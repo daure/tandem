@@ -16,7 +16,7 @@ cargo run -- mcp            # protocol-only stdio MCP
 cargo run -- serve          # HTTP MCP at http://127.0.0.1:7345/mcp
 ```
 
-1. Press `t` to create a template named `website`; its folder contains a working static web starter.
+1. Press `T` or use the Template button to create a template named `website`; its folder contains a working static web starter.
 2. On the template row, press `i` to inspect its directory, Compose file, and source; `d` copies the
    directory and `c` copies the Compose path inside that dialog.
 3. Press `n`, enter `review`, then Enter or Ctrl+S to confirm execution; watch progress in Details.
@@ -25,6 +25,11 @@ cargo run -- serve          # HTTP MCP at http://127.0.0.1:7345/mcp
 5. Press `s` on an instance to confirm stopping its containers; the workspace and volumes are kept.
 
 The TUI refreshes runtime inventory asynchronously every two seconds and local progress every 250 ms.
+Resource rows show memory above CPU using Docker Engine one-shot samples through the selected local
+Unix socket (API 1.41+). CPU is averaged between samples and displays `—` until two valid samples exist.
+Sampling starts after container discovery, publishes memory, and takes a second reading after a
+one-second pause to establish CPU usage. Regular resource polling runs once per minute; new CPU baselines
+use the same two-reading warm-up when sampled.
 An empty template list or unavailable Docker daemon is displayed without preventing template editing.
 Starting an existing instance name reapplies the same template directory. It refuses names owned by
 another template or unmanaged containers.
@@ -36,7 +41,8 @@ another template or unmanaged containers.
 ```
 
 The MCP tools are `get_instructions`, `list_templates`, `get_template`, `create_template`,
-`list_instances`, `create_instance`, `get_operation`, `stop_instance`, and `get_status`.
+`list_instances`, `create_instance`, `get_operation`, `stop_instance`, `get_open_command`,
+`set_open_command`, `run_open_command`, and `get_status`.
 List tools return objects with `templates` or `instances` arrays. Mutating instance tools require
 `confirmed=true` after user approval; create waits for readiness by default, or accepts `wait=false`.
 `get_operation` reports in-process progress, elapsed time, and `running`/`succeeded`/`failed` outcomes.
@@ -89,9 +95,11 @@ Configure application base paths, asset links, redirects, authentication callbac
 WebSockets for the chosen prefix. A proxy cannot make every application prefix-aware automatically.
 
 The template receives `TANDEM_INSTANCE`, `TANDEM_WORKSPACE`, `TANDEM_ORIGIN`, `TANDEM_UID`, and
-`TANDEM_GID`. Put writable source checkouts and per-instance data under the workspace; template files
-are shared. Clone/sync belongs in a template one-shot service, with dependent services gated on its
-successful completion. Installed dependency trees and databases must be instance-specific.
+`TANDEM_GID`. When the local Branch instances setting is enabled, new instances also receive
+`TANDEM_BRANCH` set to their instance name. Put writable source checkouts and per-instance data under
+the workspace; template files are shared. Clone/sync belongs in a template one-shot service, with
+dependent services gated on its successful completion. Installed dependency trees and databases must be
+instance-specific.
 
 ## Configuration
 
@@ -103,12 +111,35 @@ successful completion. Installed dependency trees and databases must be instance
 | `TANDEM_INSTRUCTIONS_FILE` | `$TANDEM_HOME/instructions.md` | Existing Markdown file, read on every tool call |
 | `TANDEM_KEY_INFO` | `i` | Template information dialog |
 | `TANDEM_KEY_START` | `n` | Start instance dialog |
-| `TANDEM_KEY_NEW_TEMPLATE` | `t` | Create template dialog |
+| `TANDEM_KEY_NEW_TEMPLATE` | `T` | Create template dialog |
 | `TANDEM_KEY_STOP` | `s` | Stop instance confirmation |
 | `TANDEM_KEY_REFRESH` | `r` | Refresh template/runtime inventory |
+| `TANDEM_KEY_DELETE` | `x` | Delete the selected instance, or a template with all its instances and data |
+| `TANDEM_KEY_PURGE` | `p` | Purge all instances of the selected template |
 
-Application hotkey overrides are distinct lowercase letters. Shared navigation, focus, and component
+Application hotkey overrides are distinct ASCII letters. Shared navigation, focus, and component
 keys use tuicore configuration. The TUI displays resolved key labels.
+
+### Workspace open command
+
+In Settings, edits to **Open command** save immediately. Enter on an instance opens its workspace
+with `xdg-open` when the setting is empty or whitespace-only.
+A custom command runs on the host via `sh -c`, with the workspace as its working directory, the
+instance name in `TANDEM_INSTANCE`, and the absolute path in `TANDEM_WORKSPACE`. Quote it as `"$TANDEM_WORKSPACE"`; paths are passed as
+environment data, not interpolated into shell code. Enter on a routed service opens its URL.
+
+The setting is stored in `$TANDEM_HOME/settings.sqlite3`. MCP agents can read it with
+`get_open_command` and save it with `set_open_command` using `command` and `confirmed=true`
+after approval. Saving never executes the command. Opening an instance reads the current persisted
+value, including changes from another process; the Settings cache refreshes every two seconds.
+Close and reopen Settings to display external changes.
+
+`run_open_command` executes the persisted command for a named instance workspace after user approval
+with `confirmed=true`. It accepts stopped instances whose workspace remains available.
+
+Commands inherit the TUI process's environment, including terminal-multiplexer session variables,
+but have disconnected stdin/stdout/stderr. Use noninteractive launcher commands; failures are
+recorded in Tandem's diagnostic logs. Commands run asynchronously and do not block keyboard input.
 
 ## Safety and lifecycle
 
@@ -118,6 +149,10 @@ keys use tuicore configuration. The TUI displays resolved key labels.
 - Readiness requires configured response content, not just HTTP 200. Missing healthchecks are `up`;
   successful one-shot completion is `exited 0`. Pending compilation and route registration are normal.
 - Instance and gateway mutations use advisory locks shared by processes using the same Tandem home.
+- Delete template permanently removes its instances, private volumes and networks, workspace folders,
+  and template files after confirmation. Shared Docker images, external resources, and the gateway
+  remain outside its ownership scope. Ownership receipts and verified rendered Compose files identify
+  leftover instance data; cleanup failures retain the template for a retry.
 - Failed/timed-out creation preserves resources and workspaces for diagnosis. Retry after inspecting
   the error and Docker logs. There is no cancellation or destructive workspace-prune tool.
 - Stopping removes containers and private networks; shared gateway, workspaces, and volumes remain.

@@ -14,7 +14,7 @@ pub(crate) struct Config {
     pub instructions: PathBuf,
     pub namespace: String,
     pub port: u16,
-    pub keys: [char; 5],
+    pub keys: [char; 7],
 }
 
 impl Config {
@@ -35,13 +35,21 @@ impl Config {
             config.instructions =
                 fs::canonicalize(path).map_err(|error| format!("instructions file: {error}"))?;
         }
-        for (index, name) in ["INFO", "START", "NEW_TEMPLATE", "STOP", "REFRESH"]
-            .iter()
-            .enumerate()
+        for (index, name) in [
+            "INFO",
+            "START",
+            "NEW_TEMPLATE",
+            "STOP",
+            "REFRESH",
+            "DELETE",
+            "PURGE",
+        ]
+        .iter()
+        .enumerate()
         {
             if let Ok(value) = env::var(format!("TANDEM_KEY_{name}")) {
-                if value.len() != 1 || !value.as_bytes()[0].is_ascii_lowercase() {
-                    return Err(format!("TANDEM_KEY_{name} must be one lowercase letter"));
+                if value.len() != 1 || !value.as_bytes()[0].is_ascii_alphabetic() {
+                    return Err(format!("TANDEM_KEY_{name} must be one ASCII letter"));
                 }
                 config.keys[index] = value.as_bytes()[0] as char;
             }
@@ -67,7 +75,7 @@ impl Config {
             home,
             namespace,
             port,
-            keys: ['i', 'n', 't', 's', 'r'],
+            keys: ['v', 'n', 'T', 's', 'r', 'x', 'p'],
         };
         for directory in [
             &config.templates,
@@ -100,7 +108,7 @@ impl Config {
         format!("http://localhost:{}", self.port)
     }
     pub fn project(&self, name: &str) -> String {
-        format!("{}-{name}", self.namespace)
+        format!("{}-{}", self.namespace, name.to_ascii_lowercase())
     }
     pub fn network(&self) -> String {
         self.project("gateway")

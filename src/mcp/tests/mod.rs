@@ -52,6 +52,101 @@ fn tools_omit_output_schemas_for_opencode_compatibility() {
 }
 
 #[test]
+fn open_command_tools_require_approval_and_round_trip_persisted_settings() {
+    use rmcp::handler::server::wrapper::Parameters;
+    let service = AppService::for_tests();
+    let server = McpServer::new(service.clone());
+    assert!(server.tool_router.map.contains_key("get_open_command"));
+    assert!(server.tool_router.map.contains_key("set_open_command"));
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        assert_eq!(server.get_open_command().await.unwrap().0.command, "");
+        let unconfirmed = serde_json::from_value(json!({"command": "true"})).unwrap();
+        assert!(
+            server
+                .set_open_command(Parameters(unconfirmed))
+                .await
+                .err()
+                .expect("approval is required")
+                .contains("confirmation_required")
+        );
+        for command in ["printf '%s' \"$TANDEM_WORKSPACE\"", ""] {
+            let saved = server
+                .set_open_command(Parameters(super::SetOpenCommandInput {
+                    command: command.into(),
+                    confirmed: true,
+                }))
+                .await
+                .unwrap()
+                .0;
+            assert_eq!(
+                serde_json::to_value(saved).unwrap(),
+                json!({"command": command})
+            );
+            assert_eq!(server.get_open_command().await.unwrap().0.command, command);
+            assert_eq!(service.open_command(), command);
+        }
+    });
+}
+
+#[test]
+fn run_open_command_executes_the_saved_command_for_a_named_workspace() {
+    use rmcp::handler::server::wrapper::Parameters;
+
+    let service = AppService::for_tests();
+    let server = McpServer::new(service.clone());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let workspace = std::path::PathBuf::from(
+        runtime
+            .block_on(server.get_instructions())
+            .unwrap()
+            .0
+            .workspaces_root,
+    )
+    .join("review");
+    std::fs::create_dir(&workspace).unwrap();
+    runtime.block_on(async {
+        assert!(server.tool_router.map.contains_key("run_open_command"));
+        server
+            .set_open_command(Parameters(super::SetOpenCommandInput {
+                command: "printf '%s' \"$TANDEM_INSTANCE\" > received".into(),
+                confirmed: true,
+            }))
+            .await
+            .unwrap();
+        assert!(
+            server
+                .run_open_command(Parameters(super::RunOpenCommandInput {
+                    name: "review".into(),
+                    confirmed: false,
+                }))
+                .await
+                .err()
+                .expect("approval is required")
+                .contains("confirmation_required")
+        );
+        assert_eq!(
+            serde_json::to_value(
+                server
+                    .run_open_command(Parameters(super::RunOpenCommandInput {
+                        name: "review".into(),
+                        confirmed: true,
+                    }))
+                    .await
+                    .unwrap()
+                    .0,
+            )
+            .unwrap(),
+            json!({"workspace": workspace})
+        );
+    });
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("received")).unwrap(),
+        "review"
+    );
+}
+
+#[test]
 fn template_tools_return_object_payloads_and_mutations_require_confirmation() {
     use rmcp::handler::server::wrapper::Parameters;
     let service = AppService::for_tests();
@@ -81,6 +176,15 @@ fn template_tools_return_object_payloads_and_mutations_require_confirmation() {
             .await
             .err()
             .expect("unconfirmed creation must fail");
+        assert!(error.contains("confirmation_required"));
+        let error = server
+            .delete_instance(Parameters(super::DeleteInstanceInput {
+                name: "review".into(),
+                confirmed: false,
+            }))
+            .await
+            .err()
+            .expect("unconfirmed deletion must fail");
         assert!(error.contains("confirmation_required"));
         std::fs::write(instructions.file, "# Edited agent guidance").unwrap();
         assert_eq!(

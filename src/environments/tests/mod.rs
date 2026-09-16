@@ -2,8 +2,11 @@ use std::{fs, sync::Arc, time::Duration};
 
 use serde_json::json;
 
-use super::{Environments, compose, config::Config, docker, gateway, templates};
-use crate::store::environments::{OperationState, validate_name};
+use super::{Environments, compose, config::Config, docker, gateway, lifecycle, templates};
+use crate::store::environments::{OperationState, validate_instance_name, validate_name};
+
+mod template_removal;
+mod template_removal_live;
 
 fn fixture() -> (tempfile::TempDir, Config) {
     let directory = tempfile::tempdir().unwrap();
@@ -25,6 +28,36 @@ fn templates_have_editable_absolute_paths_and_preserve_existing_content() {
         "services: {}\n"
     );
     assert_eq!(templates::list(&config).unwrap().len(), 1);
+}
+
+#[test]
+fn template_manifest_source_preserves_file_contents_for_inspection() {
+    let (_directory, config) = fixture();
+    let environment = Environments::new(config);
+    let template = environment.create_template("website").unwrap();
+    let source = "{\n    \"description\" : \"Example\", \"routes\": {}\n}\n";
+    fs::write(&template.manifest_file, source).unwrap();
+    assert_eq!(
+        environment
+            .get_template("website")
+            .unwrap()
+            .manifest_source
+            .as_deref(),
+        Some(source)
+    );
+
+    for invalid in ["{ invalid json", r#"{"one_shots":["../invalid"]}"#] {
+        fs::write(&template.manifest_file, invalid).unwrap();
+        assert!(environment.get_template("website").is_err());
+        let listed = environment.list_templates().unwrap();
+        assert!(listed[0].error.is_some());
+        assert_eq!(listed[0].manifest_source.as_deref(), Some(invalid));
+    }
+
+    fs::remove_file(&template.manifest_file).unwrap();
+    let template = environment.get_template("website").unwrap();
+    assert!(template.manifest_source.is_none());
+    assert!(template.error.is_none());
 }
 
 #[test]
@@ -93,6 +126,48 @@ fn invalid_names_and_manifests_are_rejected_without_hiding_other_templates() {
 }
 
 #[test]
+fn instance_names_preserve_capital_letters() {
+    assert!(validate_instance_name("Feature-Branch").is_ok());
+    assert!(validate_instance_name("Feature Branch").is_err());
+    let (_directory, config) = fixture();
+    assert_eq!(
+        config.project("Feature-Branch"),
+        "tandem-test-feature-branch"
+    );
+    let environment = Environments::new(config);
+    assert!(
+        environment
+            .begin("create_instance", "Feature-Branch", Some("website".into()))
+            .is_ok()
+    );
+    assert!(
+        environment
+            .begin("create_template", "Feature-Branch", None)
+            .is_err()
+    );
+}
+
+#[test]
+fn pending_instance_creation_is_visible_before_containers_exist() {
+    let (_directory, config) = fixture();
+    let environment = Environments::new(config.clone());
+    templates::create(&config, "website").unwrap();
+
+    environment
+        .begin("create_instance", "review", Some("website".into()))
+        .unwrap();
+
+    let snapshot = environment.snapshot();
+    assert_eq!(snapshot.instances.len(), 1);
+    assert_eq!(snapshot.instances[0].name, "review");
+    assert!(snapshot.instances[0].pending);
+    assert_eq!(
+        snapshot.instances[0].workspace,
+        config.workspaces.join("review").display().to_string()
+    );
+}
+
+#[test]
 fn gateway_labels_use_instance_service_boundaries_and_opt_in_prefix_stripping() {
     let (_directory, config) = fixture();
     let mut template = templates::create(&config, "web-app").unwrap();
@@ -100,6 +175,7 @@ fn gateway_labels_use_instance_service_boundaries_and_opt_in_prefix_stripping() 
     compose::decorate(&config, &template, "review", &mut model).unwrap();
     let labels = &model["services"]["web"]["labels"];
     assert_eq!(labels[compose::URL], "http://localhost:9876/review/web/");
+    assert_eq!(labels[compose::PORT], "80");
     assert_eq!(
         labels["traefik.http.routers.tandem-test-i6-review-s3-web.rule"],
         "PathPrefix(`/review/web/`)"
@@ -194,9 +270,10 @@ fn inventory_uses_container_labels_and_excludes_the_gateway() {
     let container = |project: &str| {
         json!({"Id":"container-id","Config":{"Labels":{
         "com.docker.compose.project":project,"com.docker.compose.service":"web",
-        (compose::NAMESPACE):config.namespace,(compose::TEMPLATE):"website",(compose::DIRECTORY):"/stale/template",
-        (compose::WORKSPACE):"/workspace/review",(compose::ROLE):"service",(compose::URL):"http://localhost:9876/review/web/"
-    }},"State":{"Status":"running"}})
+        (compose::NAMESPACE):config.namespace,(compose::INSTANCE):"review",(compose::TEMPLATE):"website",(compose::DIRECTORY):"/stale/template",
+        (compose::WORKSPACE):"/workspace/review",(compose::ROLE):"service",(compose::URL):"http://localhost:9876/review/web/",
+        "traefik.http.services.review-web.loadbalancer.server.port":"8080"
+    },"Image":"nginx:latest"},"HostConfig":{"Memory":536870912,"RestartPolicy":{"Name":"unless-stopped"}},"Mounts":[{"Type":"volume","Name":"db-data"},{"Type":"bind","Source":"/workspace"}],"RestartCount":2,"Created":"2026-09-16T12:00:00Z","State":{"Status":"running","StartedAt":"2026-09-16T12:01:00Z","Health":{"Status":"healthy"}}})
     };
     let instances = docker::instances(
         &config,
@@ -209,7 +286,28 @@ fn inventory_uses_container_labels_and_excludes_the_gateway() {
     .unwrap();
     assert_eq!(instances.len(), 1);
     assert_eq!(instances[0].template_directory, "/stale/template");
-    assert_eq!(instances[0].services[0].status, "up");
+    assert_eq!(instances[0].services[0].status, "healthy");
+    assert_eq!(instances[0].services[0].port, Some(8080));
+    assert_eq!(
+        instances[0].services[0].image.as_deref(),
+        Some("nginx:latest")
+    );
+    assert_eq!(instances[0].services[0].health.as_deref(), Some("healthy"));
+    assert_eq!(instances[0].services[0].restart_count, 2);
+    assert_eq!(instances[0].services[0].memory_limit_bytes, Some(536870912));
+    assert_eq!(instances[0].services[0].volumes, ["db-data"]);
+    let mut capitalized = container("tandem-test-review");
+    capitalized["Config"]["Labels"][compose::INSTANCE] = json!("Review");
+    assert_eq!(
+        docker::instances(&config, &[capitalized]).unwrap()[0].name,
+        "Review"
+    );
+    let mut uncapped = container("tandem-test-review");
+    uncapped["HostConfig"]["Memory"] = json!(0);
+    assert_eq!(
+        docker::instances(&config, &[uncapped]).unwrap()[0].services[0].memory_limit_bytes,
+        None
+    );
 }
 
 #[test]
@@ -224,7 +322,7 @@ fn operation_admission_rejects_duplicates_and_locks_release_on_drop() {
             .begin("create_template", "website", None)
             .is_err()
     );
-    environment.execute(operation.clone(), 60);
+    environment.execute(operation.clone(), 60, false);
     assert_eq!(
         environment.operation(&operation.id).unwrap().state,
         OperationState::Succeeded
@@ -233,6 +331,25 @@ fn operation_admission_rejects_duplicates_and_locks_release_on_drop() {
     assert!(gateway::lock(&config, "instance-review").is_err());
     drop(held);
     assert!(gateway::lock(&config, "instance-review").is_ok());
+}
+
+#[test]
+fn compose_commands_expose_the_instance_name_as_the_branch_when_requested() {
+    let (_directory, config) = fixture();
+    let command = compose::command(
+        &config,
+        std::path::Path::new("/template"),
+        std::path::Path::new("/template/compose.yaml"),
+        "Feature-Branch",
+        Some("Feature-Branch"),
+    );
+    let branch = command.get_envs().find_map(|(key, value)| {
+        (key == std::ffi::OsStr::new("TANDEM_BRANCH"))
+            .then(|| value.map(|value| value.to_string_lossy().into_owned()))
+            .flatten()
+    });
+
+    assert_eq!(branch.as_deref(), Some("Feature-Branch"));
 }
 
 #[test]
@@ -264,6 +381,43 @@ fn operation_history_is_chronological_and_evicts_the_oldest_finished_job() {
     environment.begin("create_template", "last", None).unwrap();
     assert!(environment.operation(&admitted[1]).is_err());
     assert!(environment.operation(&admitted[9]).is_ok());
+}
+
+#[test]
+fn instance_deletion_removes_only_its_workspace() {
+    let (_directory, config) = fixture();
+    let workspace = config.workspaces.join("review");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(workspace.join("data.txt"), "instance data").unwrap();
+
+    lifecycle::remove_workspace(&config, "review", Arc::new(|_| {})).unwrap();
+
+    assert!(!workspace.exists());
+}
+
+#[test]
+fn instance_deletion_removes_its_rendered_compose_file() {
+    let (_directory, config) = fixture();
+    let template = templates::create(&config, "website").unwrap();
+    let rendered =
+        std::path::Path::new(&template.directory).join(".tandem-tandem-test-review.compose.json");
+    fs::write(&rendered, "{}").unwrap();
+
+    lifecycle::remove_rendered_compose(&config, "website", "review", Arc::new(|_| {})).unwrap();
+
+    assert!(!rendered.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn instance_deletion_rejects_a_workspace_symlink_that_escapes_its_root() {
+    let (_directory, config) = fixture();
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("data.txt"), "keep").unwrap();
+    std::os::unix::fs::symlink(outside.path(), config.workspaces.join("review")).unwrap();
+
+    assert!(lifecycle::remove_workspace(&config, "review", Arc::new(|_| {})).is_err());
+    assert!(outside.path().join("data.txt").exists());
 }
 
 #[cfg(unix)]

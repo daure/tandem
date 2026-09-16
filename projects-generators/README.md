@@ -62,7 +62,11 @@ what fresh fixtures contain. Each generated source repository is also editable a
 versioned; those edits belong to that local fixture set.
 
 Templates run `repo-sync` as a one-shot service under your UID/GID before starting application
-processes. It clones committed `main` using `--no-local` so objects do not depend on shared hardlinks.
+processes. It clones each source repository's default branch using `--no-local` so objects do not
+depend on shared hardlinks. With Branch instances enabled, it checks out the instance-named branch
+when available; otherwise it creates that branch locally from the source repository's default branch.
+New branches remain in the workspace until explicitly pushed. This policy belongs to the fixture's
+clone script; Tandem supplies `TANDEM_BRANCH` to templates that implement branch selection.
 The clone's `origin` is the host's absolute source-repository path, mounted read-only at the same path
 inside the cloning container. Existing clones retain their branch, commits, staged changes, and
 untracked files. Unexpected origins and occupied non-repository paths cause a visible failure.

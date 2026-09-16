@@ -1,22 +1,31 @@
 use std::{
     collections::BTreeMap,
+    process::Command,
     time::{Duration, Instant},
 };
 
 use serde_json::Value;
 
 use super::{
-    command::{docker, remaining, run},
+    command::{Progress, docker, remaining, run},
     compose,
     config::Config,
 };
-use crate::store::environments::{Instance, InstanceService};
+use crate::store::environments::{Instance, InstanceService, validate_instance_name};
 
 pub(crate) fn inspect(config: &Config) -> Result<Vec<Instance>, String> {
     inspect_until(config, Instant::now() + Duration::from_secs(30))
 }
 
 pub(crate) fn inspect_until(config: &Config, deadline: Instant) -> Result<Vec<Instance>, String> {
+    inspect_with(config, deadline, &mut run)
+}
+
+pub(super) fn inspect_with(
+    config: &Config,
+    deadline: Instant,
+    execute: &mut impl FnMut(Command, Duration, Option<Progress>) -> Result<String, String>,
+) -> Result<Vec<Instance>, String> {
     let mut command = docker();
     command.args([
         "ps",
@@ -27,7 +36,7 @@ pub(crate) fn inspect_until(config: &Config, deadline: Instant) -> Result<Vec<In
         "--filter",
         &format!("label={}=instance", compose::KIND),
     ]);
-    let ids = run(
+    let ids = execute(
         command,
         remaining(deadline)?.min(Duration::from_secs(15)),
         None,
@@ -37,7 +46,7 @@ pub(crate) fn inspect_until(config: &Config, deadline: Instant) -> Result<Vec<In
     }
     let mut command = docker();
     command.arg("inspect").args(ids.split_whitespace());
-    let containers: Vec<Value> = serde_json::from_str(&run(
+    let containers: Vec<Value> = serde_json::from_str(&execute(
         command,
         remaining(deadline)?.min(Duration::from_secs(15)),
         None,
@@ -53,19 +62,22 @@ pub(crate) fn instances(config: &Config, containers: &[Value]) -> Result<Vec<Ins
         let labels = &container["Config"]["Labels"];
         let label = |name: &str| labels[name].as_str().unwrap_or("");
         let project = label("com.docker.compose.project");
-        let Some(name) = project.strip_prefix(&prefix) else {
+        let Some(project_name) = project.strip_prefix(&prefix) else {
             continue;
         };
-        if name == "gateway" || label(compose::NAMESPACE) != config.namespace {
+        let name = label(compose::INSTANCE);
+        let name = if name.is_empty() { project_name } else { name };
+        if name.eq_ignore_ascii_case("gateway") || label(compose::NAMESPACE) != config.namespace {
             continue;
         }
-        crate::store::environments::validate_name(name)?;
+        validate_instance_name(name)?;
         let instance = instances.entry(name.into()).or_insert_with(|| Instance {
             name: name.into(),
             project: project.into(),
             template: label(compose::TEMPLATE).into(),
             template_directory: label(compose::DIRECTORY).into(),
             workspace: label(compose::WORKSPACE).into(),
+            pending: false,
             services: Vec::new(),
         });
         if instance.template_directory != label(compose::DIRECTORY)
@@ -73,18 +85,60 @@ pub(crate) fn instances(config: &Config, containers: &[Value]) -> Result<Vec<Ins
         {
             return Err(format!("conflicting template labels on project {project}"));
         }
+        let port = labels[compose::PORT]
+            .as_str()
+            .or_else(|| {
+                labels.as_object().and_then(|labels| {
+                    labels.iter().find_map(|(key, value)| {
+                        (key.starts_with("traefik.http.services.")
+                            && key.ends_with(".loadbalancer.server.port"))
+                        .then(|| value.as_str())
+                        .flatten()
+                    })
+                })
+            })
+            .map(|port| {
+                port.parse::<u16>()
+                    .map_err(|_| format!("invalid port label on {project}"))
+            })
+            .transpose()?;
         instance.services.push(InstanceService {
             name: label("com.docker.compose.service").into(),
             container_id: container["Id"].as_str().unwrap_or("").into(),
             status: service_status(&container["State"], label(compose::ROLE) == "oneshot"),
             one_shot: label(compose::ROLE) == "oneshot",
+            image: string_field(&container["Config"]["Image"]),
+            health: string_field(&container["State"]["Health"]["Status"]),
+            restart_policy: string_field(&container["HostConfig"]["RestartPolicy"]["Name"]),
+            restart_count: container["RestartCount"].as_u64().unwrap_or_default(),
+            created_at: string_field(&container["Created"]),
+            started_at: string_field(&container["State"]["StartedAt"]),
+            port,
             url: labels[compose::URL].as_str().map(str::to_owned),
+            usage: None,
+            memory_limit_bytes: container["HostConfig"]["Memory"]
+                .as_u64()
+                .filter(|limit| *limit > 0),
+            volumes: container["Mounts"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|mount| mount["Type"].as_str() == Some("volume"))
+                .filter_map(|mount| string_field(&mount["Name"]))
+                .collect(),
         });
     }
     for instance in instances.values_mut() {
         instance.services.sort_by(|a, b| a.name.cmp(&b.name));
     }
     Ok(instances.into_values().collect())
+}
+
+fn string_field(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .filter(|value| !value.is_empty() && !value.starts_with("0001-01-01"))
+        .map(str::to_owned)
 }
 
 pub(crate) fn service_status(state: &Value, one_shot: bool) -> String {
@@ -97,7 +151,6 @@ pub(crate) fn service_status(state: &Value, one_shot: bool) -> String {
         },
         "exited" if one_shot && state["ExitCode"].as_i64() == Some(0) => "exited 0".into(),
         "exited" | "dead" => format!("down (exit {})", state["ExitCode"].as_i64().unwrap_or(-1)),
-        "created" | "restarting" => "boot".into(),
         other => other.into(),
     }
 }

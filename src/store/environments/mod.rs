@@ -35,6 +35,7 @@ pub(crate) struct Template {
     pub compose_file: String,
     pub manifest_file: String,
     pub compose_source: String,
+    pub manifest_source: Option<String>,
     pub manifest: Manifest,
     pub error: Option<String>,
 }
@@ -45,7 +46,64 @@ pub(crate) struct InstanceService {
     pub container_id: String,
     pub status: String,
     pub one_shot: bool,
+    pub image: Option<String>,
+    pub health: Option<String>,
+    pub restart_policy: Option<String>,
+    pub restart_count: u64,
+    pub created_at: Option<String>,
+    pub started_at: Option<String>,
+    pub port: Option<u16>,
     pub url: Option<String>,
+    pub usage: Option<ResourceUsage>,
+    pub memory_limit_bytes: Option<u64>,
+    pub volumes: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, JsonSchema, PartialEq, Eq)]
+pub(crate) struct ResourceUsage {
+    pub cpu_basis_points: Option<u64>,
+    pub memory_bytes: u64,
+    pub sampled_at_unix_seconds: u64,
+}
+
+impl ResourceUsage {
+    pub fn total<'a>(services: impl Iterator<Item = &'a InstanceService>) -> Option<Self> {
+        let mut total: Option<Self> = None;
+        for service in services.filter(|service| service.consumes_resources()) {
+            let usage = service.usage?;
+            total = Some(match total {
+                None => usage,
+                Some(previous) => Self {
+                    cpu_basis_points: previous
+                        .cpu_basis_points
+                        .zip(usage.cpu_basis_points)
+                        .and_then(|(previous, current)| previous.checked_add(current)),
+                    memory_bytes: previous.memory_bytes.checked_add(usage.memory_bytes)?,
+                    sampled_at_unix_seconds: previous
+                        .sampled_at_unix_seconds
+                        .min(usage.sampled_at_unix_seconds),
+                },
+            });
+        }
+        total
+    }
+}
+
+impl InstanceService {
+    pub fn total_memory_limit<'a>(services: impl Iterator<Item = &'a Self>) -> Option<u64> {
+        let mut total = 0_u64;
+        for service in services.filter(|service| service.consumes_resources()) {
+            total = total.checked_add(service.memory_limit_bytes.filter(|limit| *limit > 0)?)?;
+        }
+        (total > 0).then_some(total)
+    }
+
+    pub fn consumes_resources(&self) -> bool {
+        matches!(
+            self.status.as_str(),
+            "up" | "healthy" | "unhealthy" | "boot" | "paused" | "removing"
+        )
+    }
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq)]
@@ -55,7 +113,22 @@ pub(crate) struct Instance {
     pub template_directory: String,
     pub workspace: String,
     pub project: String,
+    pub pending: bool,
     pub services: Vec<InstanceService>,
+}
+
+impl Instance {
+    pub fn startup_error(&self) -> Option<String> {
+        self.services
+            .iter()
+            .find(|service| service.one_shot && service.status.starts_with("down"))
+            .map(|service| {
+                format!(
+                    "{}: {}; inspect its container logs",
+                    service.name, service.status
+                )
+            })
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, JsonSchema, PartialEq, Eq)]
@@ -63,9 +136,12 @@ pub(crate) struct EnvironmentSnapshot {
     pub templates: Vec<Template>,
     pub instances: Vec<Instance>,
     pub templates_root: String,
+    pub home_directory: Option<String>,
     pub gateway_origin: String,
     pub error: Option<String>,
     pub loading: bool,
+    pub resource_error: Option<String>,
+    pub resource_sample_duration_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq)]
@@ -108,6 +184,20 @@ pub(crate) fn validate_name(name: &str) -> Result<(), String> {
         || name == "gateway"
     {
         return Err("name must be 1–40 lowercase letters, digits or hyphens, start with a letter/digit, and not be 'gateway'".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_instance_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.len() > 40
+        || !name.as_bytes()[0].is_ascii_alphabetic() && !name.as_bytes()[0].is_ascii_digit()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphabetic() || byte.is_ascii_digit() || byte == b'-')
+        || name.eq_ignore_ascii_case("gateway")
+    {
+        return Err("name must be 1–40 letters, digits or hyphens, start with a letter/digit, and not be 'gateway'".into());
     }
     Ok(())
 }

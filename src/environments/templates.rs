@@ -1,6 +1,13 @@
-use std::{fs, io::Write, path::Path};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
-use super::config::{Config, private_file, read_text};
+use super::{
+    config::{Config, private_file, read_text},
+    gateway,
+};
 use crate::store::environments::{Manifest, Template, validate_name};
 
 pub(crate) fn list(config: &Config) -> Result<Vec<Template>, String> {
@@ -9,7 +16,7 @@ pub(crate) fn list(config: &Config) -> Result<Vec<Template>, String> {
         let entry = entry.map_err(|error| error.to_string())?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if validate_name(&name).is_ok() && entry.path().join("compose.yaml").is_file() {
-            match get(config, &name) {
+            match read_template(config, &name) {
                 Ok(template) => templates.push(template),
                 Err(error) => templates.push(Template {
                     name,
@@ -17,6 +24,7 @@ pub(crate) fn list(config: &Config) -> Result<Vec<Template>, String> {
                     compose_file: entry.path().join("compose.yaml").display().to_string(),
                     manifest_file: entry.path().join("tandem.json").display().to_string(),
                     compose_source: String::new(),
+                    manifest_source: None,
                     manifest: Manifest::default(),
                     error: Some(error),
                 }),
@@ -28,6 +36,14 @@ pub(crate) fn list(config: &Config) -> Result<Vec<Template>, String> {
 }
 
 pub(crate) fn get(config: &Config, name: &str) -> Result<Template, String> {
+    let template = read_template(config, name)?;
+    if let Some(error) = &template.error {
+        return Err(error.clone());
+    }
+    Ok(template)
+}
+
+fn read_template(config: &Config, name: &str) -> Result<Template, String> {
     validate_name(name)?;
     let directory = fs::canonicalize(config.templates.join(name))
         .map_err(|error| format!("template {name}: {error}"))?;
@@ -45,21 +61,33 @@ pub(crate) fn get(config: &Config, name: &str) -> Result<Template, String> {
         }
     }
     let manifest_path = directory.join("tandem.json");
-    let manifest: Manifest = if manifest_path.exists() {
-        serde_json::from_str(&read_text(&manifest_path)?)
-            .map_err(|error| format!("tandem.json: {error}"))?
-    } else {
-        Manifest::default()
-    };
-    validate_manifest(&manifest)?;
+    let manifest_source = manifest_path
+        .exists()
+        .then(|| read_text(&manifest_path))
+        .transpose()?;
+    let manifest = manifest_source
+        .as_deref()
+        .map_or_else(
+            || Ok(Manifest::default()),
+            |source| {
+                serde_json::from_str::<Manifest>(source)
+                    .map_err(|error| format!("tandem.json: {error}"))
+            },
+        )
+        .and_then(|manifest| {
+            validate_manifest(&manifest)?;
+            Ok(manifest)
+        });
+    let error = manifest.as_ref().err().cloned();
     Ok(Template {
         name: name.into(),
         directory: directory.display().to_string(),
         compose_file: directory.join("compose.yaml").display().to_string(),
         manifest_file: manifest_path.display().to_string(),
         compose_source: read_text(&directory.join("compose.yaml"))?,
-        manifest,
-        error: None,
+        manifest_source,
+        manifest: manifest.unwrap_or_default(),
+        error,
     })
 }
 
@@ -91,6 +119,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
 
 pub(crate) fn create(config: &Config, name: &str) -> Result<Template, String> {
     validate_name(name)?;
+    let _lock = gateway::lock(config, &format!("template-{name}"))?;
     let directory = config.templates.join(name);
     fs::create_dir(&directory).map_err(|error| format!("create template {name}: {error}"))?;
     write_new(
@@ -115,8 +144,30 @@ pub(crate) fn create(config: &Config, name: &str) -> Result<Template, String> {
         )
         .map_err(|error| error.to_string())?;
     }
-    write_new(&directory.join(".gitignore"), ".tandem-*.compose.json\n")?;
+    write_new(
+        &directory.join(".gitignore"),
+        ".tandem-*.compose.json\n.tandem-*.owner.json\n",
+    )?;
     get(config, name)
+}
+
+pub(super) fn removal_directory(config: &Config, name: &str) -> Result<PathBuf, String> {
+    validate_name(name)?;
+    let root = fs::canonicalize(&config.templates).map_err(|error| error.to_string())?;
+    if root != config.templates {
+        return Err("templates root must be a real directory".into());
+    }
+    let directory = root.join(name);
+    let metadata =
+        fs::symlink_metadata(&directory).map_err(|error| format!("template {name}: {error}"))?;
+    if !metadata.file_type().is_dir() {
+        return Err("template must be a real directory, not a symlink".into());
+    }
+    let canonical = fs::canonicalize(&directory).map_err(|error| error.to_string())?;
+    if canonical.parent() != Some(root.as_path()) {
+        return Err("template directory escapes templates root".into());
+    }
+    Ok(directory)
 }
 
 fn write_new(path: &Path, text: &str) -> Result<(), String> {

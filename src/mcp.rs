@@ -42,6 +42,34 @@ struct NameInput {
     name: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SetOpenCommandInput {
+    /// Trusted host shell command. Use "$TANDEM_INSTANCE" for the instance name and "$TANDEM_WORKSPACE" for its path; empty restores the folder opener.
+    command: String,
+    /// Approval to configure host command execution when a user opens an instance.
+    #[serde(default)]
+    confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RunOpenCommandInput {
+    /// Existing instance name; its workspace must be a real directory beneath Tandem's workspace root.
+    name: String,
+    /// Approval to execute the saved host command in this instance workspace.
+    #[serde(default)]
+    confirmed: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct OpenCommandSetting {
+    command: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct OpenCommandRun {
+    workspace: String,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 struct TemplateList {
     templates: Vec<Template>,
@@ -62,7 +90,7 @@ struct OperationInput {
 struct CreateInstanceInput {
     /// Name of an editable template directory from list_templates.
     template: String,
-    /// Instance name; 1–40 lowercase letters/digits/hyphens; gateway is reserved.
+    /// Instance name; 1–40 letters, digits or hyphens; starts with a letter/digit; gateway is reserved.
     name: String,
     /// Set only after approval to execute this trusted Compose template with local Docker privileges.
     #[serde(default)]
@@ -86,7 +114,16 @@ fn default_timeout() -> u64 {
 struct StopInstanceInput {
     /// Existing instance name; the gateway is not an instance.
     name: String,
-    /// Approval to remove containers and private networks; workspace and volumes are kept.
+    /// Approval to stop containers while keeping the instance data.
+    #[serde(default)]
+    confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct DeleteInstanceInput {
+    /// Existing instance name; the gateway is not an instance.
+    name: String,
+    /// Approval to remove this instance's containers, networks, volumes, workspace, and rendered Compose file.
     #[serde(default)]
     confirmed: bool,
 }
@@ -176,6 +213,43 @@ impl Transport<RoleServer> for TolerantStdioTransport {
 #[tool_router]
 impl McpServer {
     #[tool(
+        description = "Read the persisted workspace open command. Empty means the system folder opener."
+    )]
+    async fn get_open_command(&self) -> Result<Json<OpenCommandSetting>, String> {
+        self.service
+            .get_open_command()
+            .await
+            .map(|command| Json(OpenCommandSetting { command }))
+    }
+
+    #[tool(
+        description = "Save a trusted workspace open command after user approval (confirmed=true). Saving does not execute it. On instance opening, runs via sh -c in the workspace with TANDEM_INSTANCE and TANDEM_WORKSPACE set; quote the variables. Empty restores the folder opener."
+    )]
+    async fn set_open_command(
+        &self,
+        Parameters(input): Parameters<SetOpenCommandInput>,
+    ) -> Result<Json<OpenCommandSetting>, String> {
+        let command = self
+            .service
+            .configure_open_command(input.command, input.confirmed)
+            .await?;
+        Ok(Json(OpenCommandSetting { command }))
+    }
+
+    #[tool(
+        description = "Run the saved workspace open command for a named instance. Requires confirmed=true after user approval; runs through sh -c in the workspace with TANDEM_INSTANCE and TANDEM_WORKSPACE set. An empty saved command uses the system folder opener."
+    )]
+    async fn run_open_command(
+        &self,
+        Parameters(input): Parameters<RunOpenCommandInput>,
+    ) -> Result<Json<OpenCommandRun>, String> {
+        self.service
+            .run_open_command(input.name, input.confirmed)
+            .await
+            .map(|workspace| Json(OpenCommandRun { workspace }))
+    }
+
+    #[tool(
         description = "Read editable agent guidance and the absolute instructions, template and workspace paths. Call this before using Tandem."
     )]
     async fn get_instructions(&self) -> Result<Json<Instructions>, String> {
@@ -254,7 +328,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Remove an instance's containers and private networks, preserving workspace, volumes and gateway. Requires confirmed=true. Returns a background operation."
+        description = "Stop an instance's containers while retaining its data for a later restart. Requires confirmed=true. Returns a background operation."
     )]
     async fn stop_instance(
         &self,
@@ -262,6 +336,18 @@ impl McpServer {
     ) -> Result<Json<Operation>, String> {
         self.service
             .submit_operation("stop_instance", &input.name, None, 60, input.confirmed)
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Permanently remove an instance's containers, networks, volumes, workspace, and rendered Compose file. Requires confirmed=true. Returns a background operation."
+    )]
+    async fn delete_instance(
+        &self,
+        Parameters(input): Parameters<DeleteInstanceInput>,
+    ) -> Result<Json<Operation>, String> {
+        self.service
+            .submit_operation("delete_instance", &input.name, None, 60, input.confirmed)
             .map(Json)
     }
 

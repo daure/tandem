@@ -4,11 +4,13 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 mod environments;
+mod settings;
 
 #[derive(Clone)]
 pub(crate) struct AppService {
     runtime: Arc<tokio::runtime::Runtime>,
     environments: Arc<crate::environments::Environments>,
+    settings: Arc<settings::Settings>,
     state: Arc<ServiceState>,
 }
 
@@ -16,6 +18,8 @@ struct ServiceState {
     started_at: Instant,
     #[cfg(test)]
     _test_home: Option<tempfile::TempDir>,
+    #[cfg(test)]
+    opened_system_targets: std::sync::Mutex<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -28,19 +32,22 @@ pub(crate) struct ServiceStatus {
 
 impl AppService {
     pub(crate) fn initialize() -> Result<Self, Box<dyn Error>> {
-        Ok(Self::from_config(
-            crate::environments::config::Config::from_env()?,
-        )?)
+        Self::from_config(crate::environments::config::Config::from_env()?)
     }
 
-    fn from_config(config: crate::environments::config::Config) -> Result<Self, std::io::Error> {
+    fn from_config(config: crate::environments::config::Config) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             runtime: Arc::new(tokio::runtime::Runtime::new()?),
+            settings: Arc::new(settings::Settings::open(
+                config.home.join("settings.sqlite3"),
+            )?),
             environments: Arc::new(crate::environments::Environments::new(config)),
             state: Arc::new(ServiceState {
                 started_at: Instant::now(),
                 #[cfg(test)]
                 _test_home: None,
+                #[cfg(test)]
+                opened_system_targets: std::sync::Mutex::new(Vec::new()),
             }),
         })
     }

@@ -69,6 +69,85 @@ class GeneratorTests(unittest.TestCase):
                                     capture_output=True)
             self.assertNotEqual(result.returncode, 0)
 
+    def test_repo_sync_clones_the_requested_branch_for_every_repository(self):
+        self.generate()
+        for name in ("greetings-api", "greetings-ui"):
+            git(self.root / name, "branch", "review")
+        workspace = self.root / ".tandem/workspaces/review"
+        workspace.mkdir(parents=True)
+        script = self.root / ".tandem/templates/greetings/clone.sh"
+
+        subprocess.run(["sh", str(script), "greetings-api", "greetings-ui"], check=True,
+                       env={**os.environ, "SOURCE_ROOT": str(self.root), "TANDEM_BRANCH": "review",
+                            "TANDEM_WORKSPACE_ROOT": str(workspace)},
+                       cwd=workspace)
+
+        for name in ("greetings-api", "greetings-ui"):
+            self.assertEqual(git(workspace / name, "branch", "--show-current"), "review")
+
+    def test_repo_sync_uses_the_source_repository_default_branch_without_a_branch_setting(self):
+        self.generate()
+        source = self.root / "guestbook"
+        git(source, "switch", "-c", "source-default")
+        workspace = self.root / ".tandem/workspaces/default"
+        workspace.mkdir(parents=True)
+        script = self.root / ".tandem/templates/guestbook/clone.sh"
+
+        subprocess.run(["sh", str(script), "guestbook"], check=True,
+                       env={**os.environ, "SOURCE_ROOT": str(self.root), "TANDEM_BRANCH": "",
+                            "TANDEM_WORKSPACE_ROOT": str(workspace)}, cwd=workspace)
+
+        self.assertEqual(git(workspace / "guestbook", "branch", "--show-current"), "source-default")
+
+    def test_repo_sync_creates_missing_branches_from_each_repository_default(self):
+        self.generate()
+        names = ("greetings-api", "greetings-ui")
+        git(self.root / names[0], "branch", "review")
+        for name in names:
+            git(self.root / name, "branch", "-m", f"{name}-default")
+        workspace = self.root / ".tandem/workspaces/review"
+        workspace.mkdir(parents=True)
+        script = self.root / ".tandem/templates/greetings/clone.sh"
+
+        subprocess.run(["sh", str(script), *names], check=True,
+                       env={**os.environ, "SOURCE_ROOT": str(self.root), "TANDEM_BRANCH": "review",
+                            "TANDEM_WORKSPACE_ROOT": str(workspace)}, cwd=workspace)
+
+        for name in names:
+            self.assertEqual(git(workspace / name, "branch", "--show-current"), "review")
+            self.assertEqual(git(workspace / name, "rev-parse", "HEAD"),
+                             git(self.root / name, "rev-parse", "HEAD"))
+        self.assertEqual(git(workspace / names[0], "rev-parse", "--abbrev-ref", "@{upstream}"),
+                         "origin/review")
+        self.assertEqual(git(workspace / names[1], "for-each-ref", "--format=%(upstream)",
+                             "refs/heads/review"), "")
+        self.assertEqual(git(self.root / names[1], "branch", "--list", "review"), "")
+
+    def test_repo_sync_preserves_existing_branch_and_edits_on_retry(self):
+        self.generate()
+        workspace = self.root / ".tandem/workspaces/review"
+        workspace.mkdir(parents=True)
+        script = self.root / ".tandem/templates/guestbook/clone.sh"
+        environment = {**os.environ, "SOURCE_ROOT": str(self.root), "TANDEM_BRANCH": "review",
+                       "TANDEM_WORKSPACE_ROOT": str(workspace)}
+        subprocess.run(["sh", str(script), "guestbook"], check=True, env=environment, cwd=workspace)
+        checkout = workspace / "guestbook"
+        git(checkout, "switch", "-c", "my-work")
+        edited = checkout / "frontend/public/index.html"
+        edited.write_text("staged edits")
+        git(checkout, "add", "frontend/public/index.html")
+        edited.write_text("working edits")
+        (checkout / "notes.txt").write_text("untracked notes")
+        before = git(checkout, "status", "--porcelain")
+
+        subprocess.run(["sh", str(script), "guestbook"], check=True, env=environment, cwd=workspace)
+
+        self.assertEqual(git(checkout, "branch", "--show-current"), "my-work")
+        self.assertEqual(git(checkout, "status", "--porcelain"), before)
+        self.assertEqual(edited.read_text(), "working edits")
+        self.assertEqual(git(checkout, "show", ":frontend/public/index.html"), "staged edits")
+        self.assertEqual((checkout / "notes.txt").read_text(), "untracked notes")
+
     def test_git_overrides_are_rejected_before_the_output_is_created(self):
         script = Path(__file__).resolve().parents[1] / "generate.py"
         result = subprocess.run([sys.executable, str(script), "--output", str(self.root), "--seed-commits"],
@@ -106,6 +185,7 @@ class GeneratorTests(unittest.TestCase):
             if name == "mailroom":
                 self.assertIn("redis", model["services"])
                 self.assertIn("worker", model["services"])
+            self.assertEqual(model["services"]["repo-sync"]["environment"]["TANDEM_BRANCH"], "")
         for name in REPOSITORIES:
             result = subprocess.run(["docker", "compose", "-f", str(self.root / name / "compose.yaml"),
                                      "config", "--quiet"], check=True, capture_output=True, text=True)

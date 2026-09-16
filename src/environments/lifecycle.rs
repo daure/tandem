@@ -11,20 +11,22 @@ use super::{
     command::{Progress, docker, remaining, run},
     compose,
     config::Config,
-    docker as runtime, gateway, templates,
+    docker as runtime, gateway, ownership, templates,
 };
-use crate::store::environments::{Instance, Template, validate_name};
+use crate::store::environments::{Instance, Template, validate_instance_name, validate_name};
 
 pub(crate) fn start(
     config: &Config,
     template_name: &str,
     name: &str,
+    branch_instances: bool,
     timeout: u64,
     progress: Progress,
 ) -> Result<Instance, String> {
-    validate_name(name)?;
+    validate_instance_name(name)?;
     validate_name(template_name)?;
     let _lock = gateway::lock(config, &format!("instance-{name}"))?;
+    let _template_lock = gateway::lock(config, &format!("template-{template_name}"))?;
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let template = templates::get(config, template_name)?;
     let existing_ids = runtime::project_ids(config, name, deadline)?;
@@ -39,6 +41,8 @@ pub(crate) fn start(
             return Err("instance name belongs to another template or unmanaged containers".into());
         }
     }
+    let branch = branch_instances.then_some(name);
+    ownership::record(config, template_name, Path::new(&template.directory), name)?;
     let workspace = config.workspaces.join(name);
     fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
     if !fs::canonicalize(&workspace)
@@ -52,6 +56,7 @@ pub(crate) fn start(
         config,
         &template,
         name,
+        branch,
         remaining(deadline)?.min(Duration::from_secs(30)),
     )?;
     gateway::ensure(config, progress.clone(), remaining(deadline)?)?;
@@ -60,7 +65,13 @@ pub(crate) fn start(
         config.project(name),
         template.directory
     ));
-    let mut command = compose::command(config, Path::new(&template.directory), &rendered, name);
+    let mut command = compose::command(
+        config,
+        Path::new(&template.directory),
+        &rendered,
+        name,
+        branch,
+    );
     command.args(["up", "--detach", "--remove-orphans"]);
     run(command, remaining(deadline)?, Some(progress.clone()))?;
     progress("Waiting for service health and gateway content assertions".into());
@@ -176,9 +187,88 @@ fn readiness(
 }
 
 pub(crate) fn stop(config: &Config, name: &str, progress: Progress) -> Result<(), String> {
-    validate_name(name)?;
+    validate_instance_name(name)?;
     let deadline = Instant::now() + Duration::from_secs(60);
     let _lock = gateway::lock(config, &format!("instance-{name}"))?;
+    let (_, ids) = managed_instance(config, name, deadline)?;
+    progress("Stopping instance containers; keeping workspace, volumes, and networks".into());
+    let mut command = docker();
+    command.args(["stop"]).args(&ids);
+    run(command, remaining(deadline)?, Some(progress))?;
+    Ok(())
+}
+
+pub(crate) fn delete(config: &Config, name: &str, progress: Progress) -> Result<(), String> {
+    validate_instance_name(name)?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let _lock = gateway::lock(config, &format!("instance-{name}"))?;
+    let (instance, ids) = managed_instance(config, name, deadline)?;
+    progress("Removing instance containers".into());
+    let mut command = docker();
+    command.args(["rm", "--force", "--volumes"]).args(&ids);
+    run(command, remaining(deadline)?, Some(progress.clone()))?;
+    remove_networks(config, name, deadline, progress.clone())?;
+    remove_volumes(config, name, deadline, progress.clone())?;
+    remove_workspace(config, name, progress.clone())?;
+    remove_rendered_compose(config, &instance.template, name, progress)?;
+    ownership::forget(config, &instance.template, name)?;
+    Ok(())
+}
+
+pub(crate) fn stop_template(
+    config: &Config,
+    template_name: &str,
+    progress: Progress,
+) -> Result<(), String> {
+    let instances = template_instances(config, template_name)?;
+    if instances.is_empty() {
+        return Err("template has no instances".into());
+    }
+    for instance in instances {
+        if instance.services.iter().any(|service| {
+            matches!(
+                service.status.as_str(),
+                "up" | "healthy" | "boot" | "created" | "restarting"
+            )
+        }) {
+            stop(config, &instance.name, progress.clone())?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn delete_template(
+    config: &Config,
+    template_name: &str,
+    progress: Progress,
+) -> Result<(), String> {
+    let instances = template_instances(config, template_name)?;
+    if instances.is_empty() {
+        return Err("template has no instances".into());
+    }
+    for instance in instances {
+        delete(config, &instance.name, progress.clone())?;
+    }
+    Ok(())
+}
+
+fn template_instances(config: &Config, template_name: &str) -> Result<Vec<Instance>, String> {
+    validate_name(template_name)?;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let _lock = gateway::lock(config, &format!("template-{template_name}"))?;
+    runtime::inspect_until(config, deadline).map(|instances| {
+        instances
+            .into_iter()
+            .filter(|instance| instance.template == template_name)
+            .collect()
+    })
+}
+
+fn managed_instance(
+    config: &Config,
+    name: &str,
+    deadline: Instant,
+) -> Result<(Instance, Vec<String>), String> {
     let instance = runtime::inspect_until(config, deadline)?
         .into_iter()
         .find(|instance| instance.name == name)
@@ -195,12 +285,17 @@ pub(crate) fn stop(config: &Config, name: &str, progress: Progress) -> Result<()
             .iter()
             .any(|id| !owned.iter().any(|full| full.starts_with(id)))
     {
-        return Err("project contains unmanaged containers; refusing to stop it".into());
+        return Err("project contains unmanaged containers; refusing to change it".into());
     }
-    progress("Removing instance containers; keeping workspace and volumes".into());
-    let mut command = docker();
-    command.args(["rm", "--force"]).args(&ids);
-    run(command, remaining(deadline)?, Some(progress.clone()))?;
+    Ok((instance, ids))
+}
+
+fn remove_networks(
+    config: &Config,
+    name: &str,
+    deadline: Instant,
+    progress: Progress,
+) -> Result<(), String> {
     let mut command = docker();
     command.args([
         "network",
@@ -215,6 +310,7 @@ pub(crate) fn stop(config: &Config, name: &str, progress: Progress) -> Result<()
         None,
     )?;
     if !networks.trim().is_empty() {
+        progress("Removing instance networks".into());
         let mut command = docker();
         command
             .args(["network", "rm"])
@@ -226,4 +322,86 @@ pub(crate) fn stop(config: &Config, name: &str, progress: Progress) -> Result<()
         )?;
     }
     Ok(())
+}
+
+fn remove_volumes(
+    config: &Config,
+    name: &str,
+    deadline: Instant,
+    progress: Progress,
+) -> Result<(), String> {
+    let mut command = docker();
+    command.args([
+        "volume",
+        "ls",
+        "--quiet",
+        "--filter",
+        &format!("label=com.docker.compose.project={}", config.project(name)),
+    ]);
+    let volumes = run(
+        command,
+        remaining(deadline)?.min(Duration::from_secs(15)),
+        None,
+    )?;
+    if volumes.trim().is_empty() {
+        return Ok(());
+    }
+    progress("Removing instance volumes".into());
+    let mut command = docker();
+    command
+        .args(["volume", "rm"])
+        .args(volumes.split_whitespace());
+    run(
+        command,
+        remaining(deadline)?.min(Duration::from_secs(30)),
+        Some(progress),
+    )?;
+    Ok(())
+}
+
+pub(super) fn remove_workspace(
+    config: &Config,
+    name: &str,
+    progress: Progress,
+) -> Result<(), String> {
+    validate_instance_name(name)?;
+    let workspace = config.workspaces.join(name);
+    let metadata = match fs::symlink_metadata(&workspace) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if !metadata.file_type().is_dir() {
+        return Err("workspace must be a real directory, not a symlink".into());
+    }
+    let root = fs::canonicalize(&config.workspaces).map_err(|error| error.to_string())?;
+    let workspace = fs::canonicalize(&workspace).map_err(|error| error.to_string())?;
+    if workspace.parent() != Some(root.as_path()) {
+        return Err("workspace escapes workspace root".into());
+    }
+    progress("Removing instance workspace".into());
+    fs::remove_dir_all(workspace).map_err(|error| error.to_string())
+}
+
+pub(super) fn remove_rendered_compose(
+    config: &Config,
+    template_name: &str,
+    name: &str,
+    progress: Progress,
+) -> Result<(), String> {
+    let directory = config.templates.join(template_name);
+    if !directory.is_dir() {
+        return Ok(());
+    }
+    let root = fs::canonicalize(&config.templates).map_err(|error| error.to_string())?;
+    let directory = fs::canonicalize(directory).map_err(|error| error.to_string())?;
+    if !directory.starts_with(root) {
+        return Err("template directory escapes template root".into());
+    }
+    let rendered = directory.join(format!(".tandem-{}-{name}.compose.json", config.namespace));
+    if !rendered.exists() {
+        return Ok(());
+    }
+    progress("Removing rendered Compose file".into());
+    fs::remove_file(rendered).map_err(|error| error.to_string())
 }

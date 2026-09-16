@@ -6,7 +6,7 @@ use super::{
     command::{docker, run},
     config::{Config, private_file},
 };
-use crate::store::environments::{Template, validate_name};
+use crate::store::environments::{Template, validate_instance_name, validate_name};
 
 pub(crate) const NAMESPACE: &str = "io.tandem.namespace";
 pub(crate) const TEMPLATE: &str = "io.tandem.template";
@@ -14,9 +14,17 @@ pub(crate) const DIRECTORY: &str = "io.tandem.template-directory";
 pub(crate) const WORKSPACE: &str = "io.tandem.workspace";
 pub(crate) const ROLE: &str = "io.tandem.role";
 pub(crate) const URL: &str = "io.tandem.url";
+pub(crate) const PORT: &str = "io.tandem.port";
 pub(crate) const KIND: &str = "io.tandem.kind";
+pub(crate) const INSTANCE: &str = "io.tandem.instance";
 
-pub(crate) fn command(config: &Config, directory: &Path, compose: &Path, name: &str) -> Command {
+pub(crate) fn command(
+    config: &Config,
+    directory: &Path,
+    compose: &Path,
+    name: &str,
+    branch: Option<&str>,
+) -> Command {
     let mut cmd = docker();
     cmd.args([
         "compose",
@@ -35,6 +43,9 @@ pub(crate) fn command(config: &Config, directory: &Path, compose: &Path, name: &
     .env("TANDEM_INSTANCE", name)
     .env("TANDEM_WORKSPACE", config.workspaces.join(name))
     .env("TANDEM_ORIGIN", config.origin());
+    if let Some(branch) = branch {
+        cmd.env("TANDEM_BRANCH", branch);
+    }
     #[cfg(unix)]
     {
         cmd.env("TANDEM_UID", unsafe { libc::getuid() }.to_string());
@@ -47,10 +58,17 @@ pub(crate) fn render(
     config: &Config,
     template: &Template,
     name: &str,
+    branch: Option<&str>,
     timeout: Duration,
 ) -> Result<std::path::PathBuf, String> {
     let directory = Path::new(&template.directory);
-    let mut cmd = command(config, directory, Path::new(&template.compose_file), name);
+    let mut cmd = command(
+        config,
+        directory,
+        Path::new(&template.compose_file),
+        name,
+        branch,
+    );
     cmd.args(["config", "--format", "json"]);
     let mut model: Value =
         serde_json::from_str(&run(cmd, timeout, None)?).map_err(|error| error.to_string())?;
@@ -72,7 +90,7 @@ pub(crate) fn decorate(
     name: &str,
     model: &mut Value,
 ) -> Result<(), String> {
-    validate_name(name)?;
+    validate_instance_name(name)?;
     let services = model
         .get_mut("services")
         .and_then(Value::as_object_mut)
@@ -130,6 +148,7 @@ pub(crate) fn decorate(
         for (key, value) in [
             (NAMESPACE, config.namespace.clone()),
             (KIND, "instance".into()),
+            (INSTANCE, name.into()),
             (TEMPLATE, template.name.clone()),
             (DIRECTORY, template.directory.clone()),
             (
@@ -158,6 +177,7 @@ pub(crate) fn decorate(
                 service_name.len()
             );
             labels.insert(URL.into(), json!(format!("{}{prefix}/", config.origin())));
+            labels.insert(PORT.into(), json!(route.port.to_string()));
             labels.insert("traefik.enable".into(), json!("true"));
             labels.insert("traefik.docker.network".into(), json!(config.network()));
             labels.insert(

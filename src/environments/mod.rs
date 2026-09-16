@@ -4,10 +4,15 @@ pub(crate) mod config;
 mod docker;
 mod gateway;
 mod lifecycle;
+mod ownership;
+mod removal;
+mod resources;
+mod stats;
 mod templates;
 
 use std::{
     collections::BTreeMap,
+    fs,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -16,7 +21,8 @@ use std::{
 };
 
 use crate::store::environments::{
-    EnvironmentSnapshot, Instructions, Operation, OperationState, Template, validate_name,
+    EnvironmentSnapshot, Instance, Instructions, Operation, OperationState, Template,
+    validate_instance_name, validate_name,
 };
 use command::Progress;
 use config::Config;
@@ -27,6 +33,7 @@ pub(crate) struct Environments {
     polling: AtomicBool,
     operations: Mutex<BTreeMap<String, Job>>,
     next_id: AtomicU64,
+    resources: Mutex<resources::ResourceCache>,
 }
 
 struct Job {
@@ -39,6 +46,7 @@ impl Environments {
         Self {
             snapshot: Mutex::new(EnvironmentSnapshot {
                 templates_root: config.templates.display().to_string(),
+                home_directory: dirs::home_dir().map(|path| path.display().to_string()),
                 gateway_origin: config.origin(),
                 loading: true,
                 ..Default::default()
@@ -47,6 +55,7 @@ impl Environments {
             polling: AtomicBool::new(false),
             operations: Mutex::new(BTreeMap::new()),
             next_id: AtomicU64::new(1),
+            resources: Mutex::new(resources::ResourceCache::default()),
         }
     }
 
@@ -63,6 +72,7 @@ impl Environments {
     pub fn refresh(&self) {
         let templates = templates::list(&self.config);
         let instances = docker::inspect(&self.config);
+        let pending = self.pending_instances();
         let mut snapshot = self
             .snapshot
             .lock()
@@ -73,13 +83,21 @@ impl Environments {
             Err(error) => errors.push(error),
         }
         match instances {
-            Ok(instances) => snapshot.instances = instances,
+            Ok(mut instances) => {
+                merge_pending_instances(&mut instances, &pending);
+                snapshot.instances = instances;
+            }
             Err(error) => errors.push(format!(
                 "Docker unavailable; instance list may be stale: {error}"
             )),
         }
+        merge_pending_instances(&mut snapshot.instances, &pending);
         snapshot.error = (!errors.is_empty()).then(|| errors.join("\n"));
         snapshot.loading = false;
+        self.resources
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .apply(&mut snapshot.instances);
         self.polling.store(false, Ordering::SeqCst);
     }
 
@@ -93,7 +111,27 @@ impl Environments {
         templates::create(&self.config, name)
     }
     pub fn list_instances(&self) -> Result<Vec<crate::store::environments::Instance>, String> {
-        docker::inspect(&self.config)
+        let mut instances = docker::inspect(&self.config)?;
+        self.resources
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .apply(&mut instances);
+        Ok(instances)
+    }
+    pub fn workspace(&self, name: &str) -> Result<String, String> {
+        validate_instance_name(name)?;
+        let root = fs::canonicalize(&self.config.workspaces).map_err(|error| error.to_string())?;
+        let workspace = self.config.workspaces.join(name);
+        let metadata = fs::symlink_metadata(&workspace)
+            .map_err(|error| format!("workspace {name}: {error}"))?;
+        if !metadata.file_type().is_dir() {
+            return Err(format!("workspace {name} must be a real directory"));
+        }
+        let workspace = fs::canonicalize(&workspace).map_err(|error| error.to_string())?;
+        if workspace.parent() != Some(root.as_path()) {
+            return Err(format!("workspace {name} escapes the workspace root"));
+        }
+        Ok(workspace.display().to_string())
     }
     pub fn instructions(&self) -> Result<Instructions, String> {
         Ok(Instructions {
@@ -111,7 +149,12 @@ impl Environments {
         name: &str,
         template: Option<String>,
     ) -> Result<Operation, String> {
-        validate_name(name)?;
+        match action {
+            "create_instance" | "stop_instance" | "delete_instance" => {
+                crate::store::environments::validate_instance_name(name)?;
+            }
+            _ => validate_name(name)?,
+        }
         if let Some(template) = &template {
             validate_name(template)?;
         }
@@ -161,7 +204,60 @@ impl Environments {
                 started: Instant::now(),
             },
         );
+        drop(operations);
+        self.add_pending_instance(&operation);
         Ok(operation)
+    }
+
+    fn pending_instances(&self) -> Vec<Instance> {
+        self.operations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .filter(|job| {
+                job.operation.state == OperationState::Running
+                    && job.operation.action == "create_instance"
+            })
+            .filter_map(|job| self.pending_instance(&job.operation))
+            .collect()
+    }
+
+    fn add_pending_instance(&self, operation: &Operation) {
+        let Some(instance) = self.pending_instance(operation) else {
+            return;
+        };
+        let mut snapshot = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !snapshot
+            .instances
+            .iter()
+            .any(|current| current.name == instance.name)
+        {
+            snapshot.instances.push(instance);
+        }
+    }
+
+    fn pending_instance(&self, operation: &Operation) -> Option<Instance> {
+        if operation.action != "create_instance" {
+            return None;
+        }
+        let template = operation.template.as_ref()?;
+        Some(Instance {
+            name: operation.name.clone(),
+            template: template.clone(),
+            template_directory: self.config.templates.join(template).display().to_string(),
+            workspace: self
+                .config
+                .workspaces
+                .join(&operation.name)
+                .display()
+                .to_string(),
+            project: self.config.project(&operation.name),
+            pending: true,
+            services: Vec::new(),
+        })
     }
 
     pub fn operations(&self) -> Vec<Operation> {
@@ -192,7 +288,7 @@ impl Environments {
             })
     }
 
-    pub fn execute(self: &Arc<Self>, operation: Operation, timeout: u64) {
+    pub fn execute(self: &Arc<Self>, operation: Operation, timeout: u64, branch_instances: bool) {
         let environment = Arc::clone(self);
         let id = operation.id.clone();
         let progress: Progress = Arc::new(move |line| {
@@ -213,6 +309,7 @@ impl Environments {
                     &self.config,
                     operation.template.as_deref().ok_or("template required")?,
                     &operation.name,
+                    branch_instances,
                     timeout,
                     progress,
                 )
@@ -220,7 +317,21 @@ impl Environments {
                 "stop_instance" => {
                     lifecycle::stop(&self.config, &operation.name, progress).map(|()| None)
                 }
+                "delete_instance" => {
+                    lifecycle::delete(&self.config, &operation.name, progress).map(|()| None)
+                }
+                "stop_template" => {
+                    lifecycle::stop_template(&self.config, &operation.name, progress).map(|()| None)
+                }
+                "delete_template" => {
+                    lifecycle::delete_template(&self.config, &operation.name, progress)
+                        .map(|()| None)
+                }
                 "create_template" => self.create_template(&operation.name).map(|_| None),
+                "remove_template" => {
+                    removal::template(&self.config, &operation.name, timeout, progress)
+                        .map(|()| None)
+                }
                 _ => Err("unknown operation".into()),
             }
         }))
@@ -248,6 +359,17 @@ impl Environments {
         }
         if self.begin_refresh() {
             self.refresh();
+        }
+    }
+}
+
+fn merge_pending_instances(instances: &mut Vec<Instance>, pending: &[Instance]) {
+    for pending in pending {
+        if !instances
+            .iter()
+            .any(|instance| instance.name == pending.name)
+        {
+            instances.push(pending.clone());
         }
     }
 }

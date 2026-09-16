@@ -55,7 +55,8 @@ def create_templates(root):
         clone = {
             "image": "alpine/git:2.49.1", "user": USER, "working_dir": "/workspace",
             "entrypoint": ["sh", "/clone.sh"], "command": fixture["repos"],
-            "environment": {"HOME": "/tmp", "SOURCE_ROOT": str(root), "FAIL_CLONE": "${FAIL_CLONE:-0}"},
+            "environment": {"HOME": "/tmp", "SOURCE_ROOT": str(root), "FAIL_CLONE": "${FAIL_CLONE:-0}",
+                            "TANDEM_BRANCH": "${TANDEM_BRANCH:-}"},
             "volumes": [WORKSPACE,
                         {"type": "bind", "source": str(directory / "clone.sh"), "target": "/clone.sh", "read_only": True}]
                        + [{"type": "bind", "source": str(root / repo), "target": str(root / repo), "read_only": True}

@@ -5,22 +5,35 @@ use ratatui::{
     layout::{Constraint, Rect},
 };
 use tuicore::{
-    AnimationSettings, Column, DataView, Dialog, DialogHost, DialogLayer, EventCtx, EventOutcome,
-    EventRoute, Flex, FocusCtx, FocusId, FocusTarget, KeySpec, LayoutCtx, LayoutProposal,
-    LayoutResult, LayoutSizeHint, LifecycleCtx, Panel, PanelHost, Paragraph, RenderCtx,
-    ScrollContainer, SelectionMode, Split, StatusBar, TickResult, TreeAdapter, TuiEvent, TuiNode,
+    AnimationSettings, Button, Dialog, DialogBackdrop, DialogHost, DialogLayer,
+    DialogLayerPlacement, DockChrome, DockSpec, EventCtx, EventOutcome, EventRoute, Flex, FlexItem,
+    FocusCtx, FocusId, FocusTarget, HotkeyLabelMode, KeySpec, LayoutCtx, LayoutProposal,
+    LayoutResult, LayoutSizeHint, LifecycleCtx, Notification, RenderCtx, Split, StatusBar,
+    StatusBarMenuItem, Tab, Tabs, TabsVariant, TickResult, TuiEvent, TuiNode,
 };
 
-use crate::{
-    service::AppService,
-    store::environments::{EnvironmentSnapshot, OperationState},
-};
+use crate::{service::AppService, store::environments::EnvironmentSnapshot};
 
+mod action_menu;
+mod details;
 mod dialogs;
+mod instances;
+mod properties;
 mod rows;
+use action_menu::ActionMenu;
+use instances::{Instances, SharedState};
 use rows::Row;
 
 const TREE_FOCUS: &str = "environments";
+const MOBILE_TABS_WIDTH: u16 = 100;
+const SETTINGS_MENU_ID: &str = "settings";
+const STATUS_BAR_MENU_ITEMS: [StatusBarMenuItem; 2] = [
+    StatusBarMenuItem::Custom {
+        id: SETTINGS_MENU_ID,
+        label: " Settings",
+    },
+    StatusBarMenuItem::Theme,
+];
 
 pub(crate) fn initial_focus() -> tuicore::FocusRequest {
     tuicore::FocusRequest::Target(FocusId::new(TREE_FOCUS))
@@ -30,140 +43,197 @@ pub(crate) fn initial_focus() -> tuicore::FocusRequest {
 pub(crate) enum Msg {
     Close,
     NameChanged(String),
+    OpenSettings,
+    OpenCommandChanged(String),
+    NewTemplate,
+    SetBranchInstances(bool),
     Submit,
-    Copy(String),
 }
 
 enum Intent {
-    Start(String),
+    CreateInstance(String),
+    Resume { name: String, template: String },
     NewTemplate,
     Stop(String),
+    Delete(String),
+    StopTemplate(String),
+    DeleteTemplate(String),
+    RemoveTemplate(String),
 }
 
-type Tree = PanelHost<DataView<Row, String>, Msg>;
-type Content = Split<Tree, PanelHost<ScrollContainer<Paragraph, Msg>, Msg>>;
-type Modal = DialogHost<Flex<Msg>, Msg>;
-type MainView = DialogLayer<Content, Modal>;
-type View = Split<MainView, Flex<Msg>>;
+type Content = Tabs<Msg>;
+trait ModalNode: TuiNode<Msg> + DockChrome {
+    fn set_bottom_left(&mut self, _title: String) {}
+}
+
+impl ModalNode for DialogHost<Flex<Msg>, Msg> {
+    fn set_bottom_left(&mut self, title: String) {
+        self.dialog_mut().set_bottom_left(title);
+    }
+}
+
+impl ModalNode for Tabs<Msg> {}
+
+type Modal = Box<dyn ModalNode>;
+type MenuLayer = DialogLayer<Content, ActionMenu>;
+type MainView = DialogLayer<MenuLayer, Modal>;
+type View = Split<MainView, StatusBar<Msg>>;
 
 pub(crate) struct App {
     service: AppService,
     snapshot: EnvironmentSnapshot,
     view: View,
-    keys: [KeySpec; 5],
+    instances: SharedState,
+    keys: [KeySpec; 7],
     poll_elapsed: Duration,
-    detail: String,
     intent: Option<Intent>,
     name: String,
-    notice: String,
+    open_command: String,
+    settings_save: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
+    area: Rect,
+    details_open: bool,
 }
 
 pub(crate) fn root(service: AppService) -> App {
-    let keys = service.environment_keys().map(KeySpec::plain);
+    let key_chars = service.environment_keys();
+    let keys = key_chars.map(|key| {
+        if key.is_ascii_uppercase() {
+            KeySpec::shifted(key.to_ascii_lowercase())
+        } else {
+            KeySpec::plain(key)
+        }
+    });
+    let template_hotkey = if key_chars[2].is_ascii_uppercase() {
+        format!("shift+{}", key_chars[2].to_ascii_lowercase())
+    } else {
+        key_chars[2].to_string()
+    };
     let snapshot = service.environment_snapshot();
-    let tree = DataView::new(rows::from_snapshot(&snapshot), |row: &Row| row.id.clone())
-        .focus_id(TREE_FOCUS)
-        .columns(vec![
-            Column::text(
-                "name",
-                "Templates / instances",
-                Constraint::Percentage(60),
-                |row: &Row| row.label.clone(),
+    let instances = instances::state(rows::from_snapshot(&snapshot));
+    let content = Tabs::new(vec![Tab::new(
+        "Instances",
+        Flex::column()
+            .child(
+                "template-actions",
+                Flex::row().child(
+                    "new-template",
+                    Button::new("Template")
+                        .hotkey(template_hotkey)
+                        .hotkey_label_mode(HotkeyLabelMode::Inline)
+                        .on_press(|| Msg::NewTemplate),
+                    FlexItem::fit_content(),
+                ),
+                FlexItem::fit_content(),
+            )
+            .child(
+                "instances",
+                Instances::new(instances.clone()),
+                FlexItem::fill(1),
             ),
-            Column::text(
-                "status",
-                "Status",
-                Constraint::Percentage(40),
-                |row: &Row| row.status.clone(),
-            ),
-        ])
-        .headers(true)
-        .action_bar(true)
-        .selection_mode(SelectionMode::Single)
-        .tree(TreeAdapter::parent_id(|row: &Row| row.parent.clone()));
-    let hints = format!(
-        "{} info · {} start · {} template · {} stop · {} refresh",
-        keys[0].label(),
-        keys[1].label(),
-        keys[2].label(),
-        keys[3].label(),
-        keys[4].label()
-    );
-    let content = Split::horizontal(
-        Panel::new()
-            .top_left("Tandem")
-            .bottom_left(format!(
-                "{} expand / collapse",
-                tuicore::keybindings().data_view().toggle_expansion_label()
-            ))
-            .host(tree),
-        Panel::new()
-            .top_left("Details / operations")
-            .host(ScrollContainer::vertical(Paragraph::new(
-                "Discovering templates and instances…",
-            ))),
-    )
-    .ratio(3, 5);
-    let modal = Dialog::<Msg>::new()
-        .on_close(|_| Msg::Close)
-        .host(Flex::column());
-    let main = DialogLayer::new(content, modal)
+    )])
+    .variant(TabsVariant::OneRow);
+    let menu = DialogLayer::new(content, ActionMenu::new(keys))
         .active(false)
         .fit_content()
-        .fit_content_max(110, 34);
-    let footer = Flex::column()
-        .child(
-            "actions",
-            Paragraph::new(hints),
-            tuicore::FlexItem::fixed(1),
-        )
-        .child(
-            "status",
-            StatusBar::new().ai_enabled(false),
-            tuicore::FlexItem::fixed(1),
-        );
-    let view =
-        Split::vertical(main, footer).constraints(Constraint::Fill(1), Constraint::Length(2));
+        .fit_content_max(42, 8);
+    let modal: Modal = Box::new(
+        Dialog::<Msg>::new()
+            .on_close(|_| Msg::Close)
+            .host(Flex::column()),
+    );
+    let main = DialogLayer::new(menu, modal)
+        .active(false)
+        .fit_content()
+        .fit_content_max(110, 34)
+        .backdrop(DialogBackdrop::dim().amount(0.55));
+    let view = Split::vertical(
+        main,
+        StatusBar::new()
+            .ai_enabled(false)
+            .menu_items(STATUS_BAR_MENU_ITEMS)
+            .on_custom_menu_item(|id| match id {
+                SETTINGS_MENU_ID => Msg::OpenSettings,
+                _ => Msg::Close,
+            }),
+    )
+    .constraints(Constraint::Fill(1), Constraint::Length(1));
     service.poll_environments();
     App {
         service,
         snapshot,
         view,
+        instances,
         keys,
         poll_elapsed: Duration::ZERO,
-        detail: String::new(),
         intent: None,
         name: String::new(),
-        notice: String::new(),
+        open_command: String::new(),
+        settings_save: None,
+        area: Rect::default(),
+        details_open: false,
     }
 }
 
 impl App {
-    fn tree(&self) -> &DataView<Row, String> {
-        self.view.first().base().first().child()
-    }
-    fn tree_mut(&mut self) -> &mut DataView<Row, String> {
-        self.view.first_mut().base_mut().first_mut().child_mut()
-    }
     fn selected(&self) -> Option<Row> {
-        let id = self.tree().highlighted_id()?;
-        self.tree().rows().iter().find(|row| row.id == id).cloned()
+        instances::selected(&self.instances)
+    }
+
+    fn menu_layer(&self) -> &MenuLayer {
+        self.view.first().base()
+    }
+
+    fn menu_layer_mut(&mut self) -> &mut MenuLayer {
+        self.view.first_mut().base_mut()
+    }
+
+    #[cfg(test)]
+    fn set_rows_for_tests(&mut self, rows: Vec<Row>) {
+        let highlighted = rows.first().map(|row| row.id.clone());
+        instances::replace_rows(&self.instances, rows);
+        instances::set_highlighted(&self.instances, highlighted);
     }
 
     pub(crate) fn handle_message(&mut self, message: Msg, ctx: &mut EventCtx<Msg>) {
         match message {
             Msg::Close => {
+                self.settings_save = None;
                 self.view.first_mut().set_active_with_context(false, ctx);
                 ctx.focus(initial_focus());
                 self.intent = None;
+                self.details_open = false;
             }
             Msg::NameChanged(name) => self.name = name,
-            Msg::Copy(text) => ctx.copy_to_clipboard(text),
+            Msg::OpenSettings => self.open_settings(ctx),
+            Msg::OpenCommandChanged(command) => {
+                self.open_command = command;
+                match self.service.set_open_command(self.open_command.clone()) {
+                    Ok(reply) => {
+                        self.settings_save = Some(reply);
+                    }
+                    Err(error) => {
+                        ctx.notify(Notification::error("Cannot save open command", error))
+                    }
+                }
+            }
+            Msg::NewTemplate => self.action(2, ctx),
+            Msg::SetBranchInstances(enabled) => {
+                if let Err(error) = self.service.set_branch_instances(enabled) {
+                    ctx.notify(Notification::error("Cannot save settings", error));
+                }
+            }
             Msg::Submit => {
                 let result = match &self.intent {
-                    Some(Intent::Start(template)) => self.service.submit_operation(
+                    Some(Intent::CreateInstance(template)) => self.service.submit_operation(
                         "create_instance",
                         &self.name,
+                        Some(template.clone()),
+                        600,
+                        true,
+                    ),
+                    Some(Intent::Resume { name, template }) => self.service.submit_operation(
+                        "create_instance",
+                        name,
                         Some(template.clone()),
                         600,
                         true,
@@ -176,40 +246,146 @@ impl App {
                         self.service
                             .submit_operation("stop_instance", name, None, 60, true)
                     }
+                    Some(Intent::Delete(name)) => {
+                        self.service
+                            .submit_operation("delete_instance", name, None, 60, true)
+                    }
+                    Some(Intent::StopTemplate(name)) => {
+                        self.service
+                            .submit_operation("stop_template", name, None, 60, true)
+                    }
+                    Some(Intent::DeleteTemplate(name)) => {
+                        self.service
+                            .submit_operation("delete_template", name, None, 60, true)
+                    }
+                    Some(Intent::RemoveTemplate(name)) => {
+                        self.service
+                            .submit_operation("remove_template", name, None, 600, true)
+                    }
                     None => return,
                 };
                 match result {
-                    Ok(operation) => {
-                        self.notice = format!("{} queued: {}", operation.action, operation.name);
+                    Ok(_) => {
                         self.view.first_mut().set_active_with_context(false, ctx);
                         ctx.focus(initial_focus());
                         self.intent = None;
+                        self.details_open = false;
                     }
                     Err(error) => {
-                        self.notice = error.clone();
-                        self.view
-                            .first_mut()
-                            .layer_mut()
-                            .dialog_mut()
-                            .set_bottom_left(error);
+                        self.view.first_mut().layer_mut().set_bottom_left(error);
                     }
                 }
             }
         }
-        self.refresh_detail();
         ctx.request_redraw();
     }
 
     fn open(&mut self, modal: Modal, ctx: &mut EventCtx<Msg>) {
+        self.details_open = false;
         self.view.first_mut().replace_layer(modal, ctx);
+        self.view.first_mut().set_fit_content(true);
+        self.view.first_mut().set_fit_content_max(110, 34);
+        self.view
+            .first_mut()
+            .set_placement(DialogLayerPlacement::Center);
         self.view.first_mut().set_active_with_context(true, ctx);
-        if matches!(self.intent, Some(Intent::Start(_) | Intent::NewTemplate)) {
+        if matches!(
+            self.intent,
+            Some(Intent::CreateInstance(_) | Intent::NewTemplate)
+        ) {
             ctx.focus(tuicore::FocusRequest::Path(tuicore::TreePath::from_keys([
                 tuicore::ChildKey::first(),
                 tuicore::ChildKey::second(),
                 tuicore::ChildKey::body(),
                 tuicore::ChildKey::new("name"),
             ])));
+        }
+    }
+
+    fn open_name_entry(&mut self, ctx: &mut EventCtx<Msg>) {
+        let dialog = match &self.intent {
+            Some(Intent::CreateInstance(_)) => {
+                let branch_instances = self.service.branch_instances();
+                dialogs::name_entry(
+                    "New instance",
+                    &self.name,
+                    if branch_instances {
+                        "branch-name"
+                    } else {
+                        "Instance name"
+                    },
+                    branch_instances.then_some(
+                        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-",
+                    ),
+                )
+            }
+            Some(Intent::NewTemplate) => dialogs::name_entry(
+                "New template",
+                &self.name,
+                "Template name",
+                Some("abcdefghijklmnopqrstuvwxyz0123456789-"),
+            ),
+            _ => return,
+        };
+        self.open(dialog, ctx);
+    }
+
+    fn open_settings(&mut self, ctx: &mut EventCtx<Msg>) {
+        self.intent = None;
+        self.settings_save = None;
+        self.open_command = self.service.open_command();
+        self.open(
+            dialogs::settings(self.service.branch_instances(), &self.open_command),
+            ctx,
+        );
+    }
+
+    fn open_details(&mut self, row: &Row, ctx: &mut EventCtx<Msg>) {
+        self.view
+            .first_mut()
+            .replace_layer(dialogs::details(row), ctx);
+        self.details_open = true;
+        self.resize_details_dialog();
+        self.view.first_mut().set_active_with_context(true, ctx);
+    }
+
+    fn resize_details_dialog(&mut self) {
+        let dock = DockSpec::bottom(50).cross_percent(details_width_percent(self.area.width));
+        let layer = self.view.first_mut();
+        layer.set_dock(dock);
+        layer.layer_mut().set_dock_edge_borders(dock.edge_borders());
+    }
+
+    fn open_action_menu(&mut self, ctx: &mut EventCtx<Msg>) -> bool {
+        let Some(row) = self.selected() else {
+            return false;
+        };
+        if row.parent.is_some() && row.instance.is_none() && row.gateway_url.is_none() {
+            return false;
+        }
+        let menu = self.menu_layer_mut();
+        menu.layer_mut().open(
+            row.parent.is_none(),
+            row.running,
+            row.gateway_url.is_some(),
+            !row.compose_file.is_empty(),
+            ctx,
+        );
+        menu.set_active_with_context(true, ctx);
+        true
+    }
+
+    fn drain_action_menu(&mut self, ctx: &mut EventCtx<Msg>) {
+        if !self.menu_layer().is_active() {
+            return;
+        }
+        let action = self.menu_layer_mut().layer_mut().take_action();
+        if action.is_none() && self.menu_layer().layer().is_open() {
+            return;
+        }
+        self.menu_layer_mut().set_active_with_context(false, ctx);
+        if let Some(action) = action {
+            self.action(action.index(), ctx);
         }
     }
 
@@ -220,89 +396,125 @@ impl App {
             0 => {
                 if let Some(row) = row {
                     self.intent = None;
-                    self.open(dialogs::information(&row), ctx);
+                    self.open_details(&row, ctx);
                 }
             }
             1 => {
-                if let Some(row) = row {
-                    self.intent = Some(Intent::Start(row.template.clone()));
-                    self.open(dialogs::name_entry(&format!("Start instance / {}", row.template), "Run this trusted template with local Docker privileges.\nThe gateway starts automatically; readiness progress appears in Details."), ctx);
+                if let Some(row) = row.filter(|row| row.parent.is_none()) {
+                    self.intent = Some(Intent::CreateInstance(row.template.clone()));
+                    self.open_name_entry(ctx);
                 }
             }
             2 => {
                 self.intent = Some(Intent::NewTemplate);
-                self.open(
-                    dialogs::name_entry(
-                        "New template",
-                        "Create a dedicated editable Compose folder with a working web starter.",
-                    ),
-                    ctx,
-                );
+                self.open_name_entry(ctx);
             }
             3 => {
-                if let Some(name) = row.and_then(|row| row.instance) {
-                    self.intent = Some(Intent::Stop(name.clone()));
-                    self.open(dialogs::confirm_stop(&name), ctx);
+                if let Some(row) = row.as_ref().filter(|row| row.parent.is_none()) {
+                    let template = row.template.clone();
+                    self.intent = Some(Intent::StopTemplate(template.clone()));
+                    self.open(dialogs::confirm_stop_template(&template), ctx);
+                } else if let Some(row) = row.filter(|row| row.instance.is_some()) {
+                    let name = row.instance.expect("instance rows have a name");
+                    if row.running {
+                        self.intent = Some(Intent::Stop(name.clone()));
+                        self.open(dialogs::confirm_stop(&name), ctx);
+                    } else {
+                        self.intent = Some(Intent::Resume {
+                            name: name.clone(),
+                            template: row.template,
+                        });
+                        self.open(dialogs::confirm_start(&name), ctx);
+                    }
                 }
             }
             4 => self.service.poll_environments(),
+            5 => {
+                if let Some(row) = row
+                    .as_ref()
+                    .filter(|row| row.parent.is_none() && !row.compose_file.is_empty())
+                {
+                    self.intent = Some(Intent::RemoveTemplate(row.template.clone()));
+                    self.open(
+                        dialogs::confirm_remove_template(&row.template, &row.directory),
+                        ctx,
+                    );
+                } else if let Some(name) = row.and_then(|row| row.instance) {
+                    self.intent = Some(Intent::Delete(name.clone()));
+                    self.open(dialogs::confirm_delete(&name), ctx);
+                }
+            }
+            7 => {
+                self.open_gateway(ctx);
+            }
+            6 => {
+                if let Some(row) = row.filter(|row| row.parent.is_none()) {
+                    self.intent = Some(Intent::DeleteTemplate(row.template.clone()));
+                    self.open(dialogs::confirm_delete_template(&row.template), ctx);
+                }
+            }
             _ => {}
         }
         ctx.request_redraw();
     }
 
-    fn refresh_detail(&mut self) -> bool {
-        let mut detail = self.selected().map(|row| row.details).unwrap_or_else(|| format!(
-            "Templates root\n{}\n\nGateway\n{}\n\n{} new template · MCP create_template / get_instructions\n\nExpand template rows to browse instances.", self.snapshot.templates_root, self.snapshot.gateway_origin, self.keys[2].label()));
-        if let Some(error) = &self.snapshot.error {
-            detail.push_str(&format!("\n\nRefresh warning\n{error}"));
-        }
-        if !self.notice.is_empty() {
-            detail.push_str(&format!("\n\n{}", self.notice));
-        }
-        for operation in self.service.operations().iter().rev().take(3) {
-            let state = match operation.state {
-                OperationState::Running => "running",
-                OperationState::Succeeded => "succeeded",
-                OperationState::Failed => "failed",
-            };
-            detail.push_str(&format!(
-                "\n\n{} / {} · {state} · {}s",
-                operation.action, operation.name, operation.elapsed_seconds
-            ));
-            for line in operation.progress.iter().rev().take(4).rev() {
-                detail.push_str(&format!("\n{line}"));
-            }
-            if let Some(error) = &operation.error {
-                detail.push_str(&format!("\n{error}"));
-            }
-        }
-        if detail == self.detail {
+    fn open_gateway(&self, ctx: &mut EventCtx<Msg>) -> bool {
+        let Some(url) = self.selected().and_then(|row| row.gateway_url) else {
             return false;
+        };
+        if let Err(error) = self.service.open_gateway(&url) {
+            ctx.notify(Notification::error("Cannot open gateway", error));
         }
-        self.detail = detail.clone();
-        self.view
-            .first_mut()
-            .base_mut()
-            .second_mut()
-            .child_mut()
-            .child_mut()
-            .set_text(detail);
+        true
+    }
+
+    fn open_workspace(&self, ctx: &mut EventCtx<Msg>) -> bool {
+        let Some((workspace, instance)) = self
+            .selected()
+            .and_then(|row| Some((row.workspace?, row.instance?)))
+        else {
+            return false;
+        };
+        if let Err(error) = self.service.open_workspace(&workspace, &instance) {
+            ctx.notify(Notification::error("Cannot open workspace", error));
+        }
         true
     }
 
     fn handle_key(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
         if self.view.first().is_active()
-            && matches!(self.intent, Some(Intent::Start(_) | Intent::NewTemplate))
+            && matches!(
+                self.intent,
+                Some(Intent::CreateInstance(_) | Intent::NewTemplate)
+            )
             && let TuiEvent::Key(key) = event
-            && KeySpec::key(tuicore::Key::Enter).matches(*key)
+            && (KeySpec::key(tuicore::Key::Enter).matches(*key)
+                || KeySpec::key_with_modifiers(tuicore::Key::Enter, tuicore::KeyModifiers::CONTROL)
+                    .matches(*key))
         {
             self.handle_message(Msg::Submit, ctx);
             ctx.stop_propagation();
             return true;
         }
-        if self.view.first().is_active() || self.tree().is_searching() {
+        if self.menu_layer().is_active() || self.view.first().is_active() {
             return false;
+        }
+        if instances::is_searching(&self.instances) {
+            return false;
+        }
+        if let TuiEvent::Key(key) = event
+            && KeySpec::key(tuicore::Key::Enter).matches(*key)
+            && (self.open_workspace(ctx) || self.open_gateway(ctx))
+        {
+            ctx.stop_propagation();
+            return true;
+        }
+        if let TuiEvent::Key(key) = event
+            && KeySpec::plain('.').matches(*key)
+            && self.open_action_menu(ctx)
+        {
+            ctx.stop_propagation();
+            return true;
         }
         if let TuiEvent::Key(key) = event
             && let Some(index) = self.keys.iter().position(|spec| spec.matches(*key))
@@ -315,10 +527,8 @@ impl App {
     }
 
     fn after_event(&mut self, ctx: &mut EventCtx<Msg>) {
-        let _ = self.tree_mut().take_events();
-        if self.refresh_detail() {
-            ctx.request_redraw();
-        }
+        self.drain_action_menu(ctx);
+        ctx.request_redraw();
     }
 }
 
@@ -327,6 +537,10 @@ impl TuiNode<Msg> for App {
         self.view.measure(proposal)
     }
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.area = area;
+        if self.details_open {
+            self.resize_details_dialog();
+        }
         self.view.layout(area, ctx)
     }
     fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
@@ -336,7 +550,11 @@ impl TuiNode<Msg> for App {
         if self.handle_key(event, ctx) {
             return EventOutcome::Handled;
         }
-        let outcome = self.view.event(event, ctx);
+        let outcome = if self.menu_layer().is_active() {
+            self.menu_layer_mut().event(event, ctx)
+        } else {
+            self.view.event(event, ctx)
+        };
         self.after_event(ctx);
         outcome
     }
@@ -346,10 +564,27 @@ impl TuiNode<Msg> for App {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
+        // Toolbar and status-bar controls own their input, including instance action keys.
+        if route
+            .path
+            .without_first_if(&tuicore::ChildKey::second())
+            .is_some()
+            || route
+                .path
+                .keys()
+                .iter()
+                .any(|key| key.as_str() == "template-actions")
+        {
+            return self.view.dispatch_event(route, event, ctx);
+        }
         if self.handle_key(event, ctx) {
             return EventOutcome::Handled;
         }
-        let outcome = self.view.dispatch_event(route, event, ctx);
+        let outcome = if self.menu_layer().is_active() {
+            self.menu_layer_mut().event(event, ctx)
+        } else {
+            self.view.dispatch_event(route, event, ctx)
+        };
         self.after_event(ctx);
         outcome
     }
@@ -361,12 +596,26 @@ impl TuiNode<Msg> for App {
         }
         let snapshot = self.service.environment_snapshot();
         let mut changed = false;
+        if let Some(reply) = &mut self.settings_save {
+            let message = match reply.try_recv() {
+                Ok(Ok(_)) => None,
+                Ok(Err(error)) => Some(format!("Cannot save open command: {error}")),
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    Some("Settings worker stopped".to_owned())
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
+            };
+            if let Some(message) = message {
+                self.settings_save = None;
+                self.view.first_mut().layer_mut().set_bottom_left(message);
+                changed = true;
+            }
+        }
         if snapshot != self.snapshot {
-            self.tree_mut().set_rows(rows::from_snapshot(&snapshot));
+            instances::replace_rows(&self.instances, rows::from_snapshot(&snapshot));
             self.snapshot = snapshot;
             changed = true;
         }
-        changed |= self.refresh_detail();
         let mut result = self.view.tick(dt, settings);
         if changed {
             result = result.merge(TickResult::CHANGED);
@@ -403,6 +652,10 @@ impl TuiNode<Msg> for App {
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.view.destroy(ctx);
     }
+}
+
+fn details_width_percent(width: u16) -> u16 {
+    if width < MOBILE_TABS_WIDTH { 100 } else { 60 }
 }
 
 #[cfg(test)]
