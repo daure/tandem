@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>@@TITLE@@</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="config.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body data-mode="@@MODE@@">
+  <main>
+    <p class="eyebrow">Tandem development fixture</p>
+    <h1>@@TITLE@@</h1>
+    <p>@@DESCRIPTION@@</p>
+    <form>
+      <label for="message">Greeting</label>
+      <input id="message" name="message" value="Hello, world!" maxlength="200" required>
+      <button type="submit">@@ACTION@@</button>
+    </form>
+    <output id="result" aria-live="polite">Loading…</output>
+    <p><a href="about/">About this fixture</a> · <a href="redirect">Test a redirect</a></p>
+  </main>
+</body>
+</html>

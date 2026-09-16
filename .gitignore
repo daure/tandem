@@ -1,0 +1,6 @@
+/target/
+/projects/
+/tools/release-command/Cargo.lock
+/tools/release-command/target/
+__pycache__/
+*.pyc

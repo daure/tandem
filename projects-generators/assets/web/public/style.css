@@ -1,0 +1,10 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; padding: 2rem; }
+main { max-width: 38rem; margin: 8vh auto; }
+h1 { font-size: 3rem; margin: .4rem 0 1rem; }
+.eyebrow { text-transform: uppercase; letter-spacing: .12em; font-size: .75rem; }
+form { display: grid; gap: .75rem; margin: 2rem 0; }
+input, button { font: inherit; padding: .75rem; }
+button { cursor: pointer; }
+output { display: block; padding: 1rem; border: 1px solid currentColor; border-radius: .4rem; }
+a { color: inherit; }

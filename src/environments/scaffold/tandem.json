@@ -1,0 +1,12 @@
+{
+  "description": "Editable static web template; scripts and configuration live alongside compose.yaml.",
+  "routes": {
+    "web": {
+      "port": 80,
+      "strip_prefix": true,
+      "readiness_path": "index.html",
+      "readiness_contains": "Tandem template"
+    }
+  },
+  "one_shots": []
+}
