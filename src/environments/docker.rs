@@ -11,7 +11,9 @@ use super::{
     compose,
     config::Config,
 };
-use crate::store::environments::{Instance, InstanceService, validate_instance_name};
+use crate::store::environments::{
+    ContainerState, HealthState, Instance, InstanceService, ServiceRuntime, validate_instance_name,
+};
 
 pub(crate) fn inspect(config: &Config) -> Result<Vec<Instance>, String> {
     inspect_until(config, Instant::now() + Duration::from_secs(30))
@@ -79,6 +81,7 @@ pub(crate) fn instances(config: &Config, containers: &[Value]) -> Result<Vec<Ins
             workspace: label(compose::WORKSPACE).into(),
             pending: false,
             services: Vec::new(),
+            ..Default::default()
         });
         if instance.template_directory != label(compose::DIRECTORY)
             || instance.template != label(compose::TEMPLATE)
@@ -126,6 +129,27 @@ pub(crate) fn instances(config: &Config, containers: &[Value]) -> Result<Vec<Ins
                 .filter(|mount| mount["Type"].as_str() == Some("volume"))
                 .filter_map(|mount| string_field(&mount["Name"]))
                 .collect(),
+            runtime: ServiceRuntime {
+                state: ContainerState::from_docker(
+                    container["State"]["Status"].as_str().unwrap_or("unknown"),
+                ),
+                health: match container["State"]["Health"]["Status"].as_str() {
+                    None => HealthState::Unconfigured,
+                    Some("starting") => HealthState::Checking,
+                    Some("healthy") => HealthState::Healthy,
+                    Some("unhealthy") => HealthState::Unhealthy,
+                    _ => HealthState::Unknown,
+                },
+                exit_code: container["State"]["ExitCode"].as_i64(),
+                oom_killed: container["State"]["OOMKilled"].as_bool().unwrap_or(false),
+                error: string_field(&container["State"]["Error"]),
+                finished_at: string_field(&container["State"]["FinishedAt"]),
+                replica: label("com.docker.compose.container-number")
+                    .parse()
+                    .unwrap_or(1),
+                ..Default::default()
+            },
+            ..Default::default()
         });
     }
     for instance in instances.values_mut() {

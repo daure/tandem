@@ -118,7 +118,10 @@ def main():
                     time.sleep(0.2)
                     stopped = client.tool("get_operation", {"id": stopped["id"]})
                 assert stopped["state"] == "succeeded", stopped
-                assert client.tool("list_instances")["instances"] == []
+                inventory = client.tool("list_instances")["instances"]
+                assert len(inventory) == 1, inventory
+                assert inventory[0]["summary"]["status"] == "stopped", inventory
+                assert all(service["summary"]["status"] == "stopped" for service in inventory[0]["services"]), inventory
                 assert Path(directory, "workspaces", "review").is_dir()
             print("Stdio handshake, object tool payloads, editable instructions and confirmation passed" + ("; live route and cross-process discovery passed." if options.live else "."))
         finally:

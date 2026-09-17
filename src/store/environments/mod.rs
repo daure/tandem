@@ -3,6 +3,11 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+mod status;
+mod usage;
+pub(crate) use status::*;
+pub(crate) use usage::*;
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[schemars(
@@ -66,7 +71,7 @@ pub(crate) struct Template {
     pub error: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub(crate) struct InstanceService {
     pub name: String,
     pub container_id: String,
@@ -83,9 +88,13 @@ pub(crate) struct InstanceService {
     pub usage: Option<ResourceUsage>,
     pub memory_limit_bytes: Option<u64>,
     pub volumes: Vec<String>,
+    #[serde(default)]
+    pub runtime: ServiceRuntime,
+    #[serde(default)]
+    pub summary: StatusSummary,
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub(crate) struct ResourceUsage {
     pub cpu_basis_points: Option<u64>,
     pub memory_bytes: u64,
@@ -126,13 +135,13 @@ impl InstanceService {
 
     pub fn consumes_resources(&self) -> bool {
         matches!(
-            self.status.as_str(),
-            "up" | "healthy" | "unhealthy" | "boot" | "paused" | "removing"
+            self.state(),
+            ContainerState::Running | ContainerState::Paused
         )
     }
 }
 
-#[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub(crate) struct Instance {
     pub name: String,
     pub template: String,
@@ -141,13 +150,17 @@ pub(crate) struct Instance {
     pub project: String,
     pub pending: bool,
     pub services: Vec<InstanceService>,
+    #[serde(default)]
+    pub runtime: InstanceRuntime,
+    #[serde(default)]
+    pub summary: StatusSummary,
 }
 
 impl Instance {
     pub fn startup_error(&self) -> Option<String> {
         self.services
             .iter()
-            .find(|service| service.one_shot && service.status.starts_with("down"))
+            .find(|service| service.one_shot && service.status_summary().status == Status::Failed)
             .map(|service| {
                 format!(
                     "{}: {}; inspect its container logs",
@@ -155,6 +168,13 @@ impl Instance {
                 )
             })
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, JsonSchema, PartialEq, Eq)]
+pub(crate) struct RuntimeInventory {
+    pub instances: Vec<Instance>,
+    pub activities: Vec<Activity>,
+    pub observed_at_unix_seconds: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize, JsonSchema, PartialEq, Eq)]
@@ -170,6 +190,9 @@ pub(crate) struct EnvironmentSnapshot {
     pub loading: bool,
     pub resource_error: Option<String>,
     pub resource_sample_duration_ms: Option<u64>,
+    pub observed_at_unix_seconds: Option<u64>,
+    pub runtime_error: Option<String>,
+    pub activities: Vec<Activity>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, JsonSchema, PartialEq, Eq)]
@@ -199,6 +222,19 @@ pub(crate) struct Operation {
     pub elapsed_milliseconds: u64,
     pub error: Option<String>,
     pub instance: Option<Instance>,
+}
+
+impl Operation {
+    pub fn targets(&self, instance: &Instance) -> bool {
+        match self.action.as_str() {
+            "stop_template" | "delete_template" | "remove_template" => {
+                self.name == instance.template
+            }
+            "create_instance" | "stop_instance" | "delete_instance" | "restart_instance"
+            | "restart_service" | "start_service" | "stop_service" => self.name == instance.name,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]

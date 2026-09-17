@@ -8,7 +8,7 @@ use super::refresh::Refresh;
 use crate::{
     environments::Environments,
     store::environments::{
-        EnvironmentSnapshot, Instance, Instructions, Operation, OperationState, Template,
+        EnvironmentSnapshot, Instructions, Operation, OperationState, RuntimeInventory, Template,
     },
 };
 
@@ -37,6 +37,10 @@ impl AppService {
 
     pub(crate) fn poll_environments(&self) {
         self.refresh.request(Refresh::Instances);
+    }
+
+    pub(crate) fn set_environment_focus(&self, focused: bool) {
+        self.environments.set_focused(focused);
     }
 
     pub(crate) fn refresh_environments(&self) {
@@ -329,7 +333,7 @@ impl AppService {
         })
         .await
     }
-    pub(crate) async fn list_instances(&self) -> Result<Vec<Instance>, String> {
+    pub(crate) async fn list_instances(&self) -> Result<RuntimeInventory, String> {
         self.environment_call(Environments::list_instances).await
     }
     pub(crate) async fn get_instructions(&self) -> Result<Instructions, String> {

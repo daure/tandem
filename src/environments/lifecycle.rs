@@ -11,7 +11,7 @@ use super::{
     command::{Progress, docker, remaining, run},
     compose,
     config::Config,
-    docker as runtime, gateway, ownership, repositories, templates,
+    docker as runtime, gateway, journal, ownership, repositories, templates,
 };
 use crate::store::environments::{
     Instance, Route, Template, validate_instance_name, validate_name,
@@ -28,70 +28,78 @@ pub(crate) fn start(
 ) -> Result<Instance, String> {
     validate_instance_name(name)?;
     validate_name(template_name)?;
-    let _lock = gateway::lock(config, &format!("instance-{name}"))?;
-    let _template_lock = gateway::shared_lock(config, &format!("template-{template_name}"))?;
     let deadline = Instant::now() + Duration::from_secs(timeout);
-    let template = templates::get(config, template_name)?;
-    let existing_ids = runtime::project_ids(config, name, deadline)?;
-    if !existing_ids.is_empty() {
-        let existing = runtime::inspect_until(config, deadline)?
-            .into_iter()
-            .find(|instance| instance.name == name)
-            .ok_or("project name is occupied by containers not managed by Tandem")?;
-        if existing.template_directory != template.directory
-            || existing.services.len() != existing_ids.len()
-        {
-            return Err("instance name belongs to another template or unmanaged containers".into());
+    let _lock = gateway::lock(config, &format!("instance-{name}"))?;
+    let activity = journal::ActivityGuard::begin(config, name, "create_instance", None, timeout)?;
+    let result = (|| {
+        journal::activity_template(config, name, template_name)?;
+        let _template_lock = gateway::shared_lock(config, &format!("template-{template_name}"))?;
+        let template = templates::get(config, template_name)?;
+        let existing_ids = runtime::project_ids(config, name, deadline)?;
+        if !existing_ids.is_empty() {
+            let existing = runtime::inspect_until(config, deadline)?
+                .into_iter()
+                .find(|instance| instance.name == name)
+                .ok_or("project name is occupied by containers not managed by Tandem")?;
+            if existing.template_directory != template.directory
+                || existing.services.len() != existing_ids.len()
+            {
+                return Err(
+                    "instance name belongs to another template or unmanaged containers".into(),
+                );
+            }
         }
-    }
-    let branch = branch_instances.then_some(name);
-    ownership::record(config, template_name, Path::new(&template.directory), name)?;
-    let workspace = config.workspaces.join(name);
-    fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
-    if !fs::canonicalize(&workspace)
-        .map_err(|error| error.to_string())?
-        .starts_with(&config.workspaces)
-    {
-        return Err("workspace escapes workspace root".into());
-    }
-    repositories::prepare(
-        &config.workspaces,
-        &workspace,
-        &template,
-        branch,
-        deadline,
-        progress.clone(),
-    )?;
-    progress("Validating Compose and rendering instance routes".into());
-    let rendered = compose::render(
-        config,
-        &template,
-        name,
-        branch,
-        remaining(deadline)?.min(Duration::from_secs(30)),
-    )?;
-    let compose::Rendered {
-        path: rendered,
-        services,
-    } = rendered;
-    pending_services(services);
-    gateway::ensure(config, progress.clone(), remaining(deadline)?)?;
-    progress(format!(
-        "Starting {} from {}",
-        config.project(name),
-        template.directory
-    ));
-    let mut command = compose::command(
-        config,
-        Path::new(&template.directory),
-        &rendered,
-        name,
-        branch,
-    );
-    command.args(["up", "--detach", "--remove-orphans"]);
-    run(command, remaining(deadline)?, Some(progress.clone()))?;
-    progress("Waiting for service health and gateway content assertions".into());
-    wait_ready(config, &template, name, deadline, progress)
+        let branch = branch_instances.then_some(name);
+        ownership::record(config, template_name, Path::new(&template.directory), name)?;
+        let workspace = config.workspaces.join(name);
+        fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
+        if !fs::canonicalize(&workspace)
+            .map_err(|error| error.to_string())?
+            .starts_with(&config.workspaces)
+        {
+            return Err("workspace escapes workspace root".into());
+        }
+        repositories::prepare(
+            &config.workspaces,
+            &workspace,
+            &template,
+            branch,
+            deadline,
+            progress.clone(),
+        )?;
+        progress("Validating Compose and rendering instance routes".into());
+        let rendered = compose::render(
+            config,
+            &template,
+            name,
+            branch,
+            remaining(deadline)?.min(Duration::from_secs(30)),
+        )?;
+        let compose::Rendered {
+            path: rendered,
+            services,
+        } = rendered;
+        journal::topology(config, template_name, name, services.clone())?;
+        pending_services(services);
+        gateway::ensure(config, progress.clone(), remaining(deadline)?)?;
+        progress(format!(
+            "Starting {} from {}",
+            config.project(name),
+            template.directory
+        ));
+        let mut command = compose::command(
+            config,
+            Path::new(&template.directory),
+            &rendered,
+            name,
+            branch,
+        );
+        command.args(["up", "--detach", "--remove-orphans"]);
+        run(command, remaining(deadline)?, Some(progress.clone()))?;
+        progress("Waiting for service health and gateway content assertions".into());
+        wait_ready(config, &template, name, deadline, progress)
+    })();
+    activity.finish(result)
 }
 
 fn wait_ready(
@@ -112,15 +120,21 @@ fn wait_ready(
         remaining(deadline).map_err(|_| {
             format!("readiness timed out: {last_reason}; resources preserved for inspection")
         })?;
-        let instance = runtime::inspect_until(config, deadline)?
-            .into_iter()
-            .find(|instance| instance.name == name);
+        let mut observed = runtime::inspect_until(config, deadline)?;
+        journal::enrich(config, &mut observed)?;
+        let instance = observed.into_iter().find(|instance| instance.name == name);
         let verdict = match &instance {
             Some(instance) => readiness(instance, &template.manifest.routes, &client, deadline),
             None => Ok(Some("Waiting for instance containers".into())),
         }?;
         match verdict {
             None => {
+                journal::readiness_passed(
+                    config,
+                    instance
+                        .as_ref()
+                        .ok_or("instance disappeared during readiness")?,
+                )?;
                 progress(
                     if template.manifest.routes.is_empty() {
                         "Services running; no public routes declared"
@@ -148,18 +162,21 @@ pub(super) fn readiness(
     deadline: Instant,
 ) -> Result<Option<String>, String> {
     for service in &instance.services {
-        if service.status.starts_with("down")
-            || service.status == "unhealthy"
-            || service.status == "paused"
+        if matches!(
+            service.state(),
+            crate::store::environments::ContainerState::Exited
+                | crate::store::environments::ContainerState::Dead
+                | crate::store::environments::ContainerState::Paused
+        ) && !service.ready()
+            || service.state() == crate::store::environments::ContainerState::Running
+                && service.health_state() == crate::store::environments::HealthState::Unhealthy
         {
             return Err(format!(
                 "{}: {}; inspect its container logs",
                 service.name, service.status
             ));
         }
-        if service.one_shot && service.status != "exited 0"
-            || !service.one_shot && !["up", "healthy"].contains(&service.status.as_str())
-        {
+        if !service.ready() {
             return Ok(Some(format!(
                 "Waiting for {}: {}",
                 service.name, service.status
@@ -206,29 +223,43 @@ pub(crate) fn stop(config: &Config, name: &str, progress: Progress) -> Result<()
     validate_instance_name(name)?;
     let deadline = Instant::now() + Duration::from_secs(60);
     let _lock = gateway::lock(config, &format!("instance-{name}"))?;
-    let (_, ids) = managed_instance(config, name, deadline)?;
-    progress("Stopping instance containers; keeping workspace, volumes, and networks".into());
-    let mut command = docker();
-    command.args(["stop"]).args(&ids);
-    run(command, remaining(deadline)?, Some(progress))?;
-    Ok(())
+    let activity = journal::ActivityGuard::begin(config, name, "stop_instance", None, 60)?;
+    let result = (|| {
+        let (instance, _) = managed_instance(config, name, deadline)?;
+        journal::activity_template(config, name, &instance.template)?;
+        progress("Stopping instance containers; keeping workspace, volumes, and networks".into());
+        journal::stop(
+            config,
+            &instance,
+            &instance.services.iter().collect::<Vec<_>>(),
+            deadline,
+            progress,
+            true,
+        )
+    })();
+    activity.finish(result)
 }
 
 pub(crate) fn delete(config: &Config, name: &str, progress: Progress) -> Result<(), String> {
     validate_instance_name(name)?;
     let deadline = Instant::now() + Duration::from_secs(60);
     let _lock = gateway::lock(config, &format!("instance-{name}"))?;
-    let (instance, ids) = managed_instance(config, name, deadline)?;
-    progress("Removing instance containers".into());
-    let mut command = docker();
-    command.args(["rm", "--force", "--volumes"]).args(&ids);
-    run(command, remaining(deadline)?, Some(progress.clone()))?;
-    remove_networks(config, name, deadline, progress.clone())?;
-    remove_volumes(config, name, deadline, progress.clone())?;
-    remove_workspace(config, name, progress.clone())?;
-    remove_rendered_compose(config, &instance.template, name, progress)?;
-    ownership::forget(config, &instance.template, name)?;
-    Ok(())
+    let activity = journal::ActivityGuard::begin(config, name, "delete_instance", None, 60)?;
+    let result = (|| {
+        let (instance, ids) = managed_instance(config, name, deadline)?;
+        journal::activity_template(config, name, &instance.template)?;
+        progress("Removing instance containers".into());
+        let mut command = docker();
+        command.args(["rm", "--force", "--volumes"]).args(&ids);
+        run(command, remaining(deadline)?, Some(progress.clone()))?;
+        remove_networks(config, name, deadline, progress.clone())?;
+        remove_volumes(config, name, deadline, progress.clone())?;
+        remove_workspace(config, name, progress.clone())?;
+        remove_rendered_compose(config, &instance.template, name, progress)?;
+        ownership::forget(config, &instance.template, name)?;
+        Ok(())
+    })();
+    activity.finish(result)
 }
 
 pub(crate) fn stop_template(
@@ -242,10 +273,8 @@ pub(crate) fn stop_template(
     }
     for instance in instances {
         if instance.services.iter().any(|service| {
-            matches!(
-                service.status.as_str(),
-                "up" | "healthy" | "boot" | "created" | "restarting"
-            )
+            service.consumes_resources()
+                || service.state() == crate::store::environments::ContainerState::Restarting
         }) {
             stop(config, &instance.name, progress.clone())?;
         }

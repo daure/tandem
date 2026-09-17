@@ -196,6 +196,7 @@ fn pending_instance_shows_expected_services_before_docker_discovers_containers()
         usage: None,
         memory_limit_bytes: None,
         volumes: Vec::new(),
+        ..Default::default()
     };
     let mut database = service.clone();
     database.name = "db".into();

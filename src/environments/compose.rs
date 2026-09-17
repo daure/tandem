@@ -106,9 +106,13 @@ fn expected_services(
         .as_object()
         .into_iter()
         .flatten()
-        .map(|(name, service)| {
+        .flat_map(|(name, service)| {
             let route = template.manifest.routes.get(name);
-            InstanceService {
+            let replicas = service["scale"]
+                .as_u64()
+                .or_else(|| service["deploy"]["replicas"].as_u64())
+                .unwrap_or(1);
+            (1..=replicas).map(move |replica| InstanceService {
                 name: name.clone(),
                 container_id: String::new(),
                 status: "created".into(),
@@ -129,7 +133,14 @@ fn expected_services(
                 usage: None,
                 memory_limit_bytes: None,
                 volumes: Vec::new(),
-            }
+                runtime: crate::store::environments::ServiceRuntime {
+                    replica,
+                    state: crate::store::environments::ContainerState::Missing,
+                    waiting: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
         })
         .collect::<Vec<_>>();
     services.sort_by(|left, right| left.name.cmp(&right.name));

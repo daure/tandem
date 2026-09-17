@@ -15,6 +15,7 @@ from stdio_smoke import Client
 BINARY = Path(__file__).resolve().parents[3] / "target/debug/tandem"
 
 DOCKER = '''#!/usr/bin/env python3
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -39,8 +40,14 @@ elif args[0] in {"restart", "start", "stop"}:
         sys.exit(args[0] + " denied by Docker")
     for container in containers:
         if container["Id"] in args[1:]:
+            if args[0] == "stop" and (home / "ignore-stop").exists():
+                continue
             container["State"]["Status"] = "exited" if args[0] == "stop" else "running"
-            container["State"]["StartedAt"] = "2026-09-17T12:00:00Z"
+            if args[0] == "stop":
+                container["State"]["FinishedAt"] = datetime.now(timezone.utc).isoformat()
+                container["State"]["ExitCode"] = int((home / "stop-exit").read_text()) if (home / "stop-exit").exists() else 0
+            else:
+                container["State"]["StartedAt"] = datetime.now(timezone.utc).isoformat()
             if (home / ("crash-" + args[0])).exists():
                 container["State"]["Status"] = "exited"
                 container["State"]["ExitCode"] = 1
@@ -96,6 +103,7 @@ class RestartTests(unittest.TestCase):
         for key in list(environment):
             if key.startswith("TANDEM_KEY_") or key == "TANDEM_INSTRUCTIONS_FILE":
                 environment.pop(key)
+        self.environment = environment
         self.client = Client(BINARY, environment)
         self.addCleanup(self.client.close)
 
@@ -248,6 +256,34 @@ class RestartTests(unittest.TestCase):
         self.save()
         self.assertEqual(self.service_state("stop")["state"], "succeeded")
         self.assertEqual(self.mutations(), [["stop", "review-web"]])
+
+    def test_requested_nonzero_stop_is_preserved_across_mcp_processes(self):
+        for exit_code in [137, 143]:
+            with self.subTest(exit_code=exit_code):
+                self.save()
+                (self.home / "stop-exit").write_text(str(exit_code))
+                self.assertEqual(self.service_state("stop")["state"], "succeeded")
+                observer = Client(BINARY, self.environment)
+                try:
+                    inventory = observer.tool("list_instances")["instances"]
+                    review = next(instance for instance in inventory if instance["name"] == "review")
+                    web = next(service for service in review["services"] if service["name"] == "web")
+                    self.assertEqual(web["runtime"]["state"], "exited")
+                    self.assertTrue(web["runtime"]["requested_stop"])
+                    self.assertEqual(web["summary"]["status"], "stopped")
+                    self.assertEqual(web["summary"]["detail"], "requested stop")
+                finally:
+                    observer.close()
+
+    def test_successful_docker_command_requires_observed_stopped_targets(self):
+        (self.home / "ignore-stop").touch()
+        operation = self.service_state("stop")
+        self.assertEqual(operation["state"], "failed")
+        self.assertIn("stop outcome unverified", operation["error"])
+        review = next(instance for instance in self.client.tool("list_instances")["instances"] if instance["name"] == "review")
+        web = next(service for service in review["services"] if service["name"] == "web")
+        self.assertEqual(web["summary"]["status"], "running")
+        self.assertFalse(web["runtime"]["requested_stop"])
 
     def test_instance_completion_waits_for_every_restarted_service(self):
         self.containers[1]["State"]["Health"] = {"Status": "healthy"}

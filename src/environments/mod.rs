@@ -4,6 +4,7 @@ pub(crate) mod config;
 mod containers;
 mod docker;
 mod gateway;
+mod journal;
 mod lifecycle;
 mod ownership;
 mod removal;
@@ -17,7 +18,7 @@ use std::{
     fs,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -37,12 +38,22 @@ pub(crate) struct Environments {
     next_id: AtomicU64,
     instance_revision: AtomicU64,
     resources: Mutex<resources::ResourceCache>,
+    focused: AtomicBool,
 }
 
 struct Job {
     operation: Operation,
     started: Instant,
     pending_services: Vec<InstanceService>,
+    started_at: u64,
+    timeout_seconds: u64,
+}
+
+impl Job {
+    fn running(&self) -> bool {
+        self.operation.state == OperationState::Running
+            && self.started.elapsed().as_secs() < self.timeout_seconds
+    }
 }
 
 impl Environments {
@@ -61,6 +72,7 @@ impl Environments {
             next_id: AtomicU64::new(1),
             instance_revision: AtomicU64::new(0),
             resources: Mutex::new(resources::ResourceCache::default()),
+            focused: AtomicBool::new(true),
         }
     }
 
@@ -74,10 +86,10 @@ impl Environments {
             .operations
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        for job in jobs.values().filter(|job| {
-            job.operation.state == OperationState::Running
-                && job.operation.action == "create_instance"
-        }) {
+        for job in jobs
+            .values()
+            .filter(|job| job.running() && job.operation.action == "create_instance")
+        {
             snapshot.startup.insert(
                 job.operation.name.clone(),
                 StartupTiming {
@@ -92,13 +104,81 @@ impl Environments {
             );
         }
         for instance in &mut snapshot.instances {
+            if instance
+                .runtime
+                .activity
+                .as_ref()
+                .is_some_and(|activity| activity.owner_pid == std::process::id())
+            {
+                instance.runtime.activity = None;
+            }
+            if let Some(job) = jobs
+                .values()
+                .find(|job| job.operation.targets(instance) && job.running())
+            {
+                instance.runtime.activity = Some(activity_from_job(job));
+            } else if jobs.values().any(|job| {
+                job.operation.targets(instance)
+                    && job.operation.state == OperationState::Running
+                    && !job.running()
+            }) {
+                instance.pending = false;
+                instance.runtime.issue = Some("Operation timed out; refresh required".into());
+            }
             if instance.pending || snapshot.startup.contains_key(&instance.name) {
                 for service in &mut instance.services {
                     service.usage = None;
                 }
             }
+            project_instance(
+                instance,
+                snapshot.runtime_error.is_some(),
+                journal::now(),
+                self.focused.load(Ordering::Relaxed),
+            );
+        }
+        snapshot.activities.retain_mut(|activity| {
+            let Some(job) = jobs.get(&activity.id) else {
+                return true;
+            };
+            if job.running() {
+                return true;
+            }
+            if job.operation.action == activity.action
+                && job.operation.name == activity.name
+                && job.operation.state != OperationState::Succeeded
+            {
+                activity.finished = true;
+                activity.error = activity_from_job(job).error;
+                return true;
+            }
+            false
+        });
+        for job in jobs
+            .values()
+            .filter(|job| job.operation.state == OperationState::Running)
+        {
+            if !snapshot
+                .activities
+                .iter()
+                .any(|activity| activity.id == job.operation.id)
+            {
+                snapshot.activities.push(activity_from_job(job));
+            }
+        }
+        if !snapshot.instances.iter().any(|instance| {
+            !instance.suppress_resources()
+                && instance.services.iter().any(|service| {
+                    service.consumes_resources() && service.runtime.resource_error.is_some()
+                })
+        }) {
+            snapshot.resource_error = None;
         }
         snapshot
+    }
+
+    pub fn set_focused(&self, focused: bool) {
+        self.focused.store(focused, Ordering::Relaxed);
     }
     pub fn refresh_templates(&self) {
         let templates = templates::list(&self.config);
@@ -133,7 +213,14 @@ impl Environments {
 
     pub fn refresh_instances(&self) {
         let revision = self.instance_revision.load(Ordering::SeqCst);
-        let instances = docker::inspect(&self.config);
+        let instances = docker::inspect(&self.config).and_then(|mut instances| {
+            let activities = journal::enrich(&self.config, &mut instances)?;
+            self.snapshot
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .activities = activities;
+            Ok(instances)
+        });
         self.publish_instances(instances, revision);
     }
 
@@ -151,6 +238,7 @@ impl Environments {
             Ok(mut instances) => {
                 merge_pending_instances(&mut instances, &pending);
                 snapshot.instances = instances;
+                snapshot.observed_at_unix_seconds = Some(journal::now());
                 None
             }
             Err(error) => Some(format!(
@@ -158,6 +246,7 @@ impl Environments {
             )),
         };
         merge_pending_instances(&mut snapshot.instances, &pending);
+        snapshot.runtime_error = error.clone();
         self.set_inventory_error(&mut snapshot, 1, error);
         snapshot.loading = false;
         self.resources
@@ -182,13 +271,26 @@ impl Environments {
     ) -> Result<Template, String> {
         templates::update_manifest(&self.config, name, manifest)
     }
-    pub fn list_instances(&self) -> Result<Vec<crate::store::environments::Instance>, String> {
+    pub fn list_instances(&self) -> Result<crate::store::environments::RuntimeInventory, String> {
         let mut instances = docker::inspect(&self.config)?;
+        let activities = journal::enrich(&self.config, &mut instances)?;
         self.resources
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .apply(&mut instances);
-        Ok(instances)
+        for instance in &mut instances {
+            project_instance(
+                instance,
+                false,
+                journal::now(),
+                self.focused.load(Ordering::Relaxed),
+            );
+        }
+        Ok(crate::store::environments::RuntimeInventory {
+            instances,
+            activities,
+            observed_at_unix_seconds: journal::now(),
+        })
     }
     pub fn workspace(&self, name: &str) -> Result<String, String> {
         validate_instance_name(name)?;
@@ -298,8 +400,9 @@ impl Environments {
             }
         }
         let id = format!(
-            "{}-{}",
+            "{}-{}-{}",
             std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
             self.next_id.fetch_add(1, Ordering::SeqCst)
         );
         let operation = Operation {
@@ -321,6 +424,8 @@ impl Environments {
                 operation: operation.clone(),
                 started: Instant::now(),
                 pending_services: Vec::new(),
+                started_at: journal::now(),
+                timeout_seconds: 900,
             },
         );
         drop(operations);
@@ -333,10 +438,7 @@ impl Environments {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .values()
-            .filter(|job| {
-                job.operation.state == OperationState::Running
-                    && job.operation.action == "create_instance"
-            })
+            .filter(|job| job.running() && job.operation.action == "create_instance")
             .filter_map(|job| self.pending_instance(&job.operation, &job.pending_services))
             .collect()
     }
@@ -380,6 +482,7 @@ impl Environments {
             project: self.config.project(&operation.name),
             pending: true,
             services: services.to_vec(),
+            ..Default::default()
         })
     }
 
@@ -427,6 +530,21 @@ impl Environments {
                         .as_millis()
                         .try_into()
                         .unwrap_or(u64::MAX);
+                    if !job.running() {
+                        operation.state = OperationState::Failed;
+                        operation.error = Some("Operation timed out; refresh required".into());
+                    }
+                }
+                if let Some(instance) = &mut operation.instance {
+                    if operation.state != OperationState::Running {
+                        instance.runtime.activity = None;
+                    }
+                    project_instance(
+                        instance,
+                        false,
+                        journal::now(),
+                        self.focused.load(Ordering::Relaxed),
+                    );
                 }
                 operation
             })
@@ -443,6 +561,16 @@ impl Environments {
     }
 
     pub fn execute(self: &Arc<Self>, operation: Operation, timeout: u64, branch_instances: bool) {
+        let mut config = self.config.clone();
+        config.operation_id = Some(operation.id.clone());
+        if let Some(job) = self
+            .operations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_mut(&operation.id)
+        {
+            job.timeout_seconds = timeout;
+        }
         let environment = Arc::clone(self);
         let id = operation.id.clone();
         let progress: Progress = Arc::new(move |line| {
@@ -460,7 +588,7 @@ impl Environments {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             match operation.action.as_str() {
                 "create_instance" => lifecycle::start(
-                    &self.config,
+                    &config,
                     operation.template.as_deref().ok_or("template required")?,
                     &operation.name,
                     branch_instances,
@@ -470,11 +598,11 @@ impl Environments {
                 )
                 .map(Some),
                 "stop_instance" => {
-                    lifecycle::stop(&self.config, &operation.name, progress).map(|()| None)
+                    lifecycle::stop(&config, &operation.name, progress).map(|()| None)
                 }
                 "restart_instance" | "restart_service" | "start_service" | "stop_service" => {
                     containers::change_state(
-                        &self.config,
+                        &config,
                         &operation.name,
                         operation.service.as_deref(),
                         match operation.action.as_str() {
@@ -488,19 +616,17 @@ impl Environments {
                     .map(|()| None)
                 }
                 "delete_instance" => {
-                    lifecycle::delete(&self.config, &operation.name, progress).map(|()| None)
+                    lifecycle::delete(&config, &operation.name, progress).map(|()| None)
                 }
                 "stop_template" => {
-                    lifecycle::stop_template(&self.config, &operation.name, progress).map(|()| None)
+                    lifecycle::stop_template(&config, &operation.name, progress).map(|()| None)
                 }
                 "delete_template" => {
-                    lifecycle::delete_template(&self.config, &operation.name, progress)
-                        .map(|()| None)
+                    lifecycle::delete_template(&config, &operation.name, progress).map(|()| None)
                 }
                 "create_template" => self.create_template(&operation.name).map(|_| None),
                 "remove_template" => {
-                    removal::template(&self.config, &operation.name, timeout, progress)
-                        .map(|()| None)
+                    removal::template(&config, &operation.name, timeout, progress).map(|()| None)
                 }
                 _ => Err("unknown operation".into()),
             }
@@ -530,7 +656,17 @@ impl Environments {
                     .try_into()
                     .unwrap_or(u64::MAX);
                 match result {
-                    Ok(instance) => {
+                    Ok(mut instance) => {
+                        if let Some(ready) = &mut instance {
+                            ready.pending = false;
+                            ready.runtime.activity = None;
+                            project_instance(
+                                ready,
+                                false,
+                                journal::now(),
+                                self.focused.load(Ordering::Relaxed),
+                            );
+                        }
                         if let Some(ready) = &instance {
                             if let Some(current) = snapshot
                                 .instances
@@ -553,6 +689,15 @@ impl Environments {
                     Err(error) => {
                         job.operation.state = OperationState::Failed;
                         job.operation.error = Some(error);
+                        if let Some(instance) = snapshot
+                            .instances
+                            .iter_mut()
+                            .find(|instance| instance.name == job.operation.name)
+                        {
+                            instance.pending = false;
+                            instance.runtime.activity = None;
+                            instance.runtime.issue = job.operation.error.clone();
+                        }
                     }
                 }
             }
@@ -570,15 +715,92 @@ fn merge_pending_instances(instances: &mut Vec<Instance>, pending: &[Instance]) 
             continue;
         };
         for service in &pending.services {
-            if !instance
-                .services
-                .iter()
-                .any(|current| current.name == service.name)
-            {
+            if !instance.services.iter().any(|current| {
+                current.name == service.name
+                    && current.runtime.replica.max(1) == service.runtime.replica.max(1)
+            }) {
                 instance.services.push(service.clone());
             }
         }
     }
+}
+
+fn activity_from_job(job: &Job) -> crate::store::environments::Activity {
+    let operation = &job.operation;
+    crate::store::environments::Activity {
+        id: operation.id.clone(),
+        name: operation.name.clone(),
+        template: operation.template.clone().or_else(|| {
+            matches!(
+                operation.action.as_str(),
+                "stop_template" | "delete_template" | "remove_template"
+            )
+            .then(|| operation.name.clone())
+        }),
+        service: operation.service.clone(),
+        action: operation.action.clone(),
+        owner_pid: std::process::id(),
+        started_at: job.started_at,
+        deadline: job
+            .started_at
+            .saturating_add(job.timeout_seconds)
+            .saturating_add(1),
+        error: operation.error.clone().or_else(|| {
+            (operation.state == OperationState::Running && !job.running())
+                .then(|| "Operation timed out; refresh required".into())
+        }),
+        finished: !job.running(),
+    }
+}
+
+fn project_instance(instance: &mut Instance, stale: bool, now: u64, focused: bool) {
+    instance.runtime.stale = stale;
+    let suppressed = instance.suppress_resources();
+    for service in &mut instance.services {
+        service.runtime.stale = stale;
+        service.runtime.resources_suppressed = suppressed;
+        service.runtime.activity = instance
+            .runtime
+            .activity
+            .as_ref()
+            .filter(|activity| {
+                activity
+                    .service
+                    .as_ref()
+                    .is_none_or(|name| name == &service.name)
+                    && (!service.one_shot
+                        || matches!(
+                            activity.action.as_str(),
+                            "create_instance"
+                                | "stop_instance"
+                                | "delete_instance"
+                                | "stop_template"
+                                | "delete_template"
+                                | "remove_template"
+                        ))
+            })
+            .cloned();
+        if suppressed || !service.consumes_resources() {
+            service.usage = None;
+        }
+        if service.state() == crate::store::environments::ContainerState::Paused
+            && let Some(usage) = &mut service.usage
+        {
+            usage.cpu_basis_points = None;
+        }
+        service.runtime.resource_age_seconds = service
+            .usage
+            .map(|usage| now.saturating_sub(usage.sampled_at_unix_seconds));
+        service.runtime.resources_stale = service.usage.is_some()
+            && (stale
+                || service.runtime.resource_error.is_some()
+                || service
+                    .runtime
+                    .resource_age_seconds
+                    .is_some_and(|age| age > if focused { 120 } else { 600 }));
+        service.summary = service.status_summary();
+    }
+    instance.summary = instance.status_summary();
 }
 
 #[cfg(test)]

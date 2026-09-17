@@ -21,6 +21,18 @@ fn operation(action: &str, name: &str) -> Operation {
 }
 
 #[test]
+fn template_operation_scope_ignores_unrelated_instances_with_the_same_name() {
+    let mut other = snapshot().instances.remove(0);
+    other.name = "website".into();
+    other.template = "other".into();
+    assert!(!operation("stop_template", "website").targets(&other));
+    assert!(!operation("create_template", "website").targets(&other));
+    assert!(operation("stop_instance", "website").targets(&other));
+    other.template = "website".into();
+    assert!(operation("stop_template", "website").targets(&other));
+}
+
+#[test]
 fn pending_container_operations_keep_notifications_silent() {
     tuicore::init();
     for action in [
@@ -41,7 +53,7 @@ fn pending_container_operations_keep_notifications_silent() {
 }
 
 #[test]
-fn deletes_hide_targets_until_inventory_catches_up_and_notify_once() {
+fn deletes_remain_visible_until_completion_and_notify_once() {
     tuicore::init();
     for (action, name, title, template_count) in [
         ("delete_instance", "review", "Instance deleted", 1),
@@ -54,8 +66,8 @@ fn deletes_hide_targets_until_inventory_catches_up_and_notify_once() {
         for _ in 0..2 {
             let mut inventory = snapshot();
             assert!(deletion.project(&mut inventory, |_| Ok(op.clone()), &mut notifications));
-            assert!(inventory.instances.is_empty());
-            assert_eq!(inventory.templates.len(), template_count);
+            assert_eq!(inventory.instances.len(), 1);
+            assert_eq!(inventory.templates.len(), 1);
             assert!(notifications.is_empty());
         }
         op.state = OperationState::Succeeded;
@@ -107,7 +119,7 @@ fn failed_deletes_restore_inventory_and_report_the_failure() {
 }
 
 #[test]
-fn purge_hides_all_matching_instances_and_preserves_other_templates() {
+fn completed_purge_hides_matching_instances_and_preserves_other_templates() {
     tuicore::init();
     let mut inventory = snapshot();
     let mut second = inventory.instances[0].clone();
@@ -117,7 +129,8 @@ fn purge_hides_all_matching_instances_and_preserves_other_templates() {
     second.template = "other".into();
     second.template_directory = "/tmp/templates/other".into();
     inventory.instances.push(second);
-    let op = operation("delete_template", "website");
+    let mut op = operation("delete_template", "website");
+    op.state = OperationState::Succeeded;
     let mut deletion = Deletion::new(op.clone()).unwrap();
     assert!(deletion.project(&mut inventory, |_| Ok(op), &mut Vec::new()));
     assert_eq!(inventory.instances.len(), 1);
@@ -174,7 +187,7 @@ fn created_items_are_selected_on_arrival_without_reselecting_on_refresh() {
 }
 
 #[test]
-fn optimistic_instance_deletion_moves_to_the_next_visible_row_then_the_previous() {
+fn completed_instance_deletion_moves_to_the_next_visible_row_then_the_previous() {
     tuicore::init();
     let mut inventory = snapshot();
     for name in ["alpha", "zulu"] {
@@ -192,7 +205,8 @@ fn optimistic_instance_deletion_moves_to_the_next_visible_row_then_the_previous(
         ("zulu", "instance:alpha"),
         ("alpha", "template:/tmp/templates/website"),
     ] {
-        let op = operation("delete_instance", name);
+        let mut op = operation("delete_instance", name);
+        op.state = OperationState::Succeeded;
         let mut deletion = Deletion::new(op.clone()).unwrap();
         deletion.project(&mut inventory, |_| Ok(op), &mut Vec::new());
         instances::replace_rows(&state, rows::from_snapshot(&inventory));

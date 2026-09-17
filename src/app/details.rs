@@ -1,4 +1,6 @@
-use crate::store::environments::{Instance, InstanceService, ResourceUsage, Template};
+use crate::store::environments::{
+    Instance, InstanceService, ResourceUsage, Template, UsageSummary,
+};
 
 use super::{properties::Property, rows::Tone};
 
@@ -41,6 +43,19 @@ pub(super) fn template(template: &Template, count: usize) -> Vec<Property> {
         Property::new("Directory", &template.directory),
         Property::new("Compose file", &template.compose_file),
         Property::new("Routing manifest", &template.manifest_file),
+        Property::new(
+            "Status",
+            if template.error.is_some() {
+                "Invalid"
+            } else {
+                "Valid"
+            },
+        )
+        .tone(if template.error.is_some() {
+            Tone::Error
+        } else {
+            Tone::Success
+        }),
     ];
     if let Some(error) = &template.error {
         rows.push(Property::new("Error", error).tone(Tone::Error));
@@ -49,16 +64,37 @@ pub(super) fn template(template: &Template, count: usize) -> Vec<Property> {
 }
 
 pub(super) fn instance(instance: &Instance) -> Vec<Property> {
+    let summary = instance.status_summary();
     let mut rows = vec![
         Property::new("Instance", &instance.name),
+        Property::new("Type", " Instance"),
         Property::new("Template", &instance.template),
         Property::new("Project", &instance.project),
         Property::new("Workspace", &instance.workspace),
+        Property::new("Status", &summary.label).tone(summary.severity.into()),
+        Property::new(
+            "Running / expected",
+            format!("{} / {}", summary.running, summary.expected),
+        ),
+        Property::new(
+            "Topology",
+            if instance.runtime.topology_known {
+                "Recorded at launch"
+            } else {
+                "Unrecorded; start instance to capture configuration"
+            },
+        ),
         Property::new(
             "Open workspace",
             "Enter opens the workspace in your file explorer.",
         ),
     ];
+    if let Some(detail) = summary.detail {
+        rows.push(Property::new("Status detail", detail).tone(summary.detail_severity.into()));
+    }
+    if let Some(observed) = instance.runtime.observed_at {
+        rows.push(Property::new("Observed (Unix)", observed));
+    }
     if let Some(error) = instance.startup_error() {
         rows.push(Property::new("Startup error", error).tone(Tone::Error));
     }
@@ -67,6 +103,7 @@ pub(super) fn instance(instance: &Instance) -> Vec<Property> {
         ResourceUsage::total(instance.services.iter()),
         InstanceService::total_memory_limit(instance.services.iter()),
     );
+    usage_details(&mut rows, &UsageSummary::instance(instance));
     for service in &instance.services {
         rows.extend(self::service(service).into_iter().map(|mut row| {
             row.name = format!("{} / {}", service.name, row.name);
@@ -77,11 +114,42 @@ pub(super) fn instance(instance: &Instance) -> Vec<Property> {
 }
 
 pub(super) fn service(service: &InstanceService) -> Vec<Property> {
+    let summary = service.status_summary();
     let mut rows = vec![
         Property::new("Service", &service.name),
-        Property::new("Status", &service.status),
+        Property::new(
+            "Type",
+            if service.one_shot {
+                " Setup job"
+            } else {
+                " Service"
+            },
+        ),
+        Property::new("Status", &summary.label).tone(summary.severity.into()),
+        Property::new("Docker status", &service.status),
         Property::new("Container", &service.container_id),
     ];
+    if let Some(detail) = summary.detail {
+        rows.push(Property::new("Status detail", detail).tone(summary.detail_severity.into()));
+    }
+    if let Some(code) = service.exit_code().filter(|_| {
+        matches!(
+            service.state(),
+            crate::store::environments::ContainerState::Exited
+                | crate::store::environments::ContainerState::Dead
+        )
+    }) {
+        rows.push(Property::new("Exit code", code));
+    }
+    if service.runtime.oom_killed {
+        rows.push(Property::new("OOM killed", "Yes").tone(Tone::Error));
+    }
+    if let Some(at) = service.runtime.readiness_checked_at {
+        rows.push(Property::new("Last route readiness passed (Unix)", at));
+    }
+    if let Some(error) = &service.runtime.resource_error {
+        rows.push(Property::new("Resource error", error).tone(Tone::Warning));
+    }
     for (label, value) in [
         ("Image", service.image.as_deref()),
         ("Health", service.health.as_deref()),
@@ -99,6 +167,7 @@ pub(super) fn service(service: &InstanceService) -> Vec<Property> {
     }
     rows.push(Property::new("Restarts", service.restart_count));
     resources(&mut rows, service.usage, service.memory_limit_bytes);
+    usage_details(&mut rows, &UsageSummary::service(service));
     rows
 }
 
@@ -132,6 +201,48 @@ pub(super) fn resources(
     }
     rows.push(Property::new(
         "Resource refresh",
-        "Every minute; CPU averaged between samples",
+        "60s when focused; about 5min unfocused; manual refresh forces sampling",
     ));
+}
+
+pub(super) fn usage_details(rows: &mut Vec<Property>, usage: &UsageSummary) {
+    for row in rows.iter_mut() {
+        if row.name == "Memory" {
+            row.value = usage.memory_bytes.map_or_else(|| "—".into(), memory);
+            row.tone = memory_tone(
+                usage.memory_bytes.map(|memory_bytes| ResourceUsage {
+                    memory_bytes,
+                    ..Default::default()
+                }),
+                usage.memory_limit_bytes,
+            );
+            if usage.memory_partial {
+                row.value.push_str(" · partial");
+            }
+            if usage.memory_stale {
+                row.value.push_str(" · stale");
+                row.tone = Tone::Muted;
+            }
+        } else if row.name == "CPU" {
+            row.value = usage.cpu_basis_points.map_or_else(|| "—".into(), cpu);
+            row.tone = if usage.cpu_basis_points.is_some() {
+                Tone::Normal
+            } else {
+                Tone::Muted
+            };
+            if usage.paused {
+                row.value.push_str(" · paused");
+            }
+            if usage.cpu_partial {
+                row.value.push_str(" · partial");
+            }
+            if usage.cpu_stale {
+                row.value.push_str(" · stale");
+                row.tone = Tone::Muted;
+            }
+        }
+    }
+    if let Some(age) = usage.age_seconds {
+        rows.push(Property::new("Resource sample age", format!("{age}s")));
+    }
 }

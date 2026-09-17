@@ -404,7 +404,7 @@ impl App {
         menu.layer_mut().open(
             row.parent.is_none(),
             row.instance.is_some(),
-            row.running,
+            (row.can_start, row.can_stop, row.can_restart),
             row.gateway_url.is_some(),
             !row.compose_file.is_empty(),
             ctx,
@@ -423,6 +423,31 @@ impl App {
         }
         self.menu_layer_mut().set_active_with_context(false, ctx);
         if let Some(action) = action {
+            if matches!(
+                action,
+                action_menu::Action::Start | action_menu::Action::StartService
+            ) {
+                if let Some(row) = self.selected() {
+                    if let Some((name, service)) = row.service {
+                        self.intent = Some(Intent::ServiceState {
+                            name: name.clone(),
+                            service: service.clone(),
+                            running: true,
+                        });
+                        self.open(
+                            dialogs::confirm_service_state(&name, &service, true, self.keys[3]),
+                            ctx,
+                        );
+                    } else if let Some(name) = row.instance {
+                        self.intent = Some(Intent::Resume {
+                            name: name.clone(),
+                            template: row.template,
+                        });
+                        self.open(dialogs::confirm_start(&name), ctx);
+                    }
+                }
+                return;
+            }
             self.action(action.index(), ctx);
         }
     }
@@ -452,9 +477,12 @@ impl App {
                     let template = row.template.clone();
                     self.intent = Some(Intent::StopTemplate(template.clone()));
                     self.open(dialogs::confirm_stop_template(&template), ctx);
-                } else if let Some(row) = row.as_ref().filter(|row| row.service.is_some()) {
+                } else if let Some(row) = row
+                    .as_ref()
+                    .filter(|row| row.service.is_some() && (row.can_start || row.can_stop))
+                {
                     let (name, service) = row.service.clone().expect("service row has a target");
-                    let running = !row.running;
+                    let running = !row.can_stop;
                     let modal =
                         dialogs::confirm_service_state(&name, &service, running, self.keys[3]);
                     self.intent = Some(Intent::ServiceState {
@@ -463,9 +491,11 @@ impl App {
                         running,
                     });
                     self.open(modal, ctx);
-                } else if let Some(row) = row.filter(|row| row.instance.is_some()) {
+                } else if let Some(row) =
+                    row.filter(|row| row.instance.is_some() && (row.can_start || row.can_stop))
+                {
                     let name = row.instance.expect("instance rows have a name");
-                    if row.running {
+                    if row.can_stop {
                         self.intent = Some(Intent::Stop(name.clone()));
                         self.open(dialogs::confirm_stop(&name), ctx);
                     } else {
@@ -501,7 +531,7 @@ impl App {
                 }
             }
             7 => {
-                if let Some(row) = row {
+                if let Some(row) = row.filter(|row| row.can_restart) {
                     let target = row
                         .service
                         .map(|(name, service)| (name, Some(service)))
@@ -627,6 +657,11 @@ impl TuiNode<Msg> for App {
         self.notifications.render(frame, area);
     }
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
+        match event {
+            TuiEvent::FocusGained => self.service.set_environment_focus(true),
+            TuiEvent::FocusLost => self.service.set_environment_focus(false),
+            _ => {}
+        }
         if self.refresh_schedule.event(event, Instant::now()) {
             self.service.poll_environments();
         }
@@ -647,6 +682,11 @@ impl TuiNode<Msg> for App {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
+        match event {
+            TuiEvent::FocusGained => self.service.set_environment_focus(true),
+            TuiEvent::FocusLost => self.service.set_environment_focus(false),
+            _ => {}
+        }
         if self.refresh_schedule.event(event, Instant::now()) {
             self.service.poll_environments();
         }

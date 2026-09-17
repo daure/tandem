@@ -60,7 +60,13 @@ A template is a shared Compose recipe; an instance has its own name and workspac
   with `switch` support; SSH access uses strict host-key checking without interactive prompts.
   Keep environments local; gateway routes share a browser origin.
 - Stop preserves instance data; deletion permanently removes its workspace and owned resources.
-   Preserve Tandem-generated `.tandem-*` files for ownership checks and cleanup.
+    Preserve Tandem-generated `.tandem-*` files for ownership checks and cleanup.
+- Read `summary` for interpreted status and `runtime` for lifecycle, exit evidence and freshness.
+  A requested stop can exit 137/143; these codes alone prove neither failure nor OOM.
+  Healthy means Docker probes pass; route readiness is a separate timestamped result.
+  Unknown launch topology requires inspection before an approved Start reapplies configuration.
+  Cached resource readings may be stale, partial or unavailable; they do not determine health.
+  `list_instances.activities` includes active work and retained failures, including cleanup without containers.
 - Restart and service start/stop require approval and use existing containers with their current
   configuration and data. They exclude one-shot setup jobs. Service actions affect only that instance's
   named service; the shared gateway and dependencies stay untouched. These actions perform no builds,

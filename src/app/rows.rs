@@ -1,7 +1,8 @@
 use std::{collections::HashSet, path::Path};
 
 use crate::store::environments::{
-    EnvironmentSnapshot, Instance, InstanceService, ResourceUsage, StartupTiming,
+    EnvironmentSnapshot, Instance, InstanceService, ResourceUsage, Severity, StartupTiming, Status,
+    UsageSummary,
 };
 use ratatui::{
     style::{Color, Style},
@@ -10,12 +11,12 @@ use ratatui::{
 
 use super::{details, properties::Property};
 
-const TEMPLATE_ICON: &str = "󰠲";
-const GATEWAY_ICON: &str = "󰖟";
-const SERVICE_ICON: &str = "󰒋";
+const TEMPLATE_ICON: &str = "";
+const GATEWAY_ICON: &str = "";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Tone {
+    #[default]
     Normal,
     Muted,
     Success,
@@ -38,16 +39,33 @@ impl Tone {
     }
 }
 
-fn service_tone(status: &str) -> Tone {
-    match status {
-        "healthy" => Tone::Success,
-        "up" => Tone::Info,
-        "boot" | "created" | "starting" | "restarting" | "removing" | "paused" | "exited 0" => {
-            Tone::Muted
+impl From<Severity> for Tone {
+    fn from(severity: Severity) -> Self {
+        match severity {
+            Severity::Muted => Self::Muted,
+            Severity::Info => Self::Info,
+            Severity::Success => Self::Success,
+            Severity::Warning => Self::Warning,
+            Severity::Error => Self::Error,
         }
-        "unhealthy" => Tone::Error,
-        value if value.starts_with("down (exit ") => Tone::Muted,
-        _ => Tone::Warning,
+    }
+}
+
+fn status_icon(status: Status) -> &'static str {
+    match status {
+        Status::NotStarted | Status::Waiting => "",
+        Status::Running => "",
+        Status::Healthy => "",
+        Status::Completed => "",
+        Status::Unhealthy => "",
+        Status::Paused => "",
+        Status::Stopped => "",
+        Status::Restarting => "",
+        Status::Interrupted => "",
+        Status::Failed | Status::ContainerError => "",
+        Status::Degraded => "",
+        Status::Unknown | Status::Stale | Status::Missing => "",
+        _ => "⠋",
     }
 }
 
@@ -56,68 +74,45 @@ struct InstanceSummary {
     tone: Tone,
     loading: bool,
     icon: &'static str,
+    detail: Option<String>,
+    detail_tone: Tone,
 }
 
 fn instance_summary(instance: &Instance, startup: Option<&StartupTiming>) -> InstanceSummary {
-    let services = &instance.services;
-    let running = services
-        .iter()
-        .filter(|service| !service.one_shot)
-        .collect::<Vec<_>>();
-    let ready = running
-        .iter()
-        .filter(|service| matches!(service.status.as_str(), "up" | "healthy"))
-        .count();
-    let stopped = running.is_empty()
-        || running
-            .iter()
-            .all(|service| matches!(service.status.as_str(), "paused" | "down (exit 0)"));
-    let starting = services.iter().any(|service| {
-        matches!(
-            service.status.as_str(),
-            "created" | "restarting" | "boot" | "starting"
-        ) || service.one_shot && service.consumes_resources()
-    });
-    let removing = services.iter().any(|service| service.status == "removing");
-    let failed = instance.startup_error().is_some()
-        || services.iter().any(|service| {
-            service.status == "unhealthy"
-                || service
-                    .status
-                    .strip_prefix("down (exit ")
-                    .and_then(|value| value.strip_suffix(')'))
-                    .is_some_and(|code| code != "0")
-        });
-    let (label, tone, loading, icon) = if removing {
-        ("Removing".into(), Tone::Muted, true, "")
-    } else if failed {
-        ("Failed".into(), Tone::Error, false, "")
-    } else if let Some(startup) = startup {
-        if services.is_empty() {
-            (startup_label("Creating", startup), Tone::Muted, true, "")
-        } else {
-            (startup_label("Starting", startup), Tone::Muted, true, "")
-        }
-    } else if instance.pending {
-        ("Creating".into(), Tone::Muted, true, "")
-    } else if starting && ready > 0 {
-        ("Partially running".into(), Tone::Warning, false, "")
-    } else if starting {
-        ("Starting".into(), Tone::Muted, true, "")
-    } else if stopped {
-        ("Stopped".into(), Tone::Muted, false, "")
-    } else if running.iter().all(|service| service.status == "healthy") {
-        ("Healthy".into(), Tone::Success, false, "")
-    } else if ready == running.len() {
-        ("Running".into(), Tone::Success, false, "")
+    let mut summary = instance.status_summary();
+    if let Some(startup) = startup {
+        summary.label = startup_label(
+            if instance.services.is_empty() {
+                "Creating"
+            } else {
+                "Starting"
+            },
+            startup,
+        );
+        summary.severity = Severity::Info;
+        summary.busy = true;
+    }
+    let detail = if summary.expected > 0 {
+        Some(format!(
+            "{}/{} running{}",
+            summary.running,
+            summary.expected,
+            summary
+                .detail
+                .as_ref()
+                .map(|detail| format!(" · {detail}"))
+                .unwrap_or_default()
+        ))
     } else {
-        ("Partially running".into(), Tone::Warning, false, "")
+        summary.detail.clone()
     };
     InstanceSummary {
-        label,
-        tone,
-        loading,
-        icon,
+        label: summary.label,
+        tone: summary.severity.into(),
+        loading: summary.busy,
+        icon: status_icon(summary.status),
+        detail,
+        detail_tone: summary.detail_severity.into(),
     }
 }
 
@@ -144,7 +139,7 @@ fn format_seconds(milliseconds: u64) -> String {
     format!("{}s", milliseconds.div_ceil(1_000))
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(super) struct Row {
     pub id: String,
     pub parent: Option<String>,
@@ -163,13 +158,26 @@ pub(super) struct Row {
     pub instance: Option<String>,
     pub service: Option<(String, String)>,
     pub workspace: Option<String>,
-    pub running: bool,
     pub alternate_background: bool,
     pub gateway_url: Option<String>,
     pub details: Vec<Property>,
+    pub status_detail: Option<String>,
+    pub detail_tone: Tone,
+    pub metrics: UsageSummary,
+    pub can_start: bool,
+    pub can_stop: bool,
+    pub can_restart: bool,
 }
 
 impl Row {
+    pub(super) fn search_text(&self) -> String {
+        format!(
+            "{} {}",
+            self.label,
+            self.status_detail.as_deref().unwrap_or_default()
+        )
+    }
+
     pub(super) fn text(&self, spinner: &str) -> Text<'static> {
         let mut lines = self.label.lines();
         let icon = if self.loading { spinner } else { self.icon };
@@ -183,10 +191,16 @@ impl Row {
             first_line.push(Span::raw(name.to_owned()));
             first_line.push(Span::styled(
                 status.clone(),
-                Style::default().fg(tuicore::theme().muted_fg()),
+                Style::default().fg(self.tone.color()),
             ));
         } else {
             first_line.push(Span::raw(first.to_owned()));
+        }
+        if let Some(detail) = &self.status_detail {
+            first_line.push(Span::styled(
+                format!(" · {}", detail.lines().next().unwrap_or_default()),
+                Style::default().fg(self.detail_tone.color()),
+            ));
         }
         let mut text = vec![Line::from(first_line)];
         text.extend(lines.map(|line| {
@@ -200,18 +214,62 @@ impl Row {
 
     pub(super) fn resource_text(&self) -> Text<'static> {
         let memory = self
-            .usage
-            .map_or_else(|| "—".into(), |usage| details::memory(usage.memory_bytes));
-        let cpu = self.usage.and_then(|usage| usage.cpu_basis_points);
+            .metrics
+            .memory_bytes
+            .map_or_else(|| "—".into(), details::memory);
+        let cpu = self.metrics.cpu_basis_points;
+        let suffix = |partial: bool, stale: bool, age: Option<u64>| {
+            let mut suffix = if partial {
+                " · partial".to_owned()
+            } else {
+                String::new()
+            };
+            if stale {
+                suffix.push_str(
+                    &age.map(|age| format!(" · stale {age}s"))
+                        .unwrap_or_else(|| " · stale".into()),
+                );
+            }
+            suffix
+        };
         Text::from(vec![
             Line::from(Span::styled(
-                format!("󰑹 {memory}"),
-                Style::default()
-                    .fg(details::memory_tone(self.usage, self.memory_limit_bytes).color()),
+                format!(
+                    "󰑹 {memory}{}",
+                    suffix(
+                        self.metrics.memory_partial,
+                        self.metrics.memory_stale,
+                        self.metrics.age_seconds
+                    )
+                ),
+                Style::default().fg(if self.metrics.memory_stale {
+                    Tone::Muted
+                } else {
+                    details::memory_tone(
+                        self.metrics.memory_bytes.map(|memory_bytes| ResourceUsage {
+                            memory_bytes,
+                            ..Default::default()
+                        }),
+                        self.metrics.memory_limit_bytes,
+                    )
+                }
+                .color()),
             )),
             Line::from(Span::styled(
-                format!(" {}", cpu.map_or_else(|| "—".into(), details::cpu)),
-                Style::default().fg(if cpu.is_some() {
+                format!(
+                    " {}{}",
+                    cpu.map_or_else(|| "—".into(), details::cpu),
+                    if self.metrics.paused {
+                        " · paused".into()
+                    } else {
+                        suffix(
+                            self.metrics.cpu_partial,
+                            self.metrics.cpu_stale,
+                            self.metrics.cpu_age_seconds,
+                        )
+                    }
+                ),
+                Style::default().fg(if cpu.is_some() && !self.metrics.cpu_stale {
                     Tone::Normal
                 } else {
                     Tone::Muted
@@ -247,7 +305,7 @@ fn tree_row_ids(
 
 fn matches_search(row: &Row, query: &str) -> bool {
     query.is_empty()
-        || [row.label.as_str(), &row.resource_text().to_string()]
+        || [&row.search_text(), &row.resource_text().to_string()]
             .into_iter()
             .any(|value| tuicore::search_match(query, value, tuicore::SearchMode::Fuzzy).is_some())
 }
@@ -362,10 +420,16 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
             instance: None,
             service: None,
             workspace: None,
-            running: false,
             alternate_background: false,
             gateway_url: None,
             details: details::template(template, instance_count),
+            metrics: UsageSummary::instances(
+                snapshot
+                    .instances
+                    .iter()
+                    .filter(|instance| instance.template_directory == template.directory),
+            ),
+            ..Row::default()
         });
     }
     for instance in instances {
@@ -404,7 +468,6 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
                 compose_source: String::new(),
                 instance: None,
                 service: None,
-                running: false,
                 alternate_background: false,
                 manifest_source: None,
                 workspace: None,
@@ -417,6 +480,13 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
                     )
                     .tone(Tone::Warning),
                 ],
+                metrics: UsageSummary::instances(
+                    snapshot
+                        .instances
+                        .iter()
+                        .filter(|other| other.template_directory == instance.template_directory),
+                ),
+                ..Row::default()
             });
         }
         let template_row = rows
@@ -451,44 +521,85 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
             instance: Some(instance.name.clone()),
             service: None,
             workspace: Some(instance.workspace.clone()),
-            running: instance
-                .services
-                .iter()
-                .any(InstanceService::consumes_resources),
             alternate_background: false,
             gateway_url: None,
             details: details::instance(instance),
+            status_detail: summary.detail,
+            detail_tone: summary.detail_tone,
+            metrics: UsageSummary::instance(instance),
+            can_start: instance.can_start() && !compose_file.is_empty(),
+            can_stop: instance.can_stop(),
+            can_restart: instance.can_restart(),
         });
-        for service in instance.services.iter().filter(|service| !service.one_shot) {
-            let service_id = format!("service:{}:{}", instance.name, service.name);
+        let completed = instance
+            .services
+            .iter()
+            .filter(|service| {
+                service.one_shot && service.status_summary().status == Status::Completed
+            })
+            .count();
+        let setup_id = format!("setup:{}", instance.name);
+        if completed > 0 {
+            let mut group = rows.last().expect("instance row").clone();
+            group.id = setup_id.clone();
+            group.parent = Some(instance_id.clone());
+            group.label = format!("Setup · {completed} completed");
+            group.status = None;
+            group.status_detail = None;
+            group.icon = "";
+            group.tone = Tone::Success;
+            group.loading = false;
+            group.instance = None;
+            group.can_start = false;
+            group.can_stop = false;
+            group.can_restart = false;
+            group.usage = None;
+            group.metrics = UsageSummary::default();
+            rows.push(group);
+        }
+        for service in &instance.services {
+            let service_id = if service.runtime.replica > 1 {
+                format!(
+                    "service:{}:{}:{}",
+                    instance.name, service.name, service.runtime.replica
+                )
+            } else {
+                format!("service:{}:{}", instance.name, service.name)
+            };
+            let service_summary = service.status_summary();
             let route_detail = service
                 .url
                 .clone()
                 .map(|url| {
-                    service
-                        .port
-                        .map_or_else(|| url.clone(), |port| format!("{url} · port {port}"))
+                    service.port.map_or_else(
+                        || format!("{GATEWAY_ICON} {url}"),
+                        |port| format!("{GATEWAY_ICON} {url} · port {port}"),
+                    )
                 })
                 .or_else(|| service.port.map(|port| format!("port {port}")));
-            let icon = if route_detail.is_some() {
-                GATEWAY_ICON
+            let label = if service.runtime.replica > 1 {
+                format!("{} #{}", service.name, service.runtime.replica)
             } else {
-                SERVICE_ICON
+                service.name.clone()
             };
+            let label = format!("{label} · {}", service_summary.label);
             rows.push(Row {
                 id: service_id.clone(),
-                parent: Some(instance_id.clone()),
+                parent: Some(
+                    if service.one_shot && service_summary.status == Status::Completed {
+                        setup_id.clone()
+                    } else {
+                        instance_id.clone()
+                    },
+                ),
                 label: route_detail
                     .as_ref()
                     .or(service.image.as_ref())
-                    .map_or_else(
-                        || service.name.clone(),
-                        |detail| format!("{}\n{detail}", service.name),
-                    ),
-                status: None,
-                icon,
-                tone: service_tone(&service.status),
-                loading: false,
+                    .map_or_else(|| label.clone(), |detail| format!("{label}\n{detail}")),
+                status: Some(service_summary.label),
+                icon: status_icon(service_summary.status),
+                tone: service_summary.severity.into(),
+                loading: service_summary.busy,
                 usage: service.usage,
                 memory_limit_bytes: service.memory_limit_bytes,
                 template: instance.template.clone(),
@@ -497,18 +608,97 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
                 compose_source: compose_source.clone(),
                 manifest_source: None,
                 instance: None,
-                service: Some((instance.name.clone(), service.name.clone())),
+                service: (!service.one_shot).then(|| (instance.name.clone(), service.name.clone())),
                 workspace: None,
-                running: service.consumes_resources() || service.status == "restarting",
                 alternate_background: false,
                 gateway_url: service.url.clone(),
                 details: details::service(service),
+                status_detail: service_summary.detail,
+                detail_tone: service_summary.detail_severity.into(),
+                metrics: UsageSummary::service(service),
+                can_start: service.can_start(),
+                can_stop: service.can_stop(),
+                can_restart: service.can_restart(),
             });
         }
+    }
+    for activity in &snapshot.activities {
+        if snapshot
+            .instances
+            .iter()
+            .any(|instance| instance.name == activity.name)
+        {
+            continue;
+        }
+        let Some(name) = activity.template.as_ref() else {
+            continue;
+        };
+        if !rows
+            .iter()
+            .any(|row| row.parent.is_none() && &row.template == name)
+        {
+            rows.push(Row {
+                id: format!("template:missing:{name}"),
+                label: format!("{name} [missing]"),
+                template: name.clone(),
+                icon: TEMPLATE_ICON,
+                tone: Tone::Warning,
+                details: vec![
+                    Property::new("Status", "Missing template; retained operation evidence")
+                        .tone(Tone::Warning),
+                ],
+                ..Default::default()
+            });
+        }
+        let template = rows
+            .iter()
+            .find(|row| row.parent.is_none() && &row.template == name)
+            .expect("activity template inserted");
+        let mut row = template.clone();
+        row.id = format!("operation:{}:{}", activity.id, activity.name);
+        row.parent = Some(template.id.clone());
+        let label = if activity.active() {
+            activity.status().label().to_owned()
+        } else {
+            format!(
+                "{} failed",
+                if matches!(
+                    activity.action.as_str(),
+                    "delete_instance" | "delete_template" | "remove_template"
+                ) {
+                    "Cleanup"
+                } else {
+                    "Operation"
+                }
+            )
+        };
+        row.label = format!("{} · {label}", activity.name);
+        row.status = Some(label);
+        row.status_detail = activity.error.clone();
+        row.detail_tone = Tone::Error;
+        row.icon = if activity.active() { "⠋" } else { "" };
+        row.tone = if activity.active() {
+            Tone::Info
+        } else {
+            Tone::Error
+        };
+        row.loading = activity.active();
+        row.usage = None;
+        row.metrics = UsageSummary::default();
+        row.details = vec![
+            Property::new("Operation", &activity.action),
+            Property::new("Instance", &activity.name),
+        ];
+        if let Some(error) = &activity.error {
+            row.details
+                .push(Property::new("Error", error).tone(Tone::Error));
+        }
+        rows.push(row);
     }
     for row in &mut rows {
         if row.parent.is_none() {
             details::resources(&mut row.details, row.usage, row.memory_limit_bytes);
+            details::usage_details(&mut row.details, &row.metrics);
         }
     }
     rows.sort_by(|left, right| {

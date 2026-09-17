@@ -7,7 +7,7 @@ use std::{
 use super::{
     command::{Progress, docker, remaining, run},
     config::Config,
-    docker as runtime, gateway, lifecycle, templates,
+    docker as runtime, gateway, journal, lifecycle, templates,
 };
 use crate::store::environments::{Route, validate_instance_name};
 
@@ -22,56 +22,74 @@ pub(super) fn change_state(
     validate_instance_name(name)?;
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let _lock = gateway::lock(config, &format!("instance-{name}"))?;
-    let (instance, _) = lifecycle::managed_instance(config, name, deadline)?;
-    let targets: Vec<_> = instance
-        .services
-        .iter()
-        .filter(|target| !target.one_shot && service.is_none_or(|name| target.name == name))
-        .collect();
-    if targets.is_empty() {
-        return Err(match service {
-            Some(service) => format!("long-running service {service} not found in instance {name}"),
-            None => "instance has no long-running services".into(),
-        });
-    }
-    if action != "stop" && targets.iter().any(|target| target.status == "paused") {
-        return Err(format!("unpause the selected containers before {action}"));
-    }
-    let mut routes = BTreeMap::new();
-    let _template_lock = if action != "stop" && targets.iter().any(|target| target.url.is_some()) {
-        let lock = gateway::shared_lock(config, &format!("template-{}", instance.template))?;
-        let template = templates::get(config, &instance.template)?;
-        if template.directory != instance.template_directory {
-            return Err("instance belongs to a different template directory".into());
+    let operation = match (action, service.is_some()) {
+        ("start", _) => "start_service",
+        ("stop", _) => "stop_service",
+        (_, true) => "restart_service",
+        _ => "restart_instance",
+    };
+    let activity = journal::ActivityGuard::begin(config, name, operation, service, timeout)?;
+    let result = (|| {
+        let (instance, _) = lifecycle::managed_instance(config, name, deadline)?;
+        journal::activity_template(config, name, &instance.template)?;
+        let targets: Vec<_> = instance
+            .services
+            .iter()
+            .filter(|target| !target.one_shot && service.is_none_or(|name| target.name == name))
+            .collect();
+        if targets.is_empty() {
+            return Err(match service {
+                Some(service) => {
+                    format!("long-running service {service} not found in instance {name}")
+                }
+                None => "instance has no long-running services".into(),
+            });
         }
-        for target in targets.iter().filter(|target| target.url.is_some()) {
-            let route =
-                template.manifest.routes.get(&target.name).ok_or_else(|| {
+        if action != "stop"
+            && targets
+                .iter()
+                .any(|target| target.state() == crate::store::environments::ContainerState::Paused)
+        {
+            return Err(format!("unpause the selected containers before {action}"));
+        }
+        let mut routes = BTreeMap::new();
+        let _template_lock = if action != "stop"
+            && targets.iter().any(|target| target.url.is_some())
+        {
+            let lock = gateway::shared_lock(config, &format!("template-{}", instance.template))?;
+            let template = templates::get(config, &instance.template)?;
+            if template.directory != instance.template_directory {
+                return Err("instance belongs to a different template directory".into());
+            }
+            for target in targets.iter().filter(|target| target.url.is_some()) {
+                let route = template.manifest.routes.get(&target.name).ok_or_else(|| {
                     format!("missing readiness configuration for {}", target.name)
                 })?;
-            routes.insert(target.name.clone(), route.clone());
+                routes.insert(target.name.clone(), route.clone());
+            }
+            Some(lock)
+        } else {
+            None
+        };
+        progress(format!(
+            "Docker {action}: {} existing container(s); preserving data and configuration",
+            targets.len()
+        ));
+        if action == "stop" {
+            return journal::stop(config, &instance, &targets, deadline, progress, false);
         }
-        Some(lock)
-    } else {
-        None
-    };
-    progress(format!(
-        "Docker {action}: {} existing container(s); preserving data and configuration",
-        targets.len()
-    ));
-    let mut command = docker();
-    command
-        .arg(action)
-        .args(targets.iter().map(|target| &target.container_id));
-    run(command, remaining(deadline)?, Some(progress.clone()))?;
-    if action == "stop" {
-        return Ok(());
-    }
-    let ids = targets
-        .iter()
-        .map(|target| target.container_id.clone())
-        .collect();
-    wait_ready(config, name, &ids, &routes, deadline, progress)
+        let mut command = docker();
+        command
+            .arg(action)
+            .args(targets.iter().map(|target| &target.container_id));
+        run(command, remaining(deadline)?, Some(progress.clone()))?;
+        let ids = targets
+            .iter()
+            .map(|target| target.container_id.clone())
+            .collect();
+        wait_ready(config, name, &ids, &routes, deadline, progress)
+    })();
+    activity.finish(result)
 }
 
 pub(super) fn wait_ready(
@@ -124,6 +142,7 @@ pub(super) fn wait_ready(
         };
         match waiting {
             None => {
+                journal::readiness_passed(config, &instance)?;
                 progress("Ready: service health and configured gateway checks passed".into());
                 return Ok(());
             }

@@ -101,7 +101,7 @@ fn tree_search_matches_service_labels_and_resource_values() {
             .unwrap();
         let lines = rendered_lines(&terminal, area);
         assert!(
-            lines.iter().any(|line| line.contains("󰖟 web")),
+            lines.iter().any(|line| line.contains(" web")),
             "{query}: {lines:#?}"
         );
         assert!(

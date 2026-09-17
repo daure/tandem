@@ -1,12 +1,12 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
 };
 
 use serde::Deserialize;
 
 use super::{Environments, stats::StatsClient};
-use crate::store::environments::{Instance, ResourceUsage};
+use crate::store::environments::{ContainerState, Instance, InstanceService, ResourceUsage};
 
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(60);
 const WARMUP_INTERVAL: Duration = Duration::from_secs(1);
@@ -18,6 +18,7 @@ type SampleResults = BTreeMap<String, Result<Stats, String>>;
 pub(crate) struct ResourceRequest {
     containers: BTreeMap<String, Option<String>>,
     warm_up: bool,
+    paused: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -26,12 +27,15 @@ pub(super) struct ResourceCache {
     last_containers: BTreeMap<String, Option<String>>,
     in_flight: bool,
     samples: BTreeMap<String, CachedSample>,
+    errors: BTreeMap<String, String>,
+    last_paused: BTreeSet<String>,
 }
 
 struct CachedSample {
     started_at: Option<String>,
     stats: Stats,
     usage: ResourceUsage,
+    paused: bool,
 }
 
 impl ResourceCache {
@@ -50,10 +54,19 @@ impl ResourceCache {
             .filter(|service| service.consumes_resources() && !service.container_id.is_empty())
             .map(|service| (service.container_id.clone(), service.started_at.clone()))
             .collect();
+        let paused: BTreeSet<_> = instances
+            .iter()
+            .flat_map(|instance| &instance.services)
+            .filter(|service| service.state() == ContainerState::Paused)
+            .map(|service| service.container_id.clone())
+            .collect();
         self.samples
             .retain(|id, sample| containers.get(id) == Some(&sample.started_at));
         self.last_containers
             .retain(|id, _| containers.contains_key(id));
+        self.errors.retain(|id, _| {
+            containers.contains_key(id) && self.last_containers.get(id) == containers.get(id)
+        });
         let full_sample = force
             || self
                 .last_attempt
@@ -61,7 +74,9 @@ impl ResourceCache {
         let targets: BTreeMap<_, _> = containers
             .iter()
             .filter(|(id, started_at)| {
-                full_sample || self.last_containers.get(*id) != Some(*started_at)
+                full_sample
+                    || self.last_containers.get(*id) != Some(*started_at)
+                    || self.last_paused.contains(*id) != paused.contains(*id)
             })
             .map(|(id, started_at)| (id.clone(), started_at.clone()))
             .collect();
@@ -70,18 +85,20 @@ impl ResourceCache {
         }
         let warm_up = force
             || targets.iter().any(|(id, started_at)| {
-                self.samples
-                    .get(id)
-                    .is_none_or(|sample| sample.started_at != *started_at)
+                self.samples.get(id).is_none_or(|sample| {
+                    sample.started_at != *started_at || sample.paused != paused.contains(id)
+                })
             });
         if full_sample {
             self.last_attempt = Some(now);
         }
         self.last_containers = containers;
+        self.last_paused = paused.clone();
         self.in_flight = true;
         Some(ResourceRequest {
             containers: targets,
             warm_up,
+            paused,
         })
     }
 
@@ -96,7 +113,24 @@ impl ResourceCache {
                 .filter(|sample| {
                     service.consumes_resources() && sample.started_at == service.started_at
                 })
-                .map(|sample| sample.usage);
+                .map(|sample| {
+                    let mut usage = sample.usage;
+                    if service.state() == ContainerState::Paused
+                        || sample.paused != (service.state() == ContainerState::Paused)
+                    {
+                        usage.cpu_basis_points = None;
+                    }
+                    usage
+                });
+            service.runtime.resource_error = self
+                .errors
+                .get(&service.container_id)
+                .filter(|_| {
+                    service.consumes_resources()
+                        && self.last_containers.get(&service.container_id)
+                            == Some(&service.started_at)
+                })
+                .cloned();
         }
     }
 
@@ -108,17 +142,20 @@ impl ResourceCache {
         self.in_flight = false;
         match result {
             Ok(samples) => {
-                let mut errors = Vec::new();
                 for (id, result) in samples {
                     if let Some(started_at) = request.containers.get(&id) {
                         let stats = match result {
                             Ok(stats) => stats,
                             Err(error) => {
-                                errors.push(format!("{id}: {error}"));
+                                self.errors.insert(id.clone(), error);
                                 continue;
                             }
                         };
-                        let baseline = self.samples.get(&id);
+                        self.errors.remove(&id);
+                        let paused = request.paused.contains(&id);
+                        let baseline = self.samples.get(&id).filter(|sample| {
+                            sample.started_at == *started_at && sample.paused == paused
+                        });
                         let usage = stats.usage(baseline.map(|sample| &sample.stats));
                         self.samples.insert(
                             id,
@@ -126,13 +163,25 @@ impl ResourceCache {
                                 started_at: started_at.clone(),
                                 stats,
                                 usage,
+                                paused,
                             },
                         );
                     }
                 }
-                (!errors.is_empty()).then(|| errors.join("\n"))
+                (!self.errors.is_empty()).then(|| {
+                    self.errors
+                        .iter()
+                        .map(|(id, error)| format!("{id}: {error}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
             }
-            Err(error) => Some(error),
+            Err(error) => {
+                for id in request.containers.keys() {
+                    self.errors.insert(id.clone(), error.clone());
+                }
+                Some(error)
+            }
         }
     }
 }
@@ -152,7 +201,9 @@ impl Environments {
         let ready = snapshot
             .instances
             .iter()
-            .filter(|instance| !instance.pending && !snapshot.startup.contains_key(&instance.name))
+            .filter(|instance| {
+                !instance.suppress_resources() && !snapshot.startup.contains_key(&instance.name)
+            })
             .cloned()
             .collect::<Vec<_>>();
         self.resources
@@ -187,11 +238,28 @@ impl Environments {
 
     fn publish_resources(
         &self,
-        request: ResourceRequest,
-        result: Result<SampleResults, String>,
+        mut request: ResourceRequest,
+        mut result: Result<SampleResults, String>,
         started: Instant,
         in_flight: bool,
     ) {
+        let eligible = self
+            .snapshot()
+            .instances
+            .into_iter()
+            .filter(|instance| !instance.suppress_resources())
+            .flat_map(|instance| instance.services)
+            .filter(InstanceService::consumes_resources)
+            .map(|service| {
+                (
+                    service.container_id.clone(),
+                    (
+                        service.started_at.clone(),
+                        service.state() == ContainerState::Paused,
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         let mut snapshot = self
             .snapshot
             .lock()
@@ -200,6 +268,21 @@ impl Environments {
             .resources
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        request.containers.retain(|id, started| {
+            snapshot.instances.iter().any(|instance| {
+                eligible.get(id) == Some(&(started.clone(), request.paused.contains(id)))
+                    && instance.services.iter().any(|service| {
+                        service.container_id == *id
+                            && service.started_at == *started
+                            && service.consumes_resources()
+                            && (service.state() == ContainerState::Paused)
+                                == request.paused.contains(id)
+                    })
+            })
+        });
+        if let Ok(samples) = &mut result {
+            samples.retain(|id, _| request.containers.contains_key(id));
+        }
         snapshot.resource_sample_duration_ms = Some(started.elapsed().as_millis() as u64);
         snapshot.resource_error = cache.finish(request, result);
         cache.in_flight = in_flight;

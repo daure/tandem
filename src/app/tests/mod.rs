@@ -57,7 +57,13 @@ fn snapshot() -> EnvironmentSnapshot {
                 usage: None,
                 memory_limit_bytes: None,
                 volumes: Vec::new(),
+                ..Default::default()
             }],
+            runtime: crate::store::environments::InstanceRuntime {
+                topology_known: true,
+                ..Default::default()
+            },
+            ..Default::default()
         }],
         ..Default::default()
     }
@@ -93,23 +99,24 @@ fn tree_rows_show_routed_services_without_gateway_children() {
         usage: None,
         memory_limit_bytes: None,
         volumes: Vec::new(),
+        ..Default::default()
     });
     let rows = rows::from_snapshot(&snapshot);
     assert_eq!(rows.len(), 4);
     assert_eq!(rows[0].label, "website\n 1");
-    assert_eq!(rows[0].icon, "󰠲");
+    assert_eq!(rows[0].icon, "");
     assert_eq!(rows[1].parent, Some(rows[0].id.clone()));
     assert_eq!(rows[1].label, "review · Running\n/tmp/workspaces/review");
     assert_eq!(rows[1].icon, "");
     assert_eq!(rows[2].parent, Some(rows[1].id.clone()));
     assert_eq!(
         rows[2].label,
-        "web\nhttp://localhost:9876/review/web/ · port 8080"
+        "web · Running\n http://localhost:9876/review/web/ · port 8080"
     );
-    assert_eq!(rows[2].icon, "󰖟");
+    assert_eq!(rows[2].icon, "");
     assert_eq!(rows[3].parent, Some(rows[1].id.clone()));
-    assert_eq!(rows[3].label, "db\npostgres:17.5-alpine");
-    assert_eq!(rows[3].icon, "󰒋");
+    assert_eq!(rows[3].label, "db · Healthy\npostgres:17.5-alpine");
+    assert_eq!(rows[3].icon, "");
     assert_eq!(
         rows[2].gateway_url.as_deref(),
         Some("http://localhost:9876/review/web/")
@@ -174,7 +181,7 @@ fn template_rows_with_instances_precede_empty_templates_and_sort_by_name() {
 }
 
 #[test]
-fn declared_one_shots_are_hidden_in_the_tree_and_available_in_instance_details() {
+fn setup_jobs_are_visible_and_completed_jobs_are_grouped() {
     let mut snapshot = snapshot();
     let mut setup = snapshot.instances[0].services[0].clone();
     setup.name = "repo-sync".into();
@@ -186,18 +193,29 @@ fn declared_one_shots_are_hidden_in_the_tree_and_available_in_instance_details()
     for status in ["up", "exited 0", "down (exit 1)"] {
         snapshot.instances[0].services[1].status = status.into();
         let rows = rows::from_snapshot(&snapshot);
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[2].id, "service:review:web");
+        assert_eq!(rows.len(), if status == "exited 0" { 5 } else { 4 });
+        let setup = rows
+            .iter()
+            .find(|row| row.id == "service:review:repo-sync")
+            .unwrap();
+        assert_eq!(
+            setup.parent.as_deref(),
+            Some(if status == "exited 0" {
+                "setup:review"
+            } else {
+                "instance:review"
+            })
+        );
         assert!(
             rows[1]
                 .details
                 .iter()
-                .any(|row| row.name == "repo-sync / Status" && row.value == status)
+                .any(|row| row.name == "repo-sync / Docker status" && row.value == status)
         );
     }
 
     snapshot.templates.clear();
-    assert_eq!(rows::from_snapshot(&snapshot).len(), 3);
+    assert_eq!(rows::from_snapshot(&snapshot).len(), 4);
 
     snapshot.instances[0].services[1].one_shot = false;
     let rows = rows::from_snapshot(&snapshot);

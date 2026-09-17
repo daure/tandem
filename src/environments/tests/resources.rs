@@ -25,7 +25,13 @@ fn instances() -> Vec<Instance> {
             usage: None,
             memory_limit_bytes: None,
             volumes: Vec::new(),
+            ..Default::default()
         }],
+        runtime: crate::store::environments::InstanceRuntime {
+            topology_known: true,
+            ..Default::default()
+        },
+        ..Default::default()
     }]
 }
 
@@ -253,7 +259,14 @@ fn successful_startup_publishes_ready_services_before_clearing_startup_state() {
     environment.finish_operation(&operation.id, Ok(Some(ready.clone())));
     let snapshot = environment.snapshot();
     assert!(snapshot.startup.is_empty());
-    assert_eq!(snapshot.instances, vec![ready.clone()]);
+    assert_eq!(snapshot.instances[0].services.len(), 2);
+    assert!(
+        snapshot.instances[0]
+            .services
+            .iter()
+            .all(InstanceService::ready)
+    );
+    let ready = snapshot.instances[0].clone();
     environment.publish_instances(Ok(vec![starting.clone()]), old_revision);
     assert_eq!(environment.snapshot().instances, vec![ready]);
     let revision = environment
@@ -261,7 +274,10 @@ fn successful_startup_publishes_ready_services_before_clearing_startup_state() {
         .load(std::sync::atomic::Ordering::SeqCst);
     starting.services[1].status = "unhealthy".into();
     environment.publish_instances(Ok(vec![starting.clone()]), revision);
-    assert_eq!(environment.snapshot().instances, vec![starting]);
+    assert_eq!(
+        environment.snapshot().instances[0].services[1].status,
+        "unhealthy"
+    );
 }
 
 #[test]
@@ -757,4 +773,129 @@ fn live_resource_sampling_benchmark() {
         assert!(usage.cpu_basis_points.is_some());
         assert!(environment.begin_resource_sample(false).is_none());
     }
+}
+
+#[test]
+fn pause_and_resume_trigger_targeted_cpu_baselines_without_resetting_periodic_due_time() {
+    let mut cache = ResourceCache::default();
+    let mut inventory = instances();
+    let now = Instant::now();
+    let first = cache.begin(&inventory, now, false).unwrap();
+    cache.finish(first, Ok(samples(stats(1, 100, 1000))));
+    inventory[0].services[0].status = "paused".into();
+    let paused = cache
+        .begin(&inventory, now + Duration::from_secs(2), false)
+        .unwrap();
+    assert!(paused.warm_up);
+    cache.finish(paused, Ok(samples(stats(2, 100, 2000))));
+    cache.apply(&mut inventory);
+    assert_eq!(
+        inventory[0].services[0].usage.unwrap().memory_bytes,
+        80 * 1048576
+    );
+    assert_eq!(
+        inventory[0].services[0].usage.unwrap().cpu_basis_points,
+        None
+    );
+    inventory[0].services[0].status = "healthy".into();
+    let resumed = cache
+        .begin(&inventory, now + Duration::from_secs(3), false)
+        .unwrap();
+    assert!(resumed.warm_up);
+    cache.finish(resumed, Ok(samples(stats(3, 200, 3000))));
+    cache.apply(&mut inventory);
+    assert_eq!(
+        inventory[0].services[0].usage.unwrap().cpu_basis_points,
+        None
+    );
+    assert_eq!(cache.last_attempt, Some(now));
+}
+
+#[test]
+fn late_samples_cannot_publish_into_a_restarted_run() {
+    let (_home, environment) = environment();
+    let request = environment.begin_resource_sample(false).unwrap();
+    environment.snapshot.lock().unwrap().instances[0].services[0].started_at =
+        Some("new-run".into());
+    environment.sample_resources_with(request, |_| Ok(samples(stats(1, 100, 1000))), |_| {});
+    assert!(
+        environment.snapshot().instances[0].services[0]
+            .usage
+            .is_none()
+    );
+    assert!(environment.begin_resource_sample(false).unwrap().warm_up);
+}
+
+#[test]
+fn resource_staleness_uses_focus_budget_without_changing_health() {
+    let mut app = instances().remove(0);
+    app.services[0].usage = Some(stats(1, 100, 1000).usage(None));
+    let now = app.services[0].usage.unwrap().sampled_at_unix_seconds + 121;
+    crate::environments::project_instance(&mut app, false, now, false);
+    assert!(!app.services[0].runtime.resources_stale);
+    crate::environments::project_instance(&mut app, false, now, true);
+    assert!(app.services[0].runtime.resources_stale);
+    assert_eq!(
+        app.summary.status,
+        crate::store::environments::Status::Healthy
+    );
+    app.services[0].runtime.resource_error = Some("stats timeout".into());
+    crate::environments::project_instance(&mut app, false, now, false);
+    assert!(app.services[0].runtime.resources_stale);
+}
+
+#[test]
+fn failed_and_expired_startup_release_metric_suppression() {
+    for expired in [false, true] {
+        let (_home, environment) = environment();
+        let operation = environment
+            .begin("create_instance", "review", Some("website".into()))
+            .unwrap();
+        assert!(environment.begin_resource_sample(false).is_none());
+        if expired {
+            environment
+                .operations
+                .lock()
+                .unwrap()
+                .get_mut(&operation.id)
+                .unwrap()
+                .timeout_seconds = 0;
+        } else {
+            environment.finish_operation(&operation.id, Err("readiness failed".into()));
+        }
+        assert!(environment.begin_resource_sample(false).is_some());
+        assert_eq!(
+            environment.operation(&operation.id).unwrap().state,
+            crate::store::environments::OperationState::Failed
+        );
+    }
+}
+
+#[test]
+fn historical_failed_jobs_do_not_resurrect_after_recovery_and_deletion() {
+    let (_home, environment) = environment();
+    let failed = environment
+        .begin("create_instance", "review", Some("website".into()))
+        .unwrap();
+    environment.finish_operation(&failed.id, Err("startup failed".into()));
+    let recovered = environment
+        .begin("create_instance", "review", Some("website".into()))
+        .unwrap();
+    environment.finish_operation(&recovered.id, Ok(Some(instances().remove(0))));
+    let deleted = environment
+        .begin("delete_instance", "review", None)
+        .unwrap();
+    environment.finish_operation(&deleted.id, Ok(None));
+    environment.snapshot.lock().unwrap().instances.clear();
+    assert!(environment.snapshot().activities.is_empty());
+    let created = environment
+        .begin("create_instance", "review", Some("website".into()))
+        .unwrap();
+    let snapshot = environment.snapshot();
+    assert_eq!(snapshot.activities.len(), 1);
+    assert_eq!(snapshot.activities[0].id, created.id);
+    assert_eq!(
+        snapshot.instances[0].summary.status,
+        crate::store::environments::Status::Creating
+    );
 }

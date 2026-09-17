@@ -13,18 +13,42 @@ use super::{
     config::{Config, private_file},
 };
 
-pub(crate) fn lock(config: &Config, resource: &str) -> Result<File, String> {
+#[derive(Debug)]
+pub(crate) struct Lock(File);
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        // A concurrently forked child can briefly retain the open file description.
+        if let Err(error) = self.0.unlock() {
+            crate::diagnostics::record_error("cannot release operation lock", &error);
+        }
+    }
+}
+
+pub(crate) fn lock(config: &Config, resource: &str) -> Result<Lock, String> {
     let file = open_lock(config, resource)?;
     file.try_lock()
         .map_err(|error| lock_error(resource, error))?;
-    Ok(file)
+    Ok(Lock(file))
 }
 
-pub(super) fn shared_lock(config: &Config, resource: &str) -> Result<File, String> {
+pub(super) fn is_locked(config: &Config, resource: &str) -> Result<bool, String> {
+    let file = open_lock(config, resource)?;
+    match file.try_lock_shared() {
+        Ok(()) => {
+            drop(Lock(file));
+            Ok(false)
+        }
+        Err(TryLockError::WouldBlock) => Ok(true),
+        Err(error) => Err(lock_error(resource, error)),
+    }
+}
+
+pub(super) fn shared_lock(config: &Config, resource: &str) -> Result<Lock, String> {
     let file = open_lock(config, resource)?;
     file.try_lock_shared()
         .map_err(|error| lock_error(resource, error))?;
-    Ok(file)
+    Ok(Lock(file))
 }
 
 pub(super) fn lock_until(
@@ -32,14 +56,14 @@ pub(super) fn lock_until(
     resource: &str,
     deadline: Instant,
     progress: &Progress,
-) -> Result<File, String> {
+) -> Result<Lock, String> {
     let file = open_lock(config, resource)?;
     let mut waiting = false;
     loop {
         let budget =
             remaining(deadline).map_err(|_| format!("timed out waiting for {resource} lock"))?;
         match file.try_lock() {
-            Ok(()) => return Ok(file),
+            Ok(()) => return Ok(Lock(file)),
             Err(TryLockError::WouldBlock) => {
                 if !waiting {
                     progress(format!("Waiting for {resource} lock"));

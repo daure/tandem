@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     service::{AppService, ServiceStatus},
-    store::environments::{Instance, Instructions, Manifest, Operation, Template},
+    store::environments::{Instructions, Manifest, Operation, RuntimeInventory, Template},
 };
 
 mod http;
@@ -85,11 +85,6 @@ struct OpenCommandRun {
 #[derive(Debug, Serialize, JsonSchema)]
 struct TemplateList {
     templates: Vec<Template>,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-struct InstanceList {
-    instances: Vec<Instance>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -343,13 +338,10 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Discover instances and per-service health/URLs from Docker labels. Running without a probe is up, not healthy."
+        description = "Inspect Docker instances with typed runtime evidence, interpreted summaries, metric freshness and retained activity/cleanup outcomes. Running without a probe is not healthy."
     )]
-    async fn list_instances(&self) -> Result<Json<InstanceList>, String> {
-        self.service
-            .list_instances()
-            .await
-            .map(|instances| Json(InstanceList { instances }))
+    async fn list_instances(&self) -> Result<Json<RuntimeInventory>, String> {
+        self.service.list_instances().await.map(Json)
     }
 
     #[tool(

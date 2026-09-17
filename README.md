@@ -58,10 +58,28 @@ one-second pause to establish CPU usage. Automatic resource sampling runs alongs
 at one-minute intervals (normally every five minutes while unfocused); new or restarted containers
 are sampled on discovery. Manual Refresh bypasses the interval, publishes memory immediately after
 the first reading, and takes a second reading after one second for current CPU usage. Sampling requests
-are serialized, including both readings.
+are serialized, including both readings. Creating/starting instances show `—` until their operation
+ends; a failed startup still permits metrics for surviving running containers. Paused containers retain
+memory readings with CPU `— · paused`. Collapse, filtering and scrolling leave sampling/totals intact.
+Partial totals disclose missing coverage; stale readings retain their age and lose pressure coloring.
+Memory pressure is amber at 70% and red at 90% of explicit caps; aggregate coloring requires complete,
+fresh, capped coverage. Resource errors do not change runtime health.
 An empty template list or unavailable Docker daemon is displayed without preventing template editing.
 Starting an existing instance name reapplies the same template directory. It refuses names owned by
 another template or unmanaged containers.
+
+## Statuses
+
+Services show their runtime/health status; instance summaries include running/expected counts and
+the reason for degradation. Running without a healthcheck is blue **Running**; green **Healthy**
+requires Docker healthchecks. Gateway readiness is a separate timestamped check in Details.
+Intentional stops show **Stopped**, including signal exits such as 137/143; raw exit codes alone
+do not prove failure. **Paused** is distinct, and setup jobs use **Completed**, **Failed** or
+**Interrupted**. Completed setup jobs are grouped and collapsed. Activities use tuicore's spinner;
+names stay neutral while status labels and issue qualifiers carry semantic colors.
+Tandem retains launch topology and run-specific stop evidence across processes. Instances without
+recorded topology show **Unknown** until an approved Start captures their configuration.
+Deletion remains visible through cleanup, with failed cleanup retained as an operation row.
 
 ## Agent workflow
 
@@ -76,6 +94,8 @@ List tools return objects with `templates` or `instances` arrays. Mutating insta
 `confirmed=true` after user approval; create waits for readiness by default, or accepts `wait=false`.
 `get_operation` reports in-process progress, elapsed time, and `running`/`succeeded`/`failed` outcomes.
 Use runtime-derived `list_instances` after reconnecting to a different MCP process.
+Instance listings also include `activities` for active work and retained failures, including cleanup
+without containers; per-instance/service `summary` and `runtime` separate interpretation from evidence.
 
 [agent-instructions.md](agent-instructions.md) contains lightweight guidance on Tandem's intended use.
 On first launch it seeds `$TANDEM_HOME/instructions.md`, which `get_instructions` reads on every call.

@@ -112,12 +112,12 @@ impl Instances {
                     Constraint::Fill(1),
                     move |row: &Row, _| row.text(cell_spinner.borrow().glyph()),
                 )
-                .search_key(|row| row.label.clone())
+                .search_key(Row::search_text)
                 .constrained(),
                 Column::multiline(
                     "resources",
                     "Memory / CPU",
-                    Constraint::Min(0),
+                    Constraint::Length(30),
                     |row: &Row, _| {
                         let mut resources = row.resource_text();
                         for line in &mut resources.lines {
@@ -127,7 +127,7 @@ impl Instances {
                     },
                 )
                 .search_key(|row| row.resource_text().to_string())
-                .fit_content(),
+                .constrained(),
             ])
             .headers(false)
             .action_bar(true)

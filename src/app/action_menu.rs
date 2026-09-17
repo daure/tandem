@@ -120,7 +120,7 @@ impl ActionMenu {
         &mut self,
         template: bool,
         instance: bool,
-        running: bool,
+        capabilities: (bool, bool, bool),
         gateway: bool,
         template_available: bool,
         ctx: &mut EventCtx<Msg>,
@@ -165,8 +165,9 @@ impl ActionMenu {
             .iter()
             .copied()
             .filter(|action| match action {
-                Action::Start | Action::StartService => !running,
-                Action::Stop | Action::StopService => running,
+                Action::Start | Action::StartService => capabilities.0,
+                Action::Stop | Action::StopService => capabilities.1,
+                Action::RestartInstance | Action::RestartService => capabilities.2,
                 _ => true,
             })
             .collect();

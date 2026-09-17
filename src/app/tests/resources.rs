@@ -128,12 +128,12 @@ fn memory_color_tracks_explicit_limits_in_tree_and_details() {
         rows::from_snapshot(&snapshot)[0]
             .resource_text()
             .to_string(),
-        "󰑹 —\n —"
+        "󰑹 — · partial\n — · partial"
     );
 }
 
 #[test]
-fn resources_sum_services_and_hidden_setup_into_instances_and_templates() {
+fn resources_sum_services_and_active_setup_into_instances_and_templates() {
     let mut snapshot = snapshot();
     snapshot.instances[0].services[0].usage = Some(usage(240, 180));
     let mut db = snapshot.instances[0].services[0].clone();
@@ -173,7 +173,7 @@ fn resources_sum_services_and_hidden_setup_into_instances_and_templates() {
             .to_string(),
         "󰑹 354 MiB\n 6%"
     );
-    assert!(tree.iter().all(|row| row.id != "service:review:setup"));
+    assert!(tree.iter().any(|row| row.id == "service:review:setup"));
 
     snapshot.instances[0].services[1].usage = None;
     let tree = rows::from_snapshot(&snapshot);
@@ -182,11 +182,11 @@ fn resources_sum_services_and_hidden_setup_into_instances_and_templates() {
         row("template:/tmp/templates/website")
             .resource_text()
             .to_string(),
-        "󰑹 —\n —"
+        "󰑹 — · partial\n — · partial"
     );
     assert_eq!(
         row("instance:review").resource_text().to_string(),
-        "󰑹 —\n —"
+        "󰑹 — · partial\n — · partial"
     );
     snapshot.instances[0].services[1].status = "down (exit 0)".into();
     snapshot.templates.clear();
@@ -208,8 +208,14 @@ fn memory_stays_visible_while_cpu_baselines_are_pending() {
     worker.usage = Some(usage(100, 64));
     snapshot.instances[0].services.push(worker);
     let tree = rows::from_snapshot(&snapshot);
-    assert_eq!(tree[0].resource_text().to_string(), "󰑹 244 MiB\n —");
-    assert_eq!(tree[1].resource_text().to_string(), "󰑹 244 MiB\n —");
+    assert_eq!(
+        tree[0].resource_text().to_string(),
+        "󰑹 244 MiB\n — · partial"
+    );
+    assert_eq!(
+        tree[1].resource_text().to_string(),
+        "󰑹 244 MiB\n — · partial"
+    );
     assert_eq!(tree[2].resource_text().to_string(), "󰑹 180 MiB\n —");
     assert_eq!(
         tree[2].resource_text().lines[1].spans[0].style.fg,
@@ -225,52 +231,66 @@ fn instance_summaries_use_the_most_actionable_service_state() {
             "healthy",
             Tone::Success,
             "Healthy",
-            "",
+            "",
             Tone::Success,
             false,
         ),
-        ("up", Tone::Info, "Running", "", Tone::Success, false),
-        ("unhealthy", Tone::Error, "Failed", "", Tone::Error, false),
-        ("boot", Tone::Muted, "Starting", "", Tone::Muted, true),
-        ("removing", Tone::Muted, "Removing", "", Tone::Muted, true),
-        ("paused", Tone::Muted, "Stopped", "", Tone::Muted, false),
+        ("up", Tone::Info, "Running", "", Tone::Info, false),
+        (
+            "unhealthy",
+            Tone::Error,
+            "Degraded",
+            "",
+            Tone::Warning,
+            false,
+        ),
+        ("boot", Tone::Info, "Running", "", Tone::Info, false),
+        (
+            "removing",
+            Tone::Info,
+            "Degraded",
+            "",
+            Tone::Warning,
+            false,
+        ),
+        ("paused", Tone::Warning, "Paused", "", Tone::Warning, false),
         (
             "down (exit 0)",
             Tone::Muted,
             "Stopped",
-            "",
+            "",
             Tone::Muted,
             false,
         ),
         (
             "down (exit 1)",
             Tone::Muted,
-            "Failed",
-            "",
-            Tone::Error,
+            "Stopped",
+            "",
+            Tone::Muted,
             false,
         ),
         (
             "down (exit 137)",
             Tone::Muted,
-            "Failed",
-            "",
-            Tone::Error,
+            "Stopped",
+            "",
+            Tone::Muted,
             false,
         ),
         (
             "down (exit 143)",
             Tone::Muted,
-            "Failed",
-            "",
-            Tone::Error,
+            "Stopped",
+            "",
+            Tone::Muted,
             false,
         ),
         (
             "unknown",
             Tone::Warning,
-            "Partially running",
-            "",
+            "Unknown",
+            "",
             Tone::Warning,
             false,
         ),
@@ -296,10 +316,10 @@ fn instance_summaries_use_the_most_actionable_service_state() {
             );
             assert_eq!(tree[1].loading, loading);
             assert_eq!(tree[2].tone, service_tone);
-            assert_eq!(tree[2].icon, if routed { "󰖟" } else { "󰒋" });
+            assert!(!tree[2].icon.is_empty());
             let text = tree[2].text("⠋");
             assert_eq!(text.lines[0].spans[0].style.fg, Some(service_tone.color()));
-            assert_eq!(text.lines[0].spans[1].content, "web");
+            assert_eq!(text.lines[0].spans[1].content, "web · ");
             assert_eq!(
                 text.lines[1].spans[0].style.fg,
                 Some(tuicore::theme().muted_fg())
@@ -350,7 +370,8 @@ fn search_results_restripe_the_visible_tree_rows() {
         .buffer()
         .content
         .iter()
-        .find(|cell| cell.symbol() == "󰒋")
+        .rev()
+        .find(|cell| cell.symbol() == "")
         .expect("database search result");
     assert_eq!(database.bg, tuicore::theme().surface_bg());
 }
@@ -368,17 +389,13 @@ fn all_tree_rows_stack_memory_above_cpu() {
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
     let service_line = lines
         .iter()
-        .position(|line| line.contains("󰖟 web"))
+        .position(|line| line.contains(" web"))
         .expect("routed service");
     assert!(lines[service_line].contains("󰑹 180 MiB"), "{lines:#?}");
     assert!(lines[service_line + 1].contains("http://localhost:9876/review/web/ · port 8080"));
     let resource_byte = lines[service_line].find("󰑹").unwrap();
     let resource_column = lines[service_line][..resource_byte].chars().count();
-    assert_eq!(
-        resource_column,
-        110 - "󰑹 180 MiB".chars().count() - 1,
-        "{lines:#?}"
-    );
+    assert_eq!(resource_column, 110 - 30, "{lines:#?}");
     for offset in [0, 2, 4] {
         let row_line = service_line - offset;
         let memory_column = lines[row_line].find("󰑹 180 MiB").unwrap();
@@ -396,9 +413,9 @@ fn all_tree_rows_stack_memory_above_cpu() {
     let gateway = buffer
         .content
         .iter()
-        .find(|cell| cell.symbol() == "󰖟")
+        .find(|cell| cell.symbol() == "")
         .unwrap();
-    assert_eq!(gateway.fg, tuicore::theme().success_fg());
+    assert_eq!(gateway.fg, tuicore::theme().muted_fg());
     let narrow = render(&mut tree, 60);
     let lines = rendered_lines(&narrow, Rect::new(0, 0, 60, 18));
     assert!(
@@ -417,7 +434,7 @@ fn all_tree_rows_stack_memory_above_cpu() {
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 60, 18));
     let service_line = lines
         .iter()
-        .position(|line| line.contains("󰒋 web"))
+        .position(|line| line.contains(" web"))
         .unwrap();
     for offset in [0, 2, 4] {
         assert!(lines[service_line - offset].contains("󰑹 —"));
@@ -426,16 +443,17 @@ fn all_tree_rows_stack_memory_above_cpu() {
 }
 
 #[test]
-fn instance_loader_animates_during_boot_and_stops_when_ready() {
+fn health_check_loader_animates_on_the_service_until_ready() {
     tuicore::init();
     let mut snapshot = snapshot();
     snapshot.instances[0].services[0].status = "boot".into();
     let state = instances::state(rows::from_snapshot(&snapshot));
     let mut tree = Instances::new(state.clone());
+    expand_first_instance(&mut tree);
     let terminal = render(&mut tree, 110);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
     assert!(
-        lines.iter().any(|line| line.contains("⠋ review")),
+        lines.iter().any(|line| line.contains("⠋ web")),
         "{lines:#?}"
     );
     let result = tree.tick(Duration::from_millis(80), AnimationSettings::default());
@@ -443,7 +461,7 @@ fn instance_loader_animates_during_boot_and_stops_when_ready() {
     let terminal = render(&mut tree, 110);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
     assert!(
-        lines.iter().any(|line| line.contains("⠙ review")),
+        lines.iter().any(|line| line.contains("⠙ web")),
         "{lines:#?}"
     );
     let spinner = terminal
@@ -453,13 +471,13 @@ fn instance_loader_animates_during_boot_and_stops_when_ready() {
         .iter()
         .find(|cell| cell.symbol() == "⠙")
         .unwrap();
-    assert_eq!(spinner.fg, tuicore::theme().muted_fg());
+    assert_eq!(spinner.fg, tuicore::theme().info_fg());
     snapshot.instances[0].services[0].status = "healthy".into();
     instances::replace_rows(&state, rows::from_snapshot(&snapshot));
     let terminal = render(&mut tree, 110);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
     assert!(
-        lines.iter().any(|line| line.contains(" review")),
+        lines.iter().any(|line| line.contains(" review")),
         "{lines:#?}"
     );
 }
@@ -477,8 +495,15 @@ fn failed_setup_is_visible_while_dependent_services_are_waiting() {
         snapshot.instances[0].services[0].status = status.into();
         let rows = rows::from_snapshot(&snapshot);
         assert!(!rows[1].loading);
-        assert_eq!(rows[1].tone, Tone::Error);
-        assert!(rows[1].label.contains("Failed"));
+        assert_eq!(rows[1].detail_tone, Tone::Error);
+        assert!(
+            rows[1]
+                .status_detail
+                .as_ref()
+                .unwrap()
+                .contains("repo-sync: Failed")
+        );
+        assert_eq!(rows[3].status.as_deref(), Some("Failed"));
         assert!(rows[1].details.iter().any(|property| {
             property.name == "Startup error"
                 && property.value.contains("repo-sync: down (exit 128)")
@@ -487,7 +512,7 @@ fn failed_setup_is_visible_while_dependent_services_are_waiting() {
         let terminal = render(&mut tree, 110);
         let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
         assert!(
-            lines.iter().any(|line| line.contains("review · Failed")),
+            lines.iter().any(|line| line.contains("repo-sync: Failed")),
             "{lines:#?}"
         );
     }
@@ -535,12 +560,12 @@ fn new_instance_stays_collapsed_when_its_expected_services_arrive() {
     let terminal = render(&mut tree, 110);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
     assert!(lines.iter().any(|line| line.contains("review")));
-    assert!(!lines.iter().any(|line| line.contains("󰖟 web")));
+    assert!(!lines.iter().any(|line| line.contains(" web")));
     expand_first_instance(&mut tree);
     let terminal = render(&mut tree, 110);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
     assert!(
-        lines.iter().any(|line| line.contains("󰖟 web")),
+        lines.iter().any(|line| line.contains(" web")),
         "{lines:#?}"
     );
 }
@@ -569,7 +594,7 @@ fn startup_expands_templates_when_instances_arrive_after_the_template_listing() 
     let text = rendered_lines(&terminal, Rect::new(0, 0, 110, 18)).join("\n");
     assert!(text.contains("review · Running"));
     assert!(text.contains("second · Running"));
-    assert!(!text.contains("󰖟 web"));
+    assert!(!text.contains(" web"));
     tree.focus(None, true, &mut tuicore::FocusCtx::default());
     tree.event(
         &TuiEvent::Key(KeyEvent::from(Key::Left)),
@@ -589,6 +614,7 @@ fn template_totals_exclude_instances_that_are_still_starting() {
     let mut starting = inventory.instances[0].clone();
     starting.name = "starting".into();
     starting.services[0].usage = None;
+    starting.pending = true;
     inventory.instances.push(starting);
     inventory
         .startup
@@ -597,9 +623,10 @@ fn template_totals_exclude_instances_that_are_still_starting() {
         rows::from_snapshot(&inventory)[0]
             .resource_text()
             .to_string(),
-        "󰑹 180 MiB\n 2%"
+        "󰑹 180 MiB · partial\n 2% · partial"
     );
     inventory.startup.clear();
+    inventory.instances[1].pending = false;
     inventory.instances[1].services[0].usage = Some(usage(100, 20));
     assert_eq!(
         rows::from_snapshot(&inventory)[0]

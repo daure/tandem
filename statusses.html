@@ -42,7 +42,7 @@
     td:first-child { width: 29%; }
     td:nth-child(2) { width: 30%; }
     .status { font-weight: 650; white-space: nowrap; }
-    .glyph { display: inline-block; width: 1.3em; text-align: center; font-family: ui-monospace, monospace; }
+    .glyph { display: inline-block; width: 1.3em; text-align: center; font-family: "JetBrainsMono Nerd Font", "JetBrainsMono Nerd Font Mono", "Symbols Nerd Font Mono", monospace; }
     .legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 14px 0; font-size: 13px; }
     .tree { margin: 16px 0; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font: 14px/1.8 ui-monospace, monospace; overflow-x: auto; }
     .tree-line { white-space: pre; }
@@ -99,68 +99,98 @@
       <table>
         <thead><tr><th scope="col">Docker observation</th><th scope="col">Service label</th><th scope="col">Meaning</th></tr></thead>
         <tbody>
-          <tr><td><code>created</code></td><td class="status muted"><span class="glyph">○</span> Not started</td><td>Container exists; process never started.</td></tr>
-          <tr><td><code>running</code>, no healthcheck</td><td class="status info"><span class="glyph">▶</span> Running</td><td>Process alive; health unverified.</td></tr>
-          <tr><td><code>running</code> + <code>starting</code></td><td class="status info"><span class="glyph">◌</span> Checking health</td><td>Process alive; probe still settling.</td></tr>
-          <tr><td><code>running</code> + <code>healthy</code></td><td class="status success"><span class="glyph">✓</span> Healthy</td><td>Configured Docker probe passes.</td></tr>
-          <tr><td><code>running</code> + <code>unhealthy</code></td><td class="status error"><span class="glyph">!</span> Unhealthy</td><td>Process alive; probe fails.</td></tr>
-          <tr><td><code>restarting</code></td><td class="status warning"><span class="glyph">↻</span> Restarting</td><td>Docker recovery; show restart count.</td></tr>
-          <tr><td><code>paused</code></td><td class="status warning"><span class="glyph">Ⅱ</span> Paused</td><td>Process frozen; memory retained.</td></tr>
-          <tr><td><code>exited</code>, long-running service</td><td class="status muted"><span class="glyph">■</span> Stopped</td><td>Show exit code and reason in details.*</td></tr>
-          <tr><td><code>removing</code></td><td class="status info"><span class="glyph">◌</span> Removing</td><td>Docker is removing this container.</td></tr>
-          <tr><td><code>dead</code></td><td class="status error"><span class="glyph">×</span> Container error</td><td>Defunct; requires removal/recreation.</td></tr>
-          <tr><td>Expected container absent / unreadable state</td><td class="status warning"><span class="glyph">?</span> Missing / Unknown</td><td>Missing needs a known expected inventory.</td></tr>
+          <tr><td><code>created</code></td><td class="status muted"><span class="glyph" aria-hidden="true"></span> Not started</td><td>Container exists; process never started.</td></tr>
+          <tr><td><code>running</code>, no healthcheck</td><td class="status info"><span class="glyph" aria-hidden="true"></span> Running</td><td>Process alive; health unverified.</td></tr>
+          <tr><td><code>running</code> + <code>starting</code></td><td class="status info"><span class="glyph" title="tuicore Spinner (static preview)">⠋</span> Checking health</td><td>Process alive; probe still settling.</td></tr>
+          <tr><td><code>running</code> + <code>healthy</code></td><td class="status success"><span class="glyph" aria-hidden="true"></span> Healthy</td><td>Configured Docker probe passes.</td></tr>
+          <tr><td><code>running</code> + <code>unhealthy</code></td><td class="status error"><span class="glyph" aria-hidden="true"></span> Unhealthy</td><td>Process alive; probe fails.</td></tr>
+          <tr><td><code>restarting</code></td><td class="status warning"><span class="glyph" aria-hidden="true"></span> Restarting</td><td>Docker recovery; show restart count.</td></tr>
+          <tr><td><code>paused</code></td><td class="status warning"><span class="glyph" aria-hidden="true"></span> Paused</td><td>Process frozen; memory retained.</td></tr>
+          <tr><td><code>exited</code>, long-running service</td><td class="status muted"><span class="glyph" aria-hidden="true"></span> Stopped</td><td>Show exit code and reason in details.*</td></tr>
+          <tr><td><code>removing</code></td><td class="status info"><span class="glyph" title="tuicore Spinner (static preview)">⠋</span> Removing</td><td>Docker is removing this container.</td></tr>
+          <tr><td><code>dead</code></td><td class="status error"><span class="glyph" aria-hidden="true"></span> Container error</td><td>Defunct; requires removal/recreation.</td></tr>
+          <tr><td>Expected container absent / unreadable state</td><td class="status warning"><span class="glyph" aria-hidden="true"></span> Missing / Unknown</td><td>Missing needs a known expected inventory.</td></tr>
         </tbody>
       </table>
     </div>
-    <p><small>*Confirmed requested stop: neutral. Unexplained non-zero exit: amber <strong>Stopped · exit N</strong>. Proven unexpected termination/OOM: red <strong>Stopped · unexpected exit / OOM killed</strong>. Never whitelist 137/143 as successful exits.</small></p>
-    <p><strong>Setup jobs:</strong> Waiting → Running → <span class="success">✓ Completed</span> (exit 0) or <span class="error">× Failed</span> (non-zero). A confirmed stop of an unfinished job means <span class="warning">■ Interrupted</span>. Show active/failed/interrupted jobs; collapse completed jobs.</p>
+    <p><small>*Confirmed requested stop: neutral, with any forced termination noted. Unexplained non-zero exit: amber <strong>Stopped · exit N</strong>. Direct failure/OOM evidence: red qualifier. Missing stop history proves neither a crash nor intent; never whitelist 137/143.</small></p>
+    <p><strong>Setup jobs:</strong> use the same Docker lifecycle while active. Confirmed interruption means <span class="warning"><span class="glyph" aria-hidden="true"></span> Interrupted</span>; otherwise exit 0 means <span class="success"><span class="glyph" aria-hidden="true"></span> Completed</span> and non-zero means <span class="error"><span class="glyph" aria-hidden="true"></span> Failed</span>. Show waiting/active/problem jobs; collapse completed jobs.</p>
   </section>
 
   <section aria-labelledby="instances">
     <h2 id="instances">2. Roll up facts, not the worst exit code</h2>
-    <p>Count expected long-running services, including replicas; completed setup jobs stay outside the running denominator. Unknown/stale observations take precedence over a confident rollup.</p>
+    <p>Use the first matching rule for instances with long-running containers; “all” means every expected slot, not just discovered rows. Running counts include unhealthy containers, exclude setup jobs. Keep current issues visible beside every label.</p>
     <div class="table-wrap">
       <table>
         <thead><tr><th scope="col">Instance label</th><th scope="col" colspan="2">Rule, outside an active operation</th></tr></thead>
         <tbody>
-          <tr><td class="status success">✓ Healthy</td><td colspan="2">All expected services running and Docker-healthy; required setup completed.</td></tr>
-          <tr><td class="status info">▶ Running</td><td colspan="2">All running, setup completed, no failed checks; disclose unchecked/checking services.</td></tr>
-          <tr><td class="status muted">■ Stopped</td><td colspan="2">All long-running services exited and no job active; retain exit warnings/errors as qualifiers.</td></tr>
-          <tr><td class="status warning">Ⅱ Paused</td><td colspan="2">All long-running services paused; retain any separate issues.</td></tr>
-          <tr><td class="status muted">○ Not started</td><td colspan="2">All expected containers created, never started; no job active.</td></tr>
-          <tr><td class="status warning">! Degraded</td><td colspan="2">Other known mixtures or failed requirements. Always explain: “1/3 running · db stopped.”</td></tr>
-          <tr><td class="status warning">? Unknown / Stale</td><td colspan="2">Insufficient observations / failed refresh. Preserve last-known facts and timestamp.</td></tr>
+          <tr><td class="status warning"><span class="glyph" aria-hidden="true"></span> Unknown / Stale</td><td colspan="2">Required observations unavailable / refresh failed. Preserve last-known facts, issues and timestamp.</td></tr>
+          <tr><td class="status muted"><span class="glyph" aria-hidden="true"></span> Stopped</td><td colspan="2">All expected containers present; long-running containers exited and no job active. A confirmed whole-instance stop also permits never-started containers.</td></tr>
+          <tr><td class="status warning"><span class="glyph" aria-hidden="true"></span> Paused</td><td colspan="2">All long-running containers paused and no job active.</td></tr>
+          <tr><td class="status muted"><span class="glyph" aria-hidden="true"></span> Not started</td><td colspan="2">All long-running containers created, never started, and no job active. Surface setup failures alongside this label.</td></tr>
+          <tr><td class="status success"><span class="glyph" aria-hidden="true"></span> Healthy</td><td colspan="2">All expected services running and Docker-healthy; required setup completed.</td></tr>
+          <tr><td class="status info"><span class="glyph" aria-hidden="true"></span> Running</td><td colspan="2">All running, setup completed, no failed checks; disclose unchecked/checking services.</td></tr>
+          <tr><td class="status warning"><span class="glyph" aria-hidden="true"></span> Degraded</td><td colspan="2">Other known mixtures or unmet requirements, including missing containers. Always explain: “1/3 running · db stopped” or “3/3 running · web unhealthy.”</td></tr>
         </tbody>
       </table>
     </div>
-    <p><small>Use counts to expose total outages, even “0/3 running.” Jobs-only instances use Waiting / Running / Completed / Failed / Interrupted. Zero discovered containers alone proves neither Stopped nor Deleted.</small></p>
+    <p><small>Counts use the expected container/replica set. Confirmed absence is Missing; inability to inspect is Unknown. Jobs-only instances use the setup outcome rules below; an unknown or empty expected set cannot imply success.</small></p>
     <div class="tree" aria-label="Proposed tree after stopping an instance">
-      <div class="tree-line">▣ web-stack <span class="muted">· 1 instance</span></div>
-      <div class="tree-line">└─ <span class="muted">■</span> review <span class="muted">· Stopped</span></div>
-      <div class="tree-line">   ├─ <span class="muted">■</span> web <span class="muted">· Stopped · requested stop</span></div>
-      <div class="tree-line">   ├─ <span class="muted">■</span> db <span class="muted">· Stopped · requested stop</span></div>
-      <div class="tree-line">   └─ <span class="success">✓</span> Setup <span class="success">· 1 completed</span></div>
+      <div class="tree-line"><span class="glyph" aria-hidden="true"></span> web-stack <span class="muted">· 1 instance</span></div>
+      <div class="tree-line">└─ <span class="glyph muted" aria-hidden="true"></span> review <span class="muted">· Stopped</span></div>
+      <div class="tree-line">   ├─ <span class="glyph muted" aria-hidden="true"></span> web <span class="muted">· Stopped · requested stop</span></div>
+      <div class="tree-line">   ├─ <span class="glyph muted" aria-hidden="true"></span> db <span class="muted">· Stopped · requested stop</span></div>
+      <div class="tree-line">   └─ <span class="glyph success" aria-hidden="true"></span> Setup <span class="success">· 1 completed</span></div>
     </div>
   </section>
 
   <section aria-labelledby="operations">
     <h2 id="operations">3. Show the action while it is happening</h2>
-    <p><span class="info">◌ Creating / Starting / Restarting / Stopping / Deleting</span> belongs to the operation’s target. A service restart leaves siblings unchanged; the parent can say “Restarting db · 2/3 running.” Keep observed problems visible alongside activity.</p>
+    <p><span class="info"><span title="tuicore Spinner (static preview)">⠋</span> Creating / Starting / Restarting / Stopping / Deleting</span> belongs to the operation’s target. A service restart leaves siblings unchanged; the parent can say “Restarting db · 2/3 running.” Keep observed problems visible alongside activity.</p>
     <figure class="diagram">
       <div id="stop-diagram" class="diagram-output"></div>
-      <div id="diagram-fallback" class="diagram-fallback">Stop requested → record target identity → Docker stop → inspect targets.<br>Confirmed stopped: Stopped + operation Succeeded. Otherwise: observed state + Stop failed.</div>
+      <div id="diagram-fallback" class="diagram-fallback">Stop requested → record target identity → Docker stop → inspect targets.<br>Command succeeds + matching targets exited/created: Stopped + operation Succeeded.<br>Otherwise: observed state (or Stale) + Stop failed with reason.</div>
       <figcaption>Proposed stop sequence: confirm the resulting state before reporting success.</figcaption>
     </figure>
-    <p><small>Remove activity when the operation ends; report “Stop failed” without overwriting runtime truth. Deletion stays visible until containers <em>and</em> owned-resource cleanup finish; retain “Cleanup failed” when resources remain.</small></p>
+    <p><small>End activity on success, failure or worker loss. “Stop failed · cannot confirm outcome” leaves runtime Stale. Keep deletion visible through owned-resource cleanup; if containers are gone but cleanup fails, retain an operation/cleanup row rather than inventing a live instance.</small></p>
+  </section>
+
+  <section aria-labelledby="resources">
+    <h2 id="resources">4. Resources follow lifecycle—not row visibility</h2>
+    <p><strong>TUI cadence:</strong> inspect every 10s terminal-focused / 5min unfocused; sample when 60s is due, after inspection. Focus gain requests inspection immediately; sample if due/newly eligible. Collapse, filtering, offscreen rows and panel focus do not change sampling.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Situation</th><th scope="col" colspan="2">Memory / CPU display</th></tr></thead>
+        <tbody>
+          <tr><td>Creating / instance start active</td><td colspan="2">Muted “—” for that instance and its children; excluded from sampling. On completion—even failure—sample any surviving eligible containers.</td></tr>
+          <tr><td>Running / checking / unhealthy</td><td colspan="2">Show readings. Health does not gate usage. Keep previous readings during refresh; memory arrives first, CPU after a valid second reading.</td></tr>
+          <tr><td>Paused</td><td colspan="2">Show sampled memory; CPU “— · paused.” Paused memory still contributes to totals.</td></tr>
+          <tr><td>Not started / stopped / restarting / removing / dead / missing</td><td colspan="2">Muted “—”; clear live readings for those targets. Unaffected siblings keep theirs. While stopping but still running, retain measured usage.</td></tr>
+          <tr><td>Sampling failure / stale inventory</td><td colspan="2">Dim last-known readings with age and “stale”; otherwise “—.” A resource error does not change lifecycle or health.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>Manual refresh:</strong> force eligible targets; successful baselines trigger a second reading after a 1s pause, and completion waits for sampling. New runs/eligibility changes get targeted samples without shifting everyone else’s 60s deadline.</p>
+    <p><small>Keep memory above CPU and reserve the column width. “—” means unavailable/inapplicable; measured zero is 0. Totals include collapsed/filtered children and running setup jobs when eligible; label startup exclusions or incomplete coverage “partial.”</small></p>
+    <details>
+      <summary>Resource freshness, totals &amp; safeguards</summary>
+      <ol>
+        <li><strong>Freshness:</strong> show sample age in details. Mark stale on failure or age over 120s focused / 600s unfocused; use the focused policy without focus reporting. Clear errors only after that container/metric succeeds. Inventory and metric freshness are separate; template errors permit sampling, Docker inspection errors block it.</li>
+        <li><strong>Identity &amp; timing:</strong> key samples by container ID and start generation. Reject late results after replacement/restart/stop. Reset CPU baselines on a new run or pause/resume; show “—” until two valid readings. CPU is an interval average and may exceed 100%; memory is Docker working set. Readings have a 10s budget, at most eight requests in parallel.</li>
+        <li><strong>Coverage:</strong> memory sums running + paused containers; CPU sums running containers. Compute each metric independently. If an eligible contributor lacks a reading, show “— · partial,” not an understated sum; stale contributors make the total stale. Empty contributor sets show “—.” Startup exclusions carry a partial badge even when a subtotal is available.</li>
+        <li><strong>Presentation:</strong> fresh memory is amber at 70% and red at 90% of explicit caps; aggregate pressure needs complete fresh coverage and caps for every contributor. CPU and uncapped memory stay neutral. Stale values are muted with an amber qualifier. Sampling indicators belong to Refresh/metrics, not the lifecycle spinner.</li>
+        <li><strong>Scheduling:</strong> coalesce work; never overlap samples. A manual request during sampling queues a forced follow-up rather than disappearing. One failed container preserves other readings. MCP returns its process-local cached metrics with freshness, possibly unavailable; each list call does not start a polling loop.</li>
+      </ol>
+    </details>
   </section>
 
   <section aria-labelledby="visuals">
-    <h2 id="visuals">4. Keep the visual language literal</h2>
+    <h2 id="visuals">5. Keep the visual language literal</h2>
     <div class="legend" aria-label="Semantic color legend">
-      <span class="muted">■ Gray · inactive</span><span class="info">▶ Blue · active/unverified</span><span class="success">✓ Green · verified success</span><span class="warning">! Amber · attention/uncertainty</span><span class="error">× Red · confirmed problem</span>
+      <span class="muted"><span class="glyph" aria-hidden="true"></span> Gray · inactive</span><span class="info"><span class="glyph" aria-hidden="true"></span> Blue · active/unverified</span><span class="success"><span class="glyph" aria-hidden="true"></span> Green · verified success</span><span class="warning"><span class="glyph" aria-hidden="true"></span> Amber · attention/uncertainty</span><span class="error"><span class="glyph" aria-hidden="true"></span> Red · confirmed problem</span>
     </div>
-    <p>Color the status glyph <em>and label</em>; keep names neutral. Use ■ for stopped, Ⅱ for paused, and a spinner only for actual activity. Keep the globe beside the URL—it denotes a route, not health. Use tuicore semantic colors and ASCII fallbacks.</p>
+    <p>Color the status glyph <em>and label</em>; keep names neutral and issue qualifiers independently colored. Use JetBrainsMono Nerd Font and <code>tuicore::Spinner</code> for activity, respecting animation settings; ⠋ is a static preview. Docker recovery uses amber <span class="glyph" aria-hidden="true"></span>, explicit restart uses the blue spinner.</p>
+    <p><small>Structure: <span class="glyph" aria-hidden="true"></span> Template · <span class="glyph" aria-hidden="true"></span> Instance · <span class="glyph" aria-hidden="true"></span> Service · <span class="glyph" aria-hidden="true"></span> Setup · <span class="glyph" aria-hidden="true"></span> Route (beside URL). State glyphs take the tree’s leading slot; type icons belong in details. Valid/Succeeded use <span class="glyph" aria-hidden="true"></span>; Invalid uses <span class="glyph" aria-hidden="true"></span>. Semantic theme colors and readable labels remain authoritative without icons.</small></p>
     <p><strong>Scope matters:</strong> templates are Valid / Invalid / Missing, with instance counts. Gateway availability is shared infrastructure. A route URL is configuration; “last readiness check passed” needs a timestamp. Healthy never promises browser reachability.</p>
   </section>
 
@@ -168,16 +198,17 @@
     <summary>Implementation guardrails &amp; evidence</summary>
     <ol>
       <li><strong>One service-owned projection:</strong> retain typed Docker state, health, exit code, OOM flag, error, identity and timestamps. TUI and MCP consume the same classification; action availability uses lifecycle capabilities, not resource consumption.</li>
-      <li><strong>Stop provenance:</strong> persist target container IDs + start generation before stopping, then confirm per-target results. Share across TUI/MCP processes; supersede on a new run. An attempted stop cannot excuse an earlier crash or hide OOM evidence. Unknown external intent stays unknown.</li>
-      <li><strong>Expected topology:</strong> retain the rendered launch service/replica set and setup roles. Compare against fresh Docker inventory; template edits do not silently redefine an existing instance. While creating, not-yet-created targets are Waiting. A failed create without containers remains an operation result, not a running inventory row.</li>
-      <li><strong>Bound activity:</strong> associate it with a live operation/lease and deadline, including across processes. A lost worker becomes “Operation interrupted; refresh required.” Docker health and route-readiness results stay separate; route checks run during startup/restart, so retain their time and run identity.</li>
-      <li><strong>Actions:</strong> Start for stopped/created containers; Stop for running/restarting targets; paused targets need Unpause before Start/Restart. Missing/dead containers require recreation. Keep details available during stale observations, and revalidate ownership/state before mutations.</li>
-      <li><strong>Resource colors:</strong> memory pressure is separate from health. Retain cap-based warnings; mark old samples stale and show “—” for unavailable data.</li>
+      <li><strong>Stop provenance:</strong> under the instance lock, inspect first and persist target IDs, start generations and request time before stopping. Record each confirmed result; a partial stop only explains matching targets. Share across TUI/MCP, supersede on a new run, and retain earlier crashes/OOM evidence. A raced job exit 0 needs evidence of interruption before losing Completed status.</li>
+      <li><strong>Expected topology:</strong> retain the launch service/replica set for selected profiles, plus setup roles. Compare by container identity and replica slot; count only expected long-running slots. Template edits do not redefine an existing instance. During creation, not-yet-created targets are Waiting; after failure they are Missing. Unknown topology prevents an “all healthy” claim.</li>
+      <li><strong>Setup-only rollup:</strong> unknown/stale first, retaining known failures as qualifiers. Otherwise Failed if any job failed, then Interrupted if any interrupted, then Degraded for missing/dead/unhealthy jobs. All completed means Completed; remaining jobs are Running if any run, Paused if unfinished jobs are all paused, Waiting if all await start, otherwise Degraded.</li>
+      <li><strong>Bound activity:</strong> associate it with a live operation/lease and deadline, including across processes. A lost worker becomes “Operation interrupted; refresh required.” Startup metric suppression ends with that lease. Start/restart success requires the targeted run to satisfy configured health and route checks; retain route-check time and run identity separately from Docker health.</li>
+      <li><strong>Actions:</strong> Start for stopped/created containers; Stop for running/restarting targets; paused targets need Unpause before Start/Restart. Missing/dead containers require recreation. Keep details available while stale, and revalidate ownership/state before mutations. Metrics never enable or disable lifecycle actions.</li>
     </ol>
     <h3>Code evidence</h3>
     <p><a href="src/environments/docker.rs"><code>docker.rs:144–155</code></a> merges exited/dead into <code>down (exit N)</code>; <a href="src/app/rows.rs"><code>rows.rs:61–115</code></a> promotes non-zero exits to Failed and paused to Stopped. <a href="src/app/tests/resources.rs"><code>resources.rs:220–308</code></a> explicitly expects Failed for 137/143.</p>
     <p><a href="src/app/rows.rs"><code>rows.rs:462–506</code></a> filters setup jobs from the tree and omits child status labels. <a href="src/environments/mod.rs"><code>environments/mod.rs</code></a> holds process-local operations and preserves snapshots on inspection failure. <a href="src/environments/lifecycle.rs"><code>lifecycle.rs:205–215</code></a> reports stop success from the Docker command result.</p>
-    <p><strong>Acceptance checks:</strong> requested stop with 0/137/143; unexplained 137; explicit OOM; mixed stopped/running; paused; failed setup; dead/missing container; health recovery; restart transient; stale Docker; failed cleanup; reconnect after stop.</p>
+    <p><a href="src/app/refresh.rs"><code>app/refresh.rs:42–77</code></a> defines focus cadence; <a href="src/service/refresh.rs"><code>service/refresh.rs:126–130</code></a> schedules stats after inspection. <a href="src/environments/resources.rs"><code>resources.rs</code></a> defines 60s sampling, 1s warm-up, startup exclusion and retained samples; <a href="src/app/details.rs"><code>details.rs:5–17</code></a> defines memory-pressure thresholds.</p>
+    <p><strong>Acceptance checks:</strong> requested stop with 0/137/143; unexplained 137; explicit OOM; mixed/paused/missing/dead states; failed setup; stale Docker; failed cleanup; reconnect. Resources: failed startup releases suppression; restart rejects late samples; collapse preserves totals; partial/stale contributors; CPU warm-up; pause/resume; focus gain; manual refresh during sampling.</p>
     <p><strong>Docker references:</strong> <a href="https://docs.docker.com/reference/cli/docker/container/ls/#status">container states</a> · <a href="https://docs.docker.com/reference/cli/docker/container/stop/">stop signals</a> · <a href="https://docs.docker.com/reference/dockerfile/#healthcheck">independent health status</a>.</p>
   </details>
 
@@ -186,7 +217,7 @@
 <script type="text/plain" id="stop-source">
 sequenceDiagram
   accTitle: Proposed Tandem stop sequence
-  accDescr: Two outcomes follow inspection. Confirmed stopped targets yield Stopped and a succeeded operation. Other results keep the observed runtime state and report Stop failed.
+  accDescr: Two outcomes follow inspection. A successful command with matching targets confirmed exited or created yields Stopped and a succeeded operation. Other results keep observed state, or Stale if unavailable, and report Stop failed with a reason.
   participant service as AppService
   participant docker as Docker
   Note over service,docker: Proposed behavior. Solid = call. Dashed = reply.
@@ -195,10 +226,10 @@ sequenceDiagram
   docker-->>service: Command result
   service->>docker: Inspect target containers
   docker-->>service: Runtime state and exit evidence
-  alt Targets confirmed stopped
+  alt Success and matching targets exited/created
     Note over service: Stopped. Operation Succeeded.
-  else Stop incomplete or observation unavailable
-    Note over service: Observed state. Stop failed.
+  else Command failed or outcome unverified
+    Note over service: Observed state or Stale. Stop failed.
   end
 </script>
 <script type="module">

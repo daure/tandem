@@ -29,7 +29,7 @@ impl Deletion {
     ) -> bool {
         if !self.succeeded {
             match lookup(&self.operation.id) {
-                Ok(operation) if operation.state == OperationState::Running => {}
+                Ok(operation) if operation.state == OperationState::Running => return true,
                 Ok(operation) if operation.state == OperationState::Succeeded => {
                     self.succeeded = true;
                     let title = match operation.action.as_str() {
@@ -54,7 +54,18 @@ impl Deletion {
                 }
             }
         }
-        let before = (snapshot.instances.len(), snapshot.templates.len());
+        let before = (
+            snapshot.instances.len(),
+            snapshot.templates.len(),
+            snapshot.activities.len(),
+        );
+        snapshot.activities.retain(|activity| {
+            if self.operation.action == "delete_instance" {
+                activity.name != self.operation.name
+            } else {
+                activity.template.as_deref() != Some(&self.operation.name)
+            }
+        });
         snapshot.instances.retain(|instance| {
             if self.operation.action == "delete_instance" {
                 instance.name != self.operation.name
@@ -68,17 +79,28 @@ impl Deletion {
                 .retain(|template| template.name != self.operation.name);
         }
         // Keep successful deletes hidden until the inventory catches up.
-        !self.succeeded || before != (snapshot.instances.len(), snapshot.templates.len())
+        !self.succeeded
+            || before
+                != (
+                    snapshot.instances.len(),
+                    snapshot.templates.len(),
+                    snapshot.activities.len(),
+                )
     }
 }
 
 impl super::App {
     pub(super) fn operation_accepted(&mut self, operation: Operation) {
         match operation.action.as_str() {
-            "restart_instance" | "restart_service" | "start_service" | "stop_service" => {
+            "restart_instance" | "restart_service" | "start_service" | "stop_service"
+            | "stop_instance" | "stop_template" => {
                 self.container_operations.push(operation.clone());
             }
-            "create_instance" | "create_template" => {
+            "create_instance" => {
+                self.container_operations.push(operation.clone());
+                instances::select_created(&self.instances, &operation);
+            }
+            "create_template" => {
                 instances::select_created(&self.instances, &operation);
             }
             _ => {}
@@ -94,8 +116,8 @@ impl super::App {
         let mut notifications = Vec::new();
         self.container_operations.retain(|pending| {
             let action = match pending.action.as_str() {
-                "start_service" => "Start",
-                "stop_service" => "Stop",
+                "start_service" | "create_instance" => "Start",
+                "stop_service" | "stop_instance" | "stop_template" => "Stop",
                 _ => "Restart",
             };
             let result = self.service.get_operation(&pending.id);

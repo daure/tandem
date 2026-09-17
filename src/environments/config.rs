@@ -15,6 +15,7 @@ pub(crate) struct Config {
     pub namespace: String,
     pub port: u16,
     pub keys: [char; 8],
+    pub operation_id: Option<String>,
 }
 
 impl Config {
@@ -77,6 +78,7 @@ impl Config {
             namespace,
             port,
             keys: ['v', 'n', 'T', 's', 'R', 'x', 'p', 'r'],
+            operation_id: None,
         };
         for directory in [
             &config.templates,

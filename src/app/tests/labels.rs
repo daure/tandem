@@ -78,7 +78,7 @@ fn starting_instances_show_a_bounded_countdown_then_an_overrun() {
 }
 
 #[test]
-fn instance_status_summary_uses_muted_text() {
+fn instance_status_label_uses_its_semantic_color() {
     tuicore::init();
     let row = rows::from_snapshot(&snapshot())[1].clone();
     let text = row.text("⠋");
@@ -86,7 +86,7 @@ fn instance_status_summary_uses_muted_text() {
     assert_eq!(text.lines[0].spans[2].content, "Running");
     assert_eq!(
         text.lines[0].spans[2].style.fg,
-        Some(tuicore::theme().muted_fg())
+        Some(tuicore::theme().info_fg())
     );
 }
 
@@ -133,7 +133,7 @@ fn tree_secondary_lines_are_muted_and_align_with_the_row_icon() {
             .unwrap();
         let lines = rendered_lines(&terminal, area);
         let service_detail = if routed {
-            "http://localhost:9876/review/web/ · port 8080"
+            " http://localhost:9876/review/web/ · port 8080"
         } else {
             "nginx:latest"
         };
@@ -143,7 +143,7 @@ fn tree_secondary_lines_are_muted_and_align_with_the_row_icon() {
         {
             let y = lines
                 .iter()
-                .position(|line| line.contains(row.icon))
+                .position(|line| line.contains(row.label.lines().next().unwrap()))
                 .unwrap();
             let x = lines[y][..lines[y].find(row.icon).unwrap()].chars().count();
             let secondary_x = lines[y + 1][..lines[y + 1].find(detail).unwrap()]
