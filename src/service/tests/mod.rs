@@ -1,6 +1,7 @@
 use super::super::AppService;
 
 mod open_command;
+mod instance_batch;
 
 #[test]
 fn mutations_require_confirmation_before_admission() {

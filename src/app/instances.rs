@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Rect},
+    layout::{Alignment, Constraint, Rect},
     style::Style,
     text::Span,
 };
@@ -117,24 +117,25 @@ impl Instances {
                 Column::multiline(
                     "resources",
                     "Memory / CPU",
-                    Constraint::Length(30),
+                    Constraint::Min(0),
                     |row: &Row, _| {
                         let mut resources = row.resource_text();
                         for line in &mut resources.lines {
                             line.spans.push(Span::raw(" "));
+                            line.alignment = Some(Alignment::Right);
                         }
                         resources
                     },
                 )
                 .search_key(|row| row.resource_text().to_string())
-                .constrained(),
+                .fit_content(),
             ])
             .headers(false)
             .action_bar(true)
             .filter_controls(false)
             .selection_mode(SelectionMode::Single)
             .tree(TreeAdapter::parent_id(|row: &Row| row.parent.clone()))
-            .row_height(2)
+            .row_height_by(Row::height)
             .row_style_by(|row| {
                 row.alternate_background
                     .then(|| Style::default().bg(tuicore::theme().surface_bg()))

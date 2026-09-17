@@ -14,7 +14,7 @@ pub(crate) struct Config {
     pub instructions: PathBuf,
     pub namespace: String,
     pub port: u16,
-    pub keys: [char; 8],
+    pub keys: [char; 10],
     pub operation_id: Option<String>,
 }
 
@@ -45,6 +45,8 @@ impl Config {
             "DELETE",
             "PURGE",
             "RESTART",
+            "STOP_ALL",
+            "PURGE_ALL",
         ]
         .iter()
         .enumerate()
@@ -77,7 +79,7 @@ impl Config {
             home,
             namespace,
             port,
-            keys: ['v', 'n', 'T', 's', 'R', 'x', 'p', 'r'],
+            keys: ['v', 'n', 'T', 's', 'R', 'x', 'p', 'r', 'S', 'P'],
             operation_id: None,
         };
         for directory in [

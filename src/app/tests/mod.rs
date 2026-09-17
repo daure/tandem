@@ -9,6 +9,7 @@ use crate::{
     store::environments::{EnvironmentSnapshot, Instance, InstanceService, Manifest, Template},
 };
 
+mod bulk;
 mod input_routing;
 mod labels;
 mod operations;
@@ -104,7 +105,7 @@ fn tree_rows_show_routed_services_without_gateway_children() {
     let rows = rows::from_snapshot(&snapshot);
     assert_eq!(rows.len(), 4);
     assert_eq!(rows[0].label, "website\n 1");
-    assert_eq!(rows[0].icon, "");
+    assert_eq!(rows[0].icon, "󰠲");
     assert_eq!(rows[1].parent, Some(rows[0].id.clone()));
     assert_eq!(rows[1].label, "review · Running\n/tmp/workspaces/review");
     assert_eq!(rows[1].icon, "");
@@ -198,6 +199,7 @@ fn setup_jobs_are_visible_and_completed_jobs_are_grouped() {
             .iter()
             .find(|row| row.id == "service:review:repo-sync")
             .unwrap();
+        assert_eq!(setup.resource_text().to_string(), "");
         assert_eq!(
             setup.parent.as_deref(),
             Some(if status == "exited 0" {

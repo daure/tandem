@@ -1,4 +1,8 @@
-use std::time::{Duration, Instant};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use ratatui::{
     Frame,
@@ -12,9 +16,13 @@ use tuicore::{
     TickResult, ToastRack, TuiEvent, TuiNode,
 };
 
-use crate::{service::AppService, store::environments::EnvironmentSnapshot};
+use crate::{
+    service::AppService,
+    store::environments::EnvironmentSnapshot,
+};
 
 mod action_menu;
+mod bulk;
 mod details;
 mod dialogs;
 mod instances;
@@ -50,6 +58,8 @@ pub(crate) enum Msg {
     OpenCommandChanged(String),
     NewTemplate,
     Refresh,
+    StopAll,
+    PurgeAll,
     SetBranchInstances(bool),
     Submit,
 }
@@ -75,6 +85,8 @@ enum Intent {
     StopTemplate(String),
     DeleteTemplate(String),
     RemoveTemplate(String),
+    StopAll(Vec<String>),
+    PurgeAll(Vec<String>),
 }
 
 type Content = Tabs<Msg>;
@@ -100,7 +112,8 @@ pub(crate) struct App {
     snapshot: EnvironmentSnapshot,
     view: View,
     instances: SharedState,
-    keys: [KeySpec; 8],
+    toolbar_state: toolbar::SharedState,
+    keys: [KeySpec; 10],
     refresh_schedule: refresh::RefreshSchedule,
     manual_refresh: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
     notifications: ToastRack,
@@ -125,12 +138,19 @@ pub(crate) fn root(service: AppService) -> App {
     });
     let snapshot = service.environment_snapshot();
     let instances = instances::state(rows::from_snapshot(&snapshot));
+    let toolbar_state = Rc::new(RefCell::new(toolbar::State::from_snapshot(&snapshot)));
     let content = Tabs::new(vec![Tab::new(
         "Instances",
         Flex::column()
             .child(
                 "template-actions",
-                toolbar::Toolbar::new(key_chars[2], key_chars[4]),
+                toolbar::Toolbar::new(
+                    key_chars[2],
+                    key_chars[4],
+                    key_chars[8],
+                    key_chars[9],
+                    toolbar_state.clone(),
+                ),
                 FlexItem::fit_content(),
             )
             .child(
@@ -171,6 +191,7 @@ pub(crate) fn root(service: AppService) -> App {
         snapshot,
         view,
         instances,
+        toolbar_state,
         keys,
         refresh_schedule: refresh::RefreshSchedule::default(),
         manual_refresh: None,
@@ -187,6 +208,12 @@ pub(crate) fn root(service: AppService) -> App {
 }
 
 impl App {
+    fn update_snapshot(&mut self, snapshot: EnvironmentSnapshot) {
+        *self.toolbar_state.borrow_mut() = toolbar::State::from_snapshot(&snapshot);
+        instances::replace_rows(&self.instances, rows::from_snapshot(&snapshot));
+        self.snapshot = snapshot;
+    }
+
     fn selected(&self) -> Option<Row> {
         instances::selected(&self.instances)
     }
@@ -230,6 +257,8 @@ impl App {
             }
             Msg::NewTemplate => self.action(2, ctx),
             Msg::Refresh => self.action(4, ctx),
+            Msg::StopAll => self.confirm_stop_all(ctx),
+            Msg::PurgeAll => self.confirm_purge_all(ctx),
             Msg::SetBranchInstances(enabled) => {
                 if let Err(error) = self.service.set_branch_instances(enabled) {
                     ctx.notify(Notification::error("Cannot save settings", error));
@@ -237,6 +266,14 @@ impl App {
             }
             Msg::Submit => {
                 let result = match &self.intent {
+                    Some(Intent::StopAll(names)) => {
+                        self.submit_instance_batch("stop_instance", names.clone(), ctx);
+                        return;
+                    }
+                    Some(Intent::PurgeAll(names)) => {
+                        self.submit_instance_batch("delete_instance", names.clone(), ctx);
+                        return;
+                    }
                     Some(Intent::CreateInstance(template)) => {
                         match self
                             .service
@@ -544,7 +581,9 @@ impl App {
                     }
                 }
             }
-            8 => {
+            8 => self.confirm_stop_all(ctx),
+            9 => self.confirm_purge_all(ctx),
+            10 => {
                 self.open_gateway(ctx);
             }
             6 => {

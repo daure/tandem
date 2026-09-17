@@ -17,6 +17,12 @@ pub(crate) enum CreateInstanceOutcome {
     Started(Box<Operation>),
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct InstanceBatch {
+    pub operations: Vec<Operation>,
+    pub errors: Vec<String>,
+}
+
 impl AppService {
     pub(crate) fn environment_snapshot(&self) -> EnvironmentSnapshot {
         let mut snapshot = self.environments.snapshot();
@@ -31,7 +37,7 @@ impl AppService {
         }
         snapshot
     }
-    pub(crate) fn environment_keys(&self) -> [char; 8] {
+    pub(crate) fn environment_keys(&self) -> [char; 10] {
         self.environments.config.keys
     }
 
@@ -210,6 +216,32 @@ impl AppService {
         }
         let operation = self.environments.begin(action, name, template)?;
         Ok(self.schedule_operation(operation, timeout))
+    }
+
+    pub(crate) fn submit_instance_batch(
+        &self,
+        action: &str,
+        names: &[String],
+        confirmed: bool,
+    ) -> Result<InstanceBatch, String> {
+        if !matches!(action, "stop_instance" | "delete_instance") {
+            return Err("unsupported instance batch operation".into());
+        }
+        if !confirmed {
+            return Err(
+                "confirmation_required: this stops containers or permanently removes instance data"
+                    .into(),
+            );
+        }
+        let mut batch = InstanceBatch::default();
+        let names = names.iter().collect::<std::collections::BTreeSet<_>>();
+        for name in names {
+            match self.submit_operation(action, name, None, 60, true) {
+                Ok(operation) => batch.operations.push(operation),
+                Err(error) => batch.errors.push(format!("{name}: {error}")),
+            }
+        }
+        Ok(batch)
     }
 
     pub(crate) fn submit_restart(

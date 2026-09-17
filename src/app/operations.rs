@@ -2,7 +2,7 @@ use tuicore::Notification;
 
 use crate::store::environments::{EnvironmentSnapshot, Operation, OperationState};
 
-use super::{instances, rows};
+use super::instances;
 
 pub(super) struct Deletion {
     operation: Operation,
@@ -158,8 +158,7 @@ impl super::App {
         if snapshot == self.snapshot {
             return false;
         }
-        instances::replace_rows(&self.instances, rows::from_snapshot(&snapshot));
-        self.snapshot = snapshot;
+        self.update_snapshot(snapshot);
         true
     }
 }

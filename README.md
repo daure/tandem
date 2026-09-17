@@ -41,9 +41,17 @@ The TUI refreshes runtime inventory asynchronously every ten seconds while its t
 every five minutes while unfocused, and immediately on regaining focus. Idle means terminal focus loss,
 not time since the last keypress; terminals or multiplexers without focus reporting keep the ten-second
 cadence. Local UI state updates every 250 ms.
-Template files load at startup and on manual Refresh (`R`). The top-right refresh button refreshes
+Template files load at startup and on manual Refresh (`R`). The toolbar refresh button refreshes
 the full inventory; it shows `󰑓 Refresh` at 100 columns or wider and `󰑓 R` on narrower terminals,
 with the displayed hotkey following configuration.
+Beside Refresh, ** Stop all** and ** Purge all** act across every template, including instances whose
+template files are missing. Their hotkeys are `S` and `P`; below 100 columns they show icons and hotkey
+badges. Both require confirmation for the
+targets captured when the dialog opens; instances created afterward are outside that confirmation.
+Stop all preserves data and is disabled when no instance can be stopped. Purge all permanently removes
+instance containers, workspaces, volumes and networks and is disabled when there are no instances.
+Both preserve templates and the shared gateway. Each instance reports its own outcome; a failure does
+not prevent the other instances from being attempted.
 Manual refresh shows a completion notification after all requested checks and fresh resource samples
 finish; failures appear as a warning. Automatic refreshes stay silent, and repeated manual
 requests while one is pending share its completion notification.
@@ -201,6 +209,8 @@ guidance files are user-owned; update them explicitly when adopting this workflo
 | `TANDEM_KEY_DELETE` | `x` | Delete the selected instance, or a template with all its instances and data |
 | `TANDEM_KEY_PURGE` | `p` | Purge all instances of the selected template |
 | `TANDEM_KEY_RESTART` | `r` | Restart the selected instance or service after confirmation |
+| `TANDEM_KEY_STOP_ALL` | `S` | Stop instances across all templates after confirmation |
+| `TANDEM_KEY_PURGE_ALL` | `P` | Purge instances across all templates after confirmation |
 
 Application hotkey overrides are distinct ASCII letters. Shared navigation, focus, and component
 keys use tuicore configuration. The TUI displays resolved key labels.

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Greetings · Eval</title>
+  <link rel="icon" href="data:,">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #10151d; color: #e5edf7; font: 16px/1.5 system-ui, sans-serif; }
+    main { max-width: 1120px; margin: auto; padding: 28px 24px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .eyebrow { margin: 0; color: #a6bbd4; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 4px 0; font-size: 28px; letter-spacing: -.03em; }
+    .tag { border: 1px solid #607d9e; border-radius: 7px; padding: 5px 16px; color: #cce4ff; }
+    .caption { margin: 10px 0 20px; color: #bac9dc; }
+    figure { margin: 0; padding: 18px; background: #17212e; border: 1px solid #3c5069; border-radius: 12px; }
+    #diagram { display: flex; justify-content: center; }
+    #diagram svg { max-width: 100%; height: auto; }
+    #status { color: #bac9dc; text-align: center; }
+    footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 14px; color: #a6bbd4; font-size: 13px; }
+    a { color: #a8d5ff; }
+    @media (max-width: 600px) {
+      main { padding: 18px 12px; }
+      figure { overflow-x: auto; padding: 12px; }
+      #diagram { min-width: 720px; }
+      footer { flex-direction: column; gap: 6px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div><p class="eyebrow">Greetings / evaluation</p><h1>Prove the greeting survives.</h1></div>
+      <span class="tag">Eval</span>
+    </header>
+    <p class="caption">Pass with evidence. Fix within a bounded loop. Report anything unverified.</p>
+    <figure aria-label="Greetings evaluation workflow">
+      <p id="status" role="status">Loading diagram…</p>
+      <div id="diagram"></div>
+    </figure>
+    <footer>
+      <span>Exact checks and safety rules: <a href="eval.md">eval.md</a></span>
+      <span>Mermaid 11.17.1 · Internet required to load renderer</span>
+    </footer>
+    <noscript>Enable JavaScript to render the diagram. The evaluation contract is available in eval.md.</noscript>
+  </main>
+  <!-- Embedded preview of eval.mmd allows this page to open directly from disk. -->
+  <script id="diagram-source" type="text/plain">
+---
+title: Greetings self-evaluation flow
+---
+flowchart TD
+    accTitle: Greetings self-evaluation flow
+    accDescr: Two outcomes are possible: report a pass with evidence, or report failures and blockers. Start in the assigned instance and run the checks in eval.md. Pass only when all required checks pass; otherwise fix and repeat only when safe and fewer than three fixes have been attempted.
+
+    beginEval([Start in assigned instance])
+    runChecks[Run checks in eval.md]
+    checksPass{All required checks pass?}
+    reportPass([Report pass with evidence])
+    canRetry{Safe to fix and under 3 fixes?}
+    fixIssue[Fix issue and count attempt]
+    reportBlocked([Report failures and blockers])
+
+    beginEval --> runChecks
+    runChecks --> checksPass
+    checksPass -->|Yes| reportPass
+    checksPass -->|No or unverified| canRetry
+    canRetry -->|Yes| fixIssue
+    fixIssue -.->|Repeat checks| runChecks
+    canRetry -->|No| reportBlocked
+
+    subgraph legendKey [Legend]
+        notation[Rectangles: actions · Diamonds: decisions<br/>Rounded boxes: start or outcome · Dotted arrow: retry]
+    end
+  </script>
+  <script type="module">
+    const status = document.querySelector('#status');
+    try {
+      const { default: mermaid } = await import('https://cdn.jsdelivr.net/npm/mermaid@11.17.1/dist/mermaid.esm.min.mjs');
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: 'base',
+        fontFamily: 'system-ui, sans-serif',
+        themeVariables: {
+          darkMode: true,
+          background: '#17212e',
+          primaryColor: '#243b53', primaryTextColor: '#e5edf7', primaryBorderColor: '#8bacce',
+          secondaryColor: '#243b53', tertiaryColor: '#1b2b3d',
+          lineColor: '#a6bbd4', textColor: '#e5edf7',
+          clusterBkg: '#1b2b3d', clusterBorder: '#8bacce',
+          edgeLabelBackground: '#17212e', titleColor: '#e5edf7'
+        },
+        flowchart: { curve: 'linear', nodeSpacing: 30, rankSpacing: 34 }
+      });
+      const source = document.querySelector('#diagram-source').textContent.trim();
+      const { svg } = await mermaid.render('greetings-evaluation', source);
+      document.querySelector('#diagram').innerHTML = svg;
+      status.hidden = true;
+    } catch (error) {
+      status.textContent = `Diagram could not be rendered: ${error.message}. Check your internet connection and reload.`;
+    }
+  </script>
+</body>
+</html>

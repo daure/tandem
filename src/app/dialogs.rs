@@ -215,6 +215,28 @@ fn confirmation(title: &str, action: &str, hotkey: KeySpec, description: String)
     )
 }
 
+pub(super) fn confirm_stop_all(count: usize, hotkey: KeySpec) -> Modal {
+    confirmation(
+        "Stop all instances",
+        "Stop all",
+        hotkey,
+        format!(
+            "Stop {count} stoppable instances across all templates?\nWorkspaces and data stay for restart. Templates and the gateway stay."
+        ),
+    )
+}
+
+pub(super) fn confirm_purge_all(count: usize, hotkey: KeySpec) -> Modal {
+    confirmation(
+        "Purge all instances",
+        "Purge all",
+        hotkey,
+        format!(
+            "Permanently purge {count} instances across all templates?\nThis removes their containers, workspaces, volumes, and networks.\nTemplates and the gateway stay. This cannot be undone."
+        ),
+    )
+}
+
 pub(super) fn confirm_remove_template(name: &str, directory: &str) -> Modal {
     confirmation(
         "Delete template",

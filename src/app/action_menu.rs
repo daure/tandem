@@ -37,7 +37,7 @@ pub(super) enum Action {
 impl Action {
     pub(super) fn index(self) -> usize {
         match self {
-            Self::OpenBrowser => 8,
+            Self::OpenBrowser => 10,
             Self::RestartInstance | Self::RestartService => 7,
             Self::Details => 0,
             Self::NewInstance => 1,
@@ -79,7 +79,7 @@ pub(super) struct ActionMenu {
 }
 
 impl ActionMenu {
-    pub(super) fn new(keys: [KeySpec; 8]) -> Self {
+    pub(super) fn new(keys: [KeySpec; 10]) -> Self {
         let selected = Rc::new(RefCell::new(None));
         let selection = Rc::clone(&selected);
         let enabled = Rc::new(RefCell::new(Vec::new()));
@@ -193,7 +193,7 @@ impl ActionMenu {
     }
 }
 
-fn action_text(action: Action, keys: &[KeySpec; 8], enabled: bool) -> Text<'static> {
+fn action_text(action: Action, keys: &[KeySpec; 10], enabled: bool) -> Text<'static> {
     let label = action.label();
     let hotkey = if action == Action::OpenBrowser {
         KeySpec::key(tuicore::Key::Enter).label()

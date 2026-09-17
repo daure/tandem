@@ -1,20 +1,61 @@
-use std::time::Duration;
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
-use ratatui::{Frame, layout::Rect};
+use ratatui::{
+    Frame,
+    layout::Rect,
+    text::{Line, Span},
+};
 use tuicore::{
     AnimationSettings, Button, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
     FocusTarget, HotkeyLabelMode, KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
     LifecycleCtx, RenderCtx, TickResult, TuiEvent, TuiNode,
 };
 
-use super::{MOBILE_TABS_WIDTH, Msg};
+use super::{MOBILE_TABS_WIDTH, Msg, rows};
+use crate::store::environments::{EnvironmentSnapshot, UsageSummary};
+
+#[derive(Default)]
+pub(super) struct State {
+    pub totals: UsageSummary,
+    pub stop_targets: Vec<String>,
+    pub purge_targets: Vec<String>,
+}
+
+impl State {
+    pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Self {
+        Self {
+            totals: UsageSummary::instances(snapshot.instances.iter()),
+            stop_targets: snapshot
+                .instances
+                .iter()
+                .filter(|instance| instance.can_stop())
+                .map(|instance| instance.name.clone())
+                .collect(),
+            purge_targets: snapshot
+                .instances
+                .iter()
+                .map(|instance| instance.name.clone())
+                .collect(),
+        }
+    }
+}
+
+pub(super) type SharedState = Rc<RefCell<State>>;
 
 pub(super) struct Toolbar {
     template: Button<Msg>,
     refresh: Button<Msg>,
+    stop: Button<Msg>,
+    purge: Button<Msg>,
     refresh_key: KeySpec,
+    bulk_keys: [KeySpec; 2],
     template_area: Rect,
     refresh_area: Rect,
+    stop_area: Rect,
+    purge_area: Rect,
+    state: SharedState,
+    totals_area: Rect,
+    totals_width: usize,
 }
 
 fn hotkey(key: char) -> String {
@@ -25,8 +66,24 @@ fn hotkey(key: char) -> String {
     }
 }
 
+fn key_spec(key: char) -> KeySpec {
+    if key.is_ascii_uppercase() {
+        KeySpec::shifted(key.to_ascii_lowercase())
+    } else {
+        KeySpec::plain(key)
+    }
+}
+
 impl Toolbar {
-    pub(super) fn new(template_key: char, refresh_key: char) -> Self {
+    pub(super) fn new(
+        template_key: char,
+        refresh_key: char,
+        stop_key: char,
+        purge_key: char,
+        state: SharedState,
+    ) -> Self {
+        let stop_disabled = state.borrow().stop_targets.is_empty();
+        let purge_disabled = state.borrow().purge_targets.is_empty();
         Self {
             template: Button::new("Template")
                 .hotkey(hotkey(template_key))
@@ -35,23 +92,73 @@ impl Toolbar {
             refresh: Button::new("󰑓 Refresh")
                 .hotkey(hotkey(refresh_key))
                 .on_press(|| Msg::Refresh),
-            refresh_key: if refresh_key.is_ascii_uppercase() {
-                KeySpec::shifted(refresh_key.to_ascii_lowercase())
-            } else {
-                KeySpec::plain(refresh_key)
-            },
+            stop: Button::new(" Stop all")
+                .hotkey(hotkey(stop_key))
+                .hotkey_label_mode(HotkeyLabelMode::Inline)
+                .on_press(|| Msg::StopAll)
+                .disabled(stop_disabled),
+            purge: Button::new(" Purge all")
+                .hotkey(hotkey(purge_key))
+                .hotkey_label_mode(HotkeyLabelMode::Inline)
+                .on_press(|| Msg::PurgeAll)
+                .disabled(purge_disabled),
+            refresh_key: key_spec(refresh_key),
+            bulk_keys: [stop_key, purge_key].map(key_spec),
             template_area: Rect::default(),
             refresh_area: Rect::default(),
+            stop_area: Rect::default(),
+            purge_area: Rect::default(),
+            state,
+            totals_area: Rect::default(),
+            totals_width: 0,
         }
     }
 
-    fn refresh_hotkey(&self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
-        if let TuiEvent::Key(key) = event
-            && self.refresh_key.matches(*key)
-        {
-            ctx.emit(Msg::Refresh);
-            ctx.stop_propagation();
-            return true;
+    fn totals_text(&self) -> Line<'static> {
+        let mut spans = Vec::new();
+        for line in rows::resource_text(&self.state.borrow().totals).lines {
+            if !spans.is_empty() {
+                spans.push(Span::raw(" "));
+            }
+            spans.extend(line.spans);
+        }
+        Line::from(spans)
+    }
+
+    fn buttons_mut(&mut self) -> [(&'static str, &mut Button<Msg>); 4] {
+        [
+            ("new-template", &mut self.template),
+            ("stop-all", &mut self.stop),
+            ("purge-all", &mut self.purge),
+            ("refresh", &mut self.refresh),
+        ]
+    }
+
+    fn sync_disabled(&mut self) -> bool {
+        let state = self.state.borrow();
+        let stop_disabled = state.stop_targets.is_empty();
+        let purge_disabled = state.purge_targets.is_empty();
+        let changed = self.stop.is_disabled() != stop_disabled
+            || self.purge.is_disabled() != purge_disabled;
+        self.stop.set_disabled(stop_disabled);
+        self.purge.set_disabled(purge_disabled);
+        changed
+    }
+
+    fn action_hotkey(&self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
+        let TuiEvent::Key(key) = event else {
+            return false;
+        };
+        for (binding, disabled, message) in [
+            (self.refresh_key, false, Msg::Refresh),
+            (self.bulk_keys[0], self.stop.is_disabled(), Msg::StopAll),
+            (self.bulk_keys[1], self.purge.is_disabled(), Msg::PurgeAll),
+        ] {
+            if !disabled && binding.matches(*key) {
+                ctx.emit(message);
+                ctx.stop_propagation();
+                return true;
+            }
         }
         false
     }
@@ -65,30 +172,48 @@ impl TuiNode<Msg> for Toolbar {
             .preferred
             .width
             .saturating_add(self.refresh.measure(proposal).preferred.width)
-            .saturating_add(1);
+            .saturating_add(self.stop.measure(proposal).preferred.width)
+            .saturating_add(self.purge.measure(proposal).preferred.width)
+            .saturating_add(self.totals_text().width().min(u16::MAX as usize) as u16)
+            .saturating_add(4);
         LayoutSizeHint::content(width, 1).normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
+        self.sync_disabled();
         let compact = area.width < MOBILE_TABS_WIDTH;
+        self.stop.set_label(if compact { "" } else { " Stop all" });
+        self.purge.set_label(if compact { "" } else { " Purge all" });
         self.refresh.set_label(if compact {
             format!("󰑓 {}", self.refresh_key.label())
         } else {
             "󰑓 Refresh".into()
         });
         let proposal = LayoutProposal::at_most(area.width, area.height.min(1));
-        let refresh_width = self
-            .refresh
+        let refresh_width = self.refresh.measure(proposal).preferred.width.min(area.width);
+        let purge_width = self
+            .purge
             .measure(proposal)
             .preferred
             .width
-            .min(area.width);
+            .min(area.width.saturating_sub(refresh_width.saturating_add(1)));
+        let stop_width = self
+            .stop
+            .measure(proposal)
+            .preferred
+            .width
+            .min(area.width.saturating_sub(
+                refresh_width.saturating_add(purge_width).saturating_add(2),
+            ));
+        let bulk_width = purge_width.saturating_add(stop_width).saturating_add(2);
         let template_width = self
             .template
             .measure(proposal)
             .preferred
             .width
-            .min(area.width.saturating_sub(refresh_width.saturating_add(1)));
+            .min(area.width.saturating_sub(
+                bulk_width.saturating_add(refresh_width).saturating_add(1),
+            ));
         self.template_area = Rect::new(area.x, area.y, template_width, area.height.min(1));
         self.refresh_area = Rect::new(
             area.right().saturating_sub(refresh_width),
@@ -96,8 +221,42 @@ impl TuiNode<Msg> for Toolbar {
             refresh_width,
             area.height.min(1),
         );
+        self.purge_area = Rect::new(
+            self.refresh_area.x.saturating_sub(purge_width.saturating_add(1)).max(area.x),
+            area.y,
+            purge_width,
+            area.height.min(1),
+        );
+        self.stop_area = Rect::new(
+            self.purge_area.x.saturating_sub(stop_width.saturating_add(1)).max(area.x),
+            area.y,
+            stop_width,
+            area.height.min(1),
+        );
+        self.totals_width = self.totals_text().width();
+        let totals_width = self.totals_width.min(u16::MAX as usize) as u16;
+        let available = self
+            .stop_area
+            .x
+            .saturating_sub(self.template_area.right().saturating_add(2));
+        self.totals_area = if totals_width <= available {
+            Rect::new(
+                self.stop_area.x.saturating_sub(totals_width + 1),
+                area.y,
+                totals_width,
+                area.height.min(1),
+            )
+        } else {
+            Rect::default()
+        };
         ctx.push_slot(ChildKey::new("new-template"), self.template_area, |ctx| {
             self.template.layout(self.template_area, ctx)
+        });
+        ctx.push_slot(ChildKey::new("stop-all"), self.stop_area, |ctx| {
+            self.stop.layout(self.stop_area, ctx)
+        });
+        ctx.push_slot(ChildKey::new("purge-all"), self.purge_area, |ctx| {
+            self.purge.layout(self.purge_area, ctx)
         });
         ctx.push_slot(ChildKey::new("refresh"), self.refresh_area, |ctx| {
             self.refresh.layout(self.refresh_area, ctx)
@@ -108,15 +267,22 @@ impl TuiNode<Msg> for Toolbar {
     fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut RenderCtx<'a>) {
         <Button<Msg> as TuiNode<Msg>>::render(&self.template, frame, self.template_area, ctx);
         <Button<Msg> as TuiNode<Msg>>::render(&self.refresh, frame, self.refresh_area, ctx);
+        <Button<Msg> as TuiNode<Msg>>::render(&self.stop, frame, self.stop_area, ctx);
+        <Button<Msg> as TuiNode<Msg>>::render(&self.purge, frame, self.purge_area, ctx);
+        frame.render_widget(self.totals_text(), self.totals_area);
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
-        if self.refresh_hotkey(event, ctx)
-            || self.template.event(event, ctx) == EventOutcome::Handled
-        {
+        self.sync_disabled();
+        if self.action_hotkey(event, ctx) {
             return EventOutcome::Handled;
         }
-        self.refresh.event(event, ctx)
+        for (_, button) in self.buttons_mut() {
+            if button.event(event, ctx) == EventOutcome::Handled {
+                return EventOutcome::Handled;
+            }
+        }
+        EventOutcome::Ignored
     }
 
     fn dispatch_event(
@@ -125,56 +291,63 @@ impl TuiNode<Msg> for Toolbar {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
-        if self.refresh_hotkey(event, ctx) {
+        self.sync_disabled();
+        if self.action_hotkey(event, ctx) {
             return EventOutcome::Handled;
         }
-        if let Some(path) = route.path.without_first_if(&ChildKey::new("new-template")) {
-            return self
-                .template
-                .dispatch_event(&EventRoute::new(path), event, ctx);
-        }
-        if let Some(path) = route.path.without_first_if(&ChildKey::new("refresh")) {
-            return self
-                .refresh
-                .dispatch_event(&EventRoute::new(path), event, ctx);
+        for (key, button) in self.buttons_mut() {
+            if let Some(path) = route.path.without_first_if(&ChildKey::new(key)) {
+                return button.dispatch_event(&EventRoute::new(path), event, ctx);
+            }
         }
         EventOutcome::Ignored
     }
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        <Button<Msg> as TuiNode<Msg>>::tick(&mut self.template, dt, settings).merge(
-            <Button<Msg> as TuiNode<Msg>>::tick(&mut self.refresh, dt, settings),
-        )
+        let disabled_changed = self.sync_disabled();
+        let mut result = TickResult::IDLE;
+        for (_, button) in self.buttons_mut() {
+            result = result.merge(<Button<Msg> as TuiNode<Msg>>::tick(button, dt, settings));
+        }
+        if disabled_changed || self.totals_text().width() != self.totals_width {
+            result.changed = true;
+            result.layout = true;
+        }
+        result
     }
 
     fn focus(&mut self, target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<Msg>) {
-        self.template.focus(target, focused, ctx);
-        self.refresh.focus(target, focused, ctx);
+        for (_, button) in self.buttons_mut() {
+            button.focus(target, focused, ctx);
+        }
     }
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<Msg>) {
-        if let Some(target) = target.for_child(&ChildKey::new("new-template")) {
-            self.template.dispatch_focus(&target, focused, ctx);
-        }
-        if let Some(target) = target.for_child(&ChildKey::new("refresh")) {
-            self.refresh.dispatch_focus(&target, focused, ctx);
+        for (key, button) in self.buttons_mut() {
+            if let Some(target) = target.for_child(&ChildKey::new(key)) {
+                button.dispatch_focus(&target, focused, ctx);
+            }
         }
     }
 
     fn init(&mut self, ctx: &mut LifecycleCtx<Msg>) {
-        self.template.init(ctx);
-        self.refresh.init(ctx);
+        for (_, button) in self.buttons_mut() {
+            button.init(ctx);
+        }
     }
     fn mount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
-        self.template.mount(ctx);
-        self.refresh.mount(ctx);
+        for (_, button) in self.buttons_mut() {
+            button.mount(ctx);
+        }
     }
     fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
-        self.template.unmount(ctx);
-        self.refresh.unmount(ctx);
+        for (_, button) in self.buttons_mut() {
+            button.unmount(ctx);
+        }
     }
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
-        self.template.destroy(ctx);
-        self.refresh.destroy(ctx);
+        for (_, button) in self.buttons_mut() {
+            button.destroy(ctx);
+        }
     }
 }

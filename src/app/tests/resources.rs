@@ -377,7 +377,7 @@ fn search_results_restripe_the_visible_tree_rows() {
 }
 
 #[test]
-fn all_tree_rows_stack_memory_above_cpu() {
+fn resource_rows_stack_memory_above_cpu_at_the_right_edge() {
     tuicore::init();
     let mut snapshot = snapshot();
     snapshot.instances[0].services[0].status = "healthy".into();
@@ -393,17 +393,10 @@ fn all_tree_rows_stack_memory_above_cpu() {
         .expect("routed service");
     assert!(lines[service_line].contains("󰑹 180 MiB"), "{lines:#?}");
     assert!(lines[service_line + 1].contains("http://localhost:9876/review/web/ · port 8080"));
-    let resource_byte = lines[service_line].find("󰑹").unwrap();
-    let resource_column = lines[service_line][..resource_byte].chars().count();
-    assert_eq!(resource_column, 110 - 30, "{lines:#?}");
     for offset in [0, 2, 4] {
         let row_line = service_line - offset;
-        let memory_column = lines[row_line].find("󰑹 180 MiB").unwrap();
-        let cpu_column = lines[row_line + 1].find(" 2%").unwrap();
-        assert_eq!(
-            lines[row_line][..memory_column].chars().count(),
-            lines[row_line + 1][..cpu_column].chars().count()
-        );
+        assert!(lines[row_line].ends_with("󰑹 180 MiB "), "{lines:#?}");
+        assert!(lines[row_line + 1].ends_with(" 2% "), "{lines:#?}");
     }
     let buffer = terminal.backend().buffer();
     assert_eq!(
@@ -423,6 +416,9 @@ fn all_tree_rows_stack_memory_above_cpu() {
         "{lines:#?}"
     );
     assert_eq!(lines.iter().filter(|line| line.contains(" 2%")).count(), 3);
+    for line in lines.iter().filter(|line| line.contains(" 2%")) {
+        assert!(line.ends_with(" 2% "), "{lines:#?}");
+    }
 
     snapshot.instances[0].services[0].usage = None;
     snapshot.instances[0].services[0].url = None;
@@ -439,6 +435,58 @@ fn all_tree_rows_stack_memory_above_cpu() {
     for offset in [0, 2, 4] {
         assert!(lines[service_line - offset].contains("󰑹 —"));
         assert!(lines[service_line - offset + 1].contains(" —"));
+    }
+}
+
+#[test]
+fn setup_group_uses_one_line_and_its_children_show_only_labels() {
+    tuicore::init();
+    for image in [Some("setup-image"), None] {
+        let mut snapshot = snapshot();
+        let mut setup = snapshot.instances[0].services[0].clone();
+        setup.name = "migrate".into();
+        setup.one_shot = true;
+        setup.status = "exited 0".into();
+        setup.url = None;
+        setup.port = None;
+        setup.image = image.map(str::to_owned);
+        snapshot.instances[0].services.push(setup);
+        let mut tree = Instances::new(instances::state(rows::from_snapshot(&snapshot)));
+        expand_first_instance(&mut tree);
+        let terminal = render(&mut tree, 110);
+        let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
+        let group = lines
+            .iter()
+            .position(|line| line.contains("Setup · 1 completed"))
+            .unwrap();
+        assert!(lines[group].trim_end().ends_with("Setup · 1 completed"));
+        assert!(lines[group + 1].contains("web · Running"), "{lines:#?}");
+
+        tree.focus(None, true, &mut tuicore::FocusCtx::default());
+        let mut events = EventCtx::new(AnimationSettings::default());
+        for key in [Key::Home, Key::Down, Key::Down, Key::Right] {
+            tree.event(&TuiEvent::Key(KeyEvent::from(key)), &mut events);
+        }
+        tree.focus(None, false, &mut tuicore::FocusCtx::default());
+        let terminal = render(&mut tree, 110);
+        let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
+        assert!(
+            lines[group + 1].trim_end().ends_with("migrate · Completed"),
+            "{lines:#?}"
+        );
+        let child_height = if let Some(image) = image {
+            assert!(
+                lines[group + 2].trim_end().ends_with(image),
+                "{lines:#?}"
+            );
+            2
+        } else {
+            1
+        };
+        assert!(
+            lines[group + 1 + child_height].contains("web · Running"),
+            "{lines:#?}"
+        );
     }
 }
 

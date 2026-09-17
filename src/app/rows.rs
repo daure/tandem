@@ -11,7 +11,7 @@ use ratatui::{
 
 use super::{details, properties::Property};
 
-const TEMPLATE_ICON: &str = "";
+const TEMPLATE_ICON: &str = "󰠲";
 const GATEWAY_ICON: &str = "";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -164,12 +164,21 @@ pub(super) struct Row {
     pub status_detail: Option<String>,
     pub detail_tone: Tone,
     pub metrics: UsageSummary,
+    pub hide_resources: bool,
     pub can_start: bool,
     pub can_stop: bool,
     pub can_restart: bool,
 }
 
 impl Row {
+    pub(super) fn height(&self) -> u16 {
+        if self.hide_resources {
+            self.label.lines().count().clamp(1, 2) as u16
+        } else {
+            2
+        }
+    }
+
     pub(super) fn search_text(&self) -> String {
         format!(
             "{} {}",
@@ -213,71 +222,77 @@ impl Row {
     }
 
     pub(super) fn resource_text(&self) -> Text<'static> {
-        let memory = self
-            .metrics
-            .memory_bytes
-            .map_or_else(|| "—".into(), details::memory);
-        let cpu = self.metrics.cpu_basis_points;
-        let suffix = |partial: bool, stale: bool, age: Option<u64>| {
-            let mut suffix = if partial {
-                " · partial".to_owned()
-            } else {
-                String::new()
-            };
-            if stale {
-                suffix.push_str(
-                    &age.map(|age| format!(" · stale {age}s"))
-                        .unwrap_or_else(|| " · stale".into()),
-                );
-            }
-            suffix
-        };
-        Text::from(vec![
-            Line::from(Span::styled(
-                format!(
-                    "󰑹 {memory}{}",
-                    suffix(
-                        self.metrics.memory_partial,
-                        self.metrics.memory_stale,
-                        self.metrics.age_seconds
-                    )
-                ),
-                Style::default().fg(if self.metrics.memory_stale {
-                    Tone::Muted
-                } else {
-                    details::memory_tone(
-                        self.metrics.memory_bytes.map(|memory_bytes| ResourceUsage {
-                            memory_bytes,
-                            ..Default::default()
-                        }),
-                        self.metrics.memory_limit_bytes,
-                    )
-                }
-                .color()),
-            )),
-            Line::from(Span::styled(
-                format!(
-                    " {}{}",
-                    cpu.map_or_else(|| "—".into(), details::cpu),
-                    if self.metrics.paused {
-                        " · paused".into()
-                    } else {
-                        suffix(
-                            self.metrics.cpu_partial,
-                            self.metrics.cpu_stale,
-                            self.metrics.cpu_age_seconds,
-                        )
-                    }
-                ),
-                Style::default().fg(if cpu.is_some() && !self.metrics.cpu_stale {
-                    Tone::Normal
-                } else {
-                    Tone::Muted
-                }
-                .color()),
-            )),
-        ])
+        if self.hide_resources {
+            return Text::default();
+        }
+        resource_text(&self.metrics)
     }
+}
+
+pub(super) fn resource_text(metrics: &UsageSummary) -> Text<'static> {
+    let memory = metrics
+        .memory_bytes
+        .map_or_else(|| "—".into(), details::memory);
+    let cpu = metrics.cpu_basis_points;
+    let suffix = |partial: bool, stale: bool, age: Option<u64>| {
+        let mut suffix = if partial {
+            " · partial".to_owned()
+        } else {
+            String::new()
+        };
+        if stale {
+            suffix.push_str(
+                &age.map(|age| format!(" · stale {age}s"))
+                    .unwrap_or_else(|| " · stale".into()),
+            );
+        }
+        suffix
+    };
+    Text::from(vec![
+        Line::from(Span::styled(
+            format!(
+                "󰑹 {memory}{}",
+                suffix(
+                    metrics.memory_partial,
+                    metrics.memory_stale,
+                    metrics.age_seconds
+                )
+            ),
+            Style::default().fg(if metrics.memory_stale {
+                Tone::Muted
+            } else {
+                details::memory_tone(
+                    metrics.memory_bytes.map(|memory_bytes| ResourceUsage {
+                        memory_bytes,
+                        ..Default::default()
+                    }),
+                    metrics.memory_limit_bytes,
+                )
+            }
+            .color()),
+        )),
+        Line::from(Span::styled(
+            format!(
+                " {}{}",
+                cpu.map_or_else(|| "—".into(), details::cpu),
+                if metrics.paused {
+                    " · paused".into()
+                } else {
+                    suffix(
+                        metrics.cpu_partial,
+                        metrics.cpu_stale,
+                        metrics.cpu_age_seconds,
+                    )
+                }
+            ),
+            Style::default().fg(if cpu.is_some() && !metrics.cpu_stale {
+                Tone::Normal
+            } else {
+                Tone::Muted
+            }
+            .color()),
+        )),
+    ])
 }
 
 fn workspace_label(workspace: &str, home: Option<&str>) -> String {
@@ -527,6 +542,7 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
             status_detail: summary.detail,
             detail_tone: summary.detail_tone,
             metrics: UsageSummary::instance(instance),
+            hide_resources: false,
             can_start: instance.can_start() && !compose_file.is_empty(),
             can_stop: instance.can_stop(),
             can_restart: instance.can_restart(),
@@ -555,6 +571,7 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
             group.can_restart = false;
             group.usage = None;
             group.metrics = UsageSummary::default();
+            group.hide_resources = true;
             rows.push(group);
         }
         for service in &instance.services {
@@ -616,6 +633,7 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
                 status_detail: service_summary.detail,
                 detail_tone: service_summary.detail_severity.into(),
                 metrics: UsageSummary::service(service),
+                hide_resources: service.one_shot,
                 can_start: service.can_start(),
                 can_stop: service.can_stop(),
                 can_restart: service.can_restart(),
