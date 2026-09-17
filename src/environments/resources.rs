@@ -23,6 +23,7 @@ pub(crate) struct ResourceRequest {
 #[derive(Default)]
 pub(super) struct ResourceCache {
     last_attempt: Option<Instant>,
+    last_containers: BTreeMap<String, Option<String>>,
     in_flight: bool,
     samples: BTreeMap<String, CachedSample>,
 }
@@ -34,12 +35,13 @@ struct CachedSample {
 }
 
 impl ResourceCache {
-    fn begin(&mut self, instances: &[Instance], now: Instant) -> Option<ResourceRequest> {
-        if self.in_flight
-            || self
-                .last_attempt
-                .is_some_and(|last| now.duration_since(last) < SAMPLE_INTERVAL)
-        {
+    fn begin(
+        &mut self,
+        instances: &[Instance],
+        now: Instant,
+        force: bool,
+    ) -> Option<ResourceRequest> {
+        if self.in_flight {
             return None;
         }
         let containers: BTreeMap<_, _> = instances
@@ -48,18 +50,37 @@ impl ResourceCache {
             .filter(|service| service.consumes_resources() && !service.container_id.is_empty())
             .map(|service| (service.container_id.clone(), service.started_at.clone()))
             .collect();
-        if containers.is_empty() {
+        self.samples
+            .retain(|id, sample| containers.get(id) == Some(&sample.started_at));
+        self.last_containers
+            .retain(|id, _| containers.contains_key(id));
+        let full_sample = force
+            || self
+                .last_attempt
+                .is_none_or(|last| now.duration_since(last) >= SAMPLE_INTERVAL);
+        let targets: BTreeMap<_, _> = containers
+            .iter()
+            .filter(|(id, started_at)| {
+                full_sample || self.last_containers.get(*id) != Some(*started_at)
+            })
+            .map(|(id, started_at)| (id.clone(), started_at.clone()))
+            .collect();
+        if targets.is_empty() {
             return None;
         }
-        self.last_attempt = Some(now);
+        let warm_up = force
+            || targets.iter().any(|(id, started_at)| {
+                self.samples
+                    .get(id)
+                    .is_none_or(|sample| sample.started_at != *started_at)
+            });
+        if full_sample {
+            self.last_attempt = Some(now);
+        }
+        self.last_containers = containers;
         self.in_flight = true;
-        let warm_up = containers.iter().any(|(id, started_at)| {
-            self.samples
-                .get(id)
-                .is_none_or(|sample| sample.started_at != *started_at)
-        });
         Some(ResourceRequest {
-            containers,
+            containers: targets,
             warm_up,
         })
     }
@@ -87,8 +108,6 @@ impl ResourceCache {
         self.in_flight = false;
         match result {
             Ok(samples) => {
-                self.samples
-                    .retain(|id, sample| request.containers.get(id) == Some(&sample.started_at));
                 let mut errors = Vec::new();
                 for (id, result) in samples {
                     if let Some(started_at) = request.containers.get(&id) {
@@ -119,18 +138,27 @@ impl ResourceCache {
 }
 
 impl Environments {
-    pub(crate) fn begin_resource_sample(&self) -> Option<ResourceRequest> {
-        let snapshot = self
-            .snapshot
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if snapshot.loading || snapshot.error.is_some() {
+    pub(crate) fn begin_resource_sample(&self, force: bool) -> Option<ResourceRequest> {
+        let snapshot = self.snapshot();
+        if snapshot.loading
+            || self
+                .inventory_errors
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())[1]
+                .is_some()
+        {
             return None;
         }
+        let ready = snapshot
+            .instances
+            .iter()
+            .filter(|instance| !instance.pending && !snapshot.startup.contains_key(&instance.name))
+            .cloned()
+            .collect::<Vec<_>>();
         self.resources
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .begin(&snapshot.instances, Instant::now())
+            .begin(&ready, Instant::now(), force)
     }
 
     pub(crate) fn sample_resources(&self, request: ResourceRequest) {

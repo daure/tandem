@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Read,
     path::Path,
@@ -11,9 +11,11 @@ use super::{
     command::{Progress, docker, remaining, run},
     compose,
     config::Config,
-    docker as runtime, gateway, ownership, templates,
+    docker as runtime, gateway, ownership, repositories, templates,
 };
-use crate::store::environments::{Instance, Template, validate_instance_name, validate_name};
+use crate::store::environments::{
+    Instance, Route, Template, validate_instance_name, validate_name,
+};
 
 pub(crate) fn start(
     config: &Config,
@@ -22,11 +24,12 @@ pub(crate) fn start(
     branch_instances: bool,
     timeout: u64,
     progress: Progress,
+    pending_services: impl FnOnce(Vec<crate::store::environments::InstanceService>),
 ) -> Result<Instance, String> {
     validate_instance_name(name)?;
     validate_name(template_name)?;
     let _lock = gateway::lock(config, &format!("instance-{name}"))?;
-    let _template_lock = gateway::lock(config, &format!("template-{template_name}"))?;
+    let _template_lock = gateway::shared_lock(config, &format!("template-{template_name}"))?;
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let template = templates::get(config, template_name)?;
     let existing_ids = runtime::project_ids(config, name, deadline)?;
@@ -51,6 +54,14 @@ pub(crate) fn start(
     {
         return Err("workspace escapes workspace root".into());
     }
+    repositories::prepare(
+        &config.workspaces,
+        &workspace,
+        &template,
+        branch,
+        deadline,
+        progress.clone(),
+    )?;
     progress("Validating Compose and rendering instance routes".into());
     let rendered = compose::render(
         config,
@@ -59,6 +70,11 @@ pub(crate) fn start(
         branch,
         remaining(deadline)?.min(Duration::from_secs(30)),
     )?;
+    let compose::Rendered {
+        path: rendered,
+        services,
+    } = rendered;
+    pending_services(services);
     gateway::ensure(config, progress.clone(), remaining(deadline)?)?;
     progress(format!(
         "Starting {} from {}",
@@ -100,7 +116,7 @@ fn wait_ready(
             .into_iter()
             .find(|instance| instance.name == name);
         let verdict = match &instance {
-            Some(instance) => readiness(instance, template, &client, deadline),
+            Some(instance) => readiness(instance, &template.manifest.routes, &client, deadline),
             None => Ok(Some("Waiting for instance containers".into())),
         }?;
         match verdict {
@@ -125,9 +141,9 @@ fn wait_ready(
     }
 }
 
-fn readiness(
+pub(super) fn readiness(
     instance: &Instance,
-    template: &Template,
+    routes: &BTreeMap<String, Route>,
     client: &reqwest::blocking::Client,
     deadline: Instant,
 ) -> Result<Option<String>, String> {
@@ -150,7 +166,7 @@ fn readiness(
             )));
         }
     }
-    for (name, route) in &template.manifest.routes {
+    for (name, route) in routes {
         let Some(service) = instance
             .services
             .iter()
@@ -264,7 +280,7 @@ fn template_instances(config: &Config, template_name: &str) -> Result<Vec<Instan
     })
 }
 
-fn managed_instance(
+pub(super) fn managed_instance(
     config: &Config,
     name: &str,
     deadline: Instant,

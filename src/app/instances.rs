@@ -23,6 +23,7 @@ pub(super) struct State {
     highlighted: Option<String>,
     searching: bool,
     rows_changed: bool,
+    select_created: Option<(bool, String)>,
 }
 
 pub(super) type SharedState = Rc<RefCell<State>>;
@@ -54,6 +55,27 @@ pub(super) fn replace_rows(state: &SharedState, rows: Vec<Row>) {
     state.rows_changed = true;
 }
 
+pub(super) fn select_created(
+    state: &SharedState,
+    operation: &crate::store::environments::Operation,
+) {
+    select_item(
+        state,
+        operation.action == "create_instance",
+        &operation.name,
+    );
+}
+
+pub(super) fn select_instance(state: &SharedState, name: &str) {
+    select_item(state, true, name);
+}
+
+fn select_item(state: &SharedState, instance: bool, name: &str) {
+    let mut state = state.borrow_mut();
+    state.select_created = Some((instance, name.into()));
+    state.rows_changed = true;
+}
+
 #[cfg(test)]
 pub(super) fn set_highlighted(state: &SharedState, highlighted: Option<String>) {
     state.borrow_mut().highlighted = highlighted;
@@ -67,7 +89,6 @@ pub(super) fn set_searching(state: &SharedState, searching: bool) {
 pub(super) struct Instances {
     tree: DataView<Row, String>,
     state: SharedState,
-    expand_on_first_refresh: bool,
     spinner: Rc<RefCell<Spinner>>,
     stripe_query: String,
 }
@@ -75,7 +96,11 @@ pub(super) struct Instances {
 impl Instances {
     pub(super) fn new(state: SharedState) -> Self {
         let rows = state.borrow().rows.clone();
-        let expanded = rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
+        let expanded = rows
+            .iter()
+            .filter(|row| row.parent.is_none())
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>();
         let spinner = Rc::new(RefCell::new(Spinner::new()));
         let cell_spinner = Rc::clone(&spinner);
         let tree = DataView::new(rows, |row: &Row| row.id.clone())
@@ -118,7 +143,6 @@ impl Instances {
         let mut instances = Self {
             tree,
             state,
-            expand_on_first_refresh: true,
             spinner,
             stripe_query: String::new(),
         };
@@ -135,13 +159,54 @@ impl Instances {
             state.rows_changed = false;
             state.rows.clone()
         };
-        let query = self.tree.transform_state().search.clone();
+        let select_created =
+            self.state
+                .borrow()
+                .select_created
+                .as_ref()
+                .and_then(|(instance, name)| {
+                    rows.iter()
+                        .find(|row| {
+                            if *instance {
+                                row.instance.as_ref() == Some(name)
+                            } else {
+                                row.parent.is_none() && row.template == *name
+                            }
+                        })
+                        .map(|row| (row.id.clone(), row.parent.clone()))
+                });
+        let query = if select_created.is_some() {
+            String::new()
+        } else {
+            self.tree.transform_state().search.clone()
+        };
         rows::assign_alternating_backgrounds(&mut rows, &query);
+        let templates_with_new_children = rows
+            .iter()
+            .filter(|row| {
+                row.parent.is_none()
+                    && !self
+                        .tree
+                        .rows()
+                        .iter()
+                        .any(|current| current.parent.as_ref() == Some(&row.id))
+            })
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>();
         self.tree.set_rows(rows);
         self.stripe_query = query;
-        if self.expand_on_first_refresh {
-            self.tree.expand_all();
-            self.expand_on_first_refresh = false;
+        for id in templates_with_new_children {
+            self.tree.expand(&id);
+        }
+        if let Some((id, parent)) = select_created {
+            self.tree.set_search_query("");
+            self.stripe_query.clear();
+            if let Some(parent) = parent {
+                self.tree.expand(&parent);
+            }
+            self.tree.highlight_id(&id);
+            self.tree.reveal_highlighted();
+            self.state.borrow_mut().select_created = None;
         }
         self.record_highlighted();
         true

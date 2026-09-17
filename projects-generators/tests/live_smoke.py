@@ -81,6 +81,7 @@ class Smoke:
             assert clone.stat().st_uid == os.getuid()
             assert git(clone, "remote", "get-url", "origin") == str(self.root / repo)
             assert git(clone, "status", "--porcelain") == ""
+            assert git(clone, "branch", "--show-current") == instance
 
     def exercise(self):
         infrastructure = self.root / "greetings-api/infra/compose.yaml"
@@ -135,7 +136,17 @@ class Smoke:
         assert result["result"] == "Delivered: Hello, worker!", result
         self.api("mailroom-one", "jobs/missing", status=404)
 
-        for template, setting in [("postcard", "FAIL_CLONE"), ("greetings", "FAIL_MIGRATION"),
+        manifest_path = self.root / ".tandem/templates/postcard/tandem.json"
+        original_manifest = manifest_path.read_text()
+        broken_manifest = json.loads(original_manifest)
+        broken_manifest["repositories"][0]["source"] = str(self.root / "missing-repository")
+        manifest_path.write_text(json.dumps(broken_manifest))
+        try:
+            self.start("postcard", "postcard-broken", expected="failed", timeout=15)
+            assert not (self.root / ".tandem/workspaces/postcard-broken/postcard").exists()
+        finally:
+            manifest_path.write_text(original_manifest)
+        for template, setting in [("greetings", "FAIL_MIGRATION"),
                                   ("mailroom", "FAIL_WORKER"), ("guestbook", "FAIL_READINESS")]:
             fault = self.root / ".tandem/templates" / template / ".env"
             fault.write_text(f"{setting}=1\n")

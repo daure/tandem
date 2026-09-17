@@ -43,6 +43,51 @@ pub(crate) fn get(config: &Config, name: &str) -> Result<Template, String> {
     Ok(template)
 }
 
+pub(crate) fn update_manifest(
+    config: &Config,
+    name: &str,
+    manifest: Manifest,
+) -> Result<Template, String> {
+    validate_name(name)?;
+    validate_manifest(&manifest)?;
+    let source = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&manifest).map_err(|error| error.to_string())?
+    );
+    if source.len() > 262_144 {
+        return Err("tandem.json exceeds 256 KiB".into());
+    }
+    let _lock = gateway::lock(config, &format!("template-{name}"))?;
+    let directory = removal_directory(config, name)?;
+    let path = directory.join("tandem.json");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            return Err("tandem.json must be a regular file, not a symlink".into());
+        }
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.to_string()),
+        _ => {}
+    }
+    let mut template = read_template(config, name)?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".tandem-manifest-")
+        .tempfile_in(&directory)
+        .map_err(|error| error.to_string())?;
+    temporary
+        .write_all(source.as_bytes())
+        .map_err(|error| error.to_string())?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.to_string())?;
+    template.manifest = manifest;
+    template.manifest_source = Some(source);
+    template.error = None;
+    Ok(template)
+}
+
 fn read_template(config: &Config, name: &str) -> Result<Template, String> {
     validate_name(name)?;
     let directory = fs::canonicalize(config.templates.join(name))
@@ -92,6 +137,14 @@ fn read_template(config: &Config, name: &str) -> Result<Template, String> {
 }
 
 fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
+    super::repositories::validate(&manifest.repositories)?;
+    if !manifest.repositories.is_empty()
+        && manifest.one_shots.iter().any(|name| name == "repo-sync")
+    {
+        return Err(
+            "declared repositories use Tandem provisioning; remove the repo-sync one-shot".into(),
+        );
+    }
     for (name, route) in &manifest.routes {
         validate_name(name)?;
         let path = &route.readiness_path;

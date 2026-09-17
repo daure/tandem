@@ -61,15 +61,15 @@ projects/
 what fresh fixtures contain. Each generated source repository is also editable and independently
 versioned; those edits belong to that local fixture set.
 
-Templates run `repo-sync` as a one-shot service under your UID/GID before starting application
-processes. It clones each source repository's default branch using `--no-local` so objects do not
-depend on shared hardlinks. With Branch instances enabled, it checks out the instance-named branch
-when available; otherwise it creates that branch locally from the source repository's default branch.
-New branches remain in the workspace until explicitly pushed. This policy belongs to the fixture's
-clone script; Tandem supplies `TANDEM_BRANCH` to templates that implement branch selection.
-The clone's `origin` is the host's absolute source-repository path, mounted read-only at the same path
-inside the cloning container. Existing clones retain their branch, commits, staged changes, and
+Templates declare repositories in `tandem.json`. Tandem clones them with host Git before Compose,
+under your UID/GID, using `--no-local` so objects do not depend on shared hardlinks. With Branch
+instances enabled, it checks out the instance-named branch when available or creates it locally from
+the source's default branch. With the setting disabled, it checks out the default branch.
+New branches remain in the workspace until explicitly pushed. The clone's `origin` is the host's
+absolute source-repository path. Existing clones retain their branch, commits, staged changes and
 untracked files. Unexpected origins and occupied non-repository paths cause a visible failure.
+Existing generated templates are editable resources; migrate them by declaring sources and targets
+and removing clone services/dependencies, or generate a separate fixture root.
 
 New source commits are available to instance clones through `git fetch origin`; updating an existing
 clone is an explicit Git operation. A normal source repository rejects pushes to its checked-out
@@ -94,7 +94,6 @@ Copy a template's `.env.example` to `.env` and change the relevant value before 
 
 | Setting | Templates | Expected result |
 |---|---|---|
-| `FAIL_CLONE=1` | All | Clone one-shot exits; apps cannot start |
 | `FAIL_READINESS=1` | Guestbook, Greetings, Mailroom | API health returns 503 |
 | `STARTUP_DELAY=10` | Guestbook, Greetings, Mailroom | API readiness is delayed |
 | `FAIL_MIGRATION=1` | Greetings | Migration exits; API cannot start |
@@ -102,6 +101,8 @@ Copy a template's `.env.example` to `.env` and change the relevant value before 
 
 Fault settings are template-wide, so use fresh instance names and avoid modifying a recipe another
 developer is using. Inspect operation output and container logs; clear the setting before retrying.
+To exercise repository failure, point a declared source at a missing path for a fresh instance;
+startup fails before Compose and succeeds after restoring the source and retrying.
 Mailroom is a minimal queue demo: it does not recover a job lost if a worker dies after dequeue.
 
 Stopping through Tandem preserves workspaces and named data volumes. Generation refuses any occupied

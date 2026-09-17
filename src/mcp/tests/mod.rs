@@ -5,6 +5,8 @@ use crate::service::AppService;
 
 use super::{McpServer, StdioHandshakeBuffer};
 
+mod manifests;
+
 #[test]
 fn stdio_handshake_defers_early_requests_until_initialized() {
     let initialize: ClientJsonRpcMessage = serde_json::from_value(json!({

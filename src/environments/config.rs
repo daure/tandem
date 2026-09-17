@@ -14,7 +14,7 @@ pub(crate) struct Config {
     pub instructions: PathBuf,
     pub namespace: String,
     pub port: u16,
-    pub keys: [char; 7],
+    pub keys: [char; 8],
 }
 
 impl Config {
@@ -43,6 +43,7 @@ impl Config {
             "REFRESH",
             "DELETE",
             "PURGE",
+            "RESTART",
         ]
         .iter()
         .enumerate()
@@ -75,7 +76,7 @@ impl Config {
             home,
             namespace,
             port,
-            keys: ['v', 'n', 'T', 's', 'r', 'x', 'p'],
+            keys: ['v', 'n', 'T', 's', 'R', 'x', 'p', 'r'],
         };
         for directory in [
             &config.templates,

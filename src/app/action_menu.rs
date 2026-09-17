@@ -24,8 +24,9 @@ pub(super) enum Action {
     NewInstance,
     Start,
     Stop,
+    RestartInstance,
+    RestartService,
     StopTemplate,
-    Refresh,
     Delete,
     DeleteTemplate,
     RemoveTemplate,
@@ -34,11 +35,11 @@ pub(super) enum Action {
 impl Action {
     pub(super) fn index(self) -> usize {
         match self {
-            Self::OpenBrowser => 7,
+            Self::OpenBrowser => 8,
+            Self::RestartInstance | Self::RestartService => 7,
             Self::Details => 0,
             Self::NewInstance => 1,
             Self::Start | Self::Stop | Self::StopTemplate => 3,
-            Self::Refresh => 4,
             Self::Delete | Self::RemoveTemplate => 5,
             Self::DeleteTemplate => 6,
         }
@@ -51,8 +52,9 @@ impl Action {
             Self::NewInstance => "New instance",
             Self::Start => "Start instance",
             Self::Stop => "Stop instance",
+            Self::RestartInstance => "Restart instance",
+            Self::RestartService => "Restart service",
             Self::StopTemplate => "Stop all instances",
-            Self::Refresh => "Refresh",
             Self::Delete => "Delete instance",
             Self::DeleteTemplate => "Purge all instances",
             Self::RemoveTemplate => "Delete template",
@@ -69,14 +71,14 @@ pub(super) struct ActionMenu {
 }
 
 impl ActionMenu {
-    pub(super) fn new(keys: [KeySpec; 7]) -> Self {
+    pub(super) fn new(keys: [KeySpec; 8]) -> Self {
         let selected = Rc::new(RefCell::new(None));
         let selection = Rc::clone(&selected);
         let enabled = Rc::new(RefCell::new(Vec::new()));
         let enabled_for_renderer = Rc::clone(&enabled);
         let labels = keys;
         let dropdown = Dropdown::single_rich(
-            [Action::Refresh],
+            [Action::OpenBrowser],
             |action| *action,
             |action| action.label().to_owned(),
             move |action, _, _| {
@@ -109,13 +111,19 @@ impl ActionMenu {
     pub(super) fn open(
         &mut self,
         template: bool,
+        instance: bool,
         running: bool,
         gateway: bool,
         template_available: bool,
         ctx: &mut EventCtx<Msg>,
     ) {
         self.actions = if gateway {
-            vec![Action::OpenBrowser, Action::Details]
+            vec![
+                Action::OpenBrowser,
+                Action::Details,
+                Action::NewInstance,
+                Action::RestartService,
+            ]
         } else if template {
             vec![
                 Action::Details,
@@ -123,38 +131,42 @@ impl ActionMenu {
                 Action::StopTemplate,
                 Action::DeleteTemplate,
                 Action::RemoveTemplate,
-                Action::Refresh,
             ]
-        } else {
+        } else if instance {
             vec![
                 Action::Details,
+                Action::NewInstance,
                 Action::Start,
                 Action::Stop,
+                Action::RestartInstance,
                 Action::Delete,
-                Action::Refresh,
             ]
+        } else {
+            vec![Action::Details, Action::NewInstance, Action::RestartService]
         };
-        *self.enabled.borrow_mut() = if gateway || template {
+        *self.enabled.borrow_mut() = if gateway || template || !instance {
             self.actions.clone()
         } else if running {
             vec![
                 Action::Details,
+                Action::NewInstance,
                 Action::Stop,
+                Action::RestartInstance,
                 Action::Delete,
-                Action::Refresh,
             ]
         } else {
             vec![
                 Action::Details,
+                Action::NewInstance,
                 Action::Start,
+                Action::RestartInstance,
                 Action::Delete,
-                Action::Refresh,
             ]
         };
-        if template && !template_available {
+        if !template_available {
             self.enabled
                 .borrow_mut()
-                .retain(|action| *action != Action::RemoveTemplate);
+                .retain(|action| !matches!(action, Action::RemoveTemplate | Action::NewInstance));
         }
         self.selected.borrow_mut().take();
         self.dropdown.clear_selection();
@@ -173,7 +185,7 @@ impl ActionMenu {
     }
 }
 
-fn action_text(action: Action, keys: &[KeySpec; 7], enabled: bool) -> Text<'static> {
+fn action_text(action: Action, keys: &[KeySpec; 8], enabled: bool) -> Text<'static> {
     let label = action.label();
     let hotkey = if action == Action::OpenBrowser {
         KeySpec::key(tuicore::Key::Enter).label()

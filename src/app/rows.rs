@@ -1,6 +1,8 @@
 use std::{collections::HashSet, path::Path};
 
-use crate::store::environments::{EnvironmentSnapshot, InstanceService, ResourceUsage};
+use crate::store::environments::{
+    EnvironmentSnapshot, Instance, InstanceService, ResourceUsage, StartupTiming,
+};
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span, Text},
@@ -49,11 +51,105 @@ fn service_tone(status: &str) -> Tone {
     }
 }
 
+struct InstanceSummary {
+    label: String,
+    tone: Tone,
+    loading: bool,
+    icon: &'static str,
+}
+
+fn instance_summary(instance: &Instance, startup: Option<&StartupTiming>) -> InstanceSummary {
+    let services = &instance.services;
+    let running = services
+        .iter()
+        .filter(|service| !service.one_shot)
+        .collect::<Vec<_>>();
+    let ready = running
+        .iter()
+        .filter(|service| matches!(service.status.as_str(), "up" | "healthy"))
+        .count();
+    let stopped = running.is_empty()
+        || running
+            .iter()
+            .all(|service| matches!(service.status.as_str(), "paused" | "down (exit 0)"));
+    let starting = services.iter().any(|service| {
+        matches!(
+            service.status.as_str(),
+            "created" | "restarting" | "boot" | "starting"
+        ) || service.one_shot && service.consumes_resources()
+    });
+    let removing = services.iter().any(|service| service.status == "removing");
+    let failed = instance.startup_error().is_some()
+        || services.iter().any(|service| {
+            service.status == "unhealthy"
+                || service
+                    .status
+                    .strip_prefix("down (exit ")
+                    .and_then(|value| value.strip_suffix(')'))
+                    .is_some_and(|code| code != "0")
+        });
+    let (label, tone, loading, icon) = if removing {
+        ("Removing".into(), Tone::Muted, true, "")
+    } else if failed {
+        ("Failed".into(), Tone::Error, false, "")
+    } else if let Some(startup) = startup {
+        if services.is_empty() {
+            (startup_label("Creating", startup), Tone::Muted, true, "")
+        } else {
+            (startup_label("Starting", startup), Tone::Muted, true, "")
+        }
+    } else if instance.pending {
+        ("Creating".into(), Tone::Muted, true, "")
+    } else if starting && ready > 0 {
+        ("Partially running".into(), Tone::Warning, false, "")
+    } else if starting {
+        ("Starting".into(), Tone::Muted, true, "")
+    } else if stopped {
+        ("Stopped".into(), Tone::Muted, false, "")
+    } else if running.iter().all(|service| service.status == "healthy") {
+        ("Healthy".into(), Tone::Success, false, "")
+    } else if ready == running.len() {
+        ("Running".into(), Tone::Success, false, "")
+    } else {
+        ("Partially running".into(), Tone::Warning, false, "")
+    };
+    InstanceSummary {
+        label,
+        tone,
+        loading,
+        icon,
+    }
+}
+
+fn startup_label(status: &str, startup: &StartupTiming) -> String {
+    let Some(estimate) = startup.estimate_milliseconds else {
+        return status.into();
+    };
+    if startup.elapsed_milliseconds < estimate {
+        return format!(
+            "{status} · {}",
+            format_seconds(estimate - startup.elapsed_milliseconds)
+        );
+    }
+    if startup.elapsed_milliseconds == estimate {
+        return format!("{status} · taking longer than usual");
+    }
+    format!(
+        "{status} · {} over estimate",
+        format_seconds(startup.elapsed_milliseconds - estimate)
+    )
+}
+
+fn format_seconds(milliseconds: u64) -> String {
+    format!("{}s", milliseconds.div_ceil(1_000))
+}
+
 #[derive(Clone)]
 pub(super) struct Row {
     pub id: String,
     pub parent: Option<String>,
     pub label: String,
+    pub status: Option<String>,
     pub icon: &'static str,
     pub tone: Tone,
     pub loading: bool,
@@ -65,6 +161,7 @@ pub(super) struct Row {
     pub compose_source: String,
     pub manifest_source: Option<String>,
     pub instance: Option<String>,
+    pub service: Option<(String, String)>,
     pub workspace: Option<String>,
     pub running: bool,
     pub alternate_background: bool,
@@ -76,10 +173,22 @@ impl Row {
     pub(super) fn text(&self, spinner: &str) -> Text<'static> {
         let mut lines = self.label.lines();
         let icon = if self.loading { spinner } else { self.icon };
-        let mut text = vec![Line::from(vec![
-            Span::styled(format!("{icon} "), Style::default().fg(self.tone.color())),
-            Span::raw(lines.next().unwrap_or_default().to_owned()),
-        ])];
+        let first = lines.next().unwrap_or_default();
+        let mut first_line = vec![Span::styled(
+            format!("{icon} "),
+            Style::default().fg(self.tone.color()),
+        )];
+        if let Some(status) = &self.status {
+            let name = first.strip_suffix(status).unwrap_or(first);
+            first_line.push(Span::raw(name.to_owned()));
+            first_line.push(Span::styled(
+                status.clone(),
+                Style::default().fg(tuicore::theme().muted_fg()),
+            ));
+        } else {
+            first_line.push(Span::raw(first.to_owned()));
+        }
+        let mut text = vec![Line::from(first_line)];
         text.extend(lines.map(|line| {
             Line::from(Span::styled(
                 line.to_owned(),
@@ -173,8 +282,43 @@ pub(super) fn assign_alternating_backgrounds(rows: &mut [Row], query: &str) {
     }
 }
 
+fn template_summary(count: usize, average_milliseconds: Option<&u64>) -> String {
+    let mut summary = format!(" {count}");
+    if let Some(milliseconds) = average_milliseconds {
+        let seconds = milliseconds.div_ceil(1_000);
+        let duration = if seconds < 60 {
+            format!("{seconds}s")
+        } else {
+            format!("{}m{:02}s", seconds / 60, seconds % 60)
+        };
+        summary.push_str(&format!(" ·  {duration}"));
+    }
+    summary
+}
+
+fn ready_services<'a>(
+    snapshot: &'a EnvironmentSnapshot,
+    directory: &'a str,
+) -> impl Iterator<Item = &'a InstanceService> {
+    snapshot
+        .instances
+        .iter()
+        .filter(move |instance| {
+            instance.template_directory == directory
+                && !instance.pending
+                && !snapshot.startup.contains_key(&instance.name)
+        })
+        .flat_map(|instance| &instance.services)
+}
+
 pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
     let mut rows = Vec::new();
+    let mut instances = snapshot.instances.iter().collect::<Vec<_>>();
+    instances.sort_by(|left, right| {
+        left.template_directory
+            .cmp(&right.template_directory)
+            .then_with(|| left.name.cmp(&right.name))
+    });
     for template in &snapshot.templates {
         let instance_count = snapshot
             .instances
@@ -185,15 +329,19 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
             id: format!("template:{}", template.directory),
             parent: None,
             label: format!(
-                "{}{}\n{instance_count} instance{}",
+                "{}{}\n{}",
                 template.name,
                 if template.error.is_some() {
                     " · invalid template"
                 } else {
                     ""
                 },
-                if instance_count == 1 { "" } else { "s" },
+                template_summary(
+                    instance_count,
+                    snapshot.startup_averages_milliseconds.get(&template.name)
+                ),
             ),
+            status: None,
             icon: TEMPLATE_ICON,
             tone: if template.error.is_some() {
                 Tone::Error
@@ -201,26 +349,18 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
                 Tone::Normal
             },
             loading: false,
-            usage: ResourceUsage::total(
-                snapshot
-                    .instances
-                    .iter()
-                    .filter(|instance| instance.template_directory == template.directory)
-                    .flat_map(|instance| &instance.services),
-            ),
-            memory_limit_bytes: InstanceService::total_memory_limit(
-                snapshot
-                    .instances
-                    .iter()
-                    .filter(|instance| instance.template_directory == template.directory)
-                    .flat_map(|instance| &instance.services),
-            ),
+            usage: ResourceUsage::total(ready_services(snapshot, &template.directory)),
+            memory_limit_bytes: InstanceService::total_memory_limit(ready_services(
+                snapshot,
+                &template.directory,
+            )),
             template: template.name.clone(),
             directory: template.directory.clone(),
             compose_file: template.compose_file.clone(),
             compose_source: template.compose_source.clone(),
             manifest_source: template.manifest_source.clone(),
             instance: None,
+            service: None,
             workspace: None,
             running: false,
             alternate_background: false,
@@ -228,7 +368,7 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
             details: details::template(template, instance_count),
         });
     }
-    for instance in &snapshot.instances {
+    for instance in instances {
         let parent = format!("template:{}", instance.template_directory);
         if !rows.iter().any(|row| row.id == parent) {
             let instance_count = snapshot
@@ -240,32 +380,30 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
                 id: parent.clone(),
                 parent: None,
                 label: format!(
-                    "{} [missing]\n{instance_count} instance{}",
+                    "{} [missing]\n{}",
                     instance.template,
-                    if instance_count == 1 { "" } else { "s" }
+                    template_summary(
+                        instance_count,
+                        snapshot
+                            .startup_averages_milliseconds
+                            .get(&instance.template)
+                    )
                 ),
+                status: None,
                 icon: TEMPLATE_ICON,
                 tone: Tone::Warning,
                 loading: false,
-                usage: ResourceUsage::total(
-                    snapshot
-                        .instances
-                        .iter()
-                        .filter(|other| other.template_directory == instance.template_directory)
-                        .flat_map(|other| &other.services),
-                ),
-                memory_limit_bytes: InstanceService::total_memory_limit(
-                    snapshot
-                        .instances
-                        .iter()
-                        .filter(|other| other.template_directory == instance.template_directory)
-                        .flat_map(|other| &other.services),
-                ),
+                usage: ResourceUsage::total(ready_services(snapshot, &instance.template_directory)),
+                memory_limit_bytes: InstanceService::total_memory_limit(ready_services(
+                    snapshot,
+                    &instance.template_directory,
+                )),
                 template: instance.template.clone(),
                 directory: instance.template_directory.clone(),
                 compose_file: String::new(),
                 compose_source: String::new(),
                 instance: None,
+                service: None,
                 running: false,
                 alternate_background: false,
                 manifest_source: None,
@@ -289,50 +427,20 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
         let compose_file = template_row.compose_file.clone();
         let compose_source = template_row.compose_source.clone();
         let instance_id = format!("instance:{}", instance.name);
-        let setup_failed = instance.startup_error().is_some();
-        let loading = !setup_failed
-            && (instance.pending
-                || instance.services.iter().any(|service| {
-                    matches!(
-                        service.status.as_str(),
-                        "created" | "restarting" | "boot" | "removing"
-                    ) || service.one_shot && service.consumes_resources()
-                }));
-        let playing = instance
-            .services
-            .iter()
-            .any(|service| matches!(service.status.as_str(), "up" | "healthy" | "unhealthy"));
-        let failed = setup_failed
-            || instance
-                .services
-                .iter()
-                .any(|service| service_tone(&service.status) == Tone::Error);
+        let summary = instance_summary(instance, snapshot.startup.get(&instance.name));
         rows.push(Row {
             id: instance_id.clone(),
             parent: Some(parent),
             label: format!(
-                "{}{}\n{}",
+                "{} · {}\n{}",
                 instance.name,
-                if setup_failed { " · setup failed" } else { "" },
+                summary.label,
                 workspace_label(&instance.workspace, snapshot.home_directory.as_deref())
             ),
-            icon: if setup_failed {
-                ""
-            } else if playing {
-                ""
-            } else {
-                ""
-            },
-            tone: if loading {
-                Tone::Muted
-            } else if failed {
-                Tone::Error
-            } else if playing {
-                Tone::Success
-            } else {
-                Tone::Muted
-            },
-            loading,
+            status: Some(summary.label),
+            icon: summary.icon,
+            tone: summary.tone,
+            loading: summary.loading,
             usage: ResourceUsage::total(instance.services.iter()),
             memory_limit_bytes: InstanceService::total_memory_limit(instance.services.iter()),
             template: instance.template.clone(),
@@ -341,6 +449,7 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
             compose_source: compose_source.clone(),
             manifest_source: None,
             instance: Some(instance.name.clone()),
+            service: None,
             workspace: Some(instance.workspace.clone()),
             running: instance
                 .services
@@ -376,6 +485,7 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
                         || service.name.clone(),
                         |detail| format!("{}\n{detail}", service.name),
                     ),
+                status: None,
                 icon,
                 tone: service_tone(&service.status),
                 loading: false,
@@ -387,6 +497,7 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
                 compose_source: compose_source.clone(),
                 manifest_source: None,
                 instance: None,
+                service: Some((instance.name.clone(), service.name.clone())),
                 workspace: None,
                 running: false,
                 alternate_background: false,
@@ -400,6 +511,20 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
             details::resources(&mut row.details, row.usage, row.memory_limit_bytes);
         }
     }
+    rows.sort_by(|left, right| {
+        let left_has_instances = snapshot
+            .instances
+            .iter()
+            .any(|instance| instance.template_directory == left.directory);
+        let right_has_instances = snapshot
+            .instances
+            .iter()
+            .any(|instance| instance.template_directory == right.directory);
+        right_has_instances
+            .cmp(&left_has_instances)
+            .then_with(|| left.template.cmp(&right.template))
+            .then_with(|| left.directory.cmp(&right.directory))
+    });
     assign_alternating_backgrounds(&mut rows, "");
     rows
 }

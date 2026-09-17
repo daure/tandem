@@ -1,5 +1,5 @@
 use std::{
-    fs::{File, OpenOptions},
+    fs::{File, OpenOptions, TryLockError},
     io::Write,
     path::Path,
     time::{Duration, Instant},
@@ -14,24 +14,69 @@ use super::{
 };
 
 pub(crate) fn lock(config: &Config, resource: &str) -> Result<File, String> {
+    let file = open_lock(config, resource)?;
+    file.try_lock()
+        .map_err(|error| lock_error(resource, error))?;
+    Ok(file)
+}
+
+pub(super) fn shared_lock(config: &Config, resource: &str) -> Result<File, String> {
+    let file = open_lock(config, resource)?;
+    file.try_lock_shared()
+        .map_err(|error| lock_error(resource, error))?;
+    Ok(file)
+}
+
+pub(super) fn lock_until(
+    config: &Config,
+    resource: &str,
+    deadline: Instant,
+    progress: &Progress,
+) -> Result<File, String> {
+    let file = open_lock(config, resource)?;
+    let mut waiting = false;
+    loop {
+        let budget =
+            remaining(deadline).map_err(|_| format!("timed out waiting for {resource} lock"))?;
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(TryLockError::WouldBlock) => {
+                if !waiting {
+                    progress(format!("Waiting for {resource} lock"));
+                    waiting = true;
+                }
+                std::thread::sleep(budget.min(Duration::from_millis(50)));
+            }
+            Err(error) => return Err(lock_error(resource, error)),
+        }
+    }
+}
+
+fn lock_error(resource: &str, error: TryLockError) -> String {
+    match error {
+        TryLockError::WouldBlock => {
+            format!("{resource} is busy in another operation; retry after it finishes")
+        }
+        TryLockError::Error(error) => format!("cannot lock {resource}: {error}"),
+    }
+}
+
+fn open_lock(config: &Config, resource: &str) -> Result<File, String> {
     let mut options = OpenOptions::new();
-    options.create(true).truncate(false).write(true);
+    options.create(true).truncate(false).read(true).write(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
-    let file = options
+    options
         .open(config.home.join("locks").join(resource))
-        .map_err(|error| error.to_string())?;
-    file.try_lock()
-        .map_err(|_| format!("{resource} is busy in another operation; retry after it finishes"))?;
-    Ok(file)
+        .map_err(|error| error.to_string())
 }
 
 pub(crate) fn ensure(config: &Config, progress: Progress, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
-    let _lock = lock(config, "gateway")?;
+    let _lock = lock_until(config, "gateway", deadline, &progress)?;
     let network = config.network();
     let mut inspect = docker();
     inspect.args([

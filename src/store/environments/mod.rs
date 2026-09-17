@@ -5,22 +5,48 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[schemars(
+    title = "Tandem template manifest",
+    description = "Configuration for tandem.json. Tandem also validates repository path overlap, source safety and route/one-shot conflicts; Compose service references are checked at instance startup."
+)]
 pub(crate) struct Manifest {
     #[serde(default)]
     pub description: String,
     #[serde(default)]
+    /// Public service names mapped to gateway routes and content readiness assertions.
     pub routes: BTreeMap<String, Route>,
     #[serde(default)]
+    /// App setup service names; each must match a Compose service and cannot also be a route.
     pub one_shots: Vec<String>,
+    #[serde(default)]
+    /// Repositories provisioned by Tandem before Compose; target paths must not overlap.
+    pub repositories: Vec<Repository>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Repository {
+    /// Absolute local path, HTTPS URL without credentials, or ssh:// URL; credentials belong on the host.
+    pub source: String,
+    /// Workspace-relative path of non-hidden directories. Existing checkouts retain their branch and edits.
+    #[schemars(
+        length(min = 1, max = 240),
+        regex(pattern = r"^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*(/[a-zA-Z0-9_-][a-zA-Z0-9_.-]*)*$")
+    )]
+    pub target: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Route {
+    #[schemars(range(min = 1, max = 65535))]
     pub port: u16,
     #[serde(default = "default_strip")]
     pub strip_prefix: bool,
+    /// Relative to the service URL; an empty string probes the route root.
     pub readiness_path: String,
+    /// Non-whitespace content required in a successful readiness response; at most 4096 UTF-8 bytes.
+    #[schemars(length(min = 1, max = 4096))]
     pub readiness_contains: String,
 }
 
@@ -135,6 +161,8 @@ impl Instance {
 pub(crate) struct EnvironmentSnapshot {
     pub templates: Vec<Template>,
     pub instances: Vec<Instance>,
+    pub startup: BTreeMap<String, StartupTiming>,
+    pub startup_averages_milliseconds: BTreeMap<String, u64>,
     pub templates_root: String,
     pub home_directory: Option<String>,
     pub gateway_origin: String,
@@ -142,6 +170,12 @@ pub(crate) struct EnvironmentSnapshot {
     pub loading: bool,
     pub resource_error: Option<String>,
     pub resource_sample_duration_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, JsonSchema, PartialEq, Eq)]
+pub(crate) struct StartupTiming {
+    pub elapsed_milliseconds: u64,
+    pub estimate_milliseconds: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq)]
@@ -158,9 +192,11 @@ pub(crate) struct Operation {
     pub action: String,
     pub name: String,
     pub template: Option<String>,
+    pub service: Option<String>,
     pub state: OperationState,
     pub progress: Vec<String>,
     pub elapsed_seconds: u64,
+    pub elapsed_milliseconds: u64,
     pub error: Option<String>,
     pub instance: Option<Instance>,
 }
@@ -172,6 +208,7 @@ pub(crate) struct Instructions {
     pub templates_root: String,
     pub workspaces_root: String,
     pub gateway_origin: String,
+    pub manifest_schema: serde_json::Value,
 }
 
 pub(crate) fn validate_name(name: &str) -> Result<(), String> {

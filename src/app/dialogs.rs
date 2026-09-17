@@ -142,6 +142,21 @@ pub(super) fn confirm_start(name: &str) -> Modal {
     )
 }
 
+pub(super) fn confirm_restart(name: &str, service: Option<&str>, hotkey: KeySpec) -> Modal {
+    let (title, target) = match service {
+        Some(service) => ("Restart service", format!("{name}/{service}")),
+        None => ("Restart instance", name.to_owned()),
+    };
+    confirmation(
+        title,
+        "Restart",
+        hotkey,
+        format!(
+            "Restart {target}? This briefly interrupts service.\nData and container configuration stay; one-shot setup jobs are skipped."
+        ),
+    )
+}
+
 pub(super) fn confirm_delete(name: &str) -> Modal {
     confirmation(
         "Delete instance",

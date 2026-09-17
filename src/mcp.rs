@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     service::{AppService, ServiceStatus},
-    store::environments::{Instance, Instructions, Operation, Template},
+    store::environments::{Instance, Instructions, Manifest, Operation, Template},
 };
 
 mod http;
@@ -40,6 +40,18 @@ impl McpServer {
 struct NameInput {
     /// 1–40 lowercase letters, digits or hyphens; start with a letter/digit; gateway is reserved.
     name: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct UpdateTemplateManifestInput {
+    /// Existing template name from list_templates.
+    name: String,
+    /// Complete replacement for tandem.json, using the manifest_schema returned by get_instructions. Omitted optional fields use defaults.
+    manifest: Manifest,
+    /// Approval to replace shared template configuration; this does not start containers or provision repositories.
+    #[serde(default)]
+    confirmed: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -92,7 +104,7 @@ struct CreateInstanceInput {
     template: String,
     /// Instance name; 1–40 letters, digits or hyphens; starts with a letter/digit; gateway is reserved.
     name: String,
-    /// Set only after approval to execute this trusted Compose template with local Docker privileges.
+    /// Set only after approval for host Git repository provisioning and this trusted Compose template's local Docker privileges.
     #[serde(default)]
     confirmed: bool,
     /// Wait for content readiness (default true); false returns an operation to poll.
@@ -115,6 +127,26 @@ struct StopInstanceInput {
     /// Existing instance name; the gateway is not an instance.
     name: String,
     /// Approval to stop containers while keeping the instance data.
+    #[serde(default)]
+    confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RestartInstanceInput {
+    /// Existing instance name; the gateway is not an instance.
+    name: String,
+    /// Approval to interrupt services by restarting their existing containers.
+    #[serde(default)]
+    confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RestartServiceInput {
+    /// Existing instance containing the service.
+    name: String,
+    /// Exact Compose service name from list_instances; one-shot jobs cannot be restarted.
+    service: String,
+    /// Approval to interrupt this service by restarting its existing containers.
     #[serde(default)]
     confirmed: bool,
 }
@@ -250,7 +282,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Read editable agent guidance and the absolute instructions, template and workspace paths. Call this before using Tandem."
+        description = "Read editable agent guidance, absolute instructions/template/workspace paths, and the generated tandem.json manifest_schema. Call this before using Tandem."
     )]
     async fn get_instructions(&self) -> Result<Json<Instructions>, String> {
         self.service.get_instructions().await.map(Json)
@@ -284,6 +316,19 @@ impl McpServer {
         Parameters(input): Parameters<NameInput>,
     ) -> Result<Json<Template>, String> {
         self.service.create_template(input.name).await.map(Json)
+    }
+
+    #[tool(
+        description = "Validate and atomically replace a template's tandem.json. Requires confirmed=true after approval to change shared configuration. Rejects invalid manifests without changing the file; runs no Docker or Git commands. Compose service references are checked at instance startup."
+    )]
+    async fn update_template_manifest(
+        &self,
+        Parameters(input): Parameters<UpdateTemplateManifestInput>,
+    ) -> Result<Json<Template>, String> {
+        self.service
+            .update_template_manifest(input.name, input.manifest, input.confirmed)
+            .await
+            .map(Json)
     }
 
     #[tool(
@@ -336,6 +381,30 @@ impl McpServer {
     ) -> Result<Json<Operation>, String> {
         self.service
             .submit_operation("stop_instance", &input.name, None, 60, input.confirmed)
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Restart an instance's existing long-running containers, including stopped ones. Preserves data and configuration, skips one-shot jobs and the shared gateway. Requires confirmed=true. Returns a background operation with a ten-minute budget; success requires targeted containers to run and pass configured healthchecks and gateway content assertions. Routed services require current template readiness configuration; services without checks are verified only as running."
+    )]
+    async fn restart_instance(
+        &self,
+        Parameters(input): Parameters<RestartInstanceInput>,
+    ) -> Result<Json<Operation>, String> {
+        self.service
+            .submit_restart(&input.name, None, input.confirmed)
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Restart only the named service's existing containers within an instance. Leaves other services and dependencies untouched; preserves data and configuration. One-shot jobs are refused. Requires confirmed=true. Returns a background operation with a ten-minute budget; success requires targeted containers to run and pass configured healthchecks and gateway content assertions. Routed services require current template readiness configuration; services without checks are verified only as running."
+    )]
+    async fn restart_service(
+        &self,
+        Parameters(input): Parameters<RestartServiceInput>,
+    ) -> Result<Json<Operation>, String> {
+        self.service
+            .submit_restart(&input.name, Some(input.service), input.confirmed)
             .map(Json)
     }
 

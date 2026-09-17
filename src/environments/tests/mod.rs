@@ -3,8 +3,13 @@ use std::{fs, sync::Arc, time::Duration};
 use serde_json::json;
 
 use super::{Environments, compose, config::Config, docker, gateway, lifecycle, templates};
-use crate::store::environments::{OperationState, validate_instance_name, validate_name};
+use crate::store::environments::{
+    InstanceService, OperationState, validate_instance_name, validate_name,
+};
 
+mod concurrency;
+mod manifest_updates;
+mod restart;
 mod template_removal;
 mod template_removal_live;
 
@@ -164,6 +169,54 @@ fn pending_instance_creation_is_visible_before_containers_exist() {
     assert_eq!(
         snapshot.instances[0].workspace,
         config.workspaces.join("review").display().to_string()
+    );
+}
+
+#[test]
+fn pending_instance_shows_expected_services_before_docker_discovers_containers() {
+    let (_directory, config) = fixture();
+    let environment = Environments::new(config.clone());
+    templates::create(&config, "website").unwrap();
+    let operation = environment
+        .begin("create_instance", "review", Some("website".into()))
+        .unwrap();
+    let service = InstanceService {
+        name: "web".into(),
+        container_id: String::new(),
+        status: "created".into(),
+        one_shot: false,
+        image: Some("nginx".into()),
+        health: None,
+        restart_policy: None,
+        restart_count: 0,
+        created_at: None,
+        started_at: None,
+        port: Some(80),
+        url: Some("http://localhost:9876/review/web/".into()),
+        usage: None,
+        memory_limit_bytes: None,
+        volumes: Vec::new(),
+    };
+    let mut database = service.clone();
+    database.name = "db".into();
+    database.url = None;
+    database.port = None;
+    environment.set_pending_services(&operation.id, vec![service, database]);
+
+    let snapshot = environment.snapshot();
+    assert_eq!(snapshot.instances[0].services[0].name, "web");
+    assert_eq!(snapshot.instances[0].services[0].status, "created");
+    let mut discovered = snapshot.instances.clone();
+    discovered[0].pending = false;
+    discovered[0].services.truncate(1);
+    discovered[0].services[0].status = "boot".into();
+    super::merge_pending_instances(&mut discovered, &snapshot.instances);
+    assert_eq!(discovered[0].services[0].status, "boot");
+    assert!(
+        discovered[0]
+            .services
+            .iter()
+            .any(|service| service.name == "db")
     );
 }
 

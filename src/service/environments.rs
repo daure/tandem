@@ -4,6 +4,7 @@ use std::{path::Path, process::Stdio, sync::Arc};
 use std::process::Command;
 
 use super::AppService;
+use super::refresh::Refresh;
 use crate::{
     environments::Environments,
     store::environments::{
@@ -11,26 +12,41 @@ use crate::{
     },
 };
 
+pub(crate) enum CreateInstanceOutcome {
+    Existing,
+    Started(Box<Operation>),
+}
+
 impl AppService {
     pub(crate) fn environment_snapshot(&self) -> EnvironmentSnapshot {
-        self.environments.snapshot()
+        let mut snapshot = self.environments.snapshot();
+        snapshot.startup_averages_milliseconds = self.settings.startup_averages();
+        for instance in &snapshot.instances {
+            if let Some(startup) = snapshot.startup.get_mut(&instance.name) {
+                startup.estimate_milliseconds = snapshot
+                    .startup_averages_milliseconds
+                    .get(&instance.template)
+                    .copied();
+            }
+        }
+        snapshot
     }
-    pub(crate) fn environment_keys(&self) -> [char; 7] {
+    pub(crate) fn environment_keys(&self) -> [char; 8] {
         self.environments.config.keys
     }
 
     pub(crate) fn poll_environments(&self) {
-        self.refresh_open_command();
-        if !self.environments.begin_refresh() {
-            return;
-        }
-        let environments = Arc::clone(&self.environments);
-        self.runtime.spawn_blocking(move || {
-            environments.refresh();
-            if let Some(request) = environments.begin_resource_sample() {
-                environments.sample_resources(request);
-            }
-        });
+        self.refresh.request(Refresh::Instances);
+    }
+
+    pub(crate) fn refresh_environments(&self) {
+        self.refresh.request(Refresh::All);
+    }
+
+    pub(crate) fn manual_refresh(
+        &self,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), String>>, String> {
+        self.refresh.request_completion()
     }
 
     pub(crate) fn open_gateway(&self, url: &str) -> Result<(), String> {
@@ -133,6 +149,31 @@ impl AppService {
         self.environments.operation(id)
     }
 
+    pub(crate) fn submit_new_instance(
+        &self,
+        name: &str,
+        template: String,
+    ) -> Result<CreateInstanceOutcome, String> {
+        if self
+            .environments
+            .snapshot()
+            .instances
+            .iter()
+            .any(|instance| instance.name == name)
+        {
+            return Ok(CreateInstanceOutcome::Existing);
+        }
+        self.submit_operation("create_instance", name, Some(template), 600, true)
+            .map(|operation| CreateInstanceOutcome::Started(Box::new(operation)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn queue_instance_for_tests(&self, name: &str, template: &str) -> Operation {
+        self.environments
+            .begin("create_instance", name, Some(template.into()))
+            .unwrap()
+    }
+
     pub(crate) fn submit_operation(
         &self,
         action: &str,
@@ -156,7 +197,7 @@ impl AppService {
         }
         if action != "create_template" && !confirmed {
             return Err(
-                "confirmation_required: this executes Docker operations or removes local data"
+                "confirmation_required: this provisions repositories with host Git, executes Docker operations or removes local data"
                     .into(),
             );
         }
@@ -164,13 +205,52 @@ impl AppService {
             return Err("timeout_seconds must be between 5 and 900".into());
         }
         let operation = self.environments.begin(action, name, template)?;
+        Ok(self.schedule_operation(operation, timeout))
+    }
+
+    pub(crate) fn submit_restart(
+        &self,
+        name: &str,
+        service: Option<String>,
+        confirmed: bool,
+    ) -> Result<Operation, String> {
+        if !confirmed {
+            return Err("confirmation_required: restarting containers interrupts services".into());
+        }
+        let operation = self.environments.begin_restart(name, service)?;
+        Ok(self.schedule_operation(operation, 600))
+    }
+
+    fn schedule_operation(&self, operation: Operation, timeout: u64) -> Operation {
+        let action = operation.action.as_str();
+        let operation_id = operation.id.clone();
         let environments = Arc::clone(&self.environments);
         let worker_operation = operation.clone();
+        let startup_template = (action == "create_instance")
+            .then(|| worker_operation.template.clone())
+            .flatten();
+        let notifier = self.refresh.notifier.clone();
+        let refresh = Refresh::for_operation(action);
         let branch_instances = action == "create_instance" && self.branch_instances();
+        let settings = Arc::clone(&self.settings);
         self.runtime.spawn_blocking(move || {
-            environments.execute(worker_operation, timeout, branch_instances)
+            notifier.publish(refresh);
+            environments.execute(worker_operation, timeout, branch_instances);
+            if let Some(template) = startup_template
+                && let Ok(operation) = environments.operation(&operation_id)
+                && operation.state == OperationState::Succeeded
+                && let Err(error) =
+                    settings.record_startup(template, operation.elapsed_milliseconds)
+            {
+                crate::diagnostics::record_error(
+                    "cannot save startup timing",
+                    &std::io::Error::other(error),
+                );
+            }
+            // Failed lifecycle operations can still leave changed Docker/filesystem state.
+            notifier.publish(refresh);
         });
-        Ok(operation)
+        operation
     }
 
     pub(crate) async fn wait_operation(&self, id: &str) -> Result<Operation, String> {
@@ -201,8 +281,34 @@ impl AppService {
             .await
     }
     pub(crate) async fn create_template(&self, name: String) -> Result<Template, String> {
-        self.environment_call(move |environments| environments.create_template(&name))
-            .await
+        let notifier = self.refresh.notifier.clone();
+        self.environment_call(move |environments| {
+            let result = environments.create_template(&name);
+            if result.is_ok() {
+                notifier.publish(Refresh::Templates);
+            }
+            result
+        })
+        .await
+    }
+    pub(crate) async fn update_template_manifest(
+        &self,
+        name: String,
+        manifest: crate::store::environments::Manifest,
+        confirmed: bool,
+    ) -> Result<Template, String> {
+        if !confirmed {
+            return Err("confirmation_required: this replaces the shared template manifest".into());
+        }
+        let notifier = self.refresh.notifier.clone();
+        self.environment_call(move |environments| {
+            let result = environments.update_template_manifest(&name, manifest);
+            if result.is_ok() {
+                notifier.publish(Refresh::Templates);
+            }
+            result
+        })
+        .await
     }
     pub(crate) async fn list_instances(&self) -> Result<Vec<Instance>, String> {
         self.environment_call(Environments::list_instances).await

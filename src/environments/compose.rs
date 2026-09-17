@@ -6,7 +6,9 @@ use super::{
     command::{docker, run},
     config::{Config, private_file},
 };
-use crate::store::environments::{Template, validate_instance_name, validate_name};
+use crate::store::environments::{
+    InstanceService, Template, validate_instance_name, validate_name,
+};
 
 pub(crate) const NAMESPACE: &str = "io.tandem.namespace";
 pub(crate) const TEMPLATE: &str = "io.tandem.template";
@@ -17,6 +19,11 @@ pub(crate) const URL: &str = "io.tandem.url";
 pub(crate) const PORT: &str = "io.tandem.port";
 pub(crate) const KIND: &str = "io.tandem.kind";
 pub(crate) const INSTANCE: &str = "io.tandem.instance";
+
+pub(crate) struct Rendered {
+    pub path: std::path::PathBuf,
+    pub services: Vec<InstanceService>,
+}
 
 pub(crate) fn command(
     config: &Config,
@@ -45,6 +52,8 @@ pub(crate) fn command(
     .env("TANDEM_ORIGIN", config.origin());
     if let Some(branch) = branch {
         cmd.env("TANDEM_BRANCH", branch);
+    } else {
+        cmd.env_remove("TANDEM_BRANCH");
     }
     #[cfg(unix)]
     {
@@ -60,7 +69,7 @@ pub(crate) fn render(
     name: &str,
     branch: Option<&str>,
     timeout: Duration,
-) -> Result<std::path::PathBuf, String> {
+) -> Result<Rendered, String> {
     let directory = Path::new(&template.directory);
     let mut cmd = command(
         config,
@@ -81,7 +90,50 @@ pub(crate) fn render(
     private_file(&rendered, false)
         .and_then(|mut file| file.write_all(text.as_bytes()))
         .map_err(|error| error.to_string())?;
-    Ok(rendered)
+    Ok(Rendered {
+        path: rendered,
+        services: expected_services(config, template, name, &model),
+    })
+}
+
+fn expected_services(
+    config: &Config,
+    template: &Template,
+    instance: &str,
+    model: &Value,
+) -> Vec<InstanceService> {
+    let mut services = model["services"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(name, service)| {
+            let route = template.manifest.routes.get(name);
+            InstanceService {
+                name: name.clone(),
+                container_id: String::new(),
+                status: "created".into(),
+                one_shot: template.manifest.one_shots.contains(name),
+                image: service["image"].as_str().map(str::to_owned),
+                health: None,
+                restart_policy: None,
+                restart_count: 0,
+                created_at: None,
+                started_at: None,
+                port: route.map(|route| route.port),
+                url: route.map(|_| {
+                    format!(
+                        "{}/{instance}/{name}/",
+                        config.origin().trim_end_matches('/')
+                    )
+                }),
+                usage: None,
+                memory_limit_bytes: None,
+                volumes: Vec::new(),
+            }
+        })
+        .collect::<Vec<_>>();
+    services.sort_by(|left, right| left.name.cmp(&right.name));
+    services
 }
 
 pub(crate) fn decorate(
@@ -97,6 +149,9 @@ pub(crate) fn decorate(
         .ok_or("Compose must declare services")?;
     if services.is_empty() {
         return Err("Compose must declare at least one service".into());
+    }
+    if !template.manifest.repositories.is_empty() && services.contains_key("repo-sync") {
+        return Err("declared repositories use Tandem provisioning; remove the repo-sync service and its dependencies".into());
     }
     for expected in template
         .manifest

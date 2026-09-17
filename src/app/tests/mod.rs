@@ -11,9 +11,13 @@ use crate::{
 
 mod input_routing;
 mod labels;
+mod operations;
 mod properties;
+mod refresh;
 mod resources;
+mod restart;
 mod template_actions;
+mod toolbar;
 
 fn snapshot() -> EnvironmentSnapshot {
     EnvironmentSnapshot {
@@ -91,10 +95,10 @@ fn tree_rows_show_routed_services_without_gateway_children() {
     });
     let rows = rows::from_snapshot(&snapshot);
     assert_eq!(rows.len(), 4);
-    assert_eq!(rows[0].label, "website\n1 instance");
+    assert_eq!(rows[0].label, "website\n 1");
     assert_eq!(rows[0].icon, "󰠲");
     assert_eq!(rows[1].parent, Some(rows[0].id.clone()));
-    assert_eq!(rows[1].label, "review\n/tmp/workspaces/review");
+    assert_eq!(rows[1].label, "review · Running\n/tmp/workspaces/review");
     assert_eq!(rows[1].icon, "");
     assert_eq!(rows[2].parent, Some(rows[1].id.clone()));
     assert_eq!(
@@ -138,12 +142,34 @@ fn row_backgrounds_follow_tree_order() {
             .alternate_background
     };
 
-    assert!(background("template:/tmp/templates/website"));
-    assert!(!background("instance:review"));
-    assert!(background("service:review:web"));
-    assert!(!background("template:/tmp/templates/docs"));
-    assert!(background("instance:guide"));
-    assert!(!background("service:guide:web"));
+    assert!(background("template:/tmp/templates/docs"));
+    assert!(!background("instance:guide"));
+    assert!(background("service:guide:web"));
+    assert!(!background("template:/tmp/templates/website"));
+    assert!(background("instance:review"));
+    assert!(!background("service:review:web"));
+}
+
+#[test]
+fn template_rows_with_instances_precede_empty_templates_and_sort_by_name() {
+    let mut snapshot = snapshot();
+    let mut alpha = snapshot.templates[0].clone();
+    alpha.name = "alpha".into();
+    alpha.directory = "/tmp/templates/alpha".into();
+    snapshot.templates.push(alpha);
+    let mut docs = snapshot.templates[0].clone();
+    docs.name = "docs".into();
+    docs.directory = "/tmp/templates/docs".into();
+    snapshot.templates.push(docs);
+
+    let rows = rows::from_snapshot(&snapshot);
+    let templates = rows
+        .iter()
+        .filter(|row| row.parent.is_none())
+        .map(|row| row.template.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(templates, ["website", "alpha", "docs"]);
 }
 
 #[test]
@@ -240,7 +266,7 @@ fn enter_opens_the_selected_instance_workspace() {
 }
 
 #[test]
-fn data_view_starts_expanded_without_column_headings() {
+fn data_view_starts_with_templates_expanded_and_instances_collapsed() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
@@ -257,7 +283,7 @@ fn data_view_starts_expanded_without_column_headings() {
 
     let text = rendered_lines(&terminal, area).join("");
     assert!(text.contains("review"));
-    assert!(text.contains("http://localhost:9876/review/web/"));
+    assert!(!text.contains("http://localhost:9876/review/web/"));
     assert!(!text.contains("Templates / instances"));
     assert!(!text.contains("Status"));
 }
@@ -542,7 +568,6 @@ fn template_action_menu_keeps_typed_hotkeys_in_its_search() {
         ("Stop all instances", "s"),
         ("Purge all instances", "p"),
         ("Delete template", "x"),
-        ("Refresh", "r"),
     ] {
         let line = lines.iter().find(|line| line.contains(label)).unwrap();
         assert!(line.trim_end().ends_with(hotkey));
@@ -594,15 +619,23 @@ fn instance_action_menu_lists_instance_actions() {
     let lines = rendered_lines(&terminal, area);
     for (label, hotkey) in [
         ("View details", "v"),
+        ("New instance", "n"),
         ("Start instance", "s"),
         ("Stop instance", "s"),
         ("Delete instance", "x"),
-        ("Refresh", "r"),
     ] {
         let line = lines.iter().find(|line| line.contains(label)).unwrap();
         assert!(line.trim_end().ends_with(hotkey));
     }
-    assert!(!lines.iter().any(|line| line.contains("New instance")));
+}
+
+fn expand_first_instance(tree: &mut crate::app::Instances) {
+    tree.focus(None, true, &mut tuicore::FocusCtx::default());
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+    for key in [Key::Down, Key::Right, Key::Home] {
+        tree.event(&TuiEvent::Key(KeyEvent::from(key)), &mut ctx);
+    }
+    tree.focus(None, false, &mut tuicore::FocusCtx::default());
 }
 
 #[test]

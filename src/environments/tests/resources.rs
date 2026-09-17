@@ -64,7 +64,7 @@ fn environment() -> (tempfile::TempDir, Environments) {
 #[test]
 fn warmup_publishes_memory_then_cpu_with_a_one_second_gap_before_minute_polling() {
     let (_home, environment) = environment();
-    let request = environment.begin_resource_sample().unwrap();
+    let request = environment.begin_resource_sample(false).unwrap();
     let mut reads = 0;
     environment.sample_resources_with(
         request,
@@ -89,7 +89,8 @@ fn warmup_publishes_memory_then_cpu_with_a_one_second_gap_before_minute_polling(
                     .unwrap()
                     .begin(
                         &snapshot.instances,
-                        Instant::now() + Duration::from_secs(60)
+                        Instant::now() + Duration::from_secs(60),
+                        false,
                     )
                     .is_none()
             );
@@ -103,14 +104,14 @@ fn warmup_publishes_memory_then_cpu_with_a_one_second_gap_before_minute_polling(
             .cpu_basis_points,
         Some(4000)
     );
-    assert!(environment.begin_resource_sample().is_none());
+    assert!(environment.begin_resource_sample(false).is_none());
 
     let instances = environment.snapshot().instances;
     let request = environment
         .resources
         .lock()
         .unwrap()
-        .begin(&instances, Instant::now() + Duration::from_secs(60))
+        .begin(&instances, Instant::now() + Duration::from_secs(60), false)
         .unwrap();
     environment.sample_resources_with(
         request,
@@ -124,10 +125,175 @@ fn warmup_publishes_memory_then_cpu_with_a_one_second_gap_before_minute_polling(
 }
 
 #[test]
+fn manual_sampling_refreshes_cached_memory_and_cpu_without_waiting_or_overlapping() {
+    let (_home, environment) = environment();
+    let initial = environment.begin_resource_sample(false).unwrap();
+    let mut reads = 0;
+    environment.sample_resources_with(
+        initial,
+        |_| {
+            reads += 1;
+            Ok(samples(stats(
+                reads,
+                u64::from(reads) * 100,
+                u64::from(reads) * 1000,
+            )))
+        },
+        |_| {},
+    );
+    assert!(environment.begin_resource_sample(false).is_none());
+    let request = environment.begin_resource_sample(true).unwrap();
+    assert!(request.warm_up);
+    assert!(environment.begin_resource_sample(true).is_none());
+    environment.sample_resources_with(
+        request,
+        |_| {
+            reads += 1;
+            let mut sample = stats(
+                reads,
+                if reads == 3 { 500 } else { 550 },
+                u64::from(reads) * 1000,
+            );
+            sample.memory_stats.usage = if reads == 3 { 200 } else { 220 } * 1048576;
+            Ok(samples(sample))
+        },
+        |gap| {
+            assert_eq!(gap, Duration::from_secs(1));
+            assert_eq!(
+                environment.snapshot().instances[0].services[0]
+                    .usage
+                    .unwrap()
+                    .memory_bytes,
+                180 * 1048576
+            );
+            assert!(environment.begin_resource_sample(true).is_none());
+            assert!(environment.begin_resource_sample(false).is_none());
+        },
+    );
+    assert_eq!(reads, 4);
+    let usage = environment.snapshot().instances[0].services[0]
+        .usage
+        .unwrap();
+    assert_eq!(usage.memory_bytes, 200 * 1048576);
+    assert_eq!(usage.cpu_basis_points, Some(2000));
+    assert!(environment.begin_resource_sample(false).is_none());
+}
+
+#[test]
+fn starting_instances_hide_cached_usage_and_sample_only_after_readiness_succeeds() {
+    let (_home, environment) = environment();
+    let initial = environment.begin_resource_sample(false).unwrap();
+    environment.sample_resources_with(initial, |_| Ok(samples(stats(1, 100, 1000))), |_| {});
+    let existing = environment.snapshot().instances[0].services[0].usage;
+    let operation = environment
+        .begin("create_instance", "second", Some("website".into()))
+        .unwrap();
+    {
+        let mut snapshot = environment.snapshot.lock().unwrap();
+        let mut discovered = snapshot.instances[0].clone();
+        discovered.name = "second".into();
+        discovered.services[0].container_id = "second-id".into();
+        snapshot.instances[1] = discovered;
+    }
+    let snapshot = environment.snapshot();
+    assert_eq!(snapshot.instances[0].services[0].usage, existing);
+    assert!(snapshot.instances[1].services[0].usage.is_none());
+    assert!(environment.begin_resource_sample(false).is_none());
+    let manual = environment.begin_resource_sample(true).unwrap();
+    assert_eq!(manual.containers.keys().collect::<Vec<_>>(), ["abc123"]);
+    environment.sample_resources_with(manual, |_| Ok(samples(stats(2, 200, 2000))), |_| {});
+    environment
+        .operations
+        .lock()
+        .unwrap()
+        .get_mut(&operation.id)
+        .unwrap()
+        .operation
+        .state = crate::store::environments::OperationState::Succeeded;
+    let ready = environment.begin_resource_sample(false).unwrap();
+    assert_eq!(ready.containers.keys().collect::<Vec<_>>(), ["second-id"]);
+    let mut reads = 2;
+    environment.sample_resources_with(
+        ready,
+        |_| {
+            reads += 1;
+            let mut reading = stats(reads, u64::from(reads) * 100, u64::from(reads) * 1000);
+            reading.id = "second-id".into();
+            Ok(samples(reading))
+        },
+        |_| {},
+    );
+    assert_eq!(
+        environment.snapshot().instances[1].services[0]
+            .usage
+            .unwrap()
+            .cpu_basis_points,
+        Some(4000)
+    );
+}
+
+#[test]
+fn successful_startup_publishes_ready_services_before_clearing_startup_state() {
+    let (_home, environment) = environment();
+    let operation = environment
+        .begin("create_instance", "review", Some("website".into()))
+        .unwrap();
+    let mut ready = environment.snapshot().instances[0].clone();
+    let mut api = ready.services[0].clone();
+    api.name = "api".into();
+    api.container_id = "api-id".into();
+    ready.services.push(api);
+    let mut starting = ready.clone();
+    starting.services[1].status = "boot".into();
+    environment.snapshot.lock().unwrap().instances = vec![starting.clone()];
+    assert!(environment.snapshot().startup.contains_key("review"));
+    let old_revision = environment
+        .instance_revision
+        .load(std::sync::atomic::Ordering::SeqCst);
+    environment.finish_operation(&operation.id, Ok(Some(ready.clone())));
+    let snapshot = environment.snapshot();
+    assert!(snapshot.startup.is_empty());
+    assert_eq!(snapshot.instances, vec![ready.clone()]);
+    environment.publish_instances(Ok(vec![starting.clone()]), old_revision);
+    assert_eq!(environment.snapshot().instances, vec![ready]);
+    let revision = environment
+        .instance_revision
+        .load(std::sync::atomic::Ordering::SeqCst);
+    starting.services[1].status = "unhealthy".into();
+    environment.publish_instances(Ok(vec![starting.clone()]), revision);
+    assert_eq!(environment.snapshot().instances, vec![starting]);
+}
+
+#[test]
+fn template_scan_errors_allow_resource_sampling_but_runtime_discovery_errors_block_it() {
+    let (_home, environment) = environment();
+    {
+        let mut snapshot = environment.snapshot.lock().unwrap();
+        environment.set_inventory_error(
+            &mut snapshot,
+            0,
+            Some("Template directory unavailable".into()),
+        );
+    }
+    let request = environment.begin_resource_sample(true).unwrap();
+    environment.sample_resources_with(
+        request,
+        |_| Err("Stats unavailable".into()),
+        |_| unreachable!(),
+    );
+    assert!(!environment.resources.lock().unwrap().in_flight);
+    {
+        let mut snapshot = environment.snapshot.lock().unwrap();
+        environment.set_inventory_error(&mut snapshot, 1, Some("Docker unavailable".into()));
+    }
+    assert!(environment.begin_resource_sample(true).is_none());
+}
+
+#[test]
 fn failed_readings_release_the_warmup_guard_and_report_errors() {
     for fail_on in [1, 2] {
         let (_home, environment) = environment();
-        let request = environment.begin_resource_sample().unwrap();
+        let request = environment.begin_resource_sample(false).unwrap();
         let mut reads = 0;
         let mut waits = 0;
         environment.sample_resources_with(
@@ -149,7 +315,7 @@ fn failed_readings_release_the_warmup_guard_and_report_errors() {
             Some("unavailable")
         );
         assert!(!environment.resources.lock().unwrap().in_flight);
-        assert!(environment.begin_resource_sample().is_none());
+        assert!(environment.begin_resource_sample(false).is_none());
     }
 }
 
@@ -158,19 +324,142 @@ fn completed_samples_wait_one_minute_before_polling_again() {
     let mut cache = ResourceCache::default();
     let instances = instances();
     let now = Instant::now();
-    let request = cache.begin(&instances, now).unwrap();
+    let request = cache.begin(&instances, now, false).unwrap();
     assert!(request.warm_up);
     cache.finish(request, Ok(samples(stats(1, 100, 1000))));
     assert!(
         cache
-            .begin(&instances, now + Duration::from_secs(59))
+            .begin(&instances, now + Duration::from_secs(59), false)
             .is_none()
     );
     assert!(
         !cache
-            .begin(&instances, now + Duration::from_secs(60))
+            .begin(&instances, now + Duration::from_secs(60), false)
             .unwrap()
             .warm_up
+    );
+}
+
+#[test]
+fn new_instances_sample_only_their_containers_and_preserve_cached_totals_and_cadence() {
+    let (_home, environment) = environment();
+    let now = Instant::now();
+    let initial = environment
+        .resources
+        .lock()
+        .unwrap()
+        .begin(&instances(), now, false)
+        .unwrap();
+    let mut reads = 0;
+    environment.sample_resources_with(
+        initial,
+        |_| {
+            reads += 1;
+            Ok(samples(stats(
+                reads,
+                u64::from(reads) * 100,
+                u64::from(reads) * 1000,
+            )))
+        },
+        |_| {},
+    );
+    let original = environment.snapshot().instances[0].services[0]
+        .usage
+        .unwrap();
+    {
+        let mut snapshot = environment.snapshot.lock().unwrap();
+        let mut instance = snapshot.instances[0].clone();
+        instance.name = "new-instance".into();
+        instance.services[0].container_id = "def456".into();
+        instance.services[0].started_at = Some("second-start".into());
+        instance.services[0].usage = None;
+        snapshot.instances.push(instance);
+    }
+    let instances = environment.snapshot().instances;
+    let request = environment
+        .resources
+        .lock()
+        .unwrap()
+        .begin(&instances, now + Duration::from_secs(30), false)
+        .unwrap();
+    assert!(request.warm_up);
+    environment.sample_resources_with(
+        request,
+        |request| {
+            assert_eq!(request.containers.keys().collect::<Vec<_>>(), ["def456"]);
+            reads += 1;
+            let mut reading = stats(reads, u64::from(reads) * 100, u64::from(reads) * 1000);
+            reading.id = "def456".into();
+            Ok(samples(reading))
+        },
+        |_| {
+            let snapshot = environment.snapshot();
+            assert_eq!(snapshot.instances[0].services[0].usage, Some(original));
+            assert_eq!(
+                snapshot.instances[1].services[0]
+                    .usage
+                    .unwrap()
+                    .cpu_basis_points,
+                None
+            );
+        },
+    );
+    assert_eq!(reads, 4);
+    let instances = environment.snapshot().instances;
+    assert_eq!(instances[0].services[0].usage, Some(original));
+    let total =
+        ResourceUsage::total(instances.iter().flat_map(|instance| &instance.services)).unwrap();
+    assert_eq!(total.memory_bytes, 160 * 1048576);
+    assert_eq!(total.cpu_basis_points, Some(8000));
+    let mut cache = environment.resources.lock().unwrap();
+    assert!(
+        cache
+            .begin(&instances, now + Duration::from_secs(59), false)
+            .is_none()
+    );
+    let periodic = cache
+        .begin(&instances, now + SAMPLE_INTERVAL, false)
+        .unwrap();
+    assert!(!periodic.warm_up);
+    assert_eq!(
+        periodic.containers.keys().collect::<Vec<_>>(),
+        ["abc123", "def456"]
+    );
+}
+
+#[test]
+fn failed_new_container_samples_keep_other_usage_and_wait_for_the_regular_retry() {
+    let mut cache = ResourceCache::default();
+    let mut instances = instances();
+    let now = Instant::now();
+    let request = cache.begin(&instances, now, false).unwrap();
+    cache.finish(request, Ok(samples(stats(1, 100, 1000))));
+    let mut service = instances[0].services[0].clone();
+    service.container_id = "new".into();
+    instances[0].services.push(service);
+    let request = cache
+        .begin(&instances, now + Duration::from_secs(1), false)
+        .unwrap();
+    assert_eq!(request.containers.keys().collect::<Vec<_>>(), ["new"]);
+    cache.finish(request, Err("unavailable".into()));
+    cache.apply(&mut instances);
+    assert_eq!(
+        instances[0].services[0].usage.unwrap().memory_bytes,
+        80 * 1048576
+    );
+    assert!(instances[0].services[1].usage.is_none());
+    assert!(
+        cache
+            .begin(&instances, now + Duration::from_secs(2), false)
+            .is_none()
+    );
+    assert_eq!(
+        cache
+            .begin(&instances, now + SAMPLE_INTERVAL, false)
+            .unwrap()
+            .containers
+            .len(),
+        2
     );
 }
 
@@ -179,7 +468,7 @@ fn one_shot_memory_is_immediate_and_cpu_uses_successive_samples() {
     let mut cache = ResourceCache::default();
     let mut instances = instances();
     let now = Instant::now();
-    let request = cache.begin(&instances, now).unwrap();
+    let request = cache.begin(&instances, now, false).unwrap();
     assert!(
         cache
             .finish(request, Ok(samples(stats(1, 100, 1000))))
@@ -194,7 +483,9 @@ fn one_shot_memory_is_immediate_and_cpu_uses_successive_samples() {
         Some(usage)
     );
 
-    let request = cache.begin(&instances, now + SAMPLE_INTERVAL).unwrap();
+    let request = cache
+        .begin(&instances, now + SAMPLE_INTERVAL, false)
+        .unwrap();
     cache.finish(request, Ok(samples(stats(3, 725, 3000))));
     cache.apply(&mut instances);
     assert_eq!(
@@ -217,7 +508,7 @@ fn failed_containers_are_isolated_across_batches_and_cpu_warmup() {
             })
             .collect();
     }
-    let request = environment.begin_resource_sample().unwrap();
+    let request = environment.begin_resource_sample(false).unwrap();
     let mut reads = 0;
     environment.sample_resources_with(
         request,
@@ -242,7 +533,7 @@ fn failed_containers_are_isolated_across_batches_and_cpu_warmup() {
                     .memory_bytes,
                 80 * 1048576
             );
-            assert!(environment.begin_resource_sample().is_none());
+            assert!(environment.begin_resource_sample(false).is_none());
         },
     );
     assert_eq!(reads, 2);
@@ -270,7 +561,7 @@ fn partial_failures_preserve_valid_baselines_and_refresh_successful_containers()
     let now = Instant::now();
     for (index, failing) in [false, true, false].into_iter().enumerate() {
         let request = cache
-            .begin(&instances, now + SAMPLE_INTERVAL * index as u32)
+            .begin(&instances, now + SAMPLE_INTERVAL * index as u32, false)
             .unwrap();
         let reading = (index + 1) as u32;
         let result = sample_with(&request, |id| {
@@ -316,7 +607,7 @@ fn unstarted_containers_do_not_block_running_container_totals_or_sampling() {
         instances[0].services.push(service);
     }
     let mut cache = ResourceCache::default();
-    let request = cache.begin(&instances, Instant::now()).unwrap();
+    let request = cache.begin(&instances, Instant::now(), false).unwrap();
     assert_eq!(request.containers.keys().collect::<Vec<_>>(), ["abc123"]);
     cache.finish(request, Ok(samples(stats(1, 100, 1000))));
     cache.apply(&mut instances);
@@ -363,16 +654,22 @@ fn failed_readings_keep_the_last_valid_resource_usage() {
     let mut cache = ResourceCache::default();
     let mut instances = instances();
     let now = Instant::now();
-    assert!(cache.begin(&[], now).is_none());
-    let request = cache.begin(&instances, now).unwrap();
-    assert!(cache.begin(&instances, now + SAMPLE_INTERVAL).is_none());
+    assert!(cache.begin(&[], now, false).is_none());
+    let request = cache.begin(&instances, now, false).unwrap();
+    assert!(
+        cache
+            .begin(&instances, now + SAMPLE_INTERVAL, false)
+            .is_none()
+    );
     cache.finish(request, Ok(samples(stats(1, 100, 1000))));
     assert!(
         cache
-            .begin(&instances, now + Duration::from_secs(1))
+            .begin(&instances, now + Duration::from_secs(1), false)
             .is_none()
     );
-    let request = cache.begin(&instances, now + SAMPLE_INTERVAL).unwrap();
+    let request = cache
+        .begin(&instances, now + SAMPLE_INTERVAL, false)
+        .unwrap();
     assert_eq!(
         cache.finish(request, Err("timeout".into())).as_deref(),
         Some("timeout")
@@ -382,7 +679,9 @@ fn failed_readings_keep_the_last_valid_resource_usage() {
         instances[0].services[0].usage.unwrap().memory_bytes,
         80 * 1048576
     );
-    let request = cache.begin(&instances, now + SAMPLE_INTERVAL * 2).unwrap();
+    let request = cache
+        .begin(&instances, now + SAMPLE_INTERVAL * 2, false)
+        .unwrap();
     cache.finish(request, Ok(samples(stats(5, 200, 2000))));
     cache.apply(&mut instances);
     assert_eq!(
@@ -396,7 +695,7 @@ fn cache_rejects_restarted_replaced_and_stopped_containers() {
     let mut cache = ResourceCache::default();
     let mut instances = instances();
     let now = Instant::now();
-    let request = cache.begin(&instances, now).unwrap();
+    let request = cache.begin(&instances, now, false).unwrap();
     cache.finish(request, Ok(samples(stats(1, 100, 1000))));
     instances[0].services[0].status = "down (exit 0)".into();
     cache.apply(&mut instances);
@@ -405,7 +704,9 @@ fn cache_rejects_restarted_replaced_and_stopped_containers() {
     instances[0].services[0].started_at = Some("second-start".into());
     cache.apply(&mut instances);
     assert!(instances[0].services[0].usage.is_none());
-    let request = cache.begin(&instances, now + SAMPLE_INTERVAL).unwrap();
+    let request = cache
+        .begin(&instances, now + SAMPLE_INTERVAL, false)
+        .unwrap();
     assert!(request.warm_up);
     cache.finish(request, Ok(samples(stats(3, 200, 2000))));
     cache.apply(&mut instances);
@@ -427,9 +728,10 @@ fn live_resource_sampling_benchmark() {
         crate::environments::config::Config::at(home.path().to_owned(), namespace, 9876).unwrap();
     for _ in 0..3 {
         let environment = Environments::new(config.clone());
-        environment.refresh();
+        environment.refresh_templates();
+        environment.refresh_instances();
         let request = environment
-            .begin_resource_sample()
+            .begin_resource_sample(false)
             .expect("running containers required");
         let count = request.containers.len();
         let started = Instant::now();
@@ -453,6 +755,6 @@ fn live_resource_sampling_benchmark() {
         .unwrap();
         assert!(usage.memory_bytes > 0);
         assert!(usage.cpu_basis_points.is_some());
-        assert!(environment.begin_resource_sample().is_none());
+        assert!(environment.begin_resource_sample(false).is_none());
     }
 }

@@ -15,6 +15,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     tuicore::TreeApp::new(app::root(service))
         .initial_focus(app::initial_focus())
         .on_message(|app, message, ctx| app.handle_message(message, ctx))
+        .notifications(tuicore::ToastRack::new().max_visible(0))
+        .on_notification(|app, notification, _| app.notify(notification))
         .run()?;
     Ok(())
 }
@@ -62,6 +64,8 @@ pub fn run_dev(bind: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     tuicore::TreeApp::new(app::root(service))
         .initial_focus(app::initial_focus())
         .on_message(|app, message, ctx| app.handle_message(message, ctx))
+        .notifications(tuicore::ToastRack::new().max_visible(0))
+        .on_notification(|app, notification, _| app.notify(notification))
         .run()?;
     Ok(())
 }

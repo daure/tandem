@@ -95,15 +95,29 @@ fn new_instance_uses_a_mode_specific_placeholder() {
         Msg::SetBranchInstances(false),
         &mut EventCtx::new(AnimationSettings::default()),
     );
-    app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
-    for selected in ["instance:review", "service:review:web"] {
+    let mut inventory = snapshot();
+    let mut service = inventory.instances[0].services[0].clone();
+    service.name = "db".into();
+    service.url = None;
+    service.port = None;
+    inventory.instances[0].services.push(service);
+    app.set_rows_for_tests(rows::from_snapshot(&inventory));
+    for selected in ["instance:review", "service:review:web", "service:review:db"] {
         crate::app::instances::set_highlighted(&app.instances, Some(selected.into()));
         app.event(
             &TuiEvent::Key(KeyEvent::from(Key::Char('n'))),
             &mut EventCtx::new(AnimationSettings::default()),
         );
-        assert!(app.intent.is_none());
-        assert!(!app.view.first().is_active());
+        assert!(
+            matches!(&app.intent, Some(crate::app::Intent::CreateInstance(template)) if template == "website")
+        );
+        assert!(app.view.first().is_active());
+        assert!(
+            render_app(&mut app)
+                .iter()
+                .any(|line| line.contains("Instance name"))
+        );
+        app.handle_message(Msg::Close, &mut EventCtx::new(AnimationSettings::default()));
     }
     crate::app::instances::set_highlighted(
         &app.instances,

@@ -11,6 +11,43 @@ from stdio_smoke import Client
 
 @unittest.skipUnless(os.name == "posix" and BINARY.is_file(), "Build Tandem before runtime integration tests")
 class RuntimeTests(unittest.TestCase):
+    def test_manifest_schema_and_validated_update_round_trip_through_stdio(self):
+        with tempfile.TemporaryDirectory(prefix="tandem-manifest-") as directory:
+            root = Path(directory)
+            environment = {**os.environ, "TANDEM_HOME": directory,
+                           "XDG_STATE_HOME": str(root / "state")}
+            environment.pop("TANDEM_INSTRUCTIONS_FILE", None)
+            client = Client(BINARY, environment)
+            try:
+                instructions = client.tool("get_instructions")
+                schema = instructions["manifest_schema"]
+                self.assertEqual(schema["type"], "object")
+                self.assertFalse(schema["additionalProperties"])
+                self.assertIn("repositories", schema["properties"])
+                created = client.tool("create_template", {"name": "website"})
+                path = Path(created["manifest_file"])
+                before = path.read_bytes()
+                for arguments in [
+                    {"name": "website", "manifest": {"description": "Unconfirmed"}},
+                    {"name": "website", "confirmed": True,
+                     "manifest": {"repositories": [{"source": "/source", "target": "../escape"}]}},
+                ]:
+                    result = client.request("tools/call", {
+                        "name": "update_template_manifest", "arguments": arguments,
+                    })
+                    self.assertTrue(result.get("isError"))
+                    self.assertEqual(path.read_bytes(), before)
+                saved = client.tool("update_template_manifest", {
+                    "name": "website", "confirmed": True,
+                    "manifest": {"description": "Configured through MCP",
+                                 "repositories": [{"source": "/source", "target": "app"}]},
+                })
+                self.assertEqual(saved["manifest"]["description"], "Configured through MCP")
+                self.assertEqual(client.tool("get_template", {"name": "website"}), saved)
+                self.assertEqual(list((root / "workspaces").iterdir()), [])
+            finally:
+                client.close()
+
     def test_open_command_is_persisted_and_runs_only_after_approval(self):
         with tempfile.TemporaryDirectory(prefix="tandem-open-command-") as directory:
             root = Path(directory)

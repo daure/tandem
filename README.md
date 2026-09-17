@@ -23,13 +23,38 @@ cargo run -- serve          # HTTP MCP at http://127.0.0.1:7345/mcp
 4. Expand the template row using the DataView's configured expansion key (shown in its action bar)
    and select `review`; open `http://localhost:9876/review/web/index.html`.
 5. Press `s` on an instance to confirm stopping its containers; the workspace and volumes are kept.
+6. Press `r` on an instance or service for **Restart instance** or **Restart service**; confirm with `r`.
+   Both actions are also in the `.` Actions menu. Restart uses existing containers, including stopped
+   ones, preserves data and configuration, and skips one-shot setup jobs. A service restart leaves its
+   dependencies untouched; the shared gateway is outside both scopes. A single completion notification
+   appears after every restarted container is running, its configured healthcheck passes, and its
+   configured gateway content assertion succeeds. Restart has a ten-minute budget; failures produce
+   an error notification. Services without healthchecks or routes are verified only as running.
+   Routed services require their current template readiness configuration. Applying template or image
+   changes requires startup.
 
-The TUI refreshes runtime inventory asynchronously every two seconds and local progress every 250 ms.
+The TUI refreshes runtime inventory asynchronously every ten seconds while its terminal is focused,
+every five minutes while unfocused, and immediately on regaining focus. Idle means terminal focus loss,
+not time since the last keypress; terminals or multiplexers without focus reporting keep the ten-second
+cadence. Local UI state updates every 250 ms.
+Template files load at startup and on manual Refresh (`R`). The top-right refresh button refreshes
+the full inventory; it shows `󰑓 Refresh` at 100 columns or wider and `󰑓 R` on narrower terminals,
+with the displayed hotkey following configuration.
+Manual refresh shows a completion notification after all requested checks and fresh resource samples
+finish; failures appear as a warning. Automatic refreshes stay silent, and repeated manual
+requests while one is pending share its completion notification.
+Tandem mutations notify open TUIs through shared state, including MCP processes using the same
+`TANDEM_HOME`. The observer checks small change counters every second and refreshes only affected
+templates, runtime inventory, or settings after any in-flight refresh completes. External template
+file edits require manual Refresh or reopening Tandem. Refresh reads state; it does not restart instances.
 Resource rows show memory above CPU using Docker Engine one-shot samples through the selected local
 Unix socket (API 1.41+). CPU is averaged between samples and displays `—` until two valid samples exist.
 Sampling starts after container discovery, publishes memory, and takes a second reading after a
-one-second pause to establish CPU usage. Regular resource polling runs once per minute; new CPU baselines
-use the same two-reading warm-up when sampled.
+one-second pause to establish CPU usage. Automatic resource sampling runs alongside runtime refreshes
+at one-minute intervals (normally every five minutes while unfocused); new or restarted containers
+are sampled on discovery. Manual Refresh bypasses the interval, publishes memory immediately after
+the first reading, and takes a second reading after one second for current CPU usage. Sampling requests
+are serialized, including both readings.
 An empty template list or unavailable Docker daemon is displayed without preventing template editing.
 Starting an existing instance name reapplies the same template directory. It refuses names owned by
 another template or unmanaged containers.
@@ -40,8 +65,8 @@ another template or unmanaged containers.
 {"command":"tandem","args":["mcp"]}
 ```
 
-The MCP tools are `get_instructions`, `list_templates`, `get_template`, `create_template`,
-`list_instances`, `create_instance`, `get_operation`, `stop_instance`, `get_open_command`,
+The MCP tools are `get_instructions`, `list_templates`, `get_template`, `create_template`, `update_template_manifest`,
+`list_instances`, `create_instance`, `get_operation`, `stop_instance`, `restart_instance`, `restart_service`, `get_open_command`,
 `set_open_command`, `run_open_command`, and `get_status`.
 List tools return objects with `templates` or `instances` arrays. Mutating instance tools require
 `confirmed=true` after user approval; create waits for readiness by default, or accepts `wait=false`.
@@ -50,7 +75,9 @@ Use runtime-derived `list_instances` after reconnecting to a different MCP proce
 
 [agent-instructions.md](agent-instructions.md) contains lightweight guidance on Tandem's intended use.
 On first launch it seeds `$TANDEM_HOME/instructions.md`, which `get_instructions` reads on every call.
-The response includes that editable path and the active template/workspace roots. To edit the repository
+The response includes that editable path, the active template/workspace roots, and `manifest_schema`,
+a JSON Schema generated from Tandem's Rust manifest types. The editable guidance file is preserved.
+To edit the repository
 Markdown directly while running:
 
 ```bash
@@ -58,6 +85,14 @@ TANDEM_INSTRUCTIONS_FILE="$PWD/agent-instructions.md" cargo run -- dev
 ```
 
 `opencode.json` points to the development HTTP MCP server; start `cargo run -- dev` before connecting.
+
+Use `update_template_manifest` with `name`, a complete `manifest` JSON object, and `confirmed=true`
+after approval to replace shared template configuration. It rejects unknown fields and invalid
+manifest rules before atomically saving a private `tandem.json` under the template lock; omitted
+optional fields take their defaults. The full replacement must fit within the 256 KiB manifest limit.
+It can repair invalid JSON and create a missing manifest in an existing template. Symlinked targets
+are refused. Saving does not run Docker or Git, restart instances, or validate Compose service
+references; those checks occur during startup. Direct file edits are validated when templates are read.
 
 ## Template layout and routing
 
@@ -82,10 +117,11 @@ For example:
 ```json
 {
   "description": "Local application",
+  "repositories": [{"source": "https://github.com/team/app.git", "target": "app"}],
   "routes": {
     "web": {"port": 80, "strip_prefix": true, "readiness_path": "index.html", "readiness_contains": "My application"}
   },
-  "one_shots": ["repo-sync"]
+  "one_shots": []
 }
 ```
 
@@ -97,9 +133,33 @@ WebSockets for the chosen prefix. A proxy cannot make every application prefix-a
 The template receives `TANDEM_INSTANCE`, `TANDEM_WORKSPACE`, `TANDEM_ORIGIN`, `TANDEM_UID`, and
 `TANDEM_GID`. When the local Branch instances setting is enabled, new instances also receive
 `TANDEM_BRANCH` set to their instance name. Put writable source checkouts and per-instance data under
-the workspace; template files are shared. Clone/sync belongs in a template one-shot service, with
-dependent services gated on its successful completion. Installed dependency trees and databases must be
-instance-specific.
+the workspace; template files are shared. Installed dependency trees and databases must be instance-specific.
+
+### Repository provisioning
+
+Declare `{ "source": "…", "target": "…" }` entries in `repositories` to let Tandem prepare checkouts
+before Compose configuration and startup. Mount `${TANDEM_WORKSPACE}` into application containers;
+build contexts and includes can reference its declared repository paths. Templates own application
+setup and migrations, with dependencies gated on their one-shot completion.
+
+Sources accept absolute local paths, HTTPS URLs without embedded credentials, and `ssh://` URLs.
+Use host Git credential helpers or SSH agents; SSH requires an existing known-host entry and runs
+without prompts. Native provisioning requires Linux and Git 2.23+; it uses the startup deadline,
+instance lock and host user. It does not execute repository hooks or recursively initialize submodules.
+Targets are non-overlapping relative paths of non-hidden directories using letters, digits, dots,
+underscores and hyphens. Symlinked paths, unrelated contents and mismatched origins are rejected.
+
+For missing checkouts, Branch instances selects a matching remote branch or creates a local branch
+from the remote default when missing. With the setting disabled, the default branch is used.
+A local source's current branch is its default. Tandem never pushes these branches.
+Each clone is installed atomically after branch selection. Existing checkouts must have the exact
+declared origin and a real `.git` directory; they retain their current branch and all local work,
+even when the branch setting changes. Restarting performs no fetch, pull, reset or branch switch.
+
+Templates without `repositories` use their existing checkout scripts. To migrate, declare the same
+sources and targets, remove clone services such as `repo-sync` and their dependencies, and retain
+app-specific setup jobs. Do not run two provisioners against the same checkout. Existing runtime
+guidance files are user-owned; update them explicitly when adopting this workflow.
 
 ## Configuration
 
@@ -113,9 +173,10 @@ instance-specific.
 | `TANDEM_KEY_START` | `n` | Start instance dialog |
 | `TANDEM_KEY_NEW_TEMPLATE` | `T` | Create template dialog |
 | `TANDEM_KEY_STOP` | `s` | Stop instance confirmation |
-| `TANDEM_KEY_REFRESH` | `r` | Refresh template/runtime inventory |
+| `TANDEM_KEY_REFRESH` | `R` | Refresh template/runtime inventory |
 | `TANDEM_KEY_DELETE` | `x` | Delete the selected instance, or a template with all its instances and data |
 | `TANDEM_KEY_PURGE` | `p` | Purge all instances of the selected template |
+| `TANDEM_KEY_RESTART` | `r` | Restart the selected instance or service after confirmation |
 
 Application hotkey overrides are distinct ASCII letters. Shared navigation, focus, and component
 keys use tuicore configuration. The TUI displays resolved key labels.
@@ -131,7 +192,7 @@ environment data, not interpolated into shell code. Enter on a routed service op
 The setting is stored in `$TANDEM_HOME/settings.sqlite3`. MCP agents can read it with
 `get_open_command` and save it with `set_open_command` using `command` and `confirmed=true`
 after approval. Saving never executes the command. Opening an instance reads the current persisted
-value, including changes from another process; the Settings cache refreshes every two seconds.
+value, including changes from another process; Tandem saves notify active TUI Settings caches.
 Close and reopen Settings to display external changes.
 
 `run_open_command` executes the persisted command for a named instance workspace after user approval

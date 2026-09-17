@@ -4,13 +4,17 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 mod environments;
+mod refresh;
 mod settings;
+
+pub(crate) use environments::CreateInstanceOutcome;
 
 #[derive(Clone)]
 pub(crate) struct AppService {
     runtime: Arc<tokio::runtime::Runtime>,
     environments: Arc<crate::environments::Environments>,
     settings: Arc<settings::Settings>,
+    refresh: Arc<refresh::RefreshWorker>,
     state: Arc<ServiceState>,
 }
 
@@ -36,12 +40,19 @@ impl AppService {
     }
 
     fn from_config(config: crate::environments::config::Config) -> Result<Self, Box<dyn Error>> {
+        let settings = Arc::new(settings::Settings::open(
+            config.home.join("settings.sqlite3"),
+        )?);
+        let environments = Arc::new(crate::environments::Environments::new(config));
+        let refresh = Arc::new(refresh::RefreshWorker::start(
+            Arc::clone(&environments),
+            Arc::clone(&settings),
+        )?);
         Ok(Self {
             runtime: Arc::new(tokio::runtime::Runtime::new()?),
-            settings: Arc::new(settings::Settings::open(
-                config.home.join("settings.sqlite3"),
-            )?),
-            environments: Arc::new(crate::environments::Environments::new(config)),
+            settings,
+            environments,
+            refresh,
             state: Arc::new(ServiceState {
                 started_at: Instant::now(),
                 #[cfg(test)]

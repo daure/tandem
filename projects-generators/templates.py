@@ -3,7 +3,7 @@
 import copy
 import json
 
-from recipes import asset, completed, healthy, write, write_json
+from recipes import healthy, write, write_json
 
 FIXTURES = {
     "guestbook": {"repos": ["guestbook"], "web": "guestbook/frontend", "api": "guestbook/backend"},
@@ -21,7 +21,6 @@ def workspace_service(service, source, root):
     service.pop("ports", None)
     service.update(build={"context": str(root / source)}, user=USER, working_dir="/workspace",
                    volumes=[WORKSPACE], command=["python", f"/workspace/{source}/server.py"])
-    service.setdefault("depends_on", {}).update(completed("repo-sync"))
     return service
 
 
@@ -29,7 +28,6 @@ def create_templates(root):
     for name, fixture in FIXTURES.items():
         directory = root / ".tandem/templates" / name
         directory.mkdir(parents=True)
-        asset("clone.sh", directory / "clone.sh")
         seed = root / fixture["repos"][0]
         model = json.loads((seed / "compose.yaml").read_text())
         if "include" in model:
@@ -52,18 +50,7 @@ def create_templates(root):
                 environment.update(FAIL_READINESS="${FAIL_READINESS:-0}", STARTUP_DELAY="${STARTUP_DELAY:-0}")
                 routes[role] = {"port": 8000, "strip_prefix": True,
                                 "readiness_path": "health", "readiness_contains": '"status": "ready"'}
-        clone = {
-            "image": "alpine/git:2.49.1", "user": USER, "working_dir": "/workspace",
-            "entrypoint": ["sh", "/clone.sh"], "command": fixture["repos"],
-            "environment": {"HOME": "/tmp", "SOURCE_ROOT": str(root), "FAIL_CLONE": "${FAIL_CLONE:-0}",
-                            "TANDEM_BRANCH": "${TANDEM_BRANCH:-}"},
-            "volumes": [WORKSPACE,
-                        {"type": "bind", "source": str(directory / "clone.sh"), "target": "/clone.sh", "read_only": True}]
-                       + [{"type": "bind", "source": str(root / repo), "target": str(root / repo), "read_only": True}
-                          for repo in fixture["repos"]],
-        }
-        services["repo-sync"] = clone
-        one_shots = ["repo-sync"]
+        one_shots = []
         if name == "greetings":
             migrate = workspace_service(sources["migrate"], fixture["api"], root)
             migrate["command"] = ["python", "/workspace/greetings-api/migrate.py"]
@@ -81,8 +68,10 @@ def create_templates(root):
         model["services"] = services
         write_json(directory / "compose.yaml", model)
         write_json(directory / "tandem.json", {"description": f"{name.title()} development fixture",
+                                               "repositories": [{"source": str(root / repo), "target": repo}
+                                                                for repo in fixture["repos"]],
                                                "routes": routes, "one_shots": one_shots})
         write(directory / ".gitignore", ".env\n.tandem-*.compose.json\n")
-        write(directory / ".env.example", "FAIL_CLONE=0\nFAIL_READINESS=0\nSTARTUP_DELAY=0\n"
+        write(directory / ".env.example", "FAIL_READINESS=0\nSTARTUP_DELAY=0\n"
               + ("FAIL_MIGRATION=0\n" if name == "greetings" else "")
               + ("FAIL_WORKER=0\n" if name == "mailroom" else ""))

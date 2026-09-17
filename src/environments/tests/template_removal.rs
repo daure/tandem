@@ -298,9 +298,17 @@ fn template_removal_rejects_unsafe_names_and_busy_templates() {
             .contains("busy")
     );
     assert!(
-        lifecycle::start(&config, "website", "review", false, 5, Arc::new(|_| {}))
-            .unwrap_err()
-            .contains("busy")
+        lifecycle::start(
+            &config,
+            "website",
+            "review",
+            false,
+            5,
+            Arc::new(|_| {}),
+            |_| {},
+        )
+        .unwrap_err()
+        .contains("busy")
     );
     drop(held);
     docker.remove(&config, "website").unwrap();

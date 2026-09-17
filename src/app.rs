@@ -1,15 +1,15 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
 };
 use tuicore::{
-    AnimationSettings, Button, Dialog, DialogBackdrop, DialogHost, DialogLayer,
-    DialogLayerPlacement, DockChrome, DockSpec, EventCtx, EventOutcome, EventRoute, Flex, FlexItem,
-    FocusCtx, FocusId, FocusTarget, HotkeyLabelMode, KeySpec, LayoutCtx, LayoutProposal,
-    LayoutResult, LayoutSizeHint, LifecycleCtx, Notification, RenderCtx, Split, StatusBar,
-    StatusBarMenuItem, Tab, Tabs, TabsVariant, TickResult, TuiEvent, TuiNode,
+    AnimationSettings, Dialog, DialogBackdrop, DialogHost, DialogLayer, DialogLayerPlacement,
+    DockChrome, DockSpec, EventCtx, EventOutcome, EventRoute, Flex, FlexItem, FocusCtx, FocusId,
+    FocusTarget, KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx,
+    Notification, RenderCtx, Split, StatusBar, StatusBarMenuItem, Tab, Tabs, TabsVariant,
+    TickResult, ToastRack, TuiEvent, TuiNode,
 };
 
 use crate::{service::AppService, store::environments::EnvironmentSnapshot};
@@ -18,8 +18,11 @@ mod action_menu;
 mod details;
 mod dialogs;
 mod instances;
+mod operations;
 mod properties;
+mod refresh;
 mod rows;
+mod toolbar;
 use action_menu::ActionMenu;
 use instances::{Instances, SharedState};
 use rows::Row;
@@ -46,15 +49,23 @@ pub(crate) enum Msg {
     OpenSettings,
     OpenCommandChanged(String),
     NewTemplate,
+    Refresh,
     SetBranchInstances(bool),
     Submit,
 }
 
 enum Intent {
     CreateInstance(String),
-    Resume { name: String, template: String },
+    Resume {
+        name: String,
+        template: String,
+    },
     NewTemplate,
     Stop(String),
+    Restart {
+        name: String,
+        service: Option<String>,
+    },
     Delete(String),
     StopTemplate(String),
     DeleteTemplate(String),
@@ -84,8 +95,12 @@ pub(crate) struct App {
     snapshot: EnvironmentSnapshot,
     view: View,
     instances: SharedState,
-    keys: [KeySpec; 7],
-    poll_elapsed: Duration,
+    keys: [KeySpec; 8],
+    refresh_schedule: refresh::RefreshSchedule,
+    manual_refresh: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
+    notifications: ToastRack,
+    deletions: Vec<operations::Deletion>,
+    restarts: Vec<crate::store::environments::Operation>,
     intent: Option<Intent>,
     name: String,
     open_command: String,
@@ -103,11 +118,6 @@ pub(crate) fn root(service: AppService) -> App {
             KeySpec::plain(key)
         }
     });
-    let template_hotkey = if key_chars[2].is_ascii_uppercase() {
-        format!("shift+{}", key_chars[2].to_ascii_lowercase())
-    } else {
-        key_chars[2].to_string()
-    };
     let snapshot = service.environment_snapshot();
     let instances = instances::state(rows::from_snapshot(&snapshot));
     let content = Tabs::new(vec![Tab::new(
@@ -115,14 +125,7 @@ pub(crate) fn root(service: AppService) -> App {
         Flex::column()
             .child(
                 "template-actions",
-                Flex::row().child(
-                    "new-template",
-                    Button::new("Template")
-                        .hotkey(template_hotkey)
-                        .hotkey_label_mode(HotkeyLabelMode::Inline)
-                        .on_press(|| Msg::NewTemplate),
-                    FlexItem::fit_content(),
-                ),
+                toolbar::Toolbar::new(key_chars[2], key_chars[4]),
                 FlexItem::fit_content(),
             )
             .child(
@@ -157,14 +160,18 @@ pub(crate) fn root(service: AppService) -> App {
             }),
     )
     .constraints(Constraint::Fill(1), Constraint::Length(1));
-    service.poll_environments();
+    service.refresh_environments();
     App {
         service,
         snapshot,
         view,
         instances,
         keys,
-        poll_elapsed: Duration::ZERO,
+        refresh_schedule: refresh::RefreshSchedule::default(),
+        manual_refresh: None,
+        notifications: ToastRack::new(),
+        deletions: Vec::new(),
+        restarts: Vec::new(),
         intent: None,
         name: String::new(),
         open_command: String::new(),
@@ -217,6 +224,7 @@ impl App {
                 }
             }
             Msg::NewTemplate => self.action(2, ctx),
+            Msg::Refresh => self.action(4, ctx),
             Msg::SetBranchInstances(enabled) => {
                 if let Err(error) = self.service.set_branch_instances(enabled) {
                     ctx.notify(Notification::error("Cannot save settings", error));
@@ -224,13 +232,28 @@ impl App {
             }
             Msg::Submit => {
                 let result = match &self.intent {
-                    Some(Intent::CreateInstance(template)) => self.service.submit_operation(
-                        "create_instance",
-                        &self.name,
-                        Some(template.clone()),
-                        600,
-                        true,
-                    ),
+                    Some(Intent::CreateInstance(template)) => {
+                        match self
+                            .service
+                            .submit_new_instance(&self.name, template.clone())
+                        {
+                            Ok(crate::service::CreateInstanceOutcome::Existing) => {
+                                self.sync_environment();
+                                instances::select_instance(&self.instances, &self.name);
+                                self.notify(Notification::info(
+                                    "Instance already exists",
+                                    format!("{} already exists.", self.name),
+                                ));
+                                self.handle_message(Msg::Close, ctx);
+                                ctx.request_layout();
+                                return;
+                            }
+                            Ok(crate::service::CreateInstanceOutcome::Started(operation)) => {
+                                Ok(*operation)
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
                     Some(Intent::Resume { name, template }) => self.service.submit_operation(
                         "create_instance",
                         name,
@@ -245,6 +268,9 @@ impl App {
                     Some(Intent::Stop(name)) => {
                         self.service
                             .submit_operation("stop_instance", name, None, 60, true)
+                    }
+                    Some(Intent::Restart { name, service }) => {
+                        self.service.submit_restart(name, service.clone(), true)
                     }
                     Some(Intent::Delete(name)) => {
                         self.service
@@ -265,7 +291,9 @@ impl App {
                     None => return,
                 };
                 match result {
-                    Ok(_) => {
+                    Ok(operation) => {
+                        self.operation_accepted(operation);
+                        ctx.request_layout();
                         self.view.first_mut().set_active_with_context(false, ctx);
                         ctx.focus(initial_focus());
                         self.intent = None;
@@ -360,12 +388,10 @@ impl App {
         let Some(row) = self.selected() else {
             return false;
         };
-        if row.parent.is_some() && row.instance.is_none() && row.gateway_url.is_none() {
-            return false;
-        }
         let menu = self.menu_layer_mut();
         menu.layer_mut().open(
             row.parent.is_none(),
+            row.instance.is_some(),
             row.running,
             row.gateway_url.is_some(),
             !row.compose_file.is_empty(),
@@ -400,7 +426,7 @@ impl App {
                 }
             }
             1 => {
-                if let Some(row) = row.filter(|row| row.parent.is_none()) {
+                if let Some(row) = row.filter(|row| !row.compose_file.is_empty()) {
                     self.intent = Some(Intent::CreateInstance(row.template.clone()));
                     self.open_name_entry(ctx);
                 }
@@ -428,7 +454,14 @@ impl App {
                     }
                 }
             }
-            4 => self.service.poll_environments(),
+            4 => {
+                if self.manual_refresh.is_none() {
+                    match self.service.manual_refresh() {
+                        Ok(reply) => self.manual_refresh = Some(reply),
+                        Err(error) => self.notify(Notification::error("Refresh failed", error)),
+                    }
+                }
+            }
             5 => {
                 if let Some(row) = row
                     .as_ref()
@@ -445,6 +478,20 @@ impl App {
                 }
             }
             7 => {
+                if let Some(row) = row {
+                    let target = row
+                        .service
+                        .map(|(name, service)| (name, Some(service)))
+                        .or_else(|| row.instance.map(|name| (name, None)));
+                    if let Some((name, service)) = target {
+                        let modal =
+                            dialogs::confirm_restart(&name, service.as_deref(), self.keys[7]);
+                        self.intent = Some(Intent::Restart { name, service });
+                        self.open(modal, ctx);
+                    }
+                }
+            }
+            8 => {
                 self.open_gateway(ctx);
             }
             6 => {
@@ -479,6 +526,15 @@ impl App {
             ctx.notify(Notification::error("Cannot open workspace", error));
         }
         true
+    }
+
+    fn returns_to_data_view(event: &TuiEvent) -> bool {
+        let TuiEvent::Key(key) = event else {
+            return false;
+        };
+        KeySpec::key(tuicore::Key::Esc).matches(*key)
+            || KeySpec::key_with_modifiers(tuicore::Key::Char('['), tuicore::KeyModifiers::CONTROL)
+                .matches(*key)
     }
 
     fn handle_key(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
@@ -545,8 +601,12 @@ impl TuiNode<Msg> for App {
     }
     fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
         self.view.render(frame, area, ctx);
+        self.notifications.render(frame, area);
     }
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
+        if self.refresh_schedule.event(event, Instant::now()) {
+            self.service.poll_environments();
+        }
         if self.handle_key(event, ctx) {
             return EventOutcome::Handled;
         }
@@ -564,8 +624,11 @@ impl TuiNode<Msg> for App {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
+        if self.refresh_schedule.event(event, Instant::now()) {
+            self.service.poll_environments();
+        }
         // Toolbar and status-bar controls own their input, including instance action keys.
-        if route
+        let toolbar_route = route
             .path
             .without_first_if(&tuicore::ChildKey::second())
             .is_some()
@@ -573,8 +636,18 @@ impl TuiNode<Msg> for App {
                 .path
                 .keys()
                 .iter()
-                .any(|key| key.as_str() == "template-actions")
-        {
+                .any(|key| key.as_str() == "template-actions");
+        let data_view_route = route
+            .path
+            .keys()
+            .iter()
+            .any(|key| key.as_str() == "instances");
+        if Self::returns_to_data_view(event) && (toolbar_route || data_view_route) {
+            ctx.focus(initial_focus());
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
+        if toolbar_route {
             return self.view.dispatch_event(route, event, ctx);
         }
         if self.handle_key(event, ctx) {
@@ -589,13 +662,10 @@ impl TuiNode<Msg> for App {
         outcome
     }
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
-        self.poll_elapsed = self.poll_elapsed.saturating_add(dt);
-        if self.poll_elapsed >= Duration::from_secs(2) {
-            self.poll_elapsed = Duration::ZERO;
+        if self.refresh_schedule.tick(Instant::now()) {
             self.service.poll_environments();
         }
-        let snapshot = self.service.environment_snapshot();
-        let mut changed = false;
+        let mut changed = self.sync_environment();
         if let Some(reply) = &mut self.settings_save {
             let message = match reply.try_recv() {
                 Ok(Ok(_)) => None,
@@ -611,12 +681,9 @@ impl TuiNode<Msg> for App {
                 changed = true;
             }
         }
-        if snapshot != self.snapshot {
-            instances::replace_rows(&self.instances, rows::from_snapshot(&snapshot));
-            self.snapshot = snapshot;
-            changed = true;
-        }
         let mut result = self.view.tick(dt, settings);
+        self.poll_manual_refresh();
+        result = result.merge(self.notifications.tick(dt, settings));
         if changed {
             result = result.merge(TickResult::CHANGED);
         }
