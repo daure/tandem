@@ -21,16 +21,23 @@ fn operation(action: &str, name: &str) -> Operation {
 }
 
 #[test]
-fn pending_restarts_keep_notifications_silent() {
+fn pending_container_operations_keep_notifications_silent() {
     tuicore::init();
-    let service = AppService::for_tests();
-    let mut operation = service.queue_instance_for_tests("review", "website");
-    operation.action = "restart_instance".into();
-    let mut app = root(service);
-    app.operation_accepted(operation);
-    app.sync_environment();
-    assert_eq!(app.restarts.len(), 1);
-    assert_eq!(app.notifications.center().history().len(), 0);
+    for action in [
+        "restart_instance",
+        "restart_service",
+        "start_service",
+        "stop_service",
+    ] {
+        let service = AppService::for_tests();
+        let mut operation = service.queue_instance_for_tests("review", "website");
+        operation.action = action.into();
+        let mut app = root(service);
+        app.operation_accepted(operation);
+        app.sync_environment();
+        assert_eq!(app.container_operations.len(), 1);
+        assert_eq!(app.notifications.center().history().len(), 0);
+    }
 }
 
 #[test]

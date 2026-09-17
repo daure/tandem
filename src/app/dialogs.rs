@@ -142,6 +142,23 @@ pub(super) fn confirm_start(name: &str) -> Modal {
     )
 }
 
+pub(super) fn confirm_service_state(
+    name: &str,
+    service: &str,
+    running: bool,
+    hotkey: KeySpec,
+) -> Modal {
+    let action = if running { "Start" } else { "Stop" };
+    confirmation(
+        &format!("{action} service"),
+        action,
+        hotkey,
+        format!(
+            "{action} {name}/{service}?\nData and container configuration stay; other services are untouched."
+        ),
+    )
+}
+
 pub(super) fn confirm_restart(name: &str, service: Option<&str>, hotkey: KeySpec) -> Modal {
     let (title, target) = match service {
         Some(service) => ("Restart service", format!("{name}/{service}")),

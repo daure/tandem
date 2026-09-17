@@ -1,4 +1,4 @@
-"""Exercise restart scope, approval, locking and failures through the stdio server."""
+"""Exercise container lifecycle scope, approval, locking and failures through stdio."""
 
 import fcntl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,16 +32,16 @@ elif args[0] == "inspect":
         if (home / (container["Id"] + ".boot")).exists():
             container["State"]["Health"] = {"Status": "starting"}
     print(json.dumps([container for container in containers if container["Id"] in args[1:]]))
-elif args[0] == "restart":
+elif args[0] in {"restart", "start", "stop"}:
     with (home / "mutations").open("a") as log:
         log.write(json.dumps(args) + "\\n")
-    if (home / "fail-restart").exists():
-        sys.exit("restart denied by Docker")
+    if (home / ("fail-" + args[0])).exists():
+        sys.exit(args[0] + " denied by Docker")
     for container in containers:
         if container["Id"] in args[1:]:
-            container["State"]["Status"] = "running"
+            container["State"]["Status"] = "exited" if args[0] == "stop" else "running"
             container["State"]["StartedAt"] = "2026-09-17T12:00:00Z"
-            if (home / "crash-restart").exists():
+            if (home / ("crash-" + args[0])).exists():
                 container["State"]["Status"] = "exited"
                 container["State"]["ExitCode"] = 1
     (home / "containers.json").write_text(json.dumps(containers))
@@ -165,16 +165,89 @@ class RestartTests(unittest.TestCase):
         self.containers[0]["State"]["Health"] = {"Status": "healthy"}
         self.save()
         health = self.home / "review-web.boot"
-        health.touch()
-        operation = self.client.tool("restart_service", {"name": "review", "service": "web", "confirmed": True})
-        self.wait_progress(operation, "Waiting for web: boot")
-        self.assertEqual(paths, [], "Route probes wait for container health")
-        health.unlink()
-        self.wait_progress(operation, "Waiting for content assertion")
-        self.assertEqual(set(paths), {"/review/web/health"})
-        ready.set()
-        self.assertEqual(self.wait_operation(operation)["state"], "succeeded")
-        self.assertEqual(self.mutations(), [["restart", "review-web"]])
+        for action in ["restart", "start"]:
+            with self.subTest(action=action):
+                ready.clear()
+                paths.clear()
+                health.touch()
+                operation = self.client.tool(action + "_service", {"name": "review", "service": "web", "confirmed": True})
+                self.wait_progress(operation, "Waiting for web: boot")
+                self.assertEqual(paths, [], "Route probes wait for container health")
+                health.unlink()
+                self.wait_progress(operation, "Waiting for content assertion")
+                self.assertEqual(set(paths), {"/review/web/health"})
+                ready.set()
+                self.assertEqual(self.wait_operation(operation)["state"], "succeeded")
+        self.assertEqual(self.mutations(), [["restart", "review-web"], ["start", "review-web"]])
+
+    def service_state(self, action, service="web", name="review"):
+        operation = self.client.tool(action + "_service", {
+            "name": name, "service": service, "confirmed": True,
+        })
+        self.assertEqual(operation["action"], action + "_service")
+        self.assertEqual(operation["service"], service)
+        return self.wait_operation(operation)
+
+    def test_service_stop_start_preserves_scope_replicas_and_data(self):
+        replica = json.loads(json.dumps(self.containers[0]))
+        replica["Id"] = "review-web-replica"
+        self.containers.append(replica)
+        self.save()
+        for action, status in [("stop", "exited"), ("start", "running")]:
+            with self.subTest(action=action):
+                self.assertEqual(self.service_state(action)["state"], "succeeded")
+                self.assertEqual(set(self.mutations()[-1]), {action, "review-web", "review-web-replica"})
+                after = json.loads((self.home / "containers.json").read_text())
+                for before, current in zip(self.containers, after):
+                    if current["Id"] in {"review-web", "review-web-replica"}:
+                        self.assertEqual(current["State"]["Status"], status)
+                        self.assertEqual(current["Config"], before["Config"])
+                    else:
+                        self.assertEqual(current, before)
+                self.assertEqual(self.data.read_text(), "user data")
+
+    def test_service_state_requires_approval_ownership_and_instance_lock(self):
+        for action in ["start", "stop"]:
+            with self.subTest(action=action):
+                for arguments in [
+                    {"name": "review", "service": "web"},
+                    {"name": "gateway", "service": "gateway", "confirmed": True},
+                    {"name": "review", "service": "", "confirmed": True},
+                ]:
+                    rejected = self.client.request("tools/call", {"name": action + "_service", "arguments": arguments})
+                    self.assertTrue(rejected.get("isError"))
+                for service in ["missing", "setup", "--all"]:
+                    self.assertIn("not found", self.service_state(action, service)["error"])
+                with (self.home / "locks/instance-review").open("w") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self.assertIn("busy", self.service_state(action)["error"])
+                unmanaged = json.loads(json.dumps(self.containers[0]))
+                unmanaged["Id"] = "unmanaged"
+                del unmanaged["Config"]["Labels"]["io.tandem.kind"]
+                self.containers.append(unmanaged)
+                self.save()
+                self.assertIn("unmanaged", self.service_state(action)["error"])
+                self.containers.pop()
+                self.save()
+        self.assertEqual(self.mutations(), [])
+
+    def test_service_state_reports_docker_errors_and_start_crashes(self):
+        for action in ["start", "stop"]:
+            failure = self.home / ("fail-" + action)
+            failure.touch()
+            operation = self.service_state(action)
+            self.assertEqual(operation["state"], "failed")
+            self.assertIn(action + " denied by Docker", operation["error"])
+            failure.unlink()
+        (self.home / "crash-start").touch()
+        self.assertIn("web: down (exit 1)", self.service_state("start")["error"])
+
+    def test_routed_service_can_stop_without_template_configuration(self):
+        self.containers[0]["Config"]["Labels"]["io.tandem.url"] = "http://127.0.0.1:9876/review/web/"
+        self.containers[0]["State"]["Status"] = "paused"
+        self.save()
+        self.assertEqual(self.service_state("stop")["state"], "succeeded")
+        self.assertEqual(self.mutations(), [["stop", "review-web"]])
 
     def test_instance_completion_waits_for_every_restarted_service(self):
         self.containers[1]["State"]["Health"] = {"Status": "healthy"}

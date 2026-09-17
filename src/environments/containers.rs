@@ -11,10 +11,11 @@ use super::{
 };
 use crate::store::environments::{Route, validate_instance_name};
 
-pub(super) fn restart(
+pub(super) fn change_state(
     config: &Config,
     name: &str,
     service: Option<&str>,
+    action: &str,
     timeout: u64,
     progress: Progress,
 ) -> Result<(), String> {
@@ -29,15 +30,15 @@ pub(super) fn restart(
         .collect();
     if targets.is_empty() {
         return Err(match service {
-            Some(service) => format!("restartable service {service} not found in instance {name}"),
-            None => "instance has no restartable services".into(),
+            Some(service) => format!("long-running service {service} not found in instance {name}"),
+            None => "instance has no long-running services".into(),
         });
     }
-    if targets.iter().any(|target| target.status == "paused") {
-        return Err("unpause the selected containers before restarting".into());
+    if action != "stop" && targets.iter().any(|target| target.status == "paused") {
+        return Err(format!("unpause the selected containers before {action}"));
     }
     let mut routes = BTreeMap::new();
-    let _template_lock = if targets.iter().any(|target| target.url.is_some()) {
+    let _template_lock = if action != "stop" && targets.iter().any(|target| target.url.is_some()) {
         let lock = gateway::shared_lock(config, &format!("template-{}", instance.template))?;
         let template = templates::get(config, &instance.template)?;
         if template.directory != instance.template_directory {
@@ -55,14 +56,17 @@ pub(super) fn restart(
         None
     };
     progress(format!(
-        "Restarting {} existing container(s); preserving data and configuration",
+        "Docker {action}: {} existing container(s); preserving data and configuration",
         targets.len()
     ));
     let mut command = docker();
     command
-        .arg("restart")
+        .arg(action)
         .args(targets.iter().map(|target| &target.container_id));
     run(command, remaining(deadline)?, Some(progress.clone()))?;
+    if action == "stop" {
+        return Ok(());
+    }
     let ids = targets
         .iter()
         .map(|target| target.container_id.clone())
@@ -84,25 +88,21 @@ pub(super) fn wait_ready(
         .no_proxy()
         .build()
         .map_err(|error| error.to_string())?;
-    let mut last_reason = "Waiting for restarted containers".to_owned();
+    let mut last_reason = "Waiting for selected containers".to_owned();
     progress(last_reason.clone());
     loop {
         remaining(deadline).map_err(|_| {
-            format!(
-                "restart readiness timed out: {last_reason}; resources preserved for inspection"
-            )
+            format!("readiness timed out: {last_reason}; resources preserved for inspection")
         })?;
         let mut instance = runtime::inspect_until(config, deadline)?
             .into_iter()
             .find(|instance| instance.name == name)
-            .ok_or("instance disappeared during restart readiness")?;
+            .ok_or("instance disappeared during readiness")?;
         instance
             .services
             .retain(|service| ids.contains(&service.container_id));
         if instance.services.len() != ids.len() {
-            return Err(
-                "restarted containers disappeared or were replaced during readiness".into(),
-            );
+            return Err("selected containers disappeared or were replaced during readiness".into());
         }
         if let Some(service) = instance.services.iter().find(|service| {
             service.status.starts_with("down")
@@ -124,9 +124,7 @@ pub(super) fn wait_ready(
         };
         match waiting {
             None => {
-                progress(
-                    "Restart ready: service health and configured gateway checks passed".into(),
-                );
+                progress("Ready: service health and configured gateway checks passed".into());
                 return Ok(());
             }
             Some(reason) if reason != last_reason => {

@@ -75,8 +75,8 @@ impl Deletion {
 impl super::App {
     pub(super) fn operation_accepted(&mut self, operation: Operation) {
         match operation.action.as_str() {
-            "restart_instance" | "restart_service" => {
-                self.restarts.push(operation.clone());
+            "restart_instance" | "restart_service" | "start_service" | "stop_service" => {
+                self.container_operations.push(operation.clone());
             }
             "create_instance" | "create_template" => {
                 instances::select_created(&self.instances, &operation);
@@ -92,21 +92,31 @@ impl super::App {
     pub(super) fn sync_environment(&mut self) -> bool {
         let mut snapshot = self.service.environment_snapshot();
         let mut notifications = Vec::new();
-        self.restarts.retain(|pending| {
+        self.container_operations.retain(|pending| {
+            let action = match pending.action.as_str() {
+                "start_service" => "Start",
+                "stop_service" => "Stop",
+                _ => "Restart",
+            };
             let result = self.service.get_operation(&pending.id);
             let notification = match result {
                 Ok(operation) if operation.state == OperationState::Running => return true,
                 Ok(operation) if operation.state == OperationState::Succeeded => {
-                    Notification::success("Restart completed", restart_target(&operation))
+                    Notification::success(
+                        format!("{action} completed"),
+                        operation_target(&operation),
+                    )
                 }
                 result => {
                     let error = match result {
-                        Ok(operation) => operation.error.unwrap_or_else(|| "Restart failed".into()),
+                        Ok(operation) => operation
+                            .error
+                            .unwrap_or_else(|| format!("{action} failed")),
                         Err(error) => error,
                     };
                     Notification::error(
-                        "Restart failed",
-                        format!("{}: {error}", restart_target(pending)),
+                        format!("{action} failed"),
+                        format!("{}: {error}", operation_target(pending)),
                     )
                 }
             };
@@ -132,7 +142,7 @@ impl super::App {
     }
 }
 
-fn restart_target(operation: &Operation) -> String {
+fn operation_target(operation: &Operation) -> String {
     match &operation.service {
         Some(service) => format!("{}/{service}", operation.name),
         None => operation.name.clone(),

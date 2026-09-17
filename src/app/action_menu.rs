@@ -24,6 +24,8 @@ pub(super) enum Action {
     NewInstance,
     Start,
     Stop,
+    StartService,
+    StopService,
     RestartInstance,
     RestartService,
     StopTemplate,
@@ -39,7 +41,11 @@ impl Action {
             Self::RestartInstance | Self::RestartService => 7,
             Self::Details => 0,
             Self::NewInstance => 1,
-            Self::Start | Self::Stop | Self::StopTemplate => 3,
+            Self::Start
+            | Self::Stop
+            | Self::StartService
+            | Self::StopService
+            | Self::StopTemplate => 3,
             Self::Delete | Self::RemoveTemplate => 5,
             Self::DeleteTemplate => 6,
         }
@@ -52,6 +58,8 @@ impl Action {
             Self::NewInstance => "New instance",
             Self::Start => "Start instance",
             Self::Stop => "Stop instance",
+            Self::StartService => "Start service",
+            Self::StopService => "Stop service",
             Self::RestartInstance => "Restart instance",
             Self::RestartService => "Restart service",
             Self::StopTemplate => "Stop all instances",
@@ -122,6 +130,8 @@ impl ActionMenu {
                 Action::OpenBrowser,
                 Action::Details,
                 Action::NewInstance,
+                Action::StartService,
+                Action::StopService,
                 Action::RestartService,
             ]
         } else if template {
@@ -142,27 +152,24 @@ impl ActionMenu {
                 Action::Delete,
             ]
         } else {
-            vec![Action::Details, Action::NewInstance, Action::RestartService]
-        };
-        *self.enabled.borrow_mut() = if gateway || template || !instance {
-            self.actions.clone()
-        } else if running {
             vec![
                 Action::Details,
                 Action::NewInstance,
-                Action::Stop,
-                Action::RestartInstance,
-                Action::Delete,
-            ]
-        } else {
-            vec![
-                Action::Details,
-                Action::NewInstance,
-                Action::Start,
-                Action::RestartInstance,
-                Action::Delete,
+                Action::StartService,
+                Action::StopService,
+                Action::RestartService,
             ]
         };
+        *self.enabled.borrow_mut() = self
+            .actions
+            .iter()
+            .copied()
+            .filter(|action| match action {
+                Action::Start | Action::StartService => !running,
+                Action::Stop | Action::StopService => running,
+                _ => true,
+            })
+            .collect();
         if !template_available {
             self.enabled
                 .borrow_mut()

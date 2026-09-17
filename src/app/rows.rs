@@ -499,7 +499,7 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
                 instance: None,
                 service: Some((instance.name.clone(), service.name.clone())),
                 workspace: None,
-                running: false,
+                running: service.consumes_resources() || service.status == "restarting",
                 alternate_background: false,
                 gateway_url: service.url.clone(),
                 details: details::service(service),

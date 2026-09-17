@@ -62,6 +62,11 @@ enum Intent {
     },
     NewTemplate,
     Stop(String),
+    ServiceState {
+        name: String,
+        service: String,
+        running: bool,
+    },
     Restart {
         name: String,
         service: Option<String>,
@@ -100,7 +105,7 @@ pub(crate) struct App {
     manual_refresh: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
     notifications: ToastRack,
     deletions: Vec<operations::Deletion>,
-    restarts: Vec<crate::store::environments::Operation>,
+    container_operations: Vec<crate::store::environments::Operation>,
     intent: Option<Intent>,
     name: String,
     open_command: String,
@@ -171,7 +176,7 @@ pub(crate) fn root(service: AppService) -> App {
         manual_refresh: None,
         notifications: ToastRack::new(),
         deletions: Vec::new(),
-        restarts: Vec::new(),
+        container_operations: Vec::new(),
         intent: None,
         name: String::new(),
         open_command: String::new(),
@@ -272,6 +277,13 @@ impl App {
                     Some(Intent::Restart { name, service }) => {
                         self.service.submit_restart(name, service.clone(), true)
                     }
+                    Some(Intent::ServiceState {
+                        name,
+                        service,
+                        running,
+                    }) => self
+                        .service
+                        .submit_service_state(name, service.clone(), *running, true),
                     Some(Intent::Delete(name)) => {
                         self.service
                             .submit_operation("delete_instance", name, None, 60, true)
@@ -440,6 +452,17 @@ impl App {
                     let template = row.template.clone();
                     self.intent = Some(Intent::StopTemplate(template.clone()));
                     self.open(dialogs::confirm_stop_template(&template), ctx);
+                } else if let Some(row) = row.as_ref().filter(|row| row.service.is_some()) {
+                    let (name, service) = row.service.clone().expect("service row has a target");
+                    let running = !row.running;
+                    let modal =
+                        dialogs::confirm_service_state(&name, &service, running, self.keys[3]);
+                    self.intent = Some(Intent::ServiceState {
+                        name,
+                        service,
+                        running,
+                    });
+                    self.open(modal, ctx);
                 } else if let Some(row) = row.filter(|row| row.instance.is_some()) {
                     let name = row.instance.expect("instance rows have a name");
                     if row.running {

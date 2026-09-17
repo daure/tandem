@@ -16,6 +16,7 @@ mod properties;
 mod refresh;
 mod resources;
 mod restart;
+mod service_state;
 mod template_actions;
 mod toolbar;
 

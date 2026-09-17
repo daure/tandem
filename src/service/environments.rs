@@ -221,6 +221,25 @@ impl AppService {
         Ok(self.schedule_operation(operation, 600))
     }
 
+    pub(crate) fn submit_service_state(
+        &self,
+        name: &str,
+        service: String,
+        running: bool,
+        confirmed: bool,
+    ) -> Result<Operation, String> {
+        if !confirmed {
+            return Err(
+                "confirmation_required: starting or stopping a service executes Docker operations"
+                    .into(),
+            );
+        }
+        let operation = self
+            .environments
+            .begin_service_state(name, service, running)?;
+        Ok(self.schedule_operation(operation, if running { 600 } else { 60 }))
+    }
+
     fn schedule_operation(&self, operation: Operation, timeout: u64) -> Operation {
         let action = operation.action.as_str();
         let operation_id = operation.id.clone();

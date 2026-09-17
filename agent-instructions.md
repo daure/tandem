@@ -61,13 +61,14 @@ A template is a shared Compose recipe; an instance has its own name and workspac
   Keep environments local; gateway routes share a browser origin.
 - Stop preserves instance data; deletion permanently removes its workspace and owned resources.
    Preserve Tandem-generated `.tandem-*` files for ownership checks and cleanup.
-- Restart requires approval and restarts existing containers, including stopped ones, with their
-  current configuration and data. Instance restart skips one-shot setup jobs; service restart affects
-  only that instance's named service. The shared gateway stays untouched. It performs no builds,
-  template application or dependency orchestration. Completion requires all targeted containers to
+- Restart and service start/stop require approval and use existing containers with their current
+  configuration and data. They exclude one-shot setup jobs. Service actions affect only that instance's
+  named service; the shared gateway and dependencies stay untouched. These actions perform no builds,
+  template application or dependency orchestration. Service stop has a one-minute budget and requires
+  no template. Restart and service start completion require all targeted containers to
   run and pass configured healthchecks and gateway content assertions within a ten-minute budget.
   Routed services require their current template readiness configuration; services without healthchecks
-  or routes are verified only as running. Unpause selected containers before restarting.
+  or routes are verified only as running. Unpause selected containers before starting or restarting.
 - Distinct instances can start concurrently from the same template. Shared gateway setup waits
   within each startup deadline; template mutations remain blocked while starts are active.
 - Verify readiness before handing over URLs. On failure, inspect operation output, containers,

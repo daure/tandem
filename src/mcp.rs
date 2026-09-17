@@ -152,6 +152,17 @@ struct RestartServiceInput {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct ServiceStateInput {
+    /// Existing instance containing the service; the shared gateway is excluded.
+    name: String,
+    /// Exact Compose service name from list_instances; one-shot jobs are excluded.
+    service: String,
+    /// Approval to start or stop this service's existing containers.
+    #[serde(default)]
+    confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct DeleteInstanceInput {
     /// Existing instance name; the gateway is not an instance.
     name: String,
@@ -381,6 +392,30 @@ impl McpServer {
     ) -> Result<Json<Operation>, String> {
         self.service
             .submit_operation("stop_instance", &input.name, None, 60, input.confirmed)
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Start only the named service's existing containers. Preserves data and configuration; leaves dependencies and the gateway untouched. One-shot jobs are refused. Requires confirmed=true. Returns a background operation with a ten-minute readiness budget for running state, configured healthchecks and gateway content assertions. Routed services require current template readiness configuration."
+    )]
+    async fn start_service(
+        &self,
+        Parameters(input): Parameters<ServiceStateInput>,
+    ) -> Result<Json<Operation>, String> {
+        self.service
+            .submit_service_state(&input.name, input.service, true, input.confirmed)
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Stop only the named service's existing containers, preserving data and configuration. Leaves dependencies and the gateway untouched; one-shot jobs are refused. Requires confirmed=true. Returns a background operation with a one-minute budget."
+    )]
+    async fn stop_service(
+        &self,
+        Parameters(input): Parameters<ServiceStateInput>,
+    ) -> Result<Json<Operation>, String> {
+        self.service
+            .submit_service_state(&input.name, input.service, false, input.confirmed)
             .map(Json)
     }
 

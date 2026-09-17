@@ -22,7 +22,11 @@ cargo run -- serve          # HTTP MCP at http://127.0.0.1:7345/mcp
 3. Press `n`, enter `review`, then Enter or Ctrl+S to confirm execution; watch progress in Details.
 4. Expand the template row using the DataView's configured expansion key (shown in its action bar)
    and select `review`; open `http://localhost:9876/review/web/index.html`.
-5. Press `s` on an instance to confirm stopping its containers; the workspace and volumes are kept.
+5. Press `s` on an instance or service to confirm stopping it when running, or starting it when stopped.
+   Service actions use existing containers and leave dependencies and the shared gateway untouched;
+   workspace data and volumes are kept. The `.` Actions menu includes **Start service** and **Stop service**.
+   Service start checks running state, configured healthchecks and gateway content within ten minutes;
+   service stop has a one-minute budget. Each reports a completion or failure notification.
 6. Press `r` on an instance or service for **Restart instance** or **Restart service**; confirm with `r`.
    Both actions are also in the `.` Actions menu. Restart uses existing containers, including stopped
    ones, preserves data and configuration, and skips one-shot setup jobs. A service restart leaves its
@@ -66,7 +70,7 @@ another template or unmanaged containers.
 ```
 
 The MCP tools are `get_instructions`, `list_templates`, `get_template`, `create_template`, `update_template_manifest`,
-`list_instances`, `create_instance`, `get_operation`, `stop_instance`, `restart_instance`, `restart_service`, `get_open_command`,
+`list_instances`, `create_instance`, `get_operation`, `stop_instance`, `start_service`, `stop_service`, `restart_instance`, `restart_service`, `get_open_command`,
 `set_open_command`, `run_open_command`, and `get_status`.
 List tools return objects with `templates` or `instances` arrays. Mutating instance tools require
 `confirmed=true` after user approval; create waits for readiness by default, or accepts `wait=false`.
@@ -172,7 +176,7 @@ guidance files are user-owned; update them explicitly when adopting this workflo
 | `TANDEM_KEY_INFO` | `i` | Template information dialog |
 | `TANDEM_KEY_START` | `n` | Start instance dialog |
 | `TANDEM_KEY_NEW_TEMPLATE` | `T` | Create template dialog |
-| `TANDEM_KEY_STOP` | `s` | Stop instance confirmation |
+| `TANDEM_KEY_STOP` | `s` | Start/stop the selected instance or service; stop all instances on a template row |
 | `TANDEM_KEY_REFRESH` | `R` | Refresh template/runtime inventory |
 | `TANDEM_KEY_DELETE` | `x` | Delete the selected instance, or a template with all its instances and data |
 | `TANDEM_KEY_PURGE` | `p` | Purge all instances of the selected template |

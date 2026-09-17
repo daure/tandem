@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2391c6ff'/%3E%3Cpath d='M8 9h16v4h-6v12h-4V13H8z' fill='%2311151b'/%3E%3C/svg%3E">
+  <title>Tandem — instance status proposal</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #11151b; --panel: #191f28; --line: #354151;
+      --text: #ecf0f6; --muted: #aab5c5; --info: #91c6ff;
+      --success: #8adbb4; --warning: #f0c879; --error: #ff9fa8;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, sans-serif; }
+    main { max-width: 1000px; margin: auto; padding: 48px 28px 40px; }
+    h1 { font-size: clamp(29px, 4.8vw, 45px); line-height: 1.15; letter-spacing: -.04em; margin: 12px 0 16px; }
+    h2 { font-size: 21px; letter-spacing: -.02em; margin: 0 0 14px; }
+    h3 { font-size: 15px; margin: 0 0 6px; }
+    p { margin: 8px 0 14px; }
+    a { color: var(--info); text-underline-offset: 3px; }
+    a:focus-visible, summary:focus-visible { outline: 2px solid var(--info); outline-offset: 4px; }
+    code { font: .9em ui-monospace, monospace; overflow-wrap: anywhere; }
+    .eyebrow { color: var(--info); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
+    .lede { max-width: 780px; font-size: 17px; color: var(--muted); }
+    .muted, small { color: var(--muted); }
+    .info { color: var(--info); } .success { color: var(--success); }
+    .warning { color: var(--warning); } .error { color: var(--error); }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .card { padding: 17px 19px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+    .card p { margin: 0; color: var(--muted); }
+    section { margin-top: 30px; }
+    .callout { border-left: 3px solid var(--info); padding: 8px 0 8px 17px; margin: 20px 0; }
+    .callout p { margin: 0; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th { font-size: 12px; color: var(--muted); background: var(--panel); letter-spacing: .04em; }
+    th, td { padding: 10px 16px; vertical-align: top; border-bottom: 1px solid var(--line); }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child { width: 29%; }
+    td:nth-child(2) { width: 30%; }
+    .status { font-weight: 650; white-space: nowrap; }
+    .glyph { display: inline-block; width: 1.3em; text-align: center; font-family: ui-monospace, monospace; }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 14px 0; font-size: 13px; }
+    .tree { margin: 16px 0; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font: 14px/1.8 ui-monospace, monospace; overflow-x: auto; }
+    .tree-line { white-space: pre; }
+    ol { padding-left: 23px; margin: 10px 0; }
+    li { padding-left: 3px; margin-bottom: 8px; }
+    .diagram { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+    .diagram-output { display: flex; justify-content: center; overflow-x: auto; }
+    .diagram-output svg { max-width: 100%; height: auto; }
+    .diagram-fallback { padding: 20px; text-align: center; color: var(--muted); }
+    figcaption { color: var(--muted); font-size: 13px; text-align: center; margin: 8px 0 2px; }
+    figure { margin: 0; }
+    details { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 16px; }
+    summary { cursor: pointer; color: var(--info); font-weight: 600; }
+    details p, details li { font-size: 14px; }
+    footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 650px) {
+      main { padding: 28px 16px; }
+      .grid { grid-template-columns: 1fr; gap: 9px; }
+      .card { padding: 12px 15px; }
+      th, td { padding: 9px 10px; font-size: 13px; }
+      .status { white-space: normal; }
+      .tree { font-size: 12px; padding: 14px; }
+      .diagram-output { display: none; }
+      .diagram-fallback, .diagram-fallback[hidden] { display: block; padding: 10px; }
+    }
+    @media print {
+      :root { --bg: #fff; --panel: #f4f5f7; --line: #aaa; --text: #111; --muted: #454545; --info: #175b96; --success: #176644; --warning: #765000; --error: #a52032; }
+      main { padding: 0; max-width: none; }
+      tr, .card, figure { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Tandem / status proposal / 17 September 2026</div>
+    <h1>Stopped is a state.<br>Failed is an outcome.</h1>
+    <p class="lede">Show what Docker is doing, whether checks pass, and what Tandem is attempting. Reserve <strong>Failed</strong> for an operation or setup job.</p>
+  </header>
+
+  <div class="grid" aria-label="Three independent facts">
+    <div class="card"><h3>Runtime</h3><p>Running, paused, stopped…<br>Source: Docker inspection.</p></div>
+    <div class="card"><h3>Health</h3><p>Checking, healthy, unhealthy, unconfigured.<br>Source: Docker healthcheck.</p></div>
+    <div class="card"><h3>Activity &amp; outcome</h3><p>Stopping → Succeeded or Failed.<br>Source: Tandem operation.</p></div>
+  </div>
+
+  <div class="callout">
+    <p><strong>Why Stop can look like failure:</strong> Docker sends a stop signal, then may force-kill after a timeout. Exit <code>143</code> or <code>137</code> can accompany an intentional stop. Neither proves a crash; <code>137</code> alone does not prove an out-of-memory kill.</p>
+  </div>
+
+  <section aria-labelledby="services">
+    <h2 id="services">1. Give every child a readable status</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Docker observation</th><th scope="col">Service label</th><th scope="col">Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>created</code></td><td class="status muted"><span class="glyph">○</span> Not started</td><td>Container exists; process never started.</td></tr>
+          <tr><td><code>running</code>, no healthcheck</td><td class="status info"><span class="glyph">▶</span> Running</td><td>Process alive; health unverified.</td></tr>
+          <tr><td><code>running</code> + <code>starting</code></td><td class="status info"><span class="glyph">◌</span> Checking health</td><td>Process alive; probe still settling.</td></tr>
+          <tr><td><code>running</code> + <code>healthy</code></td><td class="status success"><span class="glyph">✓</span> Healthy</td><td>Configured Docker probe passes.</td></tr>
+          <tr><td><code>running</code> + <code>unhealthy</code></td><td class="status error"><span class="glyph">!</span> Unhealthy</td><td>Process alive; probe fails.</td></tr>
+          <tr><td><code>restarting</code></td><td class="status warning"><span class="glyph">↻</span> Restarting</td><td>Docker recovery; show restart count.</td></tr>
+          <tr><td><code>paused</code></td><td class="status warning"><span class="glyph">Ⅱ</span> Paused</td><td>Process frozen; memory retained.</td></tr>
+          <tr><td><code>exited</code>, long-running service</td><td class="status muted"><span class="glyph">■</span> Stopped</td><td>Show exit code and reason in details.*</td></tr>
+          <tr><td><code>removing</code></td><td class="status info"><span class="glyph">◌</span> Removing</td><td>Docker is removing this container.</td></tr>
+          <tr><td><code>dead</code></td><td class="status error"><span class="glyph">×</span> Container error</td><td>Defunct; requires removal/recreation.</td></tr>
+          <tr><td>Expected container absent / unreadable state</td><td class="status warning"><span class="glyph">?</span> Missing / Unknown</td><td>Missing needs a known expected inventory.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><small>*Confirmed requested stop: neutral. Unexplained non-zero exit: amber <strong>Stopped · exit N</strong>. Proven unexpected termination/OOM: red <strong>Stopped · unexpected exit / OOM killed</strong>. Never whitelist 137/143 as successful exits.</small></p>
+    <p><strong>Setup jobs:</strong> Waiting → Running → <span class="success">✓ Completed</span> (exit 0) or <span class="error">× Failed</span> (non-zero). A confirmed stop of an unfinished job means <span class="warning">■ Interrupted</span>. Show active/failed/interrupted jobs; collapse completed jobs.</p>
+  </section>
+
+  <section aria-labelledby="instances">
+    <h2 id="instances">2. Roll up facts, not the worst exit code</h2>
+    <p>Count expected long-running services, including replicas; completed setup jobs stay outside the running denominator. Unknown/stale observations take precedence over a confident rollup.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Instance label</th><th scope="col" colspan="2">Rule, outside an active operation</th></tr></thead>
+        <tbody>
+          <tr><td class="status success">✓ Healthy</td><td colspan="2">All expected services running and Docker-healthy; required setup completed.</td></tr>
+          <tr><td class="status info">▶ Running</td><td colspan="2">All running, setup completed, no failed checks; disclose unchecked/checking services.</td></tr>
+          <tr><td class="status muted">■ Stopped</td><td colspan="2">All long-running services exited and no job active; retain exit warnings/errors as qualifiers.</td></tr>
+          <tr><td class="status warning">Ⅱ Paused</td><td colspan="2">All long-running services paused; retain any separate issues.</td></tr>
+          <tr><td class="status muted">○ Not started</td><td colspan="2">All expected containers created, never started; no job active.</td></tr>
+          <tr><td class="status warning">! Degraded</td><td colspan="2">Other known mixtures or failed requirements. Always explain: “1/3 running · db stopped.”</td></tr>
+          <tr><td class="status warning">? Unknown / Stale</td><td colspan="2">Insufficient observations / failed refresh. Preserve last-known facts and timestamp.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><small>Use counts to expose total outages, even “0/3 running.” Jobs-only instances use Waiting / Running / Completed / Failed / Interrupted. Zero discovered containers alone proves neither Stopped nor Deleted.</small></p>
+    <div class="tree" aria-label="Proposed tree after stopping an instance">
+      <div class="tree-line">▣ web-stack <span class="muted">· 1 instance</span></div>
+      <div class="tree-line">└─ <span class="muted">■</span> review <span class="muted">· Stopped</span></div>
+      <div class="tree-line">   ├─ <span class="muted">■</span> web <span class="muted">· Stopped · requested stop</span></div>
+      <div class="tree-line">   ├─ <span class="muted">■</span> db <span class="muted">· Stopped · requested stop</span></div>
+      <div class="tree-line">   └─ <span class="success">✓</span> Setup <span class="success">· 1 completed</span></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="operations">
+    <h2 id="operations">3. Show the action while it is happening</h2>
+    <p><span class="info">◌ Creating / Starting / Restarting / Stopping / Deleting</span> belongs to the operation’s target. A service restart leaves siblings unchanged; the parent can say “Restarting db · 2/3 running.” Keep observed problems visible alongside activity.</p>
+    <figure class="diagram">
+      <div id="stop-diagram" class="diagram-output"></div>
+      <div id="diagram-fallback" class="diagram-fallback">Stop requested → record target identity → Docker stop → inspect targets.<br>Confirmed stopped: Stopped + operation Succeeded. Otherwise: observed state + Stop failed.</div>
+      <figcaption>Proposed stop sequence: confirm the resulting state before reporting success.</figcaption>
+    </figure>
+    <p><small>Remove activity when the operation ends; report “Stop failed” without overwriting runtime truth. Deletion stays visible until containers <em>and</em> owned-resource cleanup finish; retain “Cleanup failed” when resources remain.</small></p>
+  </section>
+
+  <section aria-labelledby="visuals">
+    <h2 id="visuals">4. Keep the visual language literal</h2>
+    <div class="legend" aria-label="Semantic color legend">
+      <span class="muted">■ Gray · inactive</span><span class="info">▶ Blue · active/unverified</span><span class="success">✓ Green · verified success</span><span class="warning">! Amber · attention/uncertainty</span><span class="error">× Red · confirmed problem</span>
+    </div>
+    <p>Color the status glyph <em>and label</em>; keep names neutral. Use ■ for stopped, Ⅱ for paused, and a spinner only for actual activity. Keep the globe beside the URL—it denotes a route, not health. Use tuicore semantic colors and ASCII fallbacks.</p>
+    <p><strong>Scope matters:</strong> templates are Valid / Invalid / Missing, with instance counts. Gateway availability is shared infrastructure. A route URL is configuration; “last readiness check passed” needs a timestamp. Healthy never promises browser reachability.</p>
+  </section>
+
+  <details>
+    <summary>Implementation guardrails &amp; evidence</summary>
+    <ol>
+      <li><strong>One service-owned projection:</strong> retain typed Docker state, health, exit code, OOM flag, error, identity and timestamps. TUI and MCP consume the same classification; action availability uses lifecycle capabilities, not resource consumption.</li>
+      <li><strong>Stop provenance:</strong> persist target container IDs + start generation before stopping, then confirm per-target results. Share across TUI/MCP processes; supersede on a new run. An attempted stop cannot excuse an earlier crash or hide OOM evidence. Unknown external intent stays unknown.</li>
+      <li><strong>Expected topology:</strong> retain the rendered launch service/replica set and setup roles. Compare against fresh Docker inventory; template edits do not silently redefine an existing instance. While creating, not-yet-created targets are Waiting. A failed create without containers remains an operation result, not a running inventory row.</li>
+      <li><strong>Bound activity:</strong> associate it with a live operation/lease and deadline, including across processes. A lost worker becomes “Operation interrupted; refresh required.” Docker health and route-readiness results stay separate; route checks run during startup/restart, so retain their time and run identity.</li>
+      <li><strong>Actions:</strong> Start for stopped/created containers; Stop for running/restarting targets; paused targets need Unpause before Start/Restart. Missing/dead containers require recreation. Keep details available during stale observations, and revalidate ownership/state before mutations.</li>
+      <li><strong>Resource colors:</strong> memory pressure is separate from health. Retain cap-based warnings; mark old samples stale and show “—” for unavailable data.</li>
+    </ol>
+    <h3>Code evidence</h3>
+    <p><a href="src/environments/docker.rs"><code>docker.rs:144–155</code></a> merges exited/dead into <code>down (exit N)</code>; <a href="src/app/rows.rs"><code>rows.rs:61–115</code></a> promotes non-zero exits to Failed and paused to Stopped. <a href="src/app/tests/resources.rs"><code>resources.rs:220–308</code></a> explicitly expects Failed for 137/143.</p>
+    <p><a href="src/app/rows.rs"><code>rows.rs:462–506</code></a> filters setup jobs from the tree and omits child status labels. <a href="src/environments/mod.rs"><code>environments/mod.rs</code></a> holds process-local operations and preserves snapshots on inspection failure. <a href="src/environments/lifecycle.rs"><code>lifecycle.rs:205–215</code></a> reports stop success from the Docker command result.</p>
+    <p><strong>Acceptance checks:</strong> requested stop with 0/137/143; unexplained 137; explicit OOM; mixed stopped/running; paused; failed setup; dead/missing container; health recovery; restart transient; stale Docker; failed cleanup; reconnect after stop.</p>
+    <p><strong>Docker references:</strong> <a href="https://docs.docker.com/reference/cli/docker/container/ls/#status">container states</a> · <a href="https://docs.docker.com/reference/cli/docker/container/stop/">stop signals</a> · <a href="https://docs.docker.com/reference/dockerfile/#healthcheck">independent health status</a>.</p>
+  </details>
+
+  <footer>Proposal only; application behavior is unchanged. The report works offline; the optional diagram uses Mermaid 11.12.0 from jsDelivr.</footer>
+</main>
+<script type="text/plain" id="stop-source">
+sequenceDiagram
+  accTitle: Proposed Tandem stop sequence
+  accDescr: Two outcomes follow inspection. Confirmed stopped targets yield Stopped and a succeeded operation. Other results keep the observed runtime state and report Stop failed.
+  participant service as AppService
+  participant docker as Docker
+  Note over service,docker: Proposed behavior. Solid = call. Dashed = reply.
+  Note over service: Record stop intent for this run. Show Stopping.
+  service->>docker: Stop target containers
+  docker-->>service: Command result
+  service->>docker: Inspect target containers
+  docker-->>service: Runtime state and exit evidence
+  alt Targets confirmed stopped
+    Note over service: Stopped. Operation Succeeded.
+  else Stop incomplete or observation unavailable
+    Note over service: Observed state. Stop failed.
+  end
+</script>
+<script type="module">
+  const fallback = document.getElementById('diagram-fallback');
+  try {
+    const { default: mermaid } = await import('https://cdn.jsdelivr.net/npm/mermaid@11.12.0/dist/mermaid.esm.min.mjs');
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme: 'base',
+      themeVariables: {
+        background: '#191f28', primaryColor: '#263344', primaryTextColor: '#ecf0f6',
+        primaryBorderColor: '#91c6ff', lineColor: '#aab5c5', textColor: '#ecf0f6',
+        actorBkg: '#263344', actorBorder: '#91c6ff', actorTextColor: '#ecf0f6',
+        actorLineColor: '#aab5c5', signalColor: '#ecf0f6', signalTextColor: '#ecf0f6',
+        noteBkgColor: '#263344', noteTextColor: '#ecf0f6', noteBorderColor: '#aab5c5',
+        labelBoxBkgColor: '#263344', labelBoxBorderColor: '#aab5c5',
+        labelTextColor: '#ecf0f6', loopTextColor: '#ecf0f6', fontFamily: 'system-ui, sans-serif'
+      },
+      sequence: { mirrorActors: false, useMaxWidth: true, diagramMarginX: 12, diagramMarginY: 12 }
+    });
+    const { svg } = await mermaid.render('stop-sequence', document.getElementById('stop-source').textContent);
+    document.getElementById('stop-diagram').innerHTML = svg;
+    fallback.hidden = true;
+  } catch {
+    document.getElementById('stop-diagram').replaceChildren();
+    fallback.dataset.status = 'text-fallback';
+  }
+</script>
+</body>
+</html>

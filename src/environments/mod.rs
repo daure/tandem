@@ -1,6 +1,7 @@
 mod command;
 mod compose;
 pub(crate) mod config;
+mod containers;
 mod docker;
 mod gateway;
 mod lifecycle;
@@ -8,7 +9,6 @@ mod ownership;
 mod removal;
 mod repositories;
 mod resources;
-mod restart;
 mod stats;
 mod templates;
 
@@ -240,6 +240,23 @@ impl Environments {
         self.begin_scoped(action, name, None, service)
     }
 
+    pub fn begin_service_state(
+        &self,
+        name: &str,
+        service: String,
+        running: bool,
+    ) -> Result<Operation, String> {
+        if service.is_empty() {
+            return Err("service name must not be empty".into());
+        }
+        let action = if running {
+            "start_service"
+        } else {
+            "stop_service"
+        };
+        self.begin_scoped(action, name, None, Some(service))
+    }
+
     fn begin_scoped(
         &self,
         action: &str,
@@ -249,7 +266,7 @@ impl Environments {
     ) -> Result<Operation, String> {
         match action {
             "create_instance" | "stop_instance" | "delete_instance" | "restart_instance"
-            | "restart_service" => {
+            | "restart_service" | "start_service" | "stop_service" => {
                 crate::store::environments::validate_instance_name(name)?;
             }
             _ => validate_name(name)?,
@@ -455,14 +472,21 @@ impl Environments {
                 "stop_instance" => {
                     lifecycle::stop(&self.config, &operation.name, progress).map(|()| None)
                 }
-                "restart_instance" | "restart_service" => restart::restart(
-                    &self.config,
-                    &operation.name,
-                    operation.service.as_deref(),
-                    timeout,
-                    progress,
-                )
-                .map(|()| None),
+                "restart_instance" | "restart_service" | "start_service" | "stop_service" => {
+                    containers::change_state(
+                        &self.config,
+                        &operation.name,
+                        operation.service.as_deref(),
+                        match operation.action.as_str() {
+                            "start_service" => "start",
+                            "stop_service" => "stop",
+                            _ => "restart",
+                        },
+                        timeout,
+                        progress,
+                    )
+                    .map(|()| None)
+                }
                 "delete_instance" => {
                     lifecycle::delete(&self.config, &operation.name, progress).map(|()| None)
                 }
