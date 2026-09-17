@@ -58,28 +58,21 @@ pub(super) struct Toolbar {
     totals_width: usize,
 }
 
-fn hotkey(key: char) -> String {
-    if key.is_ascii_uppercase() {
-        format!("shift+{}", key.to_ascii_lowercase())
+fn hotkey(key: KeySpec) -> String {
+    let label = key.label();
+    if label.len() == 1 && label.as_bytes()[0].is_ascii_uppercase() {
+        format!("shift+{}", label.to_ascii_lowercase())
     } else {
-        key.to_string()
-    }
-}
-
-fn key_spec(key: char) -> KeySpec {
-    if key.is_ascii_uppercase() {
-        KeySpec::shifted(key.to_ascii_lowercase())
-    } else {
-        KeySpec::plain(key)
+        label
     }
 }
 
 impl Toolbar {
     pub(super) fn new(
-        template_key: char,
-        refresh_key: char,
-        stop_key: char,
-        purge_key: char,
+        template_key: KeySpec,
+        refresh_key: KeySpec,
+        stop_key: KeySpec,
+        purge_key: KeySpec,
         state: SharedState,
     ) -> Self {
         let stop_disabled = state.borrow().stop_targets.is_empty();
@@ -102,8 +95,8 @@ impl Toolbar {
                 .hotkey_label_mode(HotkeyLabelMode::Inline)
                 .on_press(|| Msg::PurgeAll)
                 .disabled(purge_disabled),
-            refresh_key: key_spec(refresh_key),
-            bulk_keys: [stop_key, purge_key].map(key_spec),
+            refresh_key,
+            bulk_keys: [stop_key, purge_key],
             template_area: Rect::default(),
             refresh_area: Rect::default(),
             stop_area: Rect::default(),
@@ -138,8 +131,8 @@ impl Toolbar {
         let state = self.state.borrow();
         let stop_disabled = state.stop_targets.is_empty();
         let purge_disabled = state.purge_targets.is_empty();
-        let changed = self.stop.is_disabled() != stop_disabled
-            || self.purge.is_disabled() != purge_disabled;
+        let changed =
+            self.stop.is_disabled() != stop_disabled || self.purge.is_disabled() != purge_disabled;
         self.stop.set_disabled(stop_disabled);
         self.purge.set_disabled(purge_disabled);
         changed
@@ -182,38 +175,37 @@ impl TuiNode<Msg> for Toolbar {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.sync_disabled();
         let compact = area.width < MOBILE_TABS_WIDTH;
-        self.stop.set_label(if compact { "" } else { " Stop all" });
-        self.purge.set_label(if compact { "" } else { " Purge all" });
+        self.stop
+            .set_label(if compact { "" } else { " Stop all" });
+        self.purge
+            .set_label(if compact { "" } else { " Purge all" });
         self.refresh.set_label(if compact {
             format!("󰑓 {}", self.refresh_key.label())
         } else {
             "󰑓 Refresh".into()
         });
         let proposal = LayoutProposal::at_most(area.width, area.height.min(1));
-        let refresh_width = self.refresh.measure(proposal).preferred.width.min(area.width);
+        let refresh_width = self
+            .refresh
+            .measure(proposal)
+            .preferred
+            .width
+            .min(area.width);
         let purge_width = self
             .purge
             .measure(proposal)
             .preferred
             .width
             .min(area.width.saturating_sub(refresh_width.saturating_add(1)));
-        let stop_width = self
-            .stop
-            .measure(proposal)
-            .preferred
-            .width
-            .min(area.width.saturating_sub(
-                refresh_width.saturating_add(purge_width).saturating_add(2),
-            ));
+        let stop_width = self.stop.measure(proposal).preferred.width.min(
+            area.width
+                .saturating_sub(refresh_width.saturating_add(purge_width).saturating_add(2)),
+        );
         let bulk_width = purge_width.saturating_add(stop_width).saturating_add(2);
-        let template_width = self
-            .template
-            .measure(proposal)
-            .preferred
-            .width
-            .min(area.width.saturating_sub(
-                bulk_width.saturating_add(refresh_width).saturating_add(1),
-            ));
+        let template_width = self.template.measure(proposal).preferred.width.min(
+            area.width
+                .saturating_sub(bulk_width.saturating_add(refresh_width).saturating_add(1)),
+        );
         self.template_area = Rect::new(area.x, area.y, template_width, area.height.min(1));
         self.refresh_area = Rect::new(
             area.right().saturating_sub(refresh_width),
@@ -222,13 +214,19 @@ impl TuiNode<Msg> for Toolbar {
             area.height.min(1),
         );
         self.purge_area = Rect::new(
-            self.refresh_area.x.saturating_sub(purge_width.saturating_add(1)).max(area.x),
+            self.refresh_area
+                .x
+                .saturating_sub(purge_width.saturating_add(1))
+                .max(area.x),
             area.y,
             purge_width,
             area.height.min(1),
         );
         self.stop_area = Rect::new(
-            self.purge_area.x.saturating_sub(stop_width.saturating_add(1)).max(area.x),
+            self.purge_area
+                .x
+                .saturating_sub(stop_width.saturating_add(1))
+                .max(area.x),
             area.y,
             stop_width,
             area.height.min(1),

@@ -302,7 +302,7 @@ fn template_removal_rejects_unsafe_names_and_busy_templates() {
             &config,
             "website",
             "review",
-            false,
+            crate::environments::Startup::default(),
             5,
             Arc::new(|_| {}),
             |_| {},

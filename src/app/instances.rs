@@ -49,10 +49,14 @@ pub(super) fn is_searching(state: &SharedState) -> bool {
     state.borrow().searching
 }
 
-pub(super) fn replace_rows(state: &SharedState, rows: Vec<Row>) {
+pub(super) fn replace_rows(state: &SharedState, rows: Vec<Row>) -> bool {
     let mut state = state.borrow_mut();
+    if state.rows == rows {
+        return false;
+    }
     state.rows = rows;
     state.rows_changed = true;
+    true
 }
 
 pub(super) fn select_created(

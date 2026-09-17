@@ -6,7 +6,7 @@ use std::process::Command;
 use super::AppService;
 use super::refresh::Refresh;
 use crate::{
-    environments::Environments,
+    environments::{Environments, Startup},
     store::environments::{
         EnvironmentSnapshot, Instructions, Operation, OperationState, RuntimeInventory, Template,
     },
@@ -37,16 +37,12 @@ impl AppService {
         }
         snapshot
     }
-    pub(crate) fn environment_keys(&self) -> [char; 10] {
+    pub(crate) fn environment_keys(&self) -> [tuicore::KeySpec; 11] {
         self.environments.config.keys
     }
 
     pub(crate) fn poll_environments(&self) {
         self.refresh.request(Refresh::Instances);
-    }
-
-    pub(crate) fn set_environment_focus(&self, focused: bool) {
-        self.environments.set_focused(focused);
     }
 
     pub(crate) fn refresh_environments(&self) {
@@ -150,7 +146,6 @@ impl AppService {
             .clone()
     }
 
-    #[cfg(test)]
     pub(crate) fn operations(&self) -> Vec<Operation> {
         self.environments.operations()
     }
@@ -175,6 +170,17 @@ impl AppService {
         }
         self.submit_operation("create_instance", name, Some(template), 600, true)
             .map(|operation| CreateInstanceOutcome::Started(Box::new(operation)))
+    }
+
+    pub(crate) fn delete_instance(&self, name: &str) -> Result<(), String> {
+        let operation = self.submit_operation("delete_instance", name, None, 60, true)?;
+        let operation = self.runtime.block_on(self.wait_operation(&operation.id))?;
+        if operation.state != OperationState::Succeeded {
+            return Err(operation
+                .error
+                .unwrap_or_else(|| "instance deletion failed".into()));
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -215,7 +221,7 @@ impl AppService {
             return Err("timeout_seconds must be between 5 and 900".into());
         }
         let operation = self.environments.begin(action, name, template)?;
-        Ok(self.schedule_operation(operation, timeout))
+        Ok(self.schedule_operation(operation, timeout, Startup::default()))
     }
 
     pub(crate) fn submit_instance_batch(
@@ -254,7 +260,7 @@ impl AppService {
             return Err("confirmation_required: restarting containers interrupts services".into());
         }
         let operation = self.environments.begin_restart(name, service)?;
-        Ok(self.schedule_operation(operation, 600))
+        Ok(self.schedule_operation(operation, 600, Startup::default()))
     }
 
     pub(crate) fn submit_service_state(
@@ -273,10 +279,19 @@ impl AppService {
         let operation = self
             .environments
             .begin_service_state(name, service, running)?;
-        Ok(self.schedule_operation(operation, if running { 600 } else { 60 }))
+        Ok(self.schedule_operation(
+            operation,
+            if running { 600 } else { 60 },
+            Startup::default(),
+        ))
     }
 
-    fn schedule_operation(&self, operation: Operation, timeout: u64) -> Operation {
+    pub(super) fn schedule_operation(
+        &self,
+        operation: Operation,
+        timeout: u64,
+        mut startup: Startup,
+    ) -> Operation {
         let action = operation.action.as_str();
         let operation_id = operation.id.clone();
         let environments = Arc::clone(&self.environments);
@@ -286,11 +301,11 @@ impl AppService {
             .flatten();
         let notifier = self.refresh.notifier.clone();
         let refresh = Refresh::for_operation(action);
-        let branch_instances = action == "create_instance" && self.branch_instances();
+        startup.branch_instances = action == "create_instance" && self.branch_instances();
         let settings = Arc::clone(&self.settings);
         self.runtime.spawn_blocking(move || {
             notifier.publish(refresh);
-            environments.execute(worker_operation, timeout, branch_instances);
+            environments.execute(worker_operation, timeout, startup);
             if let Some(template) = startup_template
                 && let Ok(operation) = environments.operation(&operation_id)
                 && operation.state == OperationState::Succeeded
@@ -378,6 +393,21 @@ async fn run_workspace_command(
     workspace: &str,
     instance: &str,
 ) -> Result<(), String> {
+    let status = spawn_workspace_command(command, workspace, instance)?
+        .wait()
+        .await
+        .map_err(|error| format!("cannot wait for workspace opener: {error}"))?;
+    if !status.success() {
+        return Err(format!("workspace opener exited with {status}"));
+    }
+    Ok(())
+}
+
+pub(super) fn spawn_workspace_command(
+    command: &str,
+    workspace: &str,
+    instance: &str,
+) -> Result<tokio::process::Child, String> {
     let mut process = if command.trim().is_empty() {
         let mut process = tokio::process::Command::new("xdg-open");
         process.arg(workspace);
@@ -392,15 +422,10 @@ async fn run_workspace_command(
             .current_dir(workspace);
         process
     };
-    let status = process
+    process
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .await
-        .map_err(|error| format!("cannot launch workspace opener: {error}"))?;
-    if !status.success() {
-        return Err(format!("workspace opener exited with {status}"));
-    }
-    Ok(())
+        .spawn()
+        .map_err(|error| format!("cannot launch workspace opener: {error}"))
 }

@@ -21,12 +21,12 @@ cargo run -- dev
 
 The TUI lists all four templates. Start one with a distinct instance name, such as `guestbook-one`.
 Its website is `http://localhost:9886/guestbook-one/web/`; APIs use the sibling `api/` route.
-On Unix, `cargo run -- dev` sources the checkout's `projects/env.sh` when it exists, then starts
-the combined TUI/HTTP MCP entry point. Its exports override inherited values in the child process;
-the calling shell stays unchanged. Treat this file as trusted shell code. A missing file leaves the
-inherited environment intact. Source it manually before plain `cargo run` or `cargo run -- mcp`.
-To use another fixture root with development mode, source that root's `env.sh` and invoke the built
-binary directly: `target/debug/tandem dev`.
+On Unix, every `cargo run` invocation of Tandem sources the checkout's `projects/env.sh` when it
+exists, including plain TUI, `dev`, `new-instance` and MCP modes. Its exports override inherited
+values in the child process; the calling shell stays unchanged. Treat this file as trusted shell
+code. A missing file leaves the inherited environment intact. Cargo test binaries and release
+helpers retain their inherited environment. To use another fixture root, source that root's
+`env.sh` and invoke the built binary directly, for example `target/debug/tandem dev`.
 The generated environment isolates Tandem storage, Docker resource names, and the gateway port;
 Tandem's development HTTP MCP listener still uses its configured/default address.
 

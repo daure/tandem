@@ -376,7 +376,7 @@ fn operation_admission_rejects_duplicates_and_locks_release_on_drop() {
             .begin("create_template", "website", None)
             .is_err()
     );
-    environment.execute(operation.clone(), 60, false);
+    environment.execute(operation.clone(), 60, super::Startup::default());
     assert_eq!(
         environment.operation(&operation.id).unwrap().state,
         OperationState::Succeeded

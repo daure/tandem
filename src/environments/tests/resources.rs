@@ -306,7 +306,7 @@ fn template_scan_errors_allow_resource_sampling_but_runtime_discovery_errors_blo
 }
 
 #[test]
-fn failed_readings_release_the_warmup_guard_and_report_errors() {
+fn failed_readings_report_errors_and_recover_on_the_next_poll() {
     for fail_on in [1, 2] {
         let (_home, environment) = environment();
         let request = environment.begin_resource_sample(false).unwrap();
@@ -331,6 +331,35 @@ fn failed_readings_release_the_warmup_guard_and_report_errors() {
             Some("unavailable")
         );
         assert!(!environment.resources.lock().unwrap().in_flight);
+        let retry = environment.begin_resource_sample(false).unwrap();
+        let mut reading = 1;
+        environment.sample_resources_with(
+            retry,
+            |_| {
+                reading += 1;
+                Ok(samples(stats(
+                    reading,
+                    u64::from(reading) * 100,
+                    u64::from(reading) * 1000,
+                )))
+            },
+            |_| {},
+        );
+        let snapshot = environment.snapshot();
+        assert!(snapshot.resource_error.is_none());
+        assert!(
+            snapshot.instances[0].services[0]
+                .runtime
+                .resource_error
+                .is_none()
+        );
+        assert_eq!(
+            snapshot.instances[0].services[0]
+                .usage
+                .unwrap()
+                .cpu_basis_points,
+            Some(4000)
+        );
         assert!(environment.begin_resource_sample(false).is_none());
     }
 }
@@ -444,7 +473,7 @@ fn new_instances_sample_only_their_containers_and_preserve_cached_totals_and_cad
 }
 
 #[test]
-fn failed_new_container_samples_keep_other_usage_and_wait_for_the_regular_retry() {
+fn failed_new_container_samples_keep_other_usage_and_retry_on_the_next_poll() {
     let mut cache = ResourceCache::default();
     let mut instances = instances();
     let now = Instant::now();
@@ -464,11 +493,12 @@ fn failed_new_container_samples_keep_other_usage_and_wait_for_the_regular_retry(
         80 * 1048576
     );
     assert!(instances[0].services[1].usage.is_none());
-    assert!(
-        cache
-            .begin(&instances, now + Duration::from_secs(2), false)
-            .is_none()
-    );
+    let retry = cache
+        .begin(&instances, now + Duration::from_secs(2), false)
+        .unwrap();
+    assert_eq!(retry.containers.keys().collect::<Vec<_>>(), ["new"]);
+    assert!(retry.warm_up);
+    cache.finish(retry, Err("unavailable".into()));
     assert_eq!(
         cache
             .begin(&instances, now + SAMPLE_INTERVAL, false)
@@ -575,10 +605,26 @@ fn partial_failures_preserve_valid_baselines_and_refresh_successful_containers()
     second.container_id = "def456".into();
     instances[0].services.push(second);
     let now = Instant::now();
-    for (index, failing) in [false, true, false].into_iter().enumerate() {
-        let request = cache
-            .begin(&instances, now + SAMPLE_INTERVAL * index as u32, false)
-            .unwrap();
+    for (index, offset) in [
+        Duration::ZERO,
+        SAMPLE_INTERVAL,
+        SAMPLE_INTERVAL + Duration::from_secs(10),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let failing = index == 1;
+        let request = cache.begin(&instances, now + offset, false).unwrap();
+        if index == 2 {
+            assert_eq!(
+                request
+                    .containers
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                ["abc123"]
+            );
+        }
         let reading = (index + 1) as u32;
         let result = sample_with(&request, |id| {
             if failing && id == "abc123" {
@@ -598,14 +644,30 @@ fn partial_failures_preserve_valid_baselines_and_refresh_successful_containers()
         );
         assert_eq!(
             cache.samples["def456"].stats.read,
-            stats(reading, 0, 0).read
+            stats(reading.min(2), 0, 0).read
         );
+        if failing {
+            assert_eq!(cache.samples["abc123"].stats.read, stats(1, 0, 0).read);
+        }
     }
     assert!(
         instances[0]
             .services
             .iter()
             .all(|service| service.usage.unwrap().cpu_basis_points == Some(4000))
+    );
+    assert!(
+        cache
+            .begin(&instances, now + Duration::from_secs(119), false)
+            .is_none()
+    );
+    assert_eq!(
+        cache
+            .begin(&instances, now + SAMPLE_INTERVAL * 2, false)
+            .unwrap()
+            .containers
+            .len(),
+        2
     );
 }
 
@@ -824,24 +886,6 @@ fn late_samples_cannot_publish_into_a_restarted_run() {
             .is_none()
     );
     assert!(environment.begin_resource_sample(false).unwrap().warm_up);
-}
-
-#[test]
-fn resource_staleness_uses_focus_budget_without_changing_health() {
-    let mut app = instances().remove(0);
-    app.services[0].usage = Some(stats(1, 100, 1000).usage(None));
-    let now = app.services[0].usage.unwrap().sampled_at_unix_seconds + 121;
-    crate::environments::project_instance(&mut app, false, now, false);
-    assert!(!app.services[0].runtime.resources_stale);
-    crate::environments::project_instance(&mut app, false, now, true);
-    assert!(app.services[0].runtime.resources_stale);
-    assert_eq!(
-        app.summary.status,
-        crate::store::environments::Status::Healthy
-    );
-    app.services[0].runtime.resource_error = Some("stats timeout".into());
-    crate::environments::project_instance(&mut app, false, now, false);
-    assert!(app.services[0].runtime.resources_stale);
 }
 
 #[test]

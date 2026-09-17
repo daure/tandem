@@ -75,6 +75,7 @@ impl ResourceCache {
             .iter()
             .filter(|(id, started_at)| {
                 full_sample
+                    || self.errors.contains_key(*id)
                     || self.last_containers.get(*id) != Some(*started_at)
                     || self.last_paused.contains(*id) != paused.contains(*id)
             })

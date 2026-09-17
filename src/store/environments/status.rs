@@ -206,7 +206,6 @@ pub(crate) struct ServiceRuntime {
     pub waiting: bool,
     pub activity: Option<Activity>,
     pub resource_error: Option<String>,
-    pub resources_stale: bool,
     pub resource_age_seconds: Option<u64>,
     pub resources_suppressed: bool,
     pub readiness_checked_at: Option<u64>,

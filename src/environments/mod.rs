@@ -2,6 +2,7 @@ mod command;
 mod compose;
 pub(crate) mod config;
 mod containers;
+mod creation;
 mod docker;
 mod gateway;
 mod journal;
@@ -18,7 +19,7 @@ use std::{
     fs,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -29,6 +30,7 @@ use crate::store::environments::{
 };
 use command::Progress;
 use config::Config;
+pub(crate) use creation::Startup;
 
 pub(crate) struct Environments {
     pub config: Config,
@@ -38,7 +40,6 @@ pub(crate) struct Environments {
     next_id: AtomicU64,
     instance_revision: AtomicU64,
     resources: Mutex<resources::ResourceCache>,
-    focused: AtomicBool,
 }
 
 struct Job {
@@ -72,7 +73,6 @@ impl Environments {
             next_id: AtomicU64::new(1),
             instance_revision: AtomicU64::new(0),
             resources: Mutex::new(resources::ResourceCache::default()),
-            focused: AtomicBool::new(true),
         }
     }
 
@@ -134,7 +134,6 @@ impl Environments {
                 instance,
                 snapshot.runtime_error.is_some(),
                 journal::now(),
-                self.focused.load(Ordering::Relaxed),
             );
         }
         snapshot.activities.retain_mut(|activity| {
@@ -177,9 +176,6 @@ impl Environments {
         snapshot
     }
 
-    pub fn set_focused(&self, focused: bool) {
-        self.focused.store(focused, Ordering::Relaxed);
-    }
     pub fn refresh_templates(&self) {
         let templates = templates::list(&self.config);
         let mut snapshot = self
@@ -279,12 +275,7 @@ impl Environments {
             .unwrap_or_else(|error| error.into_inner())
             .apply(&mut instances);
         for instance in &mut instances {
-            project_instance(
-                instance,
-                false,
-                journal::now(),
-                self.focused.load(Ordering::Relaxed),
-            );
+            project_instance(instance, false, journal::now());
         }
         Ok(crate::store::environments::RuntimeInventory {
             instances,
@@ -539,12 +530,7 @@ impl Environments {
                     if operation.state != OperationState::Running {
                         instance.runtime.activity = None;
                     }
-                    project_instance(
-                        instance,
-                        false,
-                        journal::now(),
-                        self.focused.load(Ordering::Relaxed),
-                    );
+                    project_instance(instance, false, journal::now());
                 }
                 operation
             })
@@ -560,7 +546,7 @@ impl Environments {
             })
     }
 
-    pub fn execute(self: &Arc<Self>, operation: Operation, timeout: u64, branch_instances: bool) {
+    pub fn execute(self: &Arc<Self>, operation: Operation, timeout: u64, startup: Startup) {
         let mut config = self.config.clone();
         config.operation_id = Some(operation.id.clone());
         if let Some(job) = self
@@ -591,7 +577,7 @@ impl Environments {
                     &config,
                     operation.template.as_deref().ok_or("template required")?,
                     &operation.name,
-                    branch_instances,
+                    startup,
                     timeout,
                     progress,
                     |services| self.set_pending_services(&operation.id, services),
@@ -660,12 +646,7 @@ impl Environments {
                         if let Some(ready) = &mut instance {
                             ready.pending = false;
                             ready.runtime.activity = None;
-                            project_instance(
-                                ready,
-                                false,
-                                journal::now(),
-                                self.focused.load(Ordering::Relaxed),
-                            );
+                            project_instance(ready, false, journal::now());
                         }
                         if let Some(ready) = &instance {
                             if let Some(current) = snapshot
@@ -753,7 +734,7 @@ fn activity_from_job(job: &Job) -> crate::store::environments::Activity {
     }
 }
 
-fn project_instance(instance: &mut Instance, stale: bool, now: u64, focused: bool) {
+fn project_instance(instance: &mut Instance, stale: bool, now: u64) {
     instance.runtime.stale = stale;
     let suppressed = instance.suppress_resources();
     for service in &mut instance.services {
@@ -791,13 +772,6 @@ fn project_instance(instance: &mut Instance, stale: bool, now: u64, focused: boo
         service.runtime.resource_age_seconds = service
             .usage
             .map(|usage| now.saturating_sub(usage.sampled_at_unix_seconds));
-        service.runtime.resources_stale = service.usage.is_some()
-            && (stale
-                || service.runtime.resource_error.is_some()
-                || service
-                    .runtime
-                    .resource_age_seconds
-                    .is_some_and(|age| age > if focused { 120 } else { 600 }));
         service.summary = service.status_summary();
     }
     instance.summary = instance.status_summary();

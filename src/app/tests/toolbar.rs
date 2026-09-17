@@ -66,7 +66,7 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
 }
 
 #[test]
-fn toolbar_totals_preserve_unknown_partial_stale_and_paused_states() {
+fn toolbar_totals_preserve_unknown_partial_and_paused_states() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     app.update_snapshot(Default::default());
@@ -82,13 +82,10 @@ fn toolbar_totals_preserve_unknown_partial_stale_and_paused_states() {
     starting.name = "starting".into();
     starting.pending = true;
     inventory.instances.push(starting);
-    let runtime = &mut inventory.instances[0].services[0].runtime;
-    runtime.resources_stale = true;
-    runtime.resource_age_seconds = Some(180);
     app.update_snapshot(inventory.clone());
     let line = toolbar_line(&mut app, 130);
     assert!(
-        line.contains("󰑹 20 MiB · partial · stale 180s  500% · partial · stale 180s"),
+        line.contains("󰑹 20 MiB · partial  500% · partial"),
         "{line}"
     );
     let narrow = toolbar_line(&mut app, 40);
@@ -102,7 +99,6 @@ fn toolbar_totals_preserve_unknown_partial_stale_and_paused_states() {
     );
 
     inventory.instances.pop();
-    inventory.instances[0].services[0].runtime.resources_stale = false;
     inventory.instances[0].services[0].status = "paused".into();
     app.update_snapshot(inventory);
     assert!(toolbar_line(&mut app, 130).contains("󰑹 20 MiB  — · paused"));
@@ -128,7 +124,9 @@ fn refresh_button_is_rightmost_and_shows_its_hotkey_at_both_sizes() {
             })
             .unwrap();
         assert_eq!(target.area.right(), area.right());
-        let button_order = layout.focus_targets().iter()
+        let button_order = layout
+            .focus_targets()
+            .iter()
             .flat_map(|target| target.path.keys())
             .filter(|key| matches!(key.as_str(), "stop-all" | "purge-all" | "refresh"))
             .map(|key| key.as_str())
@@ -282,7 +280,13 @@ fn escape_in_the_data_view_keeps_its_focus() {
 #[test]
 fn compact_refresh_button_honors_a_configured_hotkey() {
     tuicore::init();
-    let mut toolbar = crate::app::toolbar::Toolbar::new('T', 'G', 'S', 'P', Default::default());
+    let mut toolbar = crate::app::toolbar::Toolbar::new(
+        tuicore::KeySpec::shifted('t'),
+        tuicore::KeySpec::shifted('g'),
+        tuicore::KeySpec::shifted('s'),
+        tuicore::KeySpec::shifted('p'),
+        Default::default(),
+    );
     let area = Rect::new(0, 0, 40, 1);
     toolbar.layout(area, &mut tuicore::LayoutCtx::new());
     let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();

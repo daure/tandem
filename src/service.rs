@@ -3,10 +3,12 @@ use std::{error::Error, sync::Arc, time::Instant};
 use schemars::JsonSchema;
 use serde::Serialize;
 
+mod creation;
 mod environments;
 mod refresh;
 mod settings;
 
+pub(crate) use creation::NewInstanceOutcome;
 pub(crate) use environments::CreateInstanceOutcome;
 
 #[derive(Clone)]

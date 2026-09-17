@@ -49,7 +49,7 @@ def main():
             terminal.send("\r")
             wait_for(lambda text: "create_template / website" in text and "succeeded" in text)
             wait_for(lambda text: "Compose file" in text)
-            terminal.send("i")
+            terminal.send("\r")
             info = wait_for(lambda text: "Template / website" in text and "compose.yaml" in text and "nginx:1.28-alpine" in text)
             assert "nginx:1.28-alpine" in info
             terminal.send("\x1b")

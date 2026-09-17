@@ -10,10 +10,7 @@ pub(crate) struct UsageSummary {
     pub memory_limit_bytes: Option<u64>,
     pub memory_partial: bool,
     pub cpu_partial: bool,
-    pub memory_stale: bool,
-    pub cpu_stale: bool,
     pub age_seconds: Option<u64>,
-    pub cpu_age_seconds: Option<u64>,
     pub paused: bool,
 }
 
@@ -57,11 +54,12 @@ impl UsageSummary {
         let mut limit = 0_u64;
         let (mut memory_count, mut cpu_count) = (0, 0);
         let (mut memory_missing, mut cpu_missing, mut uncapped) = (false, false, false);
+        let mut collection_error = false;
         for service in services
             .filter(|service| service.consumes_resources() && !service.runtime.resources_suppressed)
         {
             memory_count += 1;
-            result.memory_stale |= service.runtime.resources_stale || service.runtime.stale;
+            collection_error |= service.runtime.resource_error.is_some() || service.runtime.stale;
             result.age_seconds = result.age_seconds.max(service.runtime.resource_age_seconds);
             if let Some(usage) = service.usage {
                 if let Some(total) = memory.checked_add(usage.memory_bytes) {
@@ -82,15 +80,6 @@ impl UsageSummary {
             }
             if service.state() == ContainerState::Running {
                 cpu_count += 1;
-                result.cpu_stale |= service.runtime.resources_stale || service.runtime.stale;
-                if service
-                    .usage
-                    .is_some_and(|usage| usage.cpu_basis_points.is_some())
-                {
-                    result.cpu_age_seconds = result
-                        .cpu_age_seconds
-                        .max(service.runtime.resource_age_seconds);
-                }
                 match service
                     .usage
                     .and_then(|usage| usage.cpu_basis_points)
@@ -106,7 +95,7 @@ impl UsageSummary {
         result.memory_partial |= memory_missing;
         result.cpu_partial |= cpu_missing;
         result.memory_limit_bytes =
-            (memory_count > 0 && !uncapped && !result.memory_partial && !result.memory_stale)
+            (memory_count > 0 && !uncapped && !result.memory_partial && !collection_error)
                 .then_some(limit);
         result.paused = memory_count > 0 && cpu_count == 0;
         result

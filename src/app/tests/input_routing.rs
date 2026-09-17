@@ -115,7 +115,7 @@ fn status_bar_menu_opens_branch_instance_settings() {
 }
 
 #[test]
-fn settings_save_the_edited_open_command_and_enter_runs_it_for_the_instance() {
+fn saved_open_command_runs_from_the_instance_shortcut_and_menu() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     let workspace = tempfile::tempdir().unwrap();
@@ -176,24 +176,45 @@ fn settings_save_the_edited_open_command_and_enter_runs_it_for_the_instance() {
     snapshot.instances[0].workspace = workspace.path().to_str().unwrap().into();
     app.set_rows_for_tests(rows::from_snapshot(&snapshot));
     super::super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
-    app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
-        &mut EventCtx::new(settings),
-    );
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        if std::fs::read_to_string(workspace.path().join("opened"))
-            .ok()
-            .as_deref()
-            == workspace.path().to_str()
-        {
-            break;
+    for menu in [false, true] {
+        if menu {
+            for character in ".Run open command".chars() {
+                app.event(
+                    &TuiEvent::Key(KeyEvent::from(Key::Char(character))),
+                    &mut EventCtx::new(settings),
+                );
+            }
+            app.event(
+                &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+                &mut EventCtx::new(settings),
+            );
+            assert!(!app.menu_layer().is_active());
+        } else {
+            app.event(
+                &TuiEvent::Key(KeyEvent {
+                    code: Key::Char(';'),
+                    modifiers: KeyModifiers::CONTROL,
+                }),
+                &mut EventCtx::new(settings),
+            );
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "custom workspace command did not finish"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if std::fs::read_to_string(workspace.path().join("opened"))
+                .ok()
+                .as_deref()
+                == workspace.path().to_str()
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "custom workspace command did not finish"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        std::fs::remove_file(workspace.path().join("opened")).unwrap();
+        assert!(!app.view.first().is_active());
     }
     assert!(app.service.opened_system_targets().is_empty());
 }

@@ -8,6 +8,7 @@ use std::{
 };
 
 use super::{
+    Startup,
     command::{Progress, docker, remaining, run},
     compose,
     config::Config,
@@ -21,7 +22,7 @@ pub(crate) fn start(
     config: &Config,
     template_name: &str,
     name: &str,
-    branch_instances: bool,
+    startup: Startup,
     timeout: u64,
     progress: Progress,
     pending_services: impl FnOnce(Vec<crate::store::environments::InstanceService>),
@@ -29,7 +30,10 @@ pub(crate) fn start(
     validate_instance_name(name)?;
     validate_name(template_name)?;
     let deadline = Instant::now() + Duration::from_secs(timeout);
-    let _lock = gateway::lock(config, &format!("instance-{name}"))?;
+    let _lock = match startup.instance_lock {
+        Some(lock) => lock,
+        None => gateway::lock(config, &format!("instance-{name}"))?,
+    };
     let activity = journal::ActivityGuard::begin(config, name, "create_instance", None, timeout)?;
     let result = (|| {
         journal::activity_template(config, name, template_name)?;
@@ -49,7 +53,7 @@ pub(crate) fn start(
                 );
             }
         }
-        let branch = branch_instances.then_some(name);
+        let branch = startup.branch_instances.then_some(name);
         ownership::record(config, template_name, Path::new(&template.directory), name)?;
         let workspace = config.workspaces.join(name);
         fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
@@ -67,6 +71,9 @@ pub(crate) fn start(
             deadline,
             progress.clone(),
         )?;
+        if let Some(sender) = startup.workspace_ready {
+            let _ = sender.send(workspace.display().to_string());
+        }
         progress("Validating Compose and rendering instance routes".into());
         let rendered = compose::render(
             config,

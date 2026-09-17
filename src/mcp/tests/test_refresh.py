@@ -103,7 +103,7 @@ class RefreshTests(unittest.TestCase):
                     terminal.send(b"\x1b[I")
                     terminal.wait_for(lambda: inventory_calls() == 2, timeout=3)
                     terminal.output = b""
-                    terminal.send(b"v")
+                    terminal.send(b"\r")
                     terminal.wait_for(lambda: b"Fresh MCP manifest" in terminal.output)
                     external = home / "templates" / "manual-only"
                     external.mkdir()

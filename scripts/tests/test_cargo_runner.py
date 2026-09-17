@@ -44,38 +44,45 @@ export TANDEM_GATEWAY_PORT=9886
                               cwd=self.root / "bin", env=environment or self.environment,
                               capture_output=True, text=True, timeout=10)
 
-    def test_dev_sources_fixture_values_and_preserves_arguments(self):
+    def test_tandem_commands_source_fixture_values_and_preserve_arguments(self):
         self.write_environment()
-        result = self.run_binary("dev", "--bind", "127.0.0.1:7348", "argument with spaces",
-                                 environment={**self.environment, "TANDEM_HOME": "/inherited"})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stderr, "")
-        self.assertEqual(json.loads(result.stdout), {
-            "args": ["dev", "--bind", "127.0.0.1:7348", "argument with spaces"],
-            "home": "/fixture home", "namespace": "fixture-test", "port": "9886",
-        })
+        for arguments in (
+            (), ("mcp",), ("serve",), ("--help",),
+            ("dev", "--bind", "127.0.0.1:7348", "argument with spaces"),
+            ("new-instance", "review", "-t", "postcard", "-oc"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.run_binary(*arguments,
+                                         environment={**self.environment, "TANDEM_HOME": "/inherited"})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(json.loads(result.stdout), {
+                    "args": list(arguments),
+                    "home": "/fixture home", "namespace": "fixture-test", "port": "9886",
+                })
 
     def test_missing_fixture_file_preserves_the_inherited_environment(self):
         result = self.run_binary("dev", environment={**self.environment, "TANDEM_HOME": "/custom"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["home"], "/custom")
 
-    def test_other_commands_and_binaries_do_not_source_the_file(self):
+    def test_helper_and_test_binaries_keep_their_inherited_environment(self):
         (self.root / "projects/env.sh").write_text("exit 91\n")
-        for arguments in ((), ("mcp",), ("serve",), ("--help",)):
-            with self.subTest(arguments=arguments):
-                result = self.run_binary(*arguments)
+        for name in ("release-command", "tandem-test-hash"):
+            with self.subTest(binary=name):
+                helper = self.root / "bin" / name
+                shutil.copy2(self.binary, helper)
+                result = self.run_binary("dev", binary=helper,
+                                         environment={**self.environment, "TANDEM_HOME": "/custom"})
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIsNone(json.loads(result.stdout)["home"])
-        helper = self.root / "bin/release-command"
-        shutil.copy2(self.binary, helper)
-        self.assertEqual(self.run_binary("dev", binary=helper).returncode, 0)
+                self.assertEqual(json.loads(result.stdout)["home"], "/custom")
 
     def test_sourcing_failure_stops_launch_and_child_exit_codes_are_preserved(self):
         (self.root / "projects/env.sh").write_text("false\n")
         failed = self.run_binary("dev")
         self.assertNotEqual(failed.returncode, 0)
         self.assertEqual(failed.stdout, "")
+        self.write_environment()
         result = self.run_binary("mcp", environment={**self.environment, "TEST_EXIT": "23"})
         self.assertEqual(result.returncode, 23)
 
@@ -87,7 +94,8 @@ export TANDEM_GATEWAY_PORT=9886
         (self.root / "src").mkdir()
         (self.root / "Cargo.toml").write_text('[package]\nname = "tandem"\nversion = "0.0.0"\nedition = "2024"\n')
         (self.root / "src/main.rs").write_text('fn main() { println!("{}", std::env::var("TANDEM_HOME").unwrap()); }\n')
-        result = subprocess.run(["cargo", "run", "--offline", "--quiet", "--", "dev"],
+        result = subprocess.run(["cargo", "run", "--offline", "--quiet", "--",
+                                 "new-instance", "review", "-t", "postcard", "-oc"],
                                 cwd=self.root / "src", env=self.environment,
                                 capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)

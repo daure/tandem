@@ -21,6 +21,10 @@ path = "src/lib.rs"
 name = "tandem"
 path = "src/main.rs"
 
+[[test]]
+name = "cli-creation"
+path = "src/cli/tests/creation.rs"
+
 [dependencies]
 axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }

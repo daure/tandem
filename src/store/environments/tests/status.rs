@@ -152,7 +152,6 @@ fn lifecycle_actions_follow_target_roles_and_state_instead_of_metrics() {
         ContainerState::Running,
         HealthState::Healthy,
     )]);
-    app.services[0].runtime.resources_stale = true;
     app.services[0].runtime.resource_error = Some("stats unavailable".into());
     assert!(app.can_stop());
     assert!(app.can_restart());
@@ -211,11 +210,8 @@ fn memory_and_cpu_coverage_are_independent_and_paused_memory_counts() {
     assert!(usage.cpu_partial);
     let mut app = app;
     app.services[0].usage.as_mut().unwrap().cpu_basis_points = Some(15000);
-    app.services[1].runtime.resources_stale = true;
     let usage = UsageSummary::instance(&app);
     assert_eq!(usage.cpu_basis_points, Some(15000));
-    assert!(usage.memory_stale);
-    assert!(!usage.cpu_stale);
     let mut pending = instance(vec![]);
     pending.pending = true;
     assert!(UsageSummary::instances([&app, &pending].into_iter()).memory_partial);

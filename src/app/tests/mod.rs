@@ -1,6 +1,7 @@
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use tuicore::{
-    AnimationSettings, EventCtx, Key, KeyEvent, KeyModifiers, RenderCtx, TuiEvent, TuiNode,
+    AnimationSettings, EventCtx, EventRoute, HotkeyEvent, Key, KeyEvent, KeyModifiers, RenderCtx,
+    TuiEvent, TuiNode,
 };
 
 use super::{Msg, root, rows};
@@ -112,7 +113,7 @@ fn tree_rows_show_routed_services_without_gateway_children() {
     assert_eq!(rows[2].parent, Some(rows[1].id.clone()));
     assert_eq!(
         rows[2].label,
-        "web · Running\n http://localhost:9876/review/web/ · port 8080"
+        "web · Running\n http://localhost:9876/review/web/ · 󰈀 8080"
     );
     assert_eq!(rows[2].icon, "");
     assert_eq!(rows[3].parent, Some(rows[1].id.clone()));
@@ -225,21 +226,24 @@ fn setup_jobs_are_visible_and_completed_jobs_are_grouped() {
 }
 
 #[test]
-fn enter_opens_the_selected_routed_service() {
+fn unassigned_keys_leave_selected_instance_actions_idle() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
-    super::instances::set_highlighted(&app.instances, Some("service:review:web".into()));
+    super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
 
-    app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
-        &mut EventCtx::new(AnimationSettings::default()),
-    );
-
-    assert_eq!(
-        app.service.opened_system_targets(),
-        ["http://localhost:9876/review/web/"]
-    );
+    for key in [
+        KeyEvent::from(Key::Char('v')),
+        KeyEvent::from(Key::Char(';')),
+    ] {
+        app.event(
+            &TuiEvent::Key(key),
+            &mut EventCtx::new(AnimationSettings::default()),
+        );
+        assert!(!app.view.first().is_active());
+        assert!(app.service.opened_system_targets().is_empty());
+        assert!(app.service.operations().is_empty());
+    }
 }
 
 #[test]
@@ -252,7 +256,37 @@ fn routed_service_action_menu_opens_the_gateway_in_the_browser() {
 
     app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('.'))), &mut events);
     assert!(app.menu_layer().is_active());
-    app.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut events);
+    let area = Rect::new(0, 0, 130, 40);
+    app.layout(area, &mut tuicore::LayoutCtx::new());
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            app.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    let lines = rendered_lines(&terminal, area);
+    for (label, hotkey) in [
+        ("Copy service name", "yy"),
+        ("Copy gateway URL", "yu"),
+        ("Open in browser", "⌃;"),
+    ] {
+        let line = lines.iter().find(|line| line.contains(label)).unwrap();
+        assert!(
+            line.trim_end_matches([' ', '┃']).ends_with(hotkey),
+            "{line}"
+        );
+    }
+    super::instances::set_highlighted(&app.instances, Some("service:review:web".into()));
+    app.menu_layer_mut().set_active_with_context(false, &mut events);
+    app.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char(';'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut events,
+    );
 
     assert_eq!(
         app.service.opened_system_targets(),
@@ -261,14 +295,82 @@ fn routed_service_action_menu_opens_the_gateway_in_the_browser() {
 }
 
 #[test]
-fn enter_opens_the_selected_instance_workspace() {
+fn yank_copies_the_selected_row_name_and_yu_copies_its_gateway_url() {
+    tuicore::init();
+    let mut app = root(AppService::for_tests());
+    app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
+    for (id, value) in [
+        ("template:/tmp/templates/website", "website"),
+        ("instance:review", "review"),
+        ("service:review:web", "web"),
+    ] {
+        super::instances::set_highlighted(&app.instances, Some(id.into()));
+        let mut events = EventCtx::new(AnimationSettings::default());
+
+        app.event(&TuiEvent::Yank, &mut events);
+
+        assert_eq!(events.clipboard_request(), Some(value));
+    }
+
+    super::instances::set_highlighted(&app.instances, Some("service:review:web".into()));
+    let mut events = EventCtx::new(AnimationSettings::default());
+
+    app.handle_message(Msg::CopyGatewayUrl, &mut events);
+
+    assert_eq!(
+        events.clipboard_request(),
+        Some("http://localhost:9876/review/web/")
+    );
+}
+
+#[test]
+fn copy_hotkeys_are_registered_on_the_instances_tab() {
+    tuicore::init();
+    let mut app = root(AppService::for_tests());
+    app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
+    let area = Rect::new(0, 0, 130, 40);
+    let mut layout = tuicore::LayoutEngine::new();
+    layout.layout(&mut app, area);
+    let path = layout
+        .focus_targets()
+        .iter()
+        .find(|target| {
+            target
+                .hotkey_sequences
+                .iter()
+                .any(|sequence| sequence == "yy")
+        })
+        .unwrap()
+        .path
+        .clone();
+
+    for sequence in ["yy", "yu"] {
+        let mut events = EventCtx::new(AnimationSettings::default());
+        app.dispatch_event(
+            &EventRoute::new(path.clone()),
+            &TuiEvent::Hotkey(HotkeyEvent::Commit(sequence.into())),
+            &mut events,
+        );
+
+        assert!(matches!(
+            (sequence, events.messages()),
+            ("yy", [Msg::CopyName]) | ("yu", [Msg::CopyGatewayUrl])
+        ));
+    }
+}
+
+#[test]
+fn control_semicolon_opens_the_selected_instance_workspace() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
 
     app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char(';'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
         &mut EventCtx::new(AnimationSettings::default()),
     );
 
@@ -319,7 +421,7 @@ fn details_hotkey_opens_the_selected_template_in_bottom_tabs() {
     app.layout(area, &mut tuicore::LayoutCtx::new());
     app.event(
         &TuiEvent::Key(KeyEvent {
-            code: Key::Char('v'),
+            code: Key::Enter,
             modifiers: KeyModifiers::NONE,
         }),
         &mut events,
@@ -541,11 +643,12 @@ fn details_hotkey_opens_the_selected_instance_in_a_bottom_dialog() {
     super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
 
     app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Char('v'))),
+        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
         &mut EventCtx::new(AnimationSettings::default()),
     );
 
     assert!(app.view.first().is_active());
+    assert!(app.service.opened_system_targets().is_empty());
 }
 
 #[test]
@@ -556,11 +659,12 @@ fn details_hotkey_opens_the_selected_routed_service() {
     super::instances::set_highlighted(&app.instances, Some("service:review:web".into()));
 
     app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Char('v'))),
+        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
         &mut EventCtx::new(AnimationSettings::default()),
     );
 
     assert!(app.view.first().is_active());
+    assert!(app.service.opened_system_targets().is_empty());
 }
 
 #[test]
@@ -584,14 +688,18 @@ fn template_action_menu_keeps_typed_hotkeys_in_its_search() {
         .unwrap();
     let lines = rendered_lines(&terminal, area);
     for (label, hotkey) in [
-        ("View details", "v"),
+        ("Copy template name", "yy"),
+        ("View details", "Enter"),
         ("New instance", "n"),
         ("Stop all instances", "s"),
         ("Purge all instances", "p"),
         ("Delete template", "x"),
     ] {
         let line = lines.iter().find(|line| line.contains(label)).unwrap();
-        assert!(line.trim_end().ends_with(hotkey));
+        assert!(
+            line.trim_end_matches([' ', '┃']).ends_with(hotkey),
+            "{line}"
+        );
     }
 
     app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('v'))), &mut events);
@@ -639,14 +747,19 @@ fn instance_action_menu_lists_instance_actions() {
         .unwrap();
     let lines = rendered_lines(&terminal, area);
     for (label, hotkey) in [
-        ("View details", "v"),
+        ("Copy instance name", "yy"),
+        ("View details", "Enter"),
+        ("Run open command", "⌃;"),
         ("New instance", "n"),
         ("Start instance", "s"),
         ("Stop instance", "s"),
         ("Delete instance", "x"),
     ] {
         let line = lines.iter().find(|line| line.contains(label)).unwrap();
-        assert!(line.trim_end().ends_with(hotkey));
+        assert!(
+            line.trim_end_matches([' ', '┃']).ends_with(hotkey),
+            "{line}"
+        );
     }
 }
 

@@ -85,8 +85,8 @@ pub(super) fn instance(instance: &Instance) -> Vec<Property> {
             },
         ),
         Property::new(
-            "Open workspace",
-            "Enter opens the workspace in your file explorer.",
+            "Open command",
+            "Run open command from the instance Actions menu.",
         ),
     ];
     if let Some(detail) = summary.detail {
@@ -219,10 +219,6 @@ pub(super) fn usage_details(rows: &mut Vec<Property>, usage: &UsageSummary) {
             if usage.memory_partial {
                 row.value.push_str(" · partial");
             }
-            if usage.memory_stale {
-                row.value.push_str(" · stale");
-                row.tone = Tone::Muted;
-            }
         } else if row.name == "CPU" {
             row.value = usage.cpu_basis_points.map_or_else(|| "—".into(), cpu);
             row.tone = if usage.cpu_basis_points.is_some() {
@@ -235,10 +231,6 @@ pub(super) fn usage_details(rows: &mut Vec<Property>, usage: &UsageSummary) {
             }
             if usage.cpu_partial {
                 row.value.push_str(" · partial");
-            }
-            if usage.cpu_stale {
-                row.value.push_str(" · stale");
-                row.tone = Tone::Muted;
             }
         }
     }

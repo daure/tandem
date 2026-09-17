@@ -1,6 +1,6 @@
 # Tandem
 
-Keyboard-first local development environments, shared by a TUI and MCP agents. Templates are editable
+Keyboard-first local development environments, shared by a TUI, CLI and MCP agents. Templates are editable
 Compose directories; each instance gets its own Compose project and workspace. A label-driven Traefik
 gateway exposes declared HTTP services at `http://localhost:9876/<instance>/<service>/`.
 
@@ -17,8 +17,8 @@ cargo run -- serve          # HTTP MCP at http://127.0.0.1:7345/mcp
 ```
 
 1. Press `T` or use the Template button to create a template named `website`; its folder contains a working static web starter.
-2. On the template row, press `i` to inspect its directory, Compose file, and source; `d` copies the
-   directory and `c` copies the Compose path inside that dialog.
+2. Press `Enter` on a template, instance or service to view its details. Template details include
+   metadata, Compose source and the routing manifest.
 3. Press `n`, enter `review`, then Enter or Ctrl+S to confirm execution; watch progress in Details.
 4. Expand the template row using the DataView's configured expansion key (shown in its action bar)
    and select `review`; open `http://localhost:9876/review/web/index.html`.
@@ -75,6 +75,43 @@ fresh, capped coverage. Resource errors do not change runtime health.
 An empty template list or unavailable Docker daemon is displayed without preventing template editing.
 Starting an existing instance name reapplies the same template directory. It refuses names owned by
 another template or unmanaged containers.
+
+## CLI instance lifecycle
+
+```bash
+tandem new-instance review --template website
+tandem new-instance review -t website --open-command
+tandem new-instance review -t website -oc
+tandem delete-instance review
+tandem delete-instance review --headless
+```
+
+For a new instance, the template must exist. Invoking this command authorizes host Git provisioning
+and Docker execution; use trusted templates. Creation follows the saved Branch instances setting and
+the same ownership checks, locks and startup rules as the TUI/MCP. The CLI waits up to ten minutes for
+startup readiness, prints the workspace and service URLs on success, and exits nonzero on failure.
+Failed startups preserve resources for inspection.
+
+An existing instance owned by the requested template is left unchanged, including when stopped or
+paused. The CLI reports that it exists without checking readiness. With `--open-command` or `-oc`,
+it only launches the saved opener in that instance's workspace; template files and repository sources
+are not needed. Ownership mismatches and concurrent instance operations are rejected.
+
+`--open-command` (also spelled `-oc`) is a boolean flag. For a new instance, the workspace-ready signal
+triggers the saved opener after all repositories declared in `tandem.json` have been cloned or validated. This signal is
+emitted before Compose configuration; opening and startup then proceed independently. Template-owned
+clone scripts and container-created files are outside this milestone; declare repositories for early
+source access.
+An empty saved command uses the system folder opener. Without the flag, nothing is opened.
+The opener inherits the CLI's environment; custom commands run in the workspace with `TANDEM_INSTANCE`
+and `TANDEM_WORKSPACE` set. Editor lifetime does not delay startup or CLI exit. Settings/launch failures
+make the CLI fail after startup completes, or immediately for an existing instance. Opener exit failures
+observed while the CLI runs are logged.
+
+`delete-instance` permanently removes the named instance's owned containers, workspace, private volumes,
+networks, rendered Compose file, and ownership receipt. It leaves templates, shared images, and the gateway intact.
+`--headless` (also `-h`) launches deletion in a detached Tandem process and returns after that process starts.
+It cannot report the deletion result; inspect diagnostic logs or runtime state for failures.
 
 ## Statuses
 
@@ -201,7 +238,7 @@ guidance files are user-owned; update them explicitly when adopting this workflo
 | `TANDEM_NAMESPACE` | `tandem` | Docker project/network namespace |
 | `TANDEM_GATEWAY_PORT` | `9876` | Shared loopback browser port |
 | `TANDEM_INSTRUCTIONS_FILE` | `$TANDEM_HOME/instructions.md` | Existing Markdown file, read on every tool call |
-| `TANDEM_KEY_INFO` | `i` | Template information dialog |
+| `TANDEM_KEY_INFO` | `Enter` | View details for the selected template, instance or service |
 | `TANDEM_KEY_START` | `n` | Start instance dialog |
 | `TANDEM_KEY_NEW_TEMPLATE` | `T` | Create template dialog |
 | `TANDEM_KEY_STOP` | `s` | Start/stop the selected instance or service; stop all instances on a template row |
@@ -211,17 +248,22 @@ guidance files are user-owned; update them explicitly when adopting this workflo
 | `TANDEM_KEY_RESTART` | `r` | Restart the selected instance or service after confirmation |
 | `TANDEM_KEY_STOP_ALL` | `S` | Stop instances across all templates after confirmation |
 | `TANDEM_KEY_PURGE_ALL` | `P` | Purge instances across all templates after confirmation |
+| `TANDEM_KEY_OPEN_COMMAND` | `ctrl+;` | Run the saved open command for the selected instance |
 
-Application hotkey overrides are distinct ASCII letters. Shared navigation, focus, and component
-keys use tuicore configuration. The TUI displays resolved key labels.
+Application hotkey overrides accept distinct ASCII letters; `TANDEM_KEY_INFO` also accepts `Enter`,
+and `TANDEM_KEY_OPEN_COMMAND` also accepts `ctrl+;`. Shared navigation, focus, and component keys use
+tuicore configuration. The TUI displays resolved key labels. Ctrl+; requires a terminal that reports
+the modifier; the Actions menu or a letter override works when the terminal cannot send it.
 
 ### Workspace open command
 
-In Settings, edits to **Open command** save immediately. Enter on an instance opens its workspace
-with `xdg-open` when the setting is empty or whitespace-only.
+In Settings, edits to **Open command** save immediately. Press `Ctrl+;` on an instance or choose
+**Run open command** from its `.` Actions menu to execute it. An empty or whitespace-only setting
+opens the workspace with `xdg-open`.
 A custom command runs on the host via `sh -c`, with the workspace as its working directory, the
 instance name in `TANDEM_INSTANCE`, and the absolute path in `TANDEM_WORKSPACE`. Quote it as `"$TANDEM_WORKSPACE"`; paths are passed as
-environment data, not interpolated into shell code. Enter on a routed service opens its URL.
+environment data, not interpolated into shell code. Choose **Open in browser** from a routed service's
+`.` Actions menu to open its URL.
 
 The setting is stored in `$TANDEM_HOME/settings.sqlite3`. MCP agents can read it with
 `get_open_command` and save it with `set_open_command` using `command` and `confirmed=true`
@@ -268,10 +310,11 @@ logs or stderr; MCP stdout contains protocol data only.
 
 For editable sample applications, use the [development fixture generators](projects-generators/README.md).
 They create five local Git repositories and four Tandem templates under ignored `projects/`.
-On Unix, `cargo run -- dev` sources the checkout's `projects/env.sh` when present, before launching
-Tandem. Its exports override inherited values for that process; your current shell stays unchanged.
-The file is trusted shell code. Other commands use their inherited environment; source the generated
-file manually to use fixtures with plain `cargo run` or MCP-only mode.
+On Unix, `cargo run` sources the checkout's `projects/env.sh` when present for every Tandem mode,
+including `dev`, `new-instance` and MCP. Its exports override inherited values for that process;
+your current shell stays unchanged. The file is trusted shell code. A missing file preserves the
+inherited environment. Invoke the built binary directly to use another environment. Cargo test
+binaries and release helpers use their inherited environment.
 
 ```bash
 cargo fmt --check

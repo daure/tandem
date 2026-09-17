@@ -53,9 +53,10 @@ fn bulk_buttons_are_responsive_and_follow_instance_availability() {
             assert!(lines[1].contains("|S|"), "{}", lines[1]);
             assert!(lines[1].contains("|P|"), "{}", lines[1]);
             for (key, enabled) in [("stop-all", stop_enabled), ("purge-all", purge_enabled)] {
-                let target = layout.focus_targets().iter().find(|target| {
-                    target.path.keys().iter().any(|part| part.as_str() == key)
-                });
+                let target = layout
+                    .focus_targets()
+                    .iter()
+                    .find(|target| target.path.keys().iter().any(|part| part.as_str() == key));
                 assert_eq!(
                     target.is_some_and(|target| target.enabled),
                     enabled,
@@ -164,7 +165,13 @@ fn toolbar_bulk_hotkeys_use_configured_letters_for_labels_and_activation() {
         let state = std::rc::Rc::new(std::cell::RefCell::new(
             super::super::toolbar::State::from_snapshot(&inventory()),
         ));
-        let mut toolbar = super::super::toolbar::Toolbar::new('T', 'R', 'K', 'L', state);
+        let mut toolbar = super::super::toolbar::Toolbar::new(
+            tuicore::KeySpec::shifted('t'),
+            tuicore::KeySpec::shifted('r'),
+            tuicore::KeySpec::shifted('k'),
+            tuicore::KeySpec::shifted('l'),
+            state,
+        );
         let area = Rect::new(0, 0, width, 1);
         toolbar.layout(area, &mut tuicore::LayoutCtx::new());
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
@@ -203,9 +210,7 @@ fn bulk_actions_confirm_captured_targets_across_all_templates_before_submission(
             let target = layout
                 .focus_targets()
                 .iter()
-                .find(|target| {
-                    target.path.keys().iter().any(|part| part.as_str() == key)
-                })
+                .find(|target| target.path.keys().iter().any(|part| part.as_str() == key))
                 .unwrap()
                 .clone();
             app.dispatch_focus(&target, true, &mut tuicore::FocusCtx::default());
@@ -217,7 +222,11 @@ fn bulk_actions_confirm_captured_targets_across_all_templates_before_submission(
             );
             assert!(matches!(ctx.messages(), [Msg::StopAll] | [Msg::PurgeAll]));
             app.handle_message(
-                if key == "stop-all" { Msg::StopAll } else { Msg::PurgeAll },
+                if key == "stop-all" {
+                    Msg::StopAll
+                } else {
+                    Msg::PurgeAll
+                },
                 &mut ctx,
             );
             assert!(app.view.first().is_active());
@@ -230,18 +239,25 @@ fn bulk_actions_confirm_captured_targets_across_all_templates_before_submission(
                 .join(" ");
             assert!(text.contains("all templates"), "{text}");
             assert!(text.contains("gateway"), "{text}");
-            assert!(text.contains(if key == "stop-all" {
-                "Stop all (S)"
-            } else {
-                "Purge all (P)"
-            }), "{text}");
+            assert!(
+                text.contains(if key == "stop-all" {
+                    "Stop all (S)"
+                } else {
+                    "Purge all (P)"
+                }),
+                "{text}"
+            );
             if key == "purge-all" {
                 assert!(text.contains("cannot be undone"), "{text}");
             }
             app.handle_message(Msg::Close, &mut ctx);
             assert!(app.service.operations().is_empty());
             app.handle_message(
-                if key == "stop-all" { Msg::StopAll } else { Msg::PurgeAll },
+                if key == "stop-all" {
+                    Msg::StopAll
+                } else {
+                    Msg::PurgeAll
+                },
                 &mut ctx,
             );
 
@@ -267,32 +283,33 @@ fn bulk_actions_confirm_captured_targets_across_all_templates_before_submission(
 }
 
 #[test]
-fn bulk_admission_failures_keep_confirmation_or_warn_while_other_targets_proceed() {
+fn active_operations_block_bulk_confirmation_and_submission() {
     tuicore::init();
-    for partial in [false, true] {
+    for message in [Msg::StopAll, Msg::PurgeAll] {
         let mut app = root(AppService::for_tests());
-        app.update_snapshot(if partial { inventory() } else { snapshot() });
+        app.update_snapshot(inventory());
         let mut ctx = EventCtx::new(AnimationSettings::default());
-        app.handle_message(Msg::PurgeAll, &mut ctx);
         app.service.queue_instance_for_tests("review", "website");
-        app.handle_message(Msg::Submit, &mut ctx);
-        assert_eq!(app.view.first().is_active(), !partial);
-        let operations = app.service.operations();
-        assert_eq!(
-            operations.iter().filter(|operation| operation.action == "delete_instance").count(),
-            if partial { 2 } else { 0 }
-        );
-        assert!(!operations.iter().any(|operation| {
-            operation.action == "delete_instance" && operation.name == "review"
+        app.handle_message(message, &mut ctx);
+        assert!(!app.view.first().is_active());
+        assert!(app.intent.is_none());
+        assert_eq!(app.service.operations().len(), 1);
+        assert!(app.notifications.center().history().any(|notification| {
+            notification.title() == "Operation in progress"
+                && notification
+                    .body()
+                    .contains("Wait for the current operation to finish")
         }));
-        if partial {
-            assert!(app.notifications.center().history().any(|notification| {
-                notification.title() == "Some instances could not be queued"
-                    && notification.body().contains("review:")
-            }));
-        } else {
-            let (_, lines) = render(&mut app, 130);
-            assert!(lines.join(" ").contains("already running"));
-        }
     }
+
+    let mut app = root(AppService::for_tests());
+    app.update_snapshot(inventory());
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+    app.handle_message(Msg::PurgeAll, &mut ctx);
+    assert!(app.view.first().is_active());
+    app.service.queue_instance_for_tests("review", "website");
+    app.handle_message(Msg::Submit, &mut ctx);
+    assert!(!app.view.first().is_active());
+    assert!(app.intent.is_none());
+    assert_eq!(app.service.operations().len(), 1);
 }

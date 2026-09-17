@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::store::environments::validate_name;
+use tuicore::{Key, KeyEvent, KeyModifiers, KeySpec};
 
 #[derive(Clone)]
 pub(crate) struct Config {
@@ -14,7 +15,7 @@ pub(crate) struct Config {
     pub instructions: PathBuf,
     pub namespace: String,
     pub port: u16,
-    pub keys: [char; 10],
+    pub keys: [KeySpec; 11],
     pub operation_id: Option<String>,
 }
 
@@ -47,19 +48,21 @@ impl Config {
             "RESTART",
             "STOP_ALL",
             "PURGE_ALL",
+            "OPEN_COMMAND",
         ]
         .iter()
         .enumerate()
         {
             if let Ok(value) = env::var(format!("TANDEM_KEY_{name}")) {
-                if value.len() != 1 || !value.as_bytes()[0].is_ascii_alphabetic() {
-                    return Err(format!("TANDEM_KEY_{name} must be one ASCII letter"));
-                }
-                config.keys[index] = value.as_bytes()[0] as char;
+                config.keys[index] = action_key(name, &value)?;
             }
         }
-        let unique: std::collections::BTreeSet<_> = config.keys.iter().collect();
-        if unique.len() != config.keys.len() {
+        if config
+            .keys
+            .iter()
+            .enumerate()
+            .any(|(index, key)| config.keys[..index].contains(key))
+        {
             return Err("Tandem action keys must be distinct".into());
         }
         Ok(config)
@@ -79,7 +82,19 @@ impl Config {
             home,
             namespace,
             port,
-            keys: ['v', 'n', 'T', 's', 'R', 'x', 'p', 'r', 'S', 'P'],
+            keys: [
+                KeySpec::key(Key::Enter),
+                KeySpec::plain('n'),
+                KeySpec::shifted('t'),
+                KeySpec::plain('s'),
+                KeySpec::shifted('r'),
+                KeySpec::plain('x'),
+                KeySpec::plain('p'),
+                KeySpec::plain('r'),
+                KeySpec::shifted('s'),
+                KeySpec::shifted('p'),
+                KeySpec::key_with_modifiers(Key::Char(';'), KeyModifiers::CONTROL),
+            ],
             operation_id: None,
         };
         for directory in [
@@ -119,6 +134,31 @@ impl Config {
         self.project("gateway")
     }
 }
+
+fn action_key(name: &str, value: &str) -> Result<KeySpec, String> {
+    match (name, value.to_ascii_lowercase().as_str()) {
+        ("INFO", "enter") => Ok(KeySpec::key(Key::Enter)),
+        ("OPEN_COMMAND", "ctrl+;") => Ok(KeySpec::key_with_modifiers(
+            Key::Char(';'),
+            KeyModifiers::CONTROL,
+        )),
+        _ if value.len() == 1 && value.as_bytes()[0].is_ascii_alphabetic() => Ok(KeySpec::from(
+            KeyEvent::from(Key::Char(value.as_bytes()[0] as char)),
+        )),
+        _ => Err(format!(
+            "TANDEM_KEY_{name} must be one ASCII letter{}",
+            match name {
+                "INFO" => " or 'Enter'",
+                "OPEN_COMMAND" => " or 'ctrl+;'",
+                _ => "",
+            }
+        )),
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/config.rs"]
+mod tests;
 
 pub(crate) fn private_file(path: &Path, create_new: bool) -> std::io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();

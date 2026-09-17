@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::instances::{self, Instances};
-use crate::store::environments::StartupTiming;
+use crate::store::environments::{Activity, Operation, OperationState, StartupTiming};
 
 #[test]
 fn workspace_labels_abbreviate_only_paths_inside_home() {
@@ -78,6 +78,63 @@ fn starting_instances_show_a_bounded_countdown_then_an_overrun() {
 }
 
 #[test]
+fn active_startup_rows_show_the_latest_progress_beneath_the_status() {
+    let progress = "Waiting for service health and gateway content assertions";
+    let operation = Operation {
+        id: "operation-id".into(),
+        action: "create_instance".into(),
+        name: "review".into(),
+        template: Some("website".into()),
+        service: None,
+        state: OperationState::Running,
+        progress: vec!["Queued".into(), progress.into()],
+        elapsed_seconds: 0,
+        elapsed_milliseconds: 0,
+        error: None,
+        instance: None,
+    };
+
+    let mut pending = snapshot();
+    pending.instances[0].pending = true;
+    pending.instances[0].services.clear();
+    let instance = rows::from_snapshot_with_operations(&pending, &[operation.clone()])
+        .into_iter()
+        .find(|row| row.id == "instance:review")
+        .unwrap();
+    assert_eq!(instance.label, format!("review · Creating\n{progress}"));
+
+    let mut activity = snapshot();
+    activity.instances.clear();
+    activity.activities.push(Activity {
+        id: "activity-id".into(),
+        name: "review".into(),
+        template: Some("website".into()),
+        service: None,
+        action: "create_instance".into(),
+        owner_pid: 1,
+        started_at: 0,
+        deadline: 0,
+        error: None,
+        finished: false,
+    });
+    let operation = rows::from_snapshot_with_operations(&activity, &[operation])
+        .into_iter()
+        .find(|row| row.id == "operation:activity-id:review")
+        .unwrap();
+    assert_eq!(operation.label, format!("review · Starting\n{progress}"));
+    assert!(operation.hide_resources);
+
+    let fallback = rows::from_snapshot_with_operations(&activity, &[])
+        .into_iter()
+        .find(|row| row.id == "operation:activity-id:review")
+        .unwrap();
+    assert_eq!(
+        fallback.label,
+        "review · Starting\nPreparing workspace and services"
+    );
+}
+
+#[test]
 fn instance_status_label_uses_its_semantic_color() {
     tuicore::init();
     let row = rows::from_snapshot(&snapshot())[1].clone();
@@ -133,7 +190,7 @@ fn tree_secondary_lines_are_muted_and_align_with_the_row_icon() {
             .unwrap();
         let lines = rendered_lines(&terminal, area);
         let service_detail = if routed {
-            " http://localhost:9876/review/web/ · port 8080"
+            " http://localhost:9876/review/web/ · 󰈀 8080"
         } else {
             "nginx:latest"
         };

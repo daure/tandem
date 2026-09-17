@@ -1,8 +1,8 @@
 use std::{collections::HashSet, path::Path};
 
 use crate::store::environments::{
-    EnvironmentSnapshot, Instance, InstanceService, ResourceUsage, Severity, StartupTiming, Status,
-    UsageSummary,
+    EnvironmentSnapshot, Instance, InstanceService, Operation, OperationState, ResourceUsage,
+    Severity, StartupTiming, Status, UsageSummary,
 };
 use ratatui::{
     style::{Color, Style},
@@ -13,6 +13,7 @@ use super::{details, properties::Property};
 
 const TEMPLATE_ICON: &str = "󰠲";
 const GATEWAY_ICON: &str = "";
+const PORT_ICON: &str = "󰈀";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Tone {
@@ -139,7 +140,7 @@ fn format_seconds(milliseconds: u64) -> String {
     format!("{}s", milliseconds.div_ceil(1_000))
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub(super) struct Row {
     pub id: String,
     pub parent: Option<String>,
@@ -157,6 +158,7 @@ pub(super) struct Row {
     pub manifest_source: Option<String>,
     pub instance: Option<String>,
     pub service: Option<(String, String)>,
+    pub service_name: Option<String>,
     pub workspace: Option<String>,
     pub alternate_background: bool,
     pub gateway_url: Option<String>,
@@ -227,6 +229,13 @@ impl Row {
         }
         resource_text(&self.metrics)
     }
+
+    pub(super) fn name_value(&self) -> Option<String> {
+        self.service_name
+            .clone()
+            .or_else(|| self.instance.clone())
+            .or_else(|| self.parent.is_none().then(|| self.template.clone()))
+    }
 }
 
 pub(super) fn resource_text(metrics: &UsageSummary) -> Text<'static> {
@@ -234,41 +243,19 @@ pub(super) fn resource_text(metrics: &UsageSummary) -> Text<'static> {
         .memory_bytes
         .map_or_else(|| "—".into(), details::memory);
     let cpu = metrics.cpu_basis_points;
-    let suffix = |partial: bool, stale: bool, age: Option<u64>| {
-        let mut suffix = if partial {
-            " · partial".to_owned()
-        } else {
-            String::new()
-        };
-        if stale {
-            suffix.push_str(
-                &age.map(|age| format!(" · stale {age}s"))
-                    .unwrap_or_else(|| " · stale".into()),
-            );
-        }
-        suffix
+    let suffix = |partial: bool| {
+        if partial { " · partial" } else { "" }
     };
     Text::from(vec![
         Line::from(Span::styled(
-            format!(
-                "󰑹 {memory}{}",
-                suffix(
-                    metrics.memory_partial,
-                    metrics.memory_stale,
-                    metrics.age_seconds
-                )
-            ),
-            Style::default().fg(if metrics.memory_stale {
-                Tone::Muted
-            } else {
-                details::memory_tone(
-                    metrics.memory_bytes.map(|memory_bytes| ResourceUsage {
-                        memory_bytes,
-                        ..Default::default()
-                    }),
-                    metrics.memory_limit_bytes,
-                )
-            }
+            format!("󰑹 {memory}{}", suffix(metrics.memory_partial)),
+            Style::default().fg(details::memory_tone(
+                metrics.memory_bytes.map(|memory_bytes| ResourceUsage {
+                    memory_bytes,
+                    ..Default::default()
+                }),
+                metrics.memory_limit_bytes,
+            )
             .color()),
         )),
         Line::from(Span::styled(
@@ -276,16 +263,12 @@ pub(super) fn resource_text(metrics: &UsageSummary) -> Text<'static> {
                 " {}{}",
                 cpu.map_or_else(|| "—".into(), details::cpu),
                 if metrics.paused {
-                    " · paused".into()
+                    " · paused"
                 } else {
-                    suffix(
-                        metrics.cpu_partial,
-                        metrics.cpu_stale,
-                        metrics.cpu_age_seconds,
-                    )
+                    suffix(metrics.cpu_partial)
                 }
             ),
-            Style::default().fg(if cpu.is_some() && !metrics.cpu_stale {
+            Style::default().fg(if cpu.is_some() {
                 Tone::Normal
             } else {
                 Tone::Muted
@@ -385,6 +368,33 @@ fn ready_services<'a>(
 }
 
 pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
+    from_snapshot_with_operations(snapshot, &[])
+}
+
+fn operation_progress<'a>(
+    operations: &'a [Operation],
+    action: &str,
+    name: &str,
+) -> Option<&'a str> {
+    operations
+        .iter()
+        .find(|operation| {
+            operation.state == OperationState::Running
+                && operation.action == action
+                && operation.name == name
+        })?
+        .progress
+        .iter()
+        .rev()
+        .flat_map(|progress| progress.lines())
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+}
+
+pub(super) fn from_snapshot_with_operations(
+    snapshot: &EnvironmentSnapshot,
+    operations: &[Operation],
+) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut instances = snapshot.instances.iter().collect::<Vec<_>>();
     instances.sort_by(|left, right| {
@@ -513,15 +523,15 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
         let compose_source = template_row.compose_source.clone();
         let instance_id = format!("instance:{}", instance.name);
         let summary = instance_summary(instance, snapshot.startup.get(&instance.name));
+        let secondary_label = operation_progress(operations, "create_instance", &instance.name)
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                workspace_label(&instance.workspace, snapshot.home_directory.as_deref())
+            });
         rows.push(Row {
             id: instance_id.clone(),
             parent: Some(parent),
-            label: format!(
-                "{} · {}\n{}",
-                instance.name,
-                summary.label,
-                workspace_label(&instance.workspace, snapshot.home_directory.as_deref())
-            ),
+            label: format!("{} · {}\n{}", instance.name, summary.label, secondary_label),
             status: Some(summary.label),
             icon: summary.icon,
             tone: summary.tone,
@@ -535,6 +545,7 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
             manifest_source: None,
             instance: Some(instance.name.clone()),
             service: None,
+            service_name: None,
             workspace: Some(instance.workspace.clone()),
             alternate_background: false,
             gateway_url: None,
@@ -590,10 +601,10 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
                 .map(|url| {
                     service.port.map_or_else(
                         || format!("{GATEWAY_ICON} {url}"),
-                        |port| format!("{GATEWAY_ICON} {url} · port {port}"),
+                        |port| format!("{GATEWAY_ICON} {url} · {PORT_ICON} {port}"),
                     )
                 })
-                .or_else(|| service.port.map(|port| format!("port {port}")));
+                .or_else(|| service.port.map(|port| format!("{PORT_ICON} {port}")));
             let label = if service.runtime.replica > 1 {
                 format!("{} #{}", service.name, service.runtime.replica)
             } else {
@@ -626,6 +637,7 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
                 manifest_source: None,
                 instance: None,
                 service: (!service.one_shot).then(|| (instance.name.clone(), service.name.clone())),
+                service_name: Some(service.name.clone()),
                 workspace: None,
                 alternate_background: false,
                 gateway_url: service.url.clone(),
@@ -691,6 +703,14 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
             )
         };
         row.label = format!("{} · {label}", activity.name);
+        let progress = operation_progress(operations, &activity.action, &activity.name).or_else(|| {
+            (activity.active() && activity.action == "create_instance")
+                .then_some("Preparing workspace and services")
+        });
+        if let Some(progress) = progress {
+            row.label.push('\n');
+            row.label.push_str(progress);
+        }
         row.status = Some(label);
         row.status_detail = activity.error.clone();
         row.detail_tone = Tone::Error;
@@ -703,6 +723,7 @@ pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
         row.loading = activity.active();
         row.usage = None;
         row.metrics = UsageSummary::default();
+        row.hide_resources = true;
         row.details = vec![
             Property::new("Operation", &activity.action),
             Property::new("Instance", &activity.name),

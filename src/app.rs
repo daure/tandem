@@ -16,10 +16,7 @@ use tuicore::{
     TickResult, ToastRack, TuiEvent, TuiNode,
 };
 
-use crate::{
-    service::AppService,
-    store::environments::EnvironmentSnapshot,
-};
+use crate::{service::AppService, store::environments::EnvironmentSnapshot};
 
 mod action_menu;
 mod bulk;
@@ -61,6 +58,8 @@ pub(crate) enum Msg {
     StopAll,
     PurgeAll,
     SetBranchInstances(bool),
+    CopyName,
+    CopyGatewayUrl,
     Submit,
 }
 
@@ -113,7 +112,7 @@ pub(crate) struct App {
     view: View,
     instances: SharedState,
     toolbar_state: toolbar::SharedState,
-    keys: [KeySpec; 10],
+    keys: [KeySpec; 11],
     refresh_schedule: refresh::RefreshSchedule,
     manual_refresh: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
     notifications: ToastRack,
@@ -128,29 +127,16 @@ pub(crate) struct App {
 }
 
 pub(crate) fn root(service: AppService) -> App {
-    let key_chars = service.environment_keys();
-    let keys = key_chars.map(|key| {
-        if key.is_ascii_uppercase() {
-            KeySpec::shifted(key.to_ascii_lowercase())
-        } else {
-            KeySpec::plain(key)
-        }
-    });
+    let keys = service.environment_keys();
     let snapshot = service.environment_snapshot();
     let instances = instances::state(rows::from_snapshot(&snapshot));
     let toolbar_state = Rc::new(RefCell::new(toolbar::State::from_snapshot(&snapshot)));
-    let content = Tabs::new(vec![Tab::new(
+    let mut content = Tabs::new(vec![Tab::new(
         "Instances",
         Flex::column()
             .child(
                 "template-actions",
-                toolbar::Toolbar::new(
-                    key_chars[2],
-                    key_chars[4],
-                    key_chars[8],
-                    key_chars[9],
-                    toolbar_state.clone(),
-                ),
+                toolbar::Toolbar::new(keys[2], keys[4], keys[8], keys[9], toolbar_state.clone()),
                 FlexItem::fit_content(),
             )
             .child(
@@ -159,11 +145,15 @@ pub(crate) fn root(service: AppService) -> App {
                 FlexItem::fill(1),
             ),
     )])
-    .variant(TabsVariant::OneRow);
+    .variant(TabsVariant::OneRow)
+    .action_hotkey("yy", |_| Msg::CopyName)
+    .action_hotkey("yu", |_| Msg::CopyGatewayUrl);
+    content.set_action_hotkey_visible("yy", false);
+    content.set_action_hotkey_visible("yu", false);
     let menu = DialogLayer::new(content, ActionMenu::new(keys))
         .active(false)
         .fit_content()
-        .fit_content_max(42, 8);
+        .fit_content_max(42, 9);
     let modal: Modal = Box::new(
         Dialog::<Msg>::new()
             .on_close(|_| Msg::Close)
@@ -208,10 +198,19 @@ pub(crate) fn root(service: AppService) -> App {
 }
 
 impl App {
-    fn update_snapshot(&mut self, snapshot: EnvironmentSnapshot) {
+    fn update_snapshot(&mut self, snapshot: EnvironmentSnapshot) -> bool {
+        let operations = self.service.operations();
+        let snapshot_changed = snapshot != self.snapshot;
+        let rows_changed = instances::replace_rows(
+            &self.instances,
+            rows::from_snapshot_with_operations(&snapshot, &operations),
+        );
+        if !snapshot_changed {
+            return rows_changed;
+        }
         *self.toolbar_state.borrow_mut() = toolbar::State::from_snapshot(&snapshot);
-        instances::replace_rows(&self.instances, rows::from_snapshot(&snapshot));
         self.snapshot = snapshot;
+        true
     }
 
     fn selected(&self) -> Option<Row> {
@@ -264,7 +263,17 @@ impl App {
                     ctx.notify(Notification::error("Cannot save settings", error));
                 }
             }
+            Msg::CopyName => {
+                self.copy_selected_name(ctx);
+            }
+            Msg::CopyGatewayUrl => {
+                self.copy_gateway_url(ctx);
+            }
             Msg::Submit => {
+                if self.operation_in_progress() {
+                    self.block_operation(ctx);
+                    return;
+                }
                 let result = match &self.intent {
                     Some(Intent::StopAll(names)) => {
                         self.submit_instance_batch("stop_instance", names.clone(), ctx);
@@ -358,6 +367,10 @@ impl App {
     }
 
     fn open(&mut self, modal: Modal, ctx: &mut EventCtx<Msg>) {
+        if self.intent.is_some() && self.operation_in_progress() {
+            self.block_operation(ctx);
+            return;
+        }
         self.details_open = false;
         self.view.first_mut().replace_layer(modal, ctx);
         self.view.first_mut().set_fit_content(true);
@@ -377,6 +390,27 @@ impl App {
                 tuicore::ChildKey::new("name"),
             ])));
         }
+    }
+
+    fn operation_in_progress(&self) -> bool {
+        self.snapshot
+            .activities
+            .iter()
+            .any(|activity| activity.active())
+            || self.service.operations().iter().any(|operation| {
+                operation.state == crate::store::environments::OperationState::Running
+            })
+    }
+
+    fn block_operation(&mut self, ctx: &mut EventCtx<Msg>) {
+        self.intent = None;
+        self.view.first_mut().set_active_with_context(false, ctx);
+        ctx.focus(initial_focus());
+        self.notify(Notification::warning(
+            "Operation in progress",
+            "Wait for the current operation to finish before starting another.",
+        ));
+        ctx.request_redraw();
     }
 
     fn open_name_entry(&mut self, ctx: &mut EventCtx<Msg>) {
@@ -439,11 +473,14 @@ impl App {
         };
         let menu = self.menu_layer_mut();
         menu.layer_mut().open(
-            row.parent.is_none(),
-            row.instance.is_some(),
-            (row.can_start, row.can_stop, row.can_restart),
-            row.gateway_url.is_some(),
-            !row.compose_file.is_empty(),
+            action_menu::Target {
+                template: row.parent.is_none(),
+                instance: row.instance.is_some(),
+                service: row.service_name.is_some(),
+                capabilities: (row.can_start, row.can_stop, row.can_restart),
+                gateway: row.gateway_url.is_some(),
+                template_available: !row.compose_file.is_empty(),
+            },
             ctx,
         );
         menu.set_active_with_context(true, ctx);
@@ -460,6 +497,19 @@ impl App {
         }
         self.menu_layer_mut().set_active_with_context(false, ctx);
         if let Some(action) = action {
+            match action {
+                action_menu::Action::CopyTemplateName
+                | action_menu::Action::CopyInstanceName
+                | action_menu::Action::CopyServiceName => {
+                    self.copy_selected_name(ctx);
+                    return;
+                }
+                action_menu::Action::CopyGatewayUrl => {
+                    self.copy_gateway_url(ctx);
+                    return;
+                }
+                _ => {}
+            }
             if matches!(
                 action,
                 action_menu::Action::Start | action_menu::Action::StartService
@@ -584,7 +634,9 @@ impl App {
             8 => self.confirm_stop_all(ctx),
             9 => self.confirm_purge_all(ctx),
             10 => {
-                self.open_gateway(ctx);
+                if !self.open_gateway(ctx) {
+                    self.open_workspace(ctx);
+                }
             }
             6 => {
                 if let Some(row) = row.filter(|row| row.parent.is_none()) {
@@ -604,6 +656,22 @@ impl App {
         if let Err(error) = self.service.open_gateway(&url) {
             ctx.notify(Notification::error("Cannot open gateway", error));
         }
+        true
+    }
+
+    fn copy_selected_name(&self, ctx: &mut EventCtx<Msg>) -> bool {
+        let Some(value) = self.selected().and_then(|row| row.name_value()) else {
+            return false;
+        };
+        ctx.copy_to_clipboard(value);
+        true
+    }
+
+    fn copy_gateway_url(&self, ctx: &mut EventCtx<Msg>) -> bool {
+        let Some(value) = self.selected().and_then(|row| row.gateway_url) else {
+            return false;
+        };
+        ctx.copy_to_clipboard(value);
         true
     }
 
@@ -650,10 +718,7 @@ impl App {
         if instances::is_searching(&self.instances) {
             return false;
         }
-        if let TuiEvent::Key(key) = event
-            && KeySpec::key(tuicore::Key::Enter).matches(*key)
-            && (self.open_workspace(ctx) || self.open_gateway(ctx))
-        {
+        if matches!(event, TuiEvent::Yank) && self.copy_selected_name(ctx) {
             ctx.stop_propagation();
             return true;
         }
@@ -696,11 +761,6 @@ impl TuiNode<Msg> for App {
         self.notifications.render(frame, area);
     }
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
-        match event {
-            TuiEvent::FocusGained => self.service.set_environment_focus(true),
-            TuiEvent::FocusLost => self.service.set_environment_focus(false),
-            _ => {}
-        }
         if self.refresh_schedule.event(event, Instant::now()) {
             self.service.poll_environments();
         }
@@ -721,11 +781,6 @@ impl TuiNode<Msg> for App {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
-        match event {
-            TuiEvent::FocusGained => self.service.set_environment_focus(true),
-            TuiEvent::FocusLost => self.service.set_environment_focus(false),
-            _ => {}
-        }
         if self.refresh_schedule.event(event, Instant::now()) {
             self.service.poll_environments();
         }

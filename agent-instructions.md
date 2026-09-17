@@ -55,6 +55,11 @@ A template is a shared Compose recipe; an instance has its own name and workspac
   through `sh -c` on the host with the workspace as its working directory and in
   `TANDEM_WORKSPACE`; its instance name is in `TANDEM_INSTANCE`. Use `"$TANDEM_WORKSPACE"` to preserve spaces and shell characters. An empty
   command uses the system folder opener. The launching process supplies inherited session variables.
+- For approved shell workflows, `tandem new-instance <name> -t <template>` creates missing instances
+  and waits for startup readiness. Existing instances matching the template stay unchanged, including
+  when stopped; `--open-command` (or `-oc`) only opens their workspace. For new instances, the flag
+  triggers opening after declared repositories are on disk. Template-owned clone jobs and
+  container-created files need their own readiness checks. Opening can precede a startup failure.
 - Run trusted templates with approval: repository provisioning uses host Git and credentials;
   Docker execution grants local privileges. Native repository provisioning requires Linux and Git
   with `switch` support; SSH access uses strict host-key checking without interactive prompts.
@@ -65,7 +70,8 @@ A template is a shared Compose recipe; an instance has its own name and workspac
   A requested stop can exit 137/143; these codes alone prove neither failure nor OOM.
   Healthy means Docker probes pass; route readiness is a separate timestamped result.
   Unknown launch topology requires inspection before an approved Start reapplies configuration.
-  Cached resource readings may be stale, partial or unavailable; they do not determine health.
+  Resource values retain the last successful readings; check sample age and `resource_error` before
+  treating them as current. Readings may be partial or unavailable and do not determine health.
   `list_instances.activities` includes active work and retained failures, including cleanup without containers.
 - Restart and service start/stop require approval and use existing containers with their current
   configuration and data. They exclude one-shot setup jobs. Service actions affect only that instance's

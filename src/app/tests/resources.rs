@@ -392,7 +392,7 @@ fn resource_rows_stack_memory_above_cpu_at_the_right_edge() {
         .position(|line| line.contains(" web"))
         .expect("routed service");
     assert!(lines[service_line].contains("󰑹 180 MiB"), "{lines:#?}");
-    assert!(lines[service_line + 1].contains("http://localhost:9876/review/web/ · port 8080"));
+    assert!(lines[service_line + 1].contains("http://localhost:9876/review/web/ · 󰈀 8080"));
     for offset in [0, 2, 4] {
         let row_line = service_line - offset;
         assert!(lines[row_line].ends_with("󰑹 180 MiB "), "{lines:#?}");

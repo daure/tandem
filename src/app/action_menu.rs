@@ -16,10 +16,16 @@ use tuicore::{
 use super::Msg;
 
 const MENU_FIELD_WIDTH: u16 = 42;
+const MENU_CONTENT_WIDTH: u16 = MENU_FIELD_WIDTH - 2;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum Action {
+    CopyTemplateName,
+    CopyInstanceName,
+    CopyServiceName,
+    CopyGatewayUrl,
     OpenBrowser,
+    OpenCommand,
     Details,
     NewInstance,
     Start,
@@ -37,7 +43,11 @@ pub(super) enum Action {
 impl Action {
     pub(super) fn index(self) -> usize {
         match self {
-            Self::OpenBrowser => 10,
+            Self::CopyTemplateName
+            | Self::CopyInstanceName
+            | Self::CopyServiceName
+            | Self::CopyGatewayUrl => unreachable!("copy actions have fixed hotkeys"),
+            Self::OpenBrowser | Self::OpenCommand => 10,
             Self::RestartInstance | Self::RestartService => 7,
             Self::Details => 0,
             Self::NewInstance => 1,
@@ -53,7 +63,12 @@ impl Action {
 
     fn label(self) -> &'static str {
         match self {
+            Self::CopyTemplateName => "Copy template name",
+            Self::CopyInstanceName => "Copy instance name",
+            Self::CopyServiceName => "Copy service name",
+            Self::CopyGatewayUrl => "Copy gateway URL",
             Self::OpenBrowser => "Open in browser",
+            Self::OpenCommand => "Run open command",
             Self::Details => "View details",
             Self::NewInstance => "New instance",
             Self::Start => "Start instance",
@@ -78,8 +93,17 @@ pub(super) struct ActionMenu {
     field_area: Rect,
 }
 
+pub(super) struct Target {
+    pub template: bool,
+    pub instance: bool,
+    pub service: bool,
+    pub capabilities: (bool, bool, bool),
+    pub gateway: bool,
+    pub template_available: bool,
+}
+
 impl ActionMenu {
-    pub(super) fn new(keys: [KeySpec; 10]) -> Self {
+    pub(super) fn new(keys: [KeySpec; 11]) -> Self {
         let selected = Rc::new(RefCell::new(None));
         let selection = Rc::clone(&selected);
         let enabled = Rc::new(RefCell::new(Vec::new()));
@@ -105,7 +129,7 @@ impl ActionMenu {
         .centered(true)
         .show_field_when_open(false)
         .tab_stop(false)
-        .max_popup_height(8)
+        .max_popup_height(9)
         .on_select(move |actions| *selection.borrow_mut() = actions.first().copied());
         Self {
             dropdown,
@@ -116,17 +140,11 @@ impl ActionMenu {
         }
     }
 
-    pub(super) fn open(
-        &mut self,
-        template: bool,
-        instance: bool,
-        capabilities: (bool, bool, bool),
-        gateway: bool,
-        template_available: bool,
-        ctx: &mut EventCtx<Msg>,
-    ) {
-        self.actions = if gateway {
+    pub(super) fn open(&mut self, target: Target, ctx: &mut EventCtx<Msg>) {
+        self.actions = if target.gateway {
             vec![
+                Action::CopyServiceName,
+                Action::CopyGatewayUrl,
                 Action::OpenBrowser,
                 Action::Details,
                 Action::NewInstance,
@@ -134,17 +152,20 @@ impl ActionMenu {
                 Action::StopService,
                 Action::RestartService,
             ]
-        } else if template {
+        } else if target.template {
             vec![
+                Action::CopyTemplateName,
                 Action::Details,
                 Action::NewInstance,
                 Action::StopTemplate,
                 Action::DeleteTemplate,
                 Action::RemoveTemplate,
             ]
-        } else if instance {
+        } else if target.instance {
             vec![
+                Action::CopyInstanceName,
                 Action::Details,
+                Action::OpenCommand,
                 Action::NewInstance,
                 Action::Start,
                 Action::Stop,
@@ -152,26 +173,30 @@ impl ActionMenu {
                 Action::Delete,
             ]
         } else {
-            vec![
+            let mut actions = vec![
                 Action::Details,
                 Action::NewInstance,
                 Action::StartService,
                 Action::StopService,
                 Action::RestartService,
-            ]
+            ];
+            if target.service {
+                actions.insert(0, Action::CopyServiceName);
+            }
+            actions
         };
         *self.enabled.borrow_mut() = self
             .actions
             .iter()
             .copied()
             .filter(|action| match action {
-                Action::Start | Action::StartService => capabilities.0,
-                Action::Stop | Action::StopService => capabilities.1,
-                Action::RestartInstance | Action::RestartService => capabilities.2,
+                Action::Start | Action::StartService => target.capabilities.0,
+                Action::Stop | Action::StopService => target.capabilities.1,
+                Action::RestartInstance | Action::RestartService => target.capabilities.2,
                 _ => true,
             })
             .collect();
-        if !template_available {
+        if !target.template_available {
             self.enabled
                 .borrow_mut()
                 .retain(|action| !matches!(action, Action::RemoveTemplate | Action::NewInstance));
@@ -193,17 +218,20 @@ impl ActionMenu {
     }
 }
 
-fn action_text(action: Action, keys: &[KeySpec; 10], enabled: bool) -> Text<'static> {
+fn action_text(action: Action, keys: &[KeySpec; 11], enabled: bool) -> Text<'static> {
     let label = action.label();
-    let hotkey = if action == Action::OpenBrowser {
-        KeySpec::key(tuicore::Key::Enter).label()
-    } else {
-        keys.get(action.index())
+    let hotkey = match action {
+        Action::CopyTemplateName | Action::CopyInstanceName | Action::CopyServiceName => {
+            "yy".into()
+        }
+        Action::CopyGatewayUrl => "yu".into(),
+        _ => keys
+            .get(action.index())
             .copied()
             .map(KeySpec::label)
-            .unwrap_or_default()
+            .unwrap_or_default(),
     };
-    let spacing = usize::from(MENU_FIELD_WIDTH)
+    let spacing = usize::from(MENU_CONTENT_WIDTH)
         .saturating_sub(line_width(&Line::from(label)))
         .saturating_sub(line_width(&Line::from(hotkey.as_str())));
     Text::from(Line::from(vec![
@@ -222,7 +250,7 @@ fn action_text(action: Action, keys: &[KeySpec; 10], enabled: bool) -> Text<'sta
 
 impl TuiNode<Msg> for ActionMenu {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        LayoutSizeHint::content(MENU_FIELD_WIDTH, 8).normalized(proposal)
+        LayoutSizeHint::content(MENU_FIELD_WIDTH, 9).normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {

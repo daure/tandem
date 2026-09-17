@@ -155,11 +155,7 @@ impl super::App {
         for notification in notifications {
             self.notify(notification);
         }
-        if snapshot == self.snapshot {
-            return false;
-        }
-        self.update_snapshot(snapshot);
-        true
+        self.update_snapshot(snapshot)
     }
 }
 
