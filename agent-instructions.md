@@ -49,6 +49,12 @@ A template is a shared Compose recipe; an instance has its own name and workspac
 
 ## Operations
 
+- Tandem writes workspace-root `AGENTS.md` before container startup and generates it if missing before
+  opening a workspace. Read it and the repository guidance it lists. The editable template path is
+  returned as `workspace_agents_template`; edits affect future generation. When the bundled template
+  changes, launch installs it and backs up a differing local copy beside it as
+  `workspace-agents.template.<unique>.bak`. Local edits survive other restarts; existing workspace
+  files are preserved. Guidance describes configuration, so inspect runtime state for current health.
 - The workspace open command is shared by processes using the same Tandem home. Configure only
   trusted commands with user approval; saving does not execute them. `run_open_command` runs the
   saved command for a named instance workspace after approval. Workspace opening runs the command
@@ -58,7 +64,8 @@ A template is a shared Compose recipe; an instance has its own name and workspac
 - For approved shell workflows, `tandem new-instance <name> -t <template>` creates missing instances
   and waits for startup readiness. Existing instances matching the template stay unchanged, including
   when stopped; `--open-command` (or `-oc`) only opens their workspace. For new instances, the flag
-  triggers opening after declared repositories are on disk. Template-owned clone jobs and
+  triggers opening after declared repositories, rendered Compose configuration and workspace guidance
+  are on disk. Guidance generation failures block opening. Template-owned clone jobs and
   container-created files need their own readiness checks. Opening can precede a startup failure.
 - Run trusted templates with approval: repository provisioning uses host Git and credentials;
   Docker execution grants local privileges. Native repository provisioning requires Linux and Git

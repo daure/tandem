@@ -13,6 +13,8 @@ mod repositories;
 mod resources;
 mod stats;
 mod templates;
+mod workspace_agents;
+mod workspace_template;
 
 use std::{
     collections::BTreeMap,
@@ -298,6 +300,11 @@ impl Environments {
         Ok(Instructions {
             file: self.config.instructions.display().to_string(),
             markdown: config::read_text(&self.config.instructions)?,
+            workspace_agents_template: self
+                .config
+                .workspace_agents_template()
+                .display()
+                .to_string(),
             templates_root: self.config.templates.display().to_string(),
             workspaces_root: self.config.workspaces.display().to_string(),
             gateway_origin: self.config.origin(),

@@ -188,6 +188,19 @@ impl Activity {
     pub fn active(&self) -> bool {
         !self.finished && self.error.is_none()
     }
+
+    pub fn targets_instance_name(&self, name: &str) -> bool {
+        matches!(
+            self.action.as_str(),
+            "create_instance"
+                | "stop_instance"
+                | "delete_instance"
+                | "restart_instance"
+                | "restart_service"
+                | "start_service"
+                | "stop_service"
+        ) && self.name == name
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]

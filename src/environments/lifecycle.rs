@@ -12,7 +12,7 @@ use super::{
     command::{Progress, docker, remaining, run},
     compose,
     config::Config,
-    docker as runtime, gateway, journal, ownership, repositories, templates,
+    docker as runtime, gateway, journal, ownership, repositories, templates, workspace_agents,
 };
 use crate::store::environments::{
     Instance, Route, Template, validate_instance_name, validate_name,
@@ -71,9 +71,6 @@ pub(crate) fn start(
             deadline,
             progress.clone(),
         )?;
-        if let Some(sender) = startup.workspace_ready {
-            let _ = sender.send(workspace.display().to_string());
-        }
         progress("Validating Compose and rendering instance routes".into());
         let rendered = compose::render(
             config,
@@ -86,6 +83,23 @@ pub(crate) fn start(
             path: rendered,
             services,
         } = rendered;
+        progress("Preparing workspace AGENTS.md".into());
+        workspace_agents::generate(
+            config,
+            &Instance {
+                name: name.into(),
+                template: template.name.clone(),
+                template_directory: template.directory.clone(),
+                workspace: workspace.display().to_string(),
+                project: config.project(name),
+                services: services.clone(),
+                ..Default::default()
+            },
+            &template.manifest.repositories,
+        )?;
+        if let Some(sender) = startup.workspace_ready {
+            let _ = sender.send(workspace.display().to_string());
+        }
         journal::topology(config, template_name, name, services.clone())?;
         pending_services(services);
         gateway::ensure(config, progress.clone(), remaining(deadline)?)?;

@@ -73,10 +73,18 @@ impl AppService {
         let workspace = workspace.to_owned();
         let instance = instance.to_owned();
         let settings = Arc::clone(&self.settings);
+        let environments = Arc::clone(&self.environments);
         #[cfg(test)]
         let state = Arc::clone(&self.state);
         Ok(self.runtime.spawn(async move {
             let result = async {
+                let target = workspace.clone();
+                let name = instance.clone();
+                tokio::task::spawn_blocking(move || {
+                    environments.prepare_workspace_open(&target, &name)
+                })
+                .await
+                .map_err(|error| error.to_string())??;
                 let command = settings.read_open_command().await?;
                 #[cfg(test)]
                 if command.trim().is_empty() {

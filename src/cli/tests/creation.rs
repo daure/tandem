@@ -31,6 +31,7 @@ impl Fixture {
         fs::create_dir(&source).unwrap();
         git(&source, &["init", "-b", "trunk"]);
         fs::write(source.join("file.txt"), "source content").unwrap();
+        fs::write(source.join("AGENTS.md"), "Repository guidance\n").unwrap();
         git(&source, &["add", "."]);
         git(&source, &["commit", "-m", "Seed fixture"]);
         fs::write(
@@ -146,6 +147,8 @@ fn wait_output(mut child: Child) -> Output {
 }
 
 const OPEN: &str = r#"test "$(cat app/file.txt)" = 'source content' || exit 21
+test -s AGENTS.md || exit 27
+grep -q './app/AGENTS.md' AGENTS.md || exit 28
 git -C app branch --show-current > "$TANDEM_HOME/branch"
 printf '%s\n%s\n%s\n' "$TANDEM_INSTANCE" "$TANDEM_WORKSPACE" "$PWD" >> "$TANDEM_HOME/opened""#;
 
@@ -196,6 +199,7 @@ fn creation_without_open_flag_preserves_saved_command_without_executing_it() {
             .is_file()
     );
     assert!(!fixture.home.join("opened").exists());
+    assert!(fixture.home.join("workspaces/review/AGENTS.md").is_file());
 }
 
 #[test]
@@ -246,7 +250,7 @@ fn an_empty_command_opens_the_prepared_workspace_with_the_folder_opener() {
     fs::write(fixture.home.join("templates/website/tandem.json"), "{}").unwrap();
     fs::write(
         fixture.bin.join("xdg-open"),
-        "#!/bin/sh\ntest -d \"$1\" || exit 21\nprintf '%s' \"$1\" > \"$TANDEM_HOME/opened\"\n",
+        "#!/bin/sh\ntest -s \"$1/AGENTS.md\" || exit 21\nprintf '%s' \"$1\" > \"$TANDEM_HOME/opened\"\n",
     )
     .unwrap();
     fs::set_permissions(
@@ -269,6 +273,58 @@ fn an_empty_command_opens_the_prepared_workspace_with_the_folder_opener() {
     assert_eq!(
         fs::read_to_string(fixture.home.join("opened")).unwrap(),
         fixture.home.join("workspaces/review").display().to_string()
+    );
+}
+
+#[test]
+fn workspace_guidance_failure_blocks_opening_and_container_startup() {
+    let fixture = Fixture::new();
+    fixture.save_command(OPEN);
+    fs::write(
+        fixture.home.join(".workspace-agents.bundled.md"),
+        include_str!("../../../workspace-agents.template.md"),
+    )
+    .unwrap();
+    fs::write(
+        fixture.home.join("workspace-agents.template.md"),
+        "{{unknown}}",
+    )
+    .unwrap();
+    let output = fixture.run(&["new-instance", "review", "-t", "website", "-oc"]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("unknown workspace AGENTS.md template placeholder")
+    );
+    assert!(!fixture.home.join("opened").exists());
+    assert!(!fixture.home.join("started").exists());
+    assert!(!fixture.home.join("workspaces/review/AGENTS.md").exists());
+}
+
+#[test]
+fn an_updated_binary_uses_its_bundled_template_for_new_instances_and_preserves_existing_guidance() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.home.join("workspace-agents.template.md"),
+        "Legacy template\n",
+    )
+    .unwrap();
+    let existing = fixture.home.join("workspaces/other/AGENTS.md");
+    fs::create_dir_all(existing.parent().unwrap()).unwrap();
+    fs::write(&existing, "Existing instance guidance\n").unwrap();
+    let output = fixture.run(&["new-instance", "review", "-t", "website"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = fs::read_to_string(fixture.home.join("workspaces/review/AGENTS.md")).unwrap();
+    assert!(text.starts_with("# Workspace: review\n"));
+    assert!(text.contains("If a repository has `AGENTS.md` or `agents.md`"));
+    assert!(text.contains("./app/AGENTS.md"));
+    assert_eq!(
+        fs::read_to_string(existing).unwrap(),
+        "Existing instance guidance\n"
     );
 }
 
@@ -392,14 +448,6 @@ case "$1" in
   compose)
     case "$*" in
       *'config --format json')
-        if [ "$EXPECT_OPEN" = 1 ]; then
-          count=0
-          while [ ! -f "$TANDEM_HOME/opened" ]; do
-            count=$((count + 1))
-            if [ "$count" -gt 100 ]; then printf 'opener did not run before Compose\n' >&2; exit 22; fi
-            sleep 0.05
-          done
-        fi
         touch "$TANDEM_HOME/configured"
         if [ "$BLOCK_CONFIG" = 1 ]; then
           count=0
@@ -413,6 +461,14 @@ case "$1" in
         ;;
       *'up --detach'*)
         if [ "$TANDEM_INSTANCE" = gateway ]; then exit 0; fi
+        if [ "$EXPECT_OPEN" = 1 ]; then
+          count=0
+          while [ ! -f "$TANDEM_HOME/opened" ]; do
+            count=$((count + 1))
+            if [ "$count" -gt 100 ]; then printf 'opener did not run before Compose startup\n' >&2; exit 22; fi
+            sleep 0.05
+          done
+        fi
         if [ "$FAIL_START" = 1 ]; then printf 'fixture startup failed\n' >&2; exit 23; fi
         touch "$TANDEM_HOME/started"
         ;;

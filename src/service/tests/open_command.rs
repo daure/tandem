@@ -1,5 +1,26 @@
 use super::AppService;
 
+fn register_workspace(service: &AppService, workspace: &std::path::Path) {
+    let operation = service.queue_instance_for_tests("review", "website");
+    service.complete_instance_for_tests(
+        &operation.id,
+        crate::store::environments::Instance {
+            name: "review".into(),
+            template: "website".into(),
+            template_directory: service
+                .environments
+                .config
+                .templates
+                .join("website")
+                .display()
+                .to_string(),
+            workspace: workspace.display().to_string(),
+            project: "test-review".into(),
+            ..Default::default()
+        },
+    );
+}
+
 #[test]
 fn workspace_open_uses_persisted_command_and_passes_literal_path() {
     let writer = AppService::for_tests();
@@ -10,7 +31,8 @@ fn workspace_open_uses_persisted_command_and_passes_literal_path() {
         .workspaces
         .join("space ' ; $(touch injected)");
     std::fs::create_dir(&workspace).unwrap();
-    let command = "printf '%s' \"$TANDEM_WORKSPACE\" > received; printf '%s' \"$TANDEM_INSTANCE\" > instance; pwd > cwd";
+    register_workspace(&reader, &workspace);
+    let command = "test -s AGENTS.md || exit 27; printf '%s' \"$TANDEM_WORKSPACE\" > received; printf '%s' \"$TANDEM_INSTANCE\" > instance; pwd > cwd";
     writer.runtime.block_on(async {
         assert_eq!(writer.get_open_command().await.unwrap(), "");
         writer
@@ -65,7 +87,10 @@ fn workspace_open_uses_persisted_command_and_passes_literal_path() {
 #[test]
 fn open_command_failures_are_reported_without_falling_back_to_folder_opener() {
     let service = AppService::for_tests();
-    let workspace = service.environments.config.workspaces.to_str().unwrap();
+    let path = service.environments.config.workspaces.join("review");
+    std::fs::create_dir(&path).unwrap();
+    register_workspace(&service, &path);
+    let workspace = path.to_str().unwrap();
     service.runtime.block_on(async {
         assert!(
             service
@@ -103,7 +128,7 @@ fn open_command_failures_are_reported_without_falling_back_to_folder_opener() {
                 .await
                 .unwrap()
                 .unwrap_err()
-                .contains("cannot launch")
+                .contains("workspace")
         );
     });
 }
@@ -113,9 +138,13 @@ fn saved_open_command_runs_for_a_named_workspace_after_approval() {
     let service = AppService::for_tests();
     let workspace = service.environments.config.workspaces.join("review");
     std::fs::create_dir(&workspace).unwrap();
+    register_workspace(&service, &workspace);
     service.runtime.block_on(async {
         service
-            .configure_open_command("printf '%s' \"$TANDEM_INSTANCE\" > received".into(), true)
+            .configure_open_command(
+                "test -s AGENTS.md || exit 27; printf '%s' \"$TANDEM_INSTANCE\" > received".into(),
+                true,
+            )
             .await
             .unwrap();
         assert!(
@@ -138,6 +167,38 @@ fn saved_open_command_runs_for_a_named_workspace_after_approval() {
         std::fs::read_to_string(workspace.join("received")).unwrap(),
         "review"
     );
+}
+
+#[test]
+fn guidance_generation_failure_blocks_custom_and_system_openers() {
+    let service = AppService::for_tests();
+    let workspace = service.environments.config.workspaces.join("review");
+    std::fs::create_dir(&workspace).unwrap();
+    register_workspace(&service, &workspace);
+    std::fs::write(
+        service.environments.config.workspace_agents_template(),
+        "{{unknown}}",
+    )
+    .unwrap();
+    service.runtime.block_on(async {
+        for command in ["touch unexpected", ""] {
+            service
+                .configure_open_command(command.into(), true)
+                .await
+                .unwrap();
+            let error = service
+                .run_open_command("review".into(), true)
+                .await
+                .unwrap_err();
+            assert!(
+                error.contains("unknown workspace AGENTS.md template placeholder"),
+                "{error}"
+            );
+        }
+    });
+    assert!(!workspace.join("unexpected").exists());
+    assert!(!workspace.join("AGENTS.md").exists());
+    assert!(service.opened_system_targets().is_empty());
 }
 
 #[test]

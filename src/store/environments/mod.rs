@@ -225,14 +225,25 @@ pub(crate) struct Operation {
 }
 
 impl Operation {
+    pub fn targets_instance_name(&self, name: &str) -> bool {
+        matches!(
+            self.action.as_str(),
+            "create_instance"
+                | "stop_instance"
+                | "delete_instance"
+                | "restart_instance"
+                | "restart_service"
+                | "start_service"
+                | "stop_service"
+        ) && self.name == name
+    }
+
     pub fn targets(&self, instance: &Instance) -> bool {
         match self.action.as_str() {
             "stop_template" | "delete_template" | "remove_template" => {
                 self.name == instance.template
             }
-            "create_instance" | "stop_instance" | "delete_instance" | "restart_instance"
-            | "restart_service" | "start_service" | "stop_service" => self.name == instance.name,
-            _ => false,
+            _ => self.targets_instance_name(&instance.name),
         }
     }
 }
@@ -241,6 +252,7 @@ impl Operation {
 pub(crate) struct Instructions {
     pub file: String,
     pub markdown: String,
+    pub workspace_agents_template: String,
     pub templates_root: String,
     pub workspaces_root: String,
     pub gateway_origin: String,

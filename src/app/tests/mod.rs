@@ -364,7 +364,13 @@ fn copy_hotkeys_are_registered_on_the_instances_tab() {
 fn control_semicolon_opens_the_selected_instance_workspace() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
-    app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = directory.path().join("review");
+    std::fs::create_dir(&workspace).unwrap();
+    std::fs::write(workspace.join("AGENTS.md"), "Workspace guidance\n").unwrap();
+    let mut snapshot = snapshot();
+    snapshot.instances[0].workspace = workspace.display().to_string();
+    app.set_rows_for_tests(rows::from_snapshot(&snapshot));
     super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
 
     app.event(
@@ -385,7 +391,7 @@ fn control_semicolon_opens_the_selected_instance_workspace() {
     }
     assert_eq!(
         app.service.opened_system_targets(),
-        ["/tmp/workspaces/review"]
+        [workspace.display().to_string()]
     );
 }
 

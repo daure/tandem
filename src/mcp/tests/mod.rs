@@ -107,6 +107,7 @@ fn run_open_command_executes_the_saved_command_for_a_named_workspace() {
     )
     .join("review");
     std::fs::create_dir(&workspace).unwrap();
+    std::fs::write(workspace.join("AGENTS.md"), "Workspace guidance\n").unwrap();
     runtime.block_on(async {
         assert!(server.tool_router.map.contains_key("run_open_command"));
         server

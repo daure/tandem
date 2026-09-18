@@ -11,7 +11,7 @@ homepage = "https://github.com/daure/tandem"
 repository = "https://github.com/daure/tandem"
 keywords = ["tui", "terminal", "mcp"]
 categories = ["command-line-utilities"]
-include = ["Cargo.toml", "Cargo.lock", "README.md", "agent-instructions.md", "migrations/**", "src/**"]
+include = ["Cargo.toml", "Cargo.lock", "README.md", "agent-instructions.md", "workspace-agents.template.md", "migrations/**", "src/**"]
 
 [lib]
 name = "tandem"

@@ -121,7 +121,12 @@ impl Config {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error.to_string()),
         }
+        super::workspace_template::install(&config)?;
         Ok(config)
+    }
+
+    pub fn workspace_agents_template(&self) -> PathBuf {
+        self.home.join("workspace-agents.template.md")
     }
 
     pub fn origin(&self) -> String {

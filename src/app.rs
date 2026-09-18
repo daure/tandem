@@ -270,7 +270,7 @@ impl App {
                 self.copy_gateway_url(ctx);
             }
             Msg::Submit => {
-                if self.operation_in_progress() {
+                if self.target_instance_has_operation() {
                     self.block_operation(ctx);
                     return;
                 }
@@ -367,7 +367,7 @@ impl App {
     }
 
     fn open(&mut self, modal: Modal, ctx: &mut EventCtx<Msg>) {
-        if self.intent.is_some() && self.operation_in_progress() {
+        if self.target_instance_has_operation() {
             self.block_operation(ctx);
             return;
         }
@@ -392,14 +392,35 @@ impl App {
         }
     }
 
-    fn operation_in_progress(&self) -> bool {
+    fn target_instance_has_operation(&self) -> bool {
+        let Some(name) = self.intent_instance_target() else {
+            return false;
+        };
         self.snapshot
             .activities
             .iter()
-            .any(|activity| activity.active())
+            .any(|activity| activity.active() && activity.targets_instance_name(name))
             || self.service.operations().iter().any(|operation| {
                 operation.state == crate::store::environments::OperationState::Running
+                    && operation.targets_instance_name(name)
             })
+    }
+
+    fn intent_instance_target(&self) -> Option<&str> {
+        match self.intent.as_ref()? {
+            Intent::CreateInstance(_) => Some(&self.name),
+            Intent::Resume { name, .. }
+            | Intent::Stop(name)
+            | Intent::Delete(name)
+            | Intent::ServiceState { name, .. }
+            | Intent::Restart { name, .. } => Some(name),
+            Intent::NewTemplate
+            | Intent::StopTemplate(_)
+            | Intent::DeleteTemplate(_)
+            | Intent::RemoveTemplate(_)
+            | Intent::StopAll(_)
+            | Intent::PurgeAll(_) => None,
+        }
     }
 
     fn block_operation(&mut self, ctx: &mut EventCtx<Msg>) {
@@ -408,7 +429,7 @@ impl App {
         ctx.focus(initial_focus());
         self.notify(Notification::warning(
             "Operation in progress",
-            "Wait for the current operation to finish before starting another.",
+            "Wait for this instance's operation to finish before starting another.",
         ));
         ctx.request_redraw();
     }

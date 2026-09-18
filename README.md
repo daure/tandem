@@ -98,8 +98,9 @@ it only launches the saved opener in that instance's workspace; template files a
 are not needed. Ownership mismatches and concurrent instance operations are rejected.
 
 `--open-command` (also spelled `-oc`) is a boolean flag. For a new instance, the workspace-ready signal
-triggers the saved opener after all repositories declared in `tandem.json` have been cloned or validated. This signal is
-emitted before Compose configuration; opening and startup then proceed independently. Template-owned
+triggers the saved opener after declared repositories have been cloned or validated, Compose configuration
+has been rendered, and the workspace `AGENTS.md` has been written. Opening and container startup then
+proceed independently. Template-owned
 clone scripts and container-created files are outside this milestone; declare repositories for early
 source access.
 An empty saved command uses the system folder opener. Without the flag, nothing is opened.
@@ -112,6 +113,29 @@ observed while the CLI runs are logged.
 networks, rendered Compose file, and ownership receipt. It leaves templates, shared images, and the gateway intact.
 `--headless` (also `-h`) launches deletion in a detached Tandem process and returns after that process starts.
 It cannot report the deletion result; inspect diagnostic logs or runtime state for failures.
+
+### Workspace agent context
+
+[workspace-agents.template.md](workspace-agents.template.md) is the default workspace guidance template.
+On launch, Tandem installs the bundled template at `$TANDEM_HOME/workspace-agents.template.md`.
+When its bundled content changes, the first launch after installation/update refreshes that shared
+template before creating instances; this also applies to `cargo run`. A differing local copy is saved
+alongside it as `workspace-agents.template.<unique>.bak` before replacement. Local edits survive
+restarts while the bundled content stays the same. Existing workspace `AGENTS.md` files are preserved.
+`get_instructions` returns the editable template's absolute path as `workspace_agents_template`.
+
+The template supports `{{instance}}`, `{{template}}`, `{{project}}`, `{{repositories}}`, `{{services}}`,
+and `{{compose_command}}`. Values are literal substitutions; unknown or unclosed placeholders and
+empty output fail generation. Repository entries include declared targets and top-level Git checkouts
+(including worktrees), with links to root `AGENTS.md` or `agents.md` files when present. Service entries
+include names, roles, images, gateway URLs and configured route ports, without environment values or live metrics.
+
+Every new instance receives a root `AGENTS.md` before container startup, even without an open command.
+CLI, TUI and MCP opening also generate it if missing; generation failures block the opener, including
+the system folder opener. Existing regular files are preserved, while symlinks and directories are
+rejected. This is a configuration snapshot: keep local guidance current as repositories or services
+change. To regenerate from the editable template, move the workspace file aside and open the instance.
+Template-owned clone jobs and container-created files appear only after their own setup completes.
 
 ## Statuses
 

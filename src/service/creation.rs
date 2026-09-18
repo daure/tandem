@@ -71,6 +71,14 @@ impl AppService {
     }
 
     async fn launch_workspace_opener(&self, workspace: &str, name: &str) -> Result<(), String> {
+        let environments = std::sync::Arc::clone(&self.environments);
+        let target = workspace.to_owned();
+        let instance = name.to_owned();
+        tokio::task::spawn_blocking(move || {
+            environments.prepare_workspace_open(&target, &instance)
+        })
+        .await
+        .map_err(|error| error.to_string())??;
         let command = self.settings.read_open_command().await?;
         let mut child = spawn_workspace_command(&command, workspace, name)?;
         // Editors may stay running after startup. Reap while Tandem is alive without

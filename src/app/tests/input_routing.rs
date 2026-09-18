@@ -119,6 +119,7 @@ fn saved_open_command_runs_from_the_instance_shortcut_and_menu() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     let workspace = tempfile::tempdir().unwrap();
+    std::fs::write(workspace.path().join("AGENTS.md"), "Workspace guidance\n").unwrap();
     let command = "printf '%s' \"$TANDEM_WORKSPACE\" > opened";
     let settings = AnimationSettings {
         enabled: false,

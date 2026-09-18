@@ -283,7 +283,7 @@ fn bulk_actions_confirm_captured_targets_across_all_templates_before_submission(
 }
 
 #[test]
-fn active_operations_block_bulk_confirmation_and_submission() {
+fn active_operations_do_not_block_bulk_confirmation_or_other_instances() {
     tuicore::init();
     for message in [Msg::StopAll, Msg::PurgeAll] {
         let mut app = root(AppService::for_tests());
@@ -291,25 +291,21 @@ fn active_operations_block_bulk_confirmation_and_submission() {
         let mut ctx = EventCtx::new(AnimationSettings::default());
         app.service.queue_instance_for_tests("review", "website");
         app.handle_message(message, &mut ctx);
-        assert!(!app.view.first().is_active());
-        assert!(app.intent.is_none());
+        assert!(app.view.first().is_active());
+        assert!(matches!(
+            app.intent,
+            Some(super::super::Intent::StopAll(_)) | Some(super::super::Intent::PurgeAll(_))
+        ));
         assert_eq!(app.service.operations().len(), 1);
-        assert!(app.notifications.center().history().any(|notification| {
-            notification.title() == "Operation in progress"
-                && notification
-                    .body()
-                    .contains("Wait for the current operation to finish")
-        }));
     }
 
     let mut app = root(AppService::for_tests());
     app.update_snapshot(inventory());
     let mut ctx = EventCtx::new(AnimationSettings::default());
-    app.handle_message(Msg::PurgeAll, &mut ctx);
-    assert!(app.view.first().is_active());
     app.service.queue_instance_for_tests("review", "website");
+    app.intent = Some(super::super::Intent::Stop("other".into()));
     app.handle_message(Msg::Submit, &mut ctx);
     assert!(!app.view.first().is_active());
     assert!(app.intent.is_none());
-    assert_eq!(app.service.operations().len(), 1);
+    assert_eq!(app.service.operations().len(), 2);
 }

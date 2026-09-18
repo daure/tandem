@@ -33,6 +33,27 @@ fn template_operation_scope_ignores_unrelated_instances_with_the_same_name() {
 }
 
 #[test]
+fn instance_operations_only_block_their_target_instance() {
+    tuicore::init();
+    let service = AppService::for_tests();
+    service.queue_instance_for_tests("review", "website");
+    let mut app = root(service);
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+
+    app.intent = Some(crate::app::Intent::Stop("other".into()));
+    app.handle_message(Msg::Submit, &mut ctx);
+    assert_eq!(app.service.operations().len(), 2);
+    assert!(!app.view.first().is_active());
+
+    app.intent = Some(crate::app::Intent::Stop("review".into()));
+    app.handle_message(Msg::Submit, &mut ctx);
+    assert_eq!(app.service.operations().len(), 2);
+    let notification = app.notifications.center().history().last().unwrap();
+    assert_eq!(notification.title(), "Operation in progress");
+    assert!(notification.body().contains("this instance's operation"));
+}
+
+#[test]
 fn pending_container_operations_keep_notifications_silent() {
     tuicore::init();
     for action in [
