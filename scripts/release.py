@@ -47,6 +47,7 @@ def preflight():
     for directory in ("scripts/tests", "projects-generators/tests"):
         run("python3", "-W", "error", "-m", "unittest", "discover", "-s", directory,
             env={"PYTHONDONTWRITEBYTECODE": "1"})
+    run("cargo", "update", "--workspace")
     run("cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings")
     run("cargo", "test", "--locked")
 
