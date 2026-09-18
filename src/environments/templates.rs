@@ -23,8 +23,10 @@ pub(crate) fn list(config: &Config) -> Result<Vec<Template>, String> {
                     directory: entry.path().display().to_string(),
                     compose_file: entry.path().join("compose.yaml").display().to_string(),
                     manifest_file: entry.path().join("tandem.json").display().to_string(),
+                    guidance_file: entry.path().join("tandem-agents.md").display().to_string(),
                     compose_source: String::new(),
                     manifest_source: None,
+                    guidance_source: None,
                     manifest: Manifest::default(),
                     error: Some(error),
                 }),
@@ -129,11 +131,34 @@ fn read_template(config: &Config, name: &str) -> Result<Template, String> {
         directory: directory.display().to_string(),
         compose_file: directory.join("compose.yaml").display().to_string(),
         manifest_file: manifest_path.display().to_string(),
+        guidance_file: directory.join("tandem-agents.md").display().to_string(),
         compose_source: read_text(&directory.join("compose.yaml"))?,
         manifest_source,
+        guidance_source: read_guidance(&directory)?,
         manifest: manifest.unwrap_or_default(),
         error,
     })
+}
+
+pub(super) fn read_guidance(directory: &Path) -> Result<Option<String>, String> {
+    let path = directory.join("tandem-agents.md");
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+        Ok(_) => {}
+    }
+    let directory = fs::canonicalize(directory).map_err(|error| error.to_string())?;
+    let resolved =
+        fs::canonicalize(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    if !resolved.starts_with(&directory) {
+        return Err("tandem-agents.md escapes template directory".into());
+    }
+    if !resolved.is_file() {
+        return Err("tandem-agents.md must be a regular file".into());
+    }
+    read_text(&resolved)
+        .map(Some)
+        .map_err(|error| format!("{}: {error}", path.display()))
 }
 
 fn validate_manifest(manifest: &Manifest) -> Result<(), String> {

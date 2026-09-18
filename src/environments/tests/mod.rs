@@ -8,6 +8,7 @@ use crate::store::environments::{
 };
 
 mod concurrency;
+mod guidance;
 mod manifest_updates;
 mod restart;
 mod template_removal;

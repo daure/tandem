@@ -124,11 +124,42 @@ alongside it as `workspace-agents.template.<unique>.bak` before replacement. Loc
 restarts while the bundled content stays the same. Existing workspace `AGENTS.md` files are preserved.
 `get_instructions` returns the editable template's absolute path as `workspace_agents_template`.
 
-The template supports `{{instance}}`, `{{template}}`, `{{project}}`, `{{repositories}}`, `{{services}}`,
-and `{{compose_command}}`. Values are literal substitutions; unknown or unclosed placeholders and
-empty output fail generation. Repository entries include declared targets and top-level Git checkouts
-(including worktrees), with links to root `AGENTS.md` or `agents.md` files when present. Service entries
-include names, roles, images, gateway URLs and configured route ports, without environment values or live metrics.
+Template authors can place optional `tandem-agents.md` beside `compose.yaml` and `tandem.json`.
+When present, it appears as the fourth **Guidance** tab in template details, with Markdown syntax
+highlighting. Its contents are appended verbatim after the rendered workspace guidance, separated by
+a blank line; `{{...}}` expressions in this file stay literal. It accepts UTF-8 text up to 256 KiB and
+must resolve to a regular file within the template directory. Read errors block generation.
+Template inspection exposes its absolute `guidance_file` path and optional `guidance_source` content.
+Refresh templates after editing; changes apply to future generation, while existing workspace files
+remain user-owned.
+
+The template supports `{{instance}}`, `{{template}}`, `{{project}}`, `{{repositories}}`,
+`{{repository_guidance}}`, `{{compose_project_command}}`, `{{docker_discovery_command}}`,
+`{{http_urls}}`, `{{http_guidance}}`, `{{http_section}}`, `{{services}}`, and `{{compose_command}}`.
+Values are literal substitutions; unknown or unclosed placeholders and
+empty output fail generation. `{{repositories}}` renders the Services table, covering every configured
+service except `repo-sync`, plus declared targets and top-level Git checkouts (including worktrees).
+Repository rows include container code paths and root `AGENTS.md` or `agents.md` paths (`None` when
+absent). Each service/path mapping gets its own row. Services without an identified repository mapping
+use `—` in the repository, code-path and guidance columns. Unmapped repositories remain listed. The repository
+guidance instruction appears only when those files are listed. Default guidance uses the instance name
+as its heading and provides project/service-scoped Compose access and gateway HTTP URLs for development
+and self-evaluation. `{{http_guidance}}` and `{{http_section}}` provide the URL-testing sentence and
+complete HTTP URLs section only when a service has a generated URL. Template-local `tandem-agents.md`
+is appended verbatim; its author owns any route-specific guidance.
+`{{compose_project_command}}` supplies `docker compose -p` with the quoted project;
+`{{compose_command}}` also includes the rendered configuration path and project directory. Custom templates
+can include service entries with names, roles, images, gateway URLs and configured route ports,
+without environment values or live metrics.
+
+Services and repository mappings use the instance's ownership-verified rendered Compose file, including
+infrastructure, setup jobs and services with zero replicas. When that file is missing, known instance
+service names are listed once each. Direct repository
+binds identify code paths; whole-workspace binds also need a matching working directory, command or
+entrypoint argument, or local repository build context. Paths can represent a mounted repository
+subdirectory and can differ from the container's working directory. Missing configuration or
+unidentified mappings display `Not identified`; named volumes and image-only code require runtime
+inspection. Malformed or mismatched rendered configuration blocks generation.
 
 Every new instance receives a root `AGENTS.md` before container startup, even without an open command.
 CLI, TUI and MCP opening also generate it if missing; generation failures block the opener, including

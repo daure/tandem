@@ -11,7 +11,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from generate import generate
-from recipes import REPOSITORIES
+from recipes import ASSETS, REPOSITORIES
 from templates import FIXTURES
 
 
@@ -41,6 +41,10 @@ class GeneratorTests(unittest.TestCase):
             self.assertEqual(git(repo, "rev-parse", "HEAD"), git(other / name, "rev-parse", "HEAD"))
         self.assertFalse((self.root / "guestbook/frontend/.git").exists())
         self.assertEqual(set(FIXTURES), set(json.loads((self.root / "fixtures.json").read_text())["templates"]))
+        for name in FIXTURES:
+            self.assertEqual(
+                (self.root / ".tandem/templates" / name / "tandem-agents.md").read_text(encoding="utf-8"),
+                (ASSETS / "guidance" / f"{name}.md").read_text(encoding="utf-8"))
 
     def test_regeneration_refuses_to_touch_repositories_and_workspaces(self):
         self.generate()

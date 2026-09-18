@@ -57,6 +57,9 @@ pub(super) fn template(template: &Template, count: usize) -> Vec<Property> {
             Tone::Success
         }),
     ];
+    if template.guidance_source.is_some() {
+        rows.push(Property::new("Guidance file", &template.guidance_file));
+    }
     if let Some(error) = &template.error {
         rows.push(Property::new("Error", error).tone(Tone::Error));
     }

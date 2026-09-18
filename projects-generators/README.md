@@ -53,13 +53,19 @@ projects/
   env.sh                    # source this to select the fixture environment
   fixtures.json             # generated inventory and environment
   .tandem/
-    templates/              # four Compose recipes and tandem.json manifests
+    templates/              # Compose recipes, tandem.json and tandem-agents.md
     workspaces/<instance>/  # independent writable clones of the relevant repos
 ```
 
 `projects-generators/` is the tracked source of fixture recipes and app assets. Edit it to change
 what fresh fixtures contain. Each generated source repository is also editable and independently
 versioned; those edits belong to that local fixture set.
+
+Each template's `tandem-agents.md` describes its services, workspace mounts, edit/restart
+behavior and a fixture-specific evaluation cycle. The tracked originals live in
+`projects-generators/assets/guidance/`. They appear in the template's Guidance tab and
+are appended to newly generated workspace `AGENTS.md` files. Browser guidance uses
+host-installed `agent-browser` and its version-matched `skills get core --full` guide.
 
 Templates declare repositories in `tandem.json`. Tandem clones them with host Git before Compose,
 under your UID/GID, using `--no-local` so objects do not depend on shared hardlinks. With Branch

@@ -11,6 +11,7 @@ use crate::{
 };
 
 mod bulk;
+mod guidance;
 mod input_routing;
 mod labels;
 mod operations;
@@ -29,6 +30,8 @@ fn snapshot() -> EnvironmentSnapshot {
             directory: "/tmp/templates/website".into(),
             compose_file: "/tmp/templates/website/compose.yaml".into(),
             manifest_file: "/tmp/templates/website/tandem.json".into(),
+            guidance_file: "/tmp/templates/website/tandem-agents.md".into(),
+            guidance_source: None,
             compose_source: "services:\n  web:\n    image: nginx".into(),
             manifest_source: Some(
                 "{\n  \"description\": \"Website manifest\",\n  \"routes\": {}\n}\n".into(),

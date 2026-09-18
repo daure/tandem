@@ -1,22 +1,31 @@
-# Workspace: {{instance}}
+# {{instance}}
 
-Repositories:
+This workspace contains application repositories and Docker Compose development services.
+
+## Services
+
 {{repositories}}
 
-If a repository has `AGENTS.md` or `agents.md`, read it before working there; follow any applicable nested guidance.
-Run Git commands inside the relevant repository.
+Code paths in containers can differ from their configured working directories.
 
-## Docker Compose
+{{repository_guidance}}Edit source files and run Git commands in the checked-out repositories.
+Run tools and tests locally when their dependencies are available; use the service containers when commands need the environment’s runtime or dependencies.
+{{http_guidance}}
+This Docker environment supports a self-evaluation loop for code changes: exercise the application running in its containers, inspect logs and database state, then use the results to refine and recheck the changes.
 
-Project: {{project}}.
-{{services}}
+## Docker
 
-Run any commands/tests via Docker/Compose or call exposed URLs/ports.
-These development services and their data are disposable; preserve repository work.
-Listed container ports are internal; use the listed HTTP URLs from the host.
+Compose project: {{project}}
+
+Use `{{compose_project_command}}` with service names for `exec` and `logs`;
+use `{{compose_project_command}} ps --all` when container discovery or status is needed.
+
+To run a command in a running service, substitute its service name and code path from the table:
+
 ```sh
-dc() { {{compose_command}} "$@"; }
-dc ps --all --format json # current container names, IDs, status and ports
-dc exec -T SERVICE COMMAND
-dc logs --tail 100 SERVICE
+{{compose_project_command}} exec -T -w CODE_PATH SERVICE COMMAND
 ```
+
+For replicated services, use `exec --index N` to select a replica.
+Omit `-w CODE_PATH` for services without a code path.
+Building or recreating services also requires the instance's rendered Compose configuration.{{http_section}}

@@ -304,6 +304,12 @@ fn workspace_guidance_failure_blocks_opening_and_container_startup() {
 #[test]
 fn an_updated_binary_uses_its_bundled_template_for_new_instances_and_preserves_existing_guidance() {
     let fixture = Fixture::new();
+    let guidance = "## Template guidance\n\nUse {{literal}} fixtures.\n";
+    fs::write(
+        fixture.home.join("templates/website/tandem-agents.md"),
+        guidance,
+    )
+    .unwrap();
     fs::write(
         fixture.home.join("workspace-agents.template.md"),
         "Legacy template\n",
@@ -319,9 +325,13 @@ fn an_updated_binary_uses_its_bundled_template_for_new_instances_and_preserves_e
         String::from_utf8_lossy(&output.stderr)
     );
     let text = fs::read_to_string(fixture.home.join("workspaces/review/AGENTS.md")).unwrap();
-    assert!(text.starts_with("# Workspace: review\n"));
-    assert!(text.contains("If a repository has `AGENTS.md` or `agents.md`"));
+    assert!(text.starts_with("# review\n"));
+    assert!(
+        text.contains("docker compose -p 'cli-test-review' exec -T -w CODE_PATH SERVICE COMMAND")
+    );
+    assert!(text.contains("Read the agents.md files listed above before starting any work."));
     assert!(text.contains("./app/AGENTS.md"));
+    assert!(text.ends_with(guidance));
     assert_eq!(
         fs::read_to_string(existing).unwrap(),
         "Existing instance guidance\n"

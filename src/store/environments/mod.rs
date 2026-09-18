@@ -65,8 +65,10 @@ pub(crate) struct Template {
     pub directory: String,
     pub compose_file: String,
     pub manifest_file: String,
+    pub guidance_file: String,
     pub compose_source: String,
     pub manifest_source: Option<String>,
+    pub guidance_source: Option<String>,
     pub manifest: Manifest,
     pub error: Option<String>,
 }

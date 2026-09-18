@@ -54,6 +54,16 @@ pub(super) fn details(row: &Row) -> Modal {
                 Paragraph::new("tandem.json is unavailable. Check Metadata for template errors."),
             ),
         });
+        if let Some(source) = &row.guidance_source {
+            tabs.push(Tab::new(
+                "Guidance",
+                SyntaxHighlighter::new(
+                    source.clone(),
+                    Language::guess(Some("tandem-agents.md"), source),
+                )
+                .wrap(true),
+            ));
+        }
     }
     Box::new(
         Tabs::dialog(tabs)

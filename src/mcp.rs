@@ -305,7 +305,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Get absolute editable template directory, Compose file/source and manifest. Relative scripts and config belong in this directory."
+        description = "Get absolute editable template directory, Compose file/source, manifest and optional tandem-agents.md guidance. Relative scripts and config belong in this directory."
     )]
     async fn get_template(
         &self,

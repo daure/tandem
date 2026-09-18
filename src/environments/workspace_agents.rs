@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fs,
     io::Write,
     path::Path,
@@ -12,6 +12,8 @@ use super::{
     lifecycle, templates,
 };
 use crate::store::environments::{Instance, Repository};
+
+mod repositories;
 
 impl Environments {
     pub fn prepare_workspace_open(&self, workspace: &str, name: &str) -> Result<(), String> {
@@ -81,16 +83,68 @@ pub(super) fn generate(
         shell_quote(&instance.template_directory),
         shell_quote(&compose_file.display().to_string()),
     );
+    let (repository_lines, has_repository_guidance) =
+        repositories::table(config, instance, repositories, &compose_file)?;
+    let http_urls = http_url_lines(instance);
+    let (http_guidance, http_section) = if instance
+        .services
+        .iter()
+        .any(|service| service.url.is_some())
+    {
+        (
+            "Use the exposed URLs for API and browser testing against the running application.\n"
+                .into(),
+            format!(
+                "\n\n## HTTP URLs\n\n{http_urls}\n\nThese URLs use a shared gateway; container ports are internal."
+            ),
+        )
+    } else {
+        (String::new(), String::new())
+    };
     let values = BTreeMap::from([
         ("instance", instance.name.clone()),
         ("template", code(&instance.template)),
         ("project", code(&instance.project)),
-        ("repositories", repository_lines(workspace, repositories)?),
+        ("repositories", repository_lines),
+        (
+            "repository_guidance",
+            if has_repository_guidance {
+                "Read the agents.md files listed above before starting any work.\n".into()
+            } else {
+                String::new()
+            },
+        ),
         ("services", service_lines(instance)),
         ("compose_command", command),
+        (
+            "compose_project_command",
+            format!("docker compose -p {}", shell_quote(&instance.project)),
+        ),
+        (
+            "docker_discovery_command",
+            format!(
+                "docker ps -a --filter {}",
+                shell_quote(&format!(
+                    "label=com.docker.compose.project={}",
+                    instance.project
+                ))
+            ),
+        ),
+        ("http_urls", http_urls),
+        ("http_guidance", http_guidance),
+        ("http_section", http_section),
     ]);
     let source = read_text(&config.workspace_agents_template())?;
-    let markdown = render(&source, &values)?;
+    let mut markdown = render(&source, &values)?;
+    if let Some(guidance) = templates::read_guidance(Path::new(&instance.template_directory))?
+        && !guidance.is_empty()
+    {
+        if !markdown.ends_with('\n') {
+            markdown.push('\n');
+        }
+        markdown.push('\n');
+        markdown.push_str(&guidance);
+    }
     let mut file = tempfile::NamedTempFile::new_in(workspace).map_err(|error| error.to_string())?;
     file.write_all(markdown.as_bytes())
         .map_err(|error| error.to_string())?;
@@ -110,43 +164,19 @@ pub(super) fn generate(
     }
 }
 
-fn repository_lines(workspace: &Path, repositories: &[Repository]) -> Result<String, String> {
-    let mut targets: BTreeSet<String> = repositories
+fn http_url_lines(instance: &Instance) -> String {
+    let urls: BTreeMap<_, _> = instance
+        .services
         .iter()
-        .map(|repo| repo.target.clone())
+        .filter_map(|service| service.url.as_ref().map(|url| (&service.name, url)))
         .collect();
-    for entry in fs::read_dir(workspace).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        if entry
-            .file_type()
-            .map_err(|error| error.to_string())?
-            .is_dir()
-            && entry.path().join(".git").exists()
-        {
-            targets.insert(entry.file_name().to_string_lossy().into_owned());
-        }
+    if urls.is_empty() {
+        return "No HTTP routes configured.".into();
     }
-    let mut lines = Vec::new();
-    for target in targets {
-        let root = workspace.join(&target);
-        let mut guidance = Vec::new();
-        for filename in ["AGENTS.md", "agents.md"] {
-            if root.join(filename).is_file() {
-                guidance.push(code(&format!("./{target}/{filename}")));
-            }
-        }
-        let note = if guidance.is_empty() {
-            "no AGENTS.md file found at repository root".into()
-        } else {
-            format!("read {}", guidance.join(" and "))
-        };
-        lines.push(format!("- {} — {note}", code(&format!("./{target}"))));
-    }
-    Ok(if lines.is_empty() {
-        "- No declared or top-level Git repositories found; check the workspace after setup finishes.".into()
-    } else {
-        lines.join("\n")
-    })
+    urls.iter()
+        .map(|(name, url)| format!("- {}: {}", code(name), code(url)))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn service_lines(instance: &Instance) -> String {

@@ -3,7 +3,7 @@
 import copy
 import json
 
-from recipes import healthy, write, write_json
+from recipes import asset, healthy, write, write_json
 
 FIXTURES = {
     "guestbook": {"repos": ["guestbook"], "web": "guestbook/frontend", "api": "guestbook/backend"},
@@ -70,7 +70,8 @@ def create_templates(root):
         write_json(directory / "tandem.json", {"description": f"{name.title()} development fixture",
                                                "repositories": [{"source": str(root / repo), "target": repo}
                                                                 for repo in fixture["repos"]],
-                                               "routes": routes, "one_shots": one_shots})
+                                                "routes": routes, "one_shots": one_shots})
+        asset(f"guidance/{name}.md", directory / "tandem-agents.md")
         write(directory / ".gitignore", ".env\n.tandem-*.compose.json\n")
         write(directory / ".env.example", "FAIL_READINESS=0\nSTARTUP_DELAY=0\n"
               + ("FAIL_MIGRATION=0\n" if name == "greetings" else "")
