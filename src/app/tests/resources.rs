@@ -475,10 +475,7 @@ fn setup_group_uses_one_line_and_its_children_show_only_labels() {
             "{lines:#?}"
         );
         let child_height = if let Some(image) = image {
-            assert!(
-                lines[group + 2].trim_end().ends_with(image),
-                "{lines:#?}"
-            );
+            assert!(lines[group + 2].trim_end().ends_with(image), "{lines:#?}");
             2
         } else {
             1

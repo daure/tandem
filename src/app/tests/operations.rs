@@ -220,6 +220,7 @@ fn duplicate_new_instance_focuses_existing_and_notifies_without_another_operatio
     tuicore::init();
     let service = AppService::for_tests();
     let existing = service.queue_instance_for_tests("review", "website");
+    service.complete_instance_for_tests(&existing.id, snapshot().instances.remove(0));
     let mut app = root(service);
     let mut ctx = EventCtx::new(AnimationSettings::default());
     for template in ["website", "different-template"] {
@@ -234,6 +235,7 @@ fn duplicate_new_instance_focuses_existing_and_notifies_without_another_operatio
         let operations = app.service.operations();
         assert_eq!(operations.len(), 1);
         assert_eq!(operations[0].id, existing.id);
+        assert_eq!(operations[0].state, OperationState::Succeeded);
         assert_eq!(operations[0].progress, ["Queued"]);
         let notice = app.notifications.center().history().last().unwrap();
         assert_eq!(notice.title(), "Instance already exists");

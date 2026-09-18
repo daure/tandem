@@ -190,6 +190,15 @@ impl AppService {
             .unwrap()
     }
 
+    #[cfg(test)]
+    pub(crate) fn complete_instance_for_tests(
+        &self,
+        id: &str,
+        instance: crate::store::environments::Instance,
+    ) {
+        self.environments.complete_instance_for_tests(id, instance);
+    }
+
     pub(crate) fn submit_operation(
         &self,
         action: &str,

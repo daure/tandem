@@ -279,7 +279,8 @@ fn routed_service_action_menu_opens_the_gateway_in_the_browser() {
         );
     }
     super::instances::set_highlighted(&app.instances, Some("service:review:web".into()));
-    app.menu_layer_mut().set_active_with_context(false, &mut events);
+    app.menu_layer_mut()
+        .set_active_with_context(false, &mut events);
     app.event(
         &TuiEvent::Key(KeyEvent {
             code: Key::Char(';'),

@@ -27,7 +27,12 @@ fn instance_batches_continue_after_admission_failures_and_deduplicate_targets() 
         let batch = service
             .submit_instance_batch(
                 action,
-                &["busy".into(), "gateway".into(), "other".into(), "other".into()],
+                &[
+                    "busy".into(),
+                    "gateway".into(),
+                    "other".into(),
+                    "other".into(),
+                ],
                 true,
             )
             .unwrap();
@@ -36,6 +41,11 @@ fn instance_batches_continue_after_admission_failures_and_deduplicate_targets() 
         assert_eq!(batch.operations[0].action, action);
         assert_eq!(batch.errors.len(), 2);
         assert!(batch.errors.iter().any(|error| error.starts_with("busy:")));
-        assert!(batch.errors.iter().any(|error| error.starts_with("gateway:")));
+        assert!(
+            batch
+                .errors
+                .iter()
+                .any(|error| error.starts_with("gateway:"))
+        );
     }
 }

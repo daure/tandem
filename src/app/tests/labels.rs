@@ -97,7 +97,7 @@ fn active_startup_rows_show_the_latest_progress_beneath_the_status() {
     let mut pending = snapshot();
     pending.instances[0].pending = true;
     pending.instances[0].services.clear();
-    let instance = rows::from_snapshot_with_operations(&pending, &[operation.clone()])
+    let instance = rows::from_snapshot_with_operations(&pending, std::slice::from_ref(&operation))
         .into_iter()
         .find(|row| row.id == "instance:review")
         .unwrap();

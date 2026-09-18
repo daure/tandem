@@ -130,11 +130,7 @@ impl Environments {
                     service.usage = None;
                 }
             }
-            project_instance(
-                instance,
-                snapshot.runtime_error.is_some(),
-                journal::now(),
-            );
+            project_instance(instance, snapshot.runtime_error.is_some(), journal::now());
         }
         snapshot.activities.retain_mut(|activity| {
             let Some(job) = jobs.get(&activity.id) else {
@@ -621,6 +617,11 @@ impl Environments {
             Err("operation worker failed; inspect runtime state before retrying".into())
         });
         self.finish_operation(&operation.id, result);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn complete_instance_for_tests(&self, id: &str, instance: Instance) {
+        self.finish_operation(id, Ok(Some(instance)));
     }
 
     fn finish_operation(&self, id: &str, result: Result<Option<Instance>, String>) {

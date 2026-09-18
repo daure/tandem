@@ -703,10 +703,11 @@ pub(super) fn from_snapshot_with_operations(
             )
         };
         row.label = format!("{} · {label}", activity.name);
-        let progress = operation_progress(operations, &activity.action, &activity.name).or_else(|| {
-            (activity.active() && activity.action == "create_instance")
-                .then_some("Preparing workspace and services")
-        });
+        let progress =
+            operation_progress(operations, &activity.action, &activity.name).or_else(|| {
+                (activity.active() && activity.action == "create_instance")
+                    .then_some("Preparing workspace and services")
+            });
         if let Some(progress) = progress {
             row.label.push('\n');
             row.label.push_str(progress);
