@@ -27,9 +27,11 @@ enum Commands {
         template: String,
         #[arg(
             long,
-            help = "Run the saved open command when workspace repositories are on disk (alias: -oc)"
+            num_args = 0..=1,
+            value_name = "EXTRA",
+            help = "Run the saved open command when workspace repositories are on disk, optionally setting TANDEM_EXTRA (alias: -oc)"
         )]
-        open_command: bool,
+        open_command: Option<Option<String>>,
     },
     #[command(
         about = "Permanently delete an instance, its workspace, volumes, and networks",

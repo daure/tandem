@@ -1,7 +1,7 @@
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use tuicore::{
-    AnimationSettings, EventCtx, EventRoute, HotkeyEvent, Key, KeyEvent, KeyModifiers, RenderCtx,
-    TuiEvent, TuiNode,
+    AnimationSettings, EventCtx, EventRoute, HotkeyEvent, Key, KeyEvent, KeyModifiers,
+    LayoutEngine, RenderCtx, TuiEvent, TuiNode,
 };
 
 use super::{Msg, root, rows};
@@ -423,6 +423,50 @@ fn data_view_starts_with_templates_expanded_and_instances_collapsed() {
 }
 
 #[test]
+fn global_h_focuses_the_first_template_and_collapses_instances() {
+    tuicore::init();
+    let mut app = root(AppService::for_tests());
+    app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
+    let area = Rect::new(0, 0, 130, 40);
+
+    let mut tree = super::Instances::new(app.instances.clone());
+    let mut layout = LayoutEngine::new();
+    layout.layout(&mut tree, area);
+    assert!(layout.focus_targets().iter().any(|target| {
+        target
+            .hotkey_sequences
+            .iter()
+            .any(|sequence| sequence == "shift+h")
+    }));
+    expand_first_instance(&mut tree);
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+    tree.event(
+        &TuiEvent::Hotkey(HotkeyEvent::Commit("shift+h".into())),
+        &mut ctx,
+    );
+
+    assert_eq!(
+        super::instances::selected(&app.instances).unwrap().template,
+        "website"
+    );
+    assert!(ctx.focus_request().is_some());
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            tree.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    assert!(rendered_lines(&terminal, area).join("").contains("review"));
+    assert!(
+        !rendered_lines(&terminal, area)
+            .join("")
+            .contains("http://localhost:9876/review/web/")
+    );
+}
+
+#[test]
 fn details_hotkey_opens_the_selected_template_in_bottom_tabs() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
@@ -764,7 +808,7 @@ fn instance_action_menu_lists_instance_actions() {
         ("New instance", "n"),
         ("Start instance", "s"),
         ("Stop instance", "s"),
-        ("Delete instance", "x"),
+        ("Purge instance", "p"),
     ] {
         let line = lines.iter().find(|line| line.contains(label)).unwrap();
         assert!(

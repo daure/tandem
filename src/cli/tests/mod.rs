@@ -6,12 +6,21 @@ fn parse(arguments: &[&str]) -> Result<Cli, clap::Error> {
 
 #[test]
 fn new_instance_accepts_long_short_and_mixed_options() {
-    for options in [
-        vec!["review", "--template", "website"],
-        vec!["review", "-t", "website", "--open-command"],
-        vec!["-oc", "--template", "website", "review"],
-        vec!["review", "-twebsite", "-oc"],
-        vec!["--template=website", "-oc", "review"],
+    for (options, expected_open_command) in [
+        (vec!["review", "--template", "website"], None),
+        (
+            vec!["review", "-t", "website", "--open-command"],
+            Some(None),
+        ),
+        (vec!["review", "-twebsite", "-oc"], Some(None)),
+        (
+            vec!["review", "-t", "website", "-oc", "extra value"],
+            Some(Some("extra value")),
+        ),
+        (
+            vec!["review", "-t", "website", "--open-command=extra value"],
+            Some(Some("extra value")),
+        ),
     ] {
         let mut arguments = vec!["tandem", "new-instance"];
         arguments.extend(&options);
@@ -26,26 +35,18 @@ fn new_instance_accepts_long_short_and_mixed_options() {
         assert_eq!(name, "review");
         assert_eq!(template, "website");
         assert_eq!(
-            open_command,
-            options.contains(&"-oc") || options.contains(&"--open-command")
+            open_command.as_ref().map(|extra| extra.as_deref()),
+            expected_open_command
         );
     }
 }
 
 #[test]
-fn new_instance_requires_name_template_and_boolean_open_flag() {
+fn new_instance_requires_name_and_template() {
     for arguments in [
         vec!["tandem", "new-instance", "review"],
         vec!["tandem", "new-instance", "-t", "website"],
         vec!["tandem", "new-instance", "review", "-t"],
-        vec![
-            "tandem",
-            "new-instance",
-            "review",
-            "-t",
-            "website",
-            "--open-command=echo",
-        ],
         vec!["tandem", "new-instance", "review", "-t", "website", "-o"],
         vec![
             "tandem",

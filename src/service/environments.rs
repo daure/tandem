@@ -91,7 +91,7 @@ impl AppService {
                     state.opened_system_targets.lock().unwrap().push(workspace);
                     return Ok(());
                 }
-                run_workspace_command(&command, &workspace, &instance).await
+                run_workspace_command(&command, &workspace, &instance, None).await
             }
             .await;
             if let Err(error) = &result {
@@ -454,8 +454,9 @@ async fn run_workspace_command(
     command: &str,
     workspace: &str,
     instance: &str,
+    extra: Option<&str>,
 ) -> Result<(), String> {
-    let status = spawn_workspace_command(command, workspace, instance)?
+    let status = spawn_workspace_command(command, workspace, instance, extra)?
         .wait()
         .await
         .map_err(|error| format!("cannot wait for workspace opener: {error}"))?;
@@ -469,6 +470,7 @@ pub(super) fn spawn_workspace_command(
     command: &str,
     workspace: &str,
     instance: &str,
+    extra: Option<&str>,
 ) -> Result<tokio::process::Child, String> {
     let mut process = if command.trim().is_empty() {
         let mut process = tokio::process::Command::new("xdg-open");
@@ -482,6 +484,9 @@ pub(super) fn spawn_workspace_command(
             .env("TANDEM_INSTANCE", instance)
             .env("TANDEM_WORKSPACE", workspace)
             .current_dir(workspace);
+        if let Some(extra) = extra {
+            process.env("TANDEM_EXTRA", extra);
+        }
         process
     };
     process

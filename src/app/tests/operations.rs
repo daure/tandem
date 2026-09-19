@@ -46,7 +46,7 @@ fn successful_deletion_with_close_failure_shows_a_warning_once() {
     }
     assert_eq!(notifications.len(), 1);
     assert_eq!(notifications[0].kind(), tuicore::NotificationKind::Warning);
-    assert_eq!(notifications[0].title(), "Instance deleted");
+    assert_eq!(notifications[0].title(), "Instance purged");
     assert!(
         notifications[0]
             .body()
@@ -99,7 +99,7 @@ fn pending_container_operations_keep_notifications_silent() {
 fn deletes_remain_visible_until_completion_and_notify_once() {
     tuicore::init();
     for (action, name, title, template_count) in [
-        ("delete_instance", "review", "Instance deleted", 1),
+        ("delete_instance", "review", "Instance purged", 1),
         ("remove_template", "website", "Template deleted", 0),
         ("delete_template", "website", "Instances purged", 1),
     ] {
@@ -315,9 +315,9 @@ fn failed_instance_cleanup_rows_offer_confirmed_deletion_but_active_and_template
         app.snapshot = inventory.clone();
         app.set_rows_for_tests(rows::from_snapshot(&inventory));
         instances::set_highlighted(&app.instances, Some("operation:cleanup:review".into()));
-        app.action(5, &mut EventCtx::new(AnimationSettings::default()));
+        app.action(6, &mut EventCtx::new(AnimationSettings::default()));
         assert_eq!(
-            matches!(&app.intent, Some(crate::app::Intent::Delete(name)) if name == "review"),
+            matches!(&app.intent, Some(crate::app::Intent::Purge(name)) if name == "review"),
             enabled,
             "{action}, finished={finished}"
         );

@@ -84,6 +84,7 @@ another template or unmanaged containers.
 tandem new-instance review --template website
 tandem new-instance review -t website --open-command
 tandem new-instance review -t website -oc
+tandem new-instance review -t website -oc "project notes"
 tandem delete-instance review
 tandem delete-instance review --close-command
 tandem delete-instance review -cc --headless
@@ -100,7 +101,7 @@ paused. The CLI reports that it exists without checking readiness. With `--open-
 it only launches the saved opener in that instance's workspace; template files and repository sources
 are not needed. Ownership mismatches and concurrent instance operations are rejected.
 
-`--open-command` (also spelled `-oc`) is a boolean flag. For a new instance, the workspace-ready signal
+`--open-command` (also spelled `-oc`) optionally accepts an extra argument. For a new instance, the workspace-ready signal
 triggers the saved opener after declared repositories have been cloned or validated, any Compose configuration
 has been rendered, and the workspace `AGENTS.md` has been written. Opening and container startup then
 proceed independently. Template-owned
@@ -108,7 +109,8 @@ clone scripts and container-created files are outside this milestone; declare re
 source access.
 An empty saved command uses the system folder opener. Without the flag, nothing is opened.
 The opener inherits the CLI's environment; custom commands run in the workspace with `TANDEM_INSTANCE`
-and `TANDEM_WORKSPACE` set. Editor lifetime does not delay startup or CLI exit. Settings/launch failures
+and `TANDEM_WORKSPACE` set. When `--open-command` has an extra argument, it is available as `TANDEM_EXTRA`.
+Editor lifetime does not delay startup or CLI exit. Settings/launch failures
 make the CLI fail after startup completes, or immediately for an existing instance. Opener exit failures
 observed while the CLI runs are logged.
 
@@ -337,8 +339,8 @@ guidance files are user-owned; update them explicitly when adopting this workflo
 | `TANDEM_KEY_NEW_TEMPLATE` | `T` | Create template dialog |
 | `TANDEM_KEY_STOP` | `s` | Start/stop the selected instance or service; stop all instances on a template row |
 | `TANDEM_KEY_REFRESH` | `R` | Refresh template/runtime inventory |
-| `TANDEM_KEY_DELETE` | `x` | Delete the selected instance, or a template with all its instances and data |
-| `TANDEM_KEY_PURGE` | `p` | Purge all instances of the selected template |
+| `TANDEM_KEY_DELETE` | `x` | Delete the selected template with all its instances and data |
+| `TANDEM_KEY_PURGE` | `p` | Purge the selected instance, or all instances of the selected template |
 | `TANDEM_KEY_RESTART` | `r` | Restart the selected instance or service after confirmation |
 | `TANDEM_KEY_STOP_ALL` | `S` | Stop instances across all templates after confirmation |
 | `TANDEM_KEY_PURGE_ALL` | `P` | Purge instances across all templates after confirmation |

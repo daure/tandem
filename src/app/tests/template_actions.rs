@@ -200,7 +200,7 @@ fn only_branch_mode_restricts_new_instance_input() {
 }
 
 #[test]
-fn row_delete_and_bulk_purge_keys_open_distinct_confirmations() {
+fn row_purge_and_bulk_purge_keys_open_distinct_confirmations() {
     tuicore::init();
     for (selected, key, confirm_key, title) in [
         (
@@ -209,7 +209,7 @@ fn row_delete_and_bulk_purge_keys_open_distinct_confirmations() {
             'p',
             "Purge all instances",
         ),
-        ("instance:review", 'x', 'd', "Delete instance"),
+        ("instance:review", 'p', 'p', "Purge instance"),
         (
             "template:/tmp/templates/website",
             'x',
@@ -233,7 +233,7 @@ fn row_delete_and_bulk_purge_keys_open_distinct_confirmations() {
                 matches!(app.intent, Some(crate::app::Intent::RemoveTemplate(ref name)) if name == "website")
             ),
             ("instance:review", _) => assert!(
-                matches!(app.intent, Some(crate::app::Intent::Delete(ref name)) if name == "review")
+                matches!(app.intent, Some(crate::app::Intent::Purge(ref name)) if name == "review")
             ),
             _ => assert!(
                 matches!(app.intent, Some(crate::app::Intent::DeleteTemplate(ref name)) if name == "website")
@@ -256,12 +256,6 @@ fn row_delete_and_bulk_purge_keys_open_distinct_confirmations() {
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     crate::app::instances::set_highlighted(&app.instances, Some("instance:review".into()));
-    app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Char('p'))),
-        &mut EventCtx::new(AnimationSettings::default()),
-    );
-    assert!(app.intent.is_none());
-    assert!(!app.view.first().is_active());
 }
 
 #[test]

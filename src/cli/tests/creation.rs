@@ -186,6 +186,24 @@ fn open_aliases_launch_once_after_checkout_before_compose_startup() {
 }
 
 #[test]
+fn open_command_extra_is_available_to_the_saved_command() {
+    let fixture = Fixture::new();
+    fixture.save_command("printf '%s' \"$TANDEM_EXTRA\" > \"$TANDEM_HOME/opened-extra\"");
+
+    let output = fixture.run(&["new-instance", "review", "-t", "website", "-oc", "from CLI"]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.home.join("opened-extra")).unwrap(),
+        "from CLI"
+    );
+}
+
+#[test]
 fn creation_without_open_flag_preserves_saved_command_without_executing_it() {
     let fixture = Fixture::new();
     fixture.save_command(OPEN);

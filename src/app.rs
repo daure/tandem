@@ -81,7 +81,7 @@ enum Intent {
         name: String,
         service: Option<String>,
     },
-    Delete(String),
+    Purge(String),
     StopTemplate(String),
     DeleteTemplate(String),
     RemoveTemplate(String),
@@ -335,7 +335,7 @@ impl App {
                     }) => self
                         .service
                         .submit_service_state(name, service.clone(), *running, true),
-                    Some(Intent::Delete(name)) => {
+                    Some(Intent::Purge(name)) => {
                         self.service
                             .submit_operation("delete_instance", name, None, 60, true)
                     }
@@ -416,7 +416,7 @@ impl App {
             Intent::CreateInstance(_) => Some(&self.name),
             Intent::Resume { name, .. }
             | Intent::Stop(name)
-            | Intent::Delete(name)
+            | Intent::Purge(name)
             | Intent::ServiceState { name, .. }
             | Intent::Restart { name, .. } => Some(name),
             Intent::NewTemplate
@@ -648,9 +648,6 @@ impl App {
                         dialogs::confirm_remove_template(&row.template, &row.directory),
                         ctx,
                     );
-                } else if let Some(name) = row.and_then(|row| row.cleanup_target.or(row.instance)) {
-                    self.intent = Some(Intent::Delete(name.clone()));
-                    self.open(dialogs::confirm_delete(&name), ctx);
                 }
             }
             7 => {
@@ -675,9 +672,12 @@ impl App {
                 }
             }
             6 => {
-                if let Some(row) = row.filter(|row| row.parent.is_none()) {
+                if let Some(row) = row.as_ref().filter(|row| row.parent.is_none()) {
                     self.intent = Some(Intent::DeleteTemplate(row.template.clone()));
                     self.open(dialogs::confirm_delete_template(&row.template), ctx);
+                } else if let Some(name) = row.and_then(|row| row.cleanup_target.or(row.instance)) {
+                    self.intent = Some(Intent::Purge(name.clone()));
+                    self.open(dialogs::confirm_purge(&name), ctx);
                 }
             }
             _ => {}

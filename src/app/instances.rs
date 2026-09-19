@@ -140,6 +140,7 @@ impl Instances {
             .selection_mode(SelectionMode::Single)
             .tree(TreeAdapter::parent_id(|row: &Row| row.parent.clone()))
             .row_height_by(Row::height)
+            .hotkey("shift+h")
             .row_style_by(|row| {
                 row.alternate_background
                     .then(|| Style::default().bg(tuicore::theme().surface_bg()))
@@ -234,6 +235,26 @@ impl Instances {
         }
         self.record_highlighted();
     }
+
+    fn focus_first_template(&mut self, ctx: &mut EventCtx<Msg>) {
+        let template_ids = self
+            .tree
+            .rows()
+            .iter()
+            .filter(|row| row.parent.is_none())
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>();
+        self.tree.collapse_all();
+        for id in &template_ids {
+            self.tree.expand(id);
+        }
+        if let Some(id) = template_ids.first() {
+            self.tree.highlight_id(id);
+            self.tree.reveal_highlighted();
+        }
+        self.record_highlighted();
+        ctx.focus(super::initial_focus());
+    }
 }
 
 impl TuiNode<Msg> for Instances {
@@ -252,6 +273,12 @@ impl TuiNode<Msg> for Instances {
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
         self.sync_rows();
+        if matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "shift+h")
+        {
+            self.focus_first_template(ctx);
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let outcome = self.tree.event(event, ctx);
         self.after_event();
         outcome
@@ -264,6 +291,12 @@ impl TuiNode<Msg> for Instances {
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
         self.sync_rows();
+        if matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "shift+h")
+        {
+            self.focus_first_template(ctx);
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         let outcome = self.tree.dispatch_event(route, event, ctx);
         self.after_event();
         outcome

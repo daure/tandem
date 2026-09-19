@@ -36,7 +36,7 @@ pub(super) enum Action {
     RestartInstance,
     RestartService,
     StopTemplate,
-    Delete,
+    Purge,
     RetryCleanup,
     DeleteTemplate,
     RemoveTemplate,
@@ -59,8 +59,8 @@ impl Action {
             | Self::StartService
             | Self::StopService
             | Self::StopTemplate => 3,
-            Self::Delete | Self::RetryCleanup | Self::RemoveTemplate => 5,
-            Self::DeleteTemplate => 6,
+            Self::RemoveTemplate => 5,
+            Self::Purge | Self::RetryCleanup | Self::DeleteTemplate => 6,
         }
     }
 
@@ -82,7 +82,7 @@ impl Action {
             Self::RestartInstance => "Restart instance",
             Self::RestartService => "Restart service",
             Self::StopTemplate => "Stop all instances",
-            Self::Delete => "Delete instance",
+            Self::Purge => "Purge instance",
             Self::RetryCleanup => "Retry cleanup",
             Self::DeleteTemplate => "Purge all instances",
             Self::RemoveTemplate => "Delete template",
@@ -189,7 +189,7 @@ impl ActionMenu {
                 Action::Start,
                 Action::Stop,
                 Action::RestartInstance,
-                Action::Delete,
+                Action::Purge,
             ]
         } else {
             let mut actions = vec![

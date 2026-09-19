@@ -33,7 +33,7 @@ impl Deletion {
                 Ok(operation) if operation.state == OperationState::Succeeded => {
                     self.succeeded = true;
                     let title = match operation.action.as_str() {
-                        "delete_instance" => "Instance deleted",
+                        "delete_instance" => "Instance purged",
                         "remove_template" => "Template deleted",
                         _ => "Instances purged",
                     };
@@ -56,7 +56,7 @@ impl Deletion {
                         Err(error) => error,
                     };
                     notifications.push(Notification::error(
-                        "Delete failed",
+                        "Purge failed",
                         format!("{}: {error}", self.operation.name),
                     ));
                     return false;

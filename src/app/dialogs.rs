@@ -197,12 +197,12 @@ pub(super) fn confirm_restart(name: &str, service: Option<&str>, hotkey: KeySpec
     )
 }
 
-pub(super) fn confirm_delete(name: &str) -> Modal {
+pub(super) fn confirm_purge(name: &str) -> Modal {
     confirmation(
-        "Delete instance",
-        "Delete",
-        KeySpec::plain('d'),
-        format!("Delete {name}? This permanently removes its data."),
+        "Purge instance",
+        "Purge",
+        KeySpec::plain('p'),
+        format!("Purge {name}? This permanently removes its data."),
     )
 }
 
