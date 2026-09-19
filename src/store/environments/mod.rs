@@ -73,6 +73,19 @@ pub(crate) struct Template {
     pub error: Option<String>,
 }
 
+impl Template {
+    pub fn workspace_only(&self) -> bool {
+        self.compose_file.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub(crate) struct RepositoryCheckout {
+    pub target: String,
+    pub path: String,
+    pub cloned: bool,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub(crate) struct InstanceService {
     pub name: String,
@@ -153,6 +166,10 @@ pub(crate) struct Instance {
     pub pending: bool,
     pub services: Vec<InstanceService>,
     #[serde(default)]
+    pub workspace_only: bool,
+    #[serde(default)]
+    pub repositories: Vec<RepositoryCheckout>,
+    #[serde(default)]
     pub runtime: InstanceRuntime,
     #[serde(default)]
     pub summary: StatusSummary,
@@ -177,6 +194,7 @@ pub(crate) struct RuntimeInventory {
     pub instances: Vec<Instance>,
     pub activities: Vec<Activity>,
     pub observed_at_unix_seconds: u64,
+    pub runtime_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, JsonSchema, PartialEq, Eq)]

@@ -4,6 +4,7 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 mod creation;
+mod dev_server;
 mod environments;
 mod refresh;
 mod settings;
@@ -86,6 +87,13 @@ impl AppService {
             templates_root: self.environments.config.templates.display().to_string(),
             gateway_origin: self.environments.config.origin(),
         }
+    }
+
+    pub(crate) fn replace_dev_server(
+        &self,
+        port: u16,
+    ) -> Result<dev_server::DevServerLease, String> {
+        dev_server::DevServerLease::replace(&self.environments.config.home, port)
     }
 }
 

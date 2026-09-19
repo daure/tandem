@@ -75,6 +75,7 @@ pub(crate) enum Status {
     Unknown,
     Stale,
     Completed,
+    WorkspaceReady,
     Failed,
     Interrupted,
     Degraded,
@@ -102,6 +103,7 @@ impl Status {
             Self::Unknown => "Unknown",
             Self::Stale => "Stale",
             Self::Completed => "Completed",
+            Self::WorkspaceReady => "Workspace ready",
             Self::Failed => "Failed",
             Self::Interrupted => "Interrupted",
             Self::Degraded => "Degraded",
@@ -122,7 +124,7 @@ impl Status {
             | Self::Stopping
             | Self::Deleting
             | Self::Removing => Severity::Info,
-            Self::Healthy | Self::Completed => Severity::Success,
+            Self::Healthy | Self::Completed | Self::WorkspaceReady => Severity::Success,
             Self::Unhealthy | Self::ContainerError | Self::Failed => Severity::Error,
             _ => Severity::Warning,
         }
@@ -228,6 +230,7 @@ pub(crate) struct ServiceRuntime {
 #[serde(default)]
 pub(crate) struct InstanceRuntime {
     pub topology_known: bool,
+    pub workspace_ready: bool,
     pub stale: bool,
     pub observed_at: Option<u64>,
     pub whole_stop: bool,
@@ -503,6 +506,12 @@ impl Instance {
             .all(|service| service.status_summary().status == Status::Completed);
         let status = if self.runtime.stale {
             Status::Stale
+        } else if self.workspace_only {
+            if self.runtime.workspace_ready {
+                Status::WorkspaceReady
+            } else {
+                Status::Failed
+            }
         } else if !self.runtime.topology_known
             || running.is_empty() && jobs.is_empty()
             || self.services.iter().any(|service| {

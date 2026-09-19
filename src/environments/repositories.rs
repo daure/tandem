@@ -10,7 +10,7 @@ use super::{
     command::{Progress, remaining, run},
     config::{private_file, read_text},
 };
-use crate::store::environments::{Repository, Template};
+use crate::store::environments::{Repository, RepositoryCheckout, Template};
 
 pub(super) fn validate(repositories: &[Repository]) -> Result<(), String> {
     for (index, repository) in repositories.iter().enumerate() {
@@ -70,6 +70,7 @@ pub(super) fn prepare(
     branch: Option<&str>,
     deadline: Instant,
     progress: Progress,
+    mut prepared: impl FnMut(RepositoryCheckout) -> Result<(), String>,
 ) -> Result<(), String> {
     let repositories = &template.manifest.repositories;
     validate(repositories)?;
@@ -98,6 +99,11 @@ pub(super) fn prepare(
                 "Preserving repository {} (branch and edits unchanged)",
                 repository.target
             ));
+            prepared(RepositoryCheckout {
+                target: repository.target.clone(),
+                path: target.display().to_string(),
+                cloned: false,
+            })?;
             continue;
         }
         progress(format!("Cloning repository {}", repository.target));
@@ -128,6 +134,11 @@ pub(super) fn prepare(
         let selected = query(&checkout, &["symbolic-ref", "--short", "HEAD"], deadline)?;
         checked_target(workspace, &repository.target, false)?;
         install(&checkout, &target)?;
+        prepared(RepositoryCheckout {
+            target: repository.target.clone(),
+            path: target.display().to_string(),
+            cloned: true,
+        })?;
         progress(format!(
             "Repository {} ready on branch {selected}",
             repository.target

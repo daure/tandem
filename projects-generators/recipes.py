@@ -1,11 +1,11 @@
-"""Source repositories and standalone Compose applications for the four fixtures."""
+"""Source repositories and standalone applications for development fixtures."""
 
 import json
 from pathlib import Path
 
 ASSETS = Path(__file__).parent / "assets"
 PYTHON_IMAGE = "python:3.13.5-slim-bookworm"
-REPOSITORIES = ("guestbook", "greetings-api", "greetings-ui", "postcard", "mailroom")
+REPOSITORIES = ("guestbook", "greetings-api", "greetings-ui", "postcard", "mailroom", "repo-only")
 DATABASE_URL = "postgresql://fixture:fixture@db:5432/greetings"
 REDIS_URL = "redis://redis:6379/0"
 
@@ -162,6 +162,12 @@ def mailroom(root):
                                       "services": {"api": backend, "web": frontend, "worker": worker}})
 
 
+def local_repository(root):
+    for path in ("greeting.py", "tests/test_greeting.py", "AGENTS.md", "README.md"):
+        asset(f"repo-only/{path}", root / "repo-only" / path)
+    write(root / "repo-only/.gitignore", "__pycache__/\n*.pyc\n")
+
+
 def create_repositories(root):
     for name in REPOSITORIES:
         (root / name).mkdir()
@@ -169,8 +175,11 @@ def create_repositories(root):
     greetings(root)
     postcard(root)
     mailroom(root)
+    local_repository(root)
     for name in REPOSITORIES:
         write(root / name / ".gitignore", ".env\n.venv/\n__pycache__/\n*.pyc\n.tandem-*.compose.json\n")
+        if name == "repo-only":
+            continue
         write(root / name / "README.md", f"""# {name}
 
 A local Tandem development fixture. Source and infrastructure are intentionally small.

@@ -328,7 +328,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List template directories, Compose paths and routing metadata. Invalid templates include errors. Does not require Docker."
+        description = "List development templates with optional Compose paths and manifest metadata. Invalid templates include errors. Does not require Docker."
     )]
     async fn list_templates(&self) -> Result<Json<TemplateList>, String> {
         self.service
@@ -338,7 +338,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Get absolute editable template directory, Compose file/source, manifest and optional tandem-agents.md guidance. Relative scripts and config belong in this directory."
+        description = "Get the editable template directory, Compose file/source when present, optional manifest and tandem-agents.md guidance. Workspace-only templates have empty Compose fields; guidance-only templates need no manifest. Relative scripts and config belong in this directory."
     )]
     async fn get_template(
         &self,
@@ -371,14 +371,14 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Inspect Docker instances with typed runtime evidence, interpreted summaries, metric freshness and retained activity/cleanup outcomes. Running without a probe is not healthy."
+        description = "List container-backed and workspace-only instances with provisioning outcomes, runtime evidence, summaries and retained activities. A runtime_error marks partial workspace-only inventory when Docker is unavailable. Running without a probe is not healthy."
     )]
     async fn list_instances(&self) -> Result<Json<RuntimeInventory>, String> {
         self.service.list_instances().await.map(Json)
     }
 
     #[tool(
-        description = "Run a trusted template as an instance. Requires confirmed=true after user approval. Starts the shared loopback gateway; waits for content readiness by default. With wait=false, poll get_operation in this process."
+        description = "Prepare an instance from a trusted template. Requires confirmed=true after user approval. Workspace-only templates prepare guidance and any declared Git repositories without Docker; guidance-only templates require no Git. Service templates start Compose and the shared gateway and verify configured readiness. With wait=false, poll get_operation in this process."
     )]
     async fn create_instance(
         &self,
@@ -409,7 +409,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Stop an instance's containers while retaining its data for a later restart. Requires confirmed=true. Returns a background operation."
+        description = "Stop an instance's containers while retaining its data for a later restart. Workspace-only instances are preserved without work. Requires confirmed=true. Returns a background operation."
     )]
     async fn stop_instance(
         &self,

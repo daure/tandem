@@ -41,8 +41,15 @@ pub(super) fn template(template: &Template, count: usize) -> Vec<Property> {
         Property::new("Description", &template.manifest.description),
         Property::new("Instances", count),
         Property::new("Directory", &template.directory),
-        Property::new("Compose file", &template.compose_file),
-        Property::new("Routing manifest", &template.manifest_file),
+        Property::new(
+            "Compose file",
+            if template.workspace_only() {
+                "Not specified"
+            } else {
+                &template.compose_file
+            },
+        ),
+        Property::new("Manifest", &template.manifest_file),
         Property::new(
             "Status",
             if template.error.is_some() {
@@ -100,6 +107,16 @@ pub(super) fn instance(instance: &Instance) -> Vec<Property> {
     }
     if let Some(error) = instance.startup_error() {
         rows.push(Property::new("Startup error", error).tone(Tone::Error));
+    }
+    if instance.workspace_only {
+        rows.retain(|row| {
+            !matches!(
+                row.name.as_str(),
+                "Project" | "Running / expected" | "Topology"
+            )
+        });
+        rows.push(Property::new("Services", "No services specified"));
+        return rows;
     }
     resources(
         &mut rows,

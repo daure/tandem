@@ -76,7 +76,7 @@ fn workspace_guidance_lists_declared_and_discovered_repositories_and_service_acc
         "Building or recreating services also requires the instance's rendered Compose configuration.",
         "Run tools and tests locally when their dependencies are available; use the service containers when commands need the environment’s runtime or dependencies.",
         "Use the exposed URLs for API and browser testing against the running application.",
-        "This Docker environment supports a self-evaluation loop for code changes: exercise the application running in its containers, inspect logs and database state, then use the results to refine and recheck the changes.",
+        "Verify the running services with their tools and healthchecks, inspect relevant logs and data, then refine and recheck changes.",
     ] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
@@ -100,12 +100,12 @@ fn workspace_guidance_omits_http_content_when_no_service_has_a_url() {
     assert!(!text.contains("## HTTP URLs"));
     assert!(!text.contains("Use the exposed URLs"));
     assert!(!text.contains("These URLs use a shared gateway"));
+    assert!(!text.contains("contains application repositories"));
+    assert!(!text.contains("Edit source files"));
     assert!(text.contains("## Services"));
     assert!(text.contains("| — | `db` | — | — |"));
     assert!(text.contains("docker compose -p 'test-review' exec -T -w CODE_PATH SERVICE COMMAND"));
-    assert!(
-        text.contains("dependencies.\n\nThis Docker environment supports a self-evaluation loop")
-    );
+    assert!(text.contains("dependencies.\n\nVerify the running services"));
     assert!(text.ends_with("Building or recreating services also requires the instance's rendered Compose configuration.\n"));
 }
 
@@ -311,7 +311,7 @@ fn services_table_reports_when_no_services_or_repositories_are_identified() {
     instance.services.clear();
     generate(&config, &instance, &[]).unwrap();
     let text = fs::read_to_string(Path::new(&instance.workspace).join("AGENTS.md")).unwrap();
-    assert!(text.contains("## Services\n\nNo services or repositories identified."));
+    assert!(text.contains("## Workspace\n\nNo services or repositories identified."));
 }
 
 #[test]
@@ -355,7 +355,15 @@ fn edited_template_is_preserved_and_existing_workspace_guidance_is_user_owned() 
 #[test]
 fn invalid_templates_leave_no_partial_workspace_file() {
     let (_directory, config, instance) = fixture();
-    for source in ["{{unknown}}", "{{instance", " \n"] {
+    for source in [
+        "{{unknown}}",
+        "{{instance",
+        " \n",
+        "{{#services}}",
+        "{{/services}}",
+        "{{#services}}x{{/repositories}}",
+        "{{#unknown}}x{{/unknown}}",
+    ] {
         fs::write(config.workspace_agents_template(), source).unwrap();
         assert!(generate(&config, &instance, &[]).is_err());
         assert!(!Path::new(&instance.workspace).join("AGENTS.md").exists());
@@ -369,7 +377,12 @@ fn template_guidance_is_appended_verbatim_after_rendering() {
     let guidance = "## Project workflow\n\nKeep {{literal}} and {{instance}} unchanged.\n";
     fs::write(&template.guidance_file, guidance).unwrap();
     let path = Path::new(&instance.workspace).join("AGENTS.md");
-    for source in ["# {{instance}}", "# {{instance}}\n"] {
+    for source in [
+        "# {{instance}}",
+        "# {{instance}}\n\n",
+        "# {{instance}}\r\n\r\n",
+        "# {{instance}}\n",
+    ] {
         fs::write(config.workspace_agents_template(), source).unwrap();
         generate(&config, &instance, &[]).unwrap();
         assert_eq!(

@@ -1,24 +1,26 @@
 # Tandem
 
 Keyboard-first local development environments, shared by a TUI, CLI and MCP agents. Templates are editable
-Compose directories; each instance gets its own Compose project and workspace. A label-driven Traefik
+development recipes; each instance gets its own workspace and, when services are configured, a Compose project. A label-driven Traefik
 gateway exposes declared HTTP services at `http://localhost:9876/<instance>/<service>/`.
 
 ## Quick start
 
-Requires a local Docker Engine, Docker Compose v2 or newer, and Rust. The source checkout uses the
-sibling `../tuicore` package. Container images are pulled on first use.
+Building requires Rust and the sibling `../tuicore` package. Service templates require a local Docker
+Engine and Docker Compose v2 or newer; container images are pulled on first use. Repository-only
+templates require Linux and host Git but their lifecycle does not require Docker.
+Guidance-only templates prepare a workspace folder without Git or Docker.
 
 ```bash
 cargo run                   # TUI
-cargo run -- dev            # TUI + HTTP MCP at http://127.0.0.1:7348/mcp
+cargo run -- dev            # TUI + HTTP MCP at http://127.0.0.1:7348/mcp; replaces a prior dev server using this Tandem home and port
 cargo run -- mcp            # protocol-only stdio MCP
 cargo run -- serve          # HTTP MCP at http://127.0.0.1:7345/mcp
 ```
 
 1. Press `T` or use the Template button to create a template named `website`; its folder contains a working static web starter.
 2. Press `Enter` on a template, instance or service to view its details. Template details include
-   metadata, Compose source and the routing manifest.
+   metadata, available Compose source and the manifest.
 3. Press `n`, enter `review`, then Enter or Ctrl+S to confirm execution; watch progress in Details.
 4. Expand the template row using the DataView's configured expansion key (shown in its action bar)
    and select `review`; open `http://localhost:9876/review/web/index.html`.
@@ -99,7 +101,7 @@ it only launches the saved opener in that instance's workspace; template files a
 are not needed. Ownership mismatches and concurrent instance operations are rejected.
 
 `--open-command` (also spelled `-oc`) is a boolean flag. For a new instance, the workspace-ready signal
-triggers the saved opener after declared repositories have been cloned or validated, Compose configuration
+triggers the saved opener after declared repositories have been cloned or validated, any Compose configuration
 has been rendered, and the workspace `AGENTS.md` has been written. Opening and container startup then
 proceed independently. Template-owned
 clone scripts and container-created files are outside this milestone; declare repositories for early
@@ -129,7 +131,7 @@ restarts while the bundled content stays the same. Existing workspace `AGENTS.md
 `get_instructions` returns the editable template's absolute path as `workspace_agents_template`.
 
 Template authors can place optional `tandem-agents.md` beside `compose.yaml` and `tandem.json`.
-When present, it appears as the fourth **Guidance** tab in template details, with Markdown syntax
+When present, it appears as a **Guidance** tab in template details, with Markdown syntax
 highlighting. Its contents are appended verbatim after the rendered workspace guidance, separated by
 a blank line; `{{...}}` expressions in this file stay literal. It accepts UTF-8 text up to 256 KiB and
 must resolve to a regular file within the template directory. Read errors block generation.
@@ -139,16 +141,22 @@ remain user-owned.
 
 The template supports `{{instance}}`, `{{template}}`, `{{project}}`, `{{repositories}}`,
 `{{repository_guidance}}`, `{{compose_project_command}}`, `{{docker_discovery_command}}`,
-`{{http_urls}}`, `{{http_guidance}}`, `{{http_section}}`, `{{services}}`, and `{{compose_command}}`.
-Values are literal substitutions; unknown or unclosed placeholders and
-empty output fail generation. `{{repositories}}` renders the Services table, covering every configured
+`{{http_urls}}`, `{{http_guidance}}`, `{{http_section}}`, `{{services}}`, `{{compose_command}}`,
+`{{workspace_description}}`, and `{{inventory_heading}}`.
+Conditional sections use `{{#inventory}}…{{/inventory}}` (resource inventory or unknown container configuration),
+`{{#services}}…{{/services}}`, `{{#repositories}}…{{/repositories}}`,
+`{{#code_paths}}…{{/code_paths}}` (repositories and services), and `{{#local_only}}…{{/local_only}}`
+(repositories without services). Values are literal substitutions; unknown, unclosed or mismatched
+expressions and empty output fail generation. `{{repositories}}` renders an inventory table, covering every configured
 service except `repo-sync`, plus declared targets and top-level Git checkouts (including worktrees).
 Repository rows include container code paths and root `AGENTS.md` or `agents.md` paths (`None` when
 absent). Each service/path mapping gets its own row. Services without an identified repository mapping
 use `—` in the repository, code-path and guidance columns. Unmapped repositories remain listed. The repository
 guidance instruction appears only when those files are listed. Default guidance uses the instance name
-as its heading and provides project/service-scoped Compose access and gateway HTTP URLs for development
-and self-evaluation. `{{http_guidance}}` and `{{http_section}}` provide the URL-testing sentence and
+as its heading and includes repository instructions, Compose access and gateway HTTP URLs only when
+those resources are identified. Repository-only guidance uses a repository/guidance table and local
+verification instructions. Guidance-only workspaces contain an instance heading, a short local-work
+introduction, and the template's literal guidance. `{{http_guidance}}` and `{{http_section}}` provide the URL-testing sentence and
 complete HTTP URLs section only when a service has a generated URL. Template-local `tandem-agents.md`
 is appended verbatim; its author owns any route-specific guidance.
 `{{compose_project_command}}` supplies `docker compose -p` with the quoted project;
@@ -165,7 +173,7 @@ subdirectory and can differ from the container's working directory. Missing conf
 unidentified mappings display `Not identified`; named volumes and image-only code require runtime
 inspection. Malformed or mismatched rendered configuration blocks generation.
 
-Every new instance receives a root `AGENTS.md` before container startup, even without an open command.
+Every new instance receives a root `AGENTS.md` after repository preparation and before any container startup, even without an open command.
 CLI, TUI and MCP opening also generate it if missing; generation failures block the opener, including
 the system folder opener. Existing regular files are preserved, while symlinks and directories are
 rejected. This is a configuration snapshot: keep local guidance current as repositories or services
@@ -179,11 +187,26 @@ the reason for degradation. Running without a healthcheck is blue **Running**; g
 requires Docker healthchecks. Gateway readiness is a separate timestamped check in Details.
 Intentional stops show **Stopped**, including signal exits such as 137/143; raw exit codes alone
 do not prove failure. **Paused** is distinct, and setup jobs use **Completed**, **Failed** or
-**Interrupted**. Completed setup jobs are grouped and collapsed. Activities use tuicore's spinner;
+**Interrupted**. The collapsed **Setup** group includes successfully provisioned Git repositories,
+sorted by target path above completed one-shot jobs. Repository rows occupy one line, start with a
+success-colored ``, and show **Cloned** or **Existing checkout** from the latest preparation.
+Press `yy` on a repository row to copy its absolute checkout directory, also available in Actions.
+The completion count includes repositories and completed jobs; provisioning results survive reconnects.
+Activities use tuicore's spinner;
 names stay neutral while status labels and issue qualifiers carry semantic colors.
 Tandem retains launch topology and run-specific stop evidence across processes. Instances without
 recorded topology show **Unknown** until an approved Start captures their configuration.
 Deletion remains visible through cleanup, with failed cleanup retained as an operation row.
+Select a failed instance-cleanup row and press `x`, or choose **Retry cleanup** in Actions, to retry
+with the deletion confirmation. If containers are absent, recovery requires a matching runtime record
+and template ownership receipt; it checks Docker project membership before removing remaining data.
+Recovery with missing execution-kind metadata requires Docker access. Unverifiable ownership leaves data intact.
+
+Workspace-only instances (repository-only or guidance-only) show **Workspace ready** after preparation and guidance generation, retain
+their workspace path, and show a single muted **(no services configured)** child when expanded. They hide
+CPU/memory metrics and disable container Start/Stop/Restart actions; Open, Details and Delete remain
+available. Failed preparation retains completed checkouts and reports its error; retry New instance
+with the same template/name after correcting the cause. Docker failures do not make these workspaces stale.
 
 ## Agent workflow
 
@@ -200,6 +223,8 @@ List tools return objects with `templates` or `instances` arrays. Mutating insta
 Use runtime-derived `list_instances` after reconnecting to a different MCP process.
 Instance listings also include `activities` for active work and retained failures, including cleanup
 without containers; per-instance/service `summary` and `runtime` separate interpretation from evidence.
+Workspace-only instances come from durable workspace records. If Docker inspection fails while these
+records exist, `list_instances` returns them with `runtime_error`; container inventory is unavailable.
 
 [agent-instructions.md](agent-instructions.md) contains lightweight guidance on Tandem's intended use.
 On first launch it seeds `$TANDEM_HOME/instructions.md`, which `get_instructions` reads on every call.
@@ -223,6 +248,16 @@ are refused. Saving does not run Docker or Git, restart instances, or validate C
 references; those checks occur during startup. Direct file edits are validated when templates are read.
 
 ## Template layout and routing
+
+A template may contain `compose.yaml`, a repository-declaring `tandem.json`, `tandem-agents.md`, or a combination. Compose-only
+templates use empty manifest defaults: services have no Tandem routes, one-shot roles, or managed clones.
+Repository-only templates omit `compose.yaml`, declare at least one repository, and omit routes and
+one-shots. Guidance-only templates supply `tandem-agents.md` with an optional manifest and prepare an
+otherwise empty workspace containing generated `AGENTS.md`. Templates without Compose require either
+repositories or a guidance file; empty unrelated directories are not templates. An empty Compose services
+map is invalid. The template creator supplies a Compose starter;
+edit the dedicated template directory to select another shape. Existing instances retain their launch
+kind; use a new instance name to switch between workspace-only and container-backed execution.
 
 ```text
 <TANDEM_HOME>/templates/website/
@@ -417,6 +452,6 @@ cargo release major   # major: 0.1.0 -> 1.0.0
 ./scripts/release.sh patch
 ```
 
-The command checks the branch and local Tuicore path, then runs the release workflow's formatting, script tests, Clippy, and Rust tests before changing the version. It then bumps Tandem, refreshes and commits the local lockfile, creates an annotated tag without opening an editor or pager, and atomically pushes `main` and its `vX.Y.Z` tag. Generated `Cargo.lock` changes are accepted; all other files must be clean. It returns without waiting for GitHub Actions. Existing `cargo patch`, `cargo minor`, and `cargo major` aliases use the same release flow.
+The command checks the branch and local Tuicore path, then runs the release workflow's formatting, script tests, Clippy, and Rust tests before changing the version. Cargo validation uses two compilation jobs, two test threads, stripped debug data, disabled incremental compilation, and the persistent `target/release-check` directory. It then bumps Tandem, refreshes and commits the local lockfile, creates an annotated tag without opening an editor or pager, and atomically pushes `main` and its `vX.Y.Z` tag. Generated `Cargo.lock` changes are accepted; all other files must be clean. It returns without waiting for GitHub Actions. Existing `cargo patch`, `cargo minor`, and `cargo major` aliases use the same release flow.
 
 GitHub Actions resolves the highest stable, non-yanked Tuicore version from crates.io before running Cargo checks and builds. This only modifies the disposable CI checkout; local development always builds the sibling `../tuicore` checkout. Registry or compatibility failures stop the build.

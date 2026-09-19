@@ -1,3 +1,4 @@
+mod cleanup;
 mod close_command;
 mod command;
 mod compose;
@@ -240,6 +241,34 @@ impl Environments {
                 "Docker unavailable; instance list may be stale: {error}"
             )),
         };
+        match journal::workspaces(&self.config) {
+            Ok(workspaces) => {
+                snapshot
+                    .instances
+                    .retain(|instance| !instance.workspace_only);
+                for workspace in workspaces {
+                    if let Some(instance) = snapshot
+                        .instances
+                        .iter_mut()
+                        .find(|instance| instance.name == workspace.name)
+                    {
+                        if instance.pending {
+                            *instance = workspace;
+                        } else {
+                            instance.runtime.issue =
+                                Some("instance record conflicts with Docker ownership".into());
+                        }
+                    } else {
+                        snapshot.instances.push(workspace);
+                    }
+                }
+            }
+            Err(issue) => {
+                self.set_inventory_error(&mut snapshot, 1, Some(issue));
+                snapshot.loading = false;
+                return;
+            }
+        }
         merge_pending_instances(&mut snapshot.instances, &pending);
         snapshot.runtime_error = error.clone();
         self.set_inventory_error(&mut snapshot, 1, error);
@@ -267,7 +296,21 @@ impl Environments {
         templates::update_manifest(&self.config, name, manifest)
     }
     pub fn list_instances(&self) -> Result<crate::store::environments::RuntimeInventory, String> {
-        let mut instances = docker::inspect(&self.config)?;
+        let workspaces = journal::workspaces(&self.config)?;
+        let (mut instances, runtime_error) = match docker::inspect(&self.config) {
+            Ok(instances) => (instances, None),
+            Err(error) if !workspaces.is_empty() => (Vec::new(), Some(error)),
+            Err(error) => return Err(error),
+        };
+        for workspace in workspaces {
+            if instances
+                .iter()
+                .any(|instance| instance.name == workspace.name)
+            {
+                return Err("instance record conflicts with Docker ownership".into());
+            }
+            instances.push(workspace);
+        }
         let activities = journal::enrich(&self.config, &mut instances)?;
         self.resources
             .lock()
@@ -280,6 +323,7 @@ impl Environments {
             instances,
             activities,
             observed_at_unix_seconds: journal::now(),
+            runtime_error,
         })
     }
     pub fn workspace(&self, name: &str) -> Result<String, String> {
@@ -769,7 +813,7 @@ fn activity_from_job(job: &Job) -> crate::store::environments::Activity {
 }
 
 fn project_instance(instance: &mut Instance, stale: bool, now: u64) {
-    instance.runtime.stale = stale;
+    instance.runtime.stale = stale && !instance.workspace_only;
     let suppressed = instance.suppress_resources();
     for service in &mut instance.services {
         service.runtime.stale = stale;

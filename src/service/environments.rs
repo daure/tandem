@@ -167,14 +167,26 @@ impl AppService {
         name: &str,
         template: String,
     ) -> Result<CreateInstanceOutcome, String> {
-        if self
+        if let Some(instance) = self
             .environments
             .snapshot()
             .instances
             .iter()
-            .any(|instance| instance.name == name)
+            .find(|instance| instance.name == name)
         {
-            return Ok(CreateInstanceOutcome::Existing);
+            if !instance.workspace_only
+                || instance.runtime.workspace_ready
+                || instance
+                    .runtime
+                    .activity
+                    .as_ref()
+                    .is_some_and(|activity| activity.active())
+            {
+                return Ok(CreateInstanceOutcome::Existing);
+            }
+            if instance.template != template {
+                return Err("instance name belongs to another template".into());
+            }
         }
         self.submit_operation("create_instance", name, Some(template), 600, true)
             .map(|operation| CreateInstanceOutcome::Started(Box::new(operation)))

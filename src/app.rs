@@ -501,6 +501,9 @@ impl App {
         let Some(row) = self.selected() else {
             return false;
         };
+        if row.informational {
+            return false;
+        }
         let menu = self.menu_layer_mut();
         menu.layer_mut().open(
             action_menu::Target {
@@ -509,7 +512,9 @@ impl App {
                 service: row.service_name.is_some(),
                 capabilities: (row.can_start, row.can_stop, row.can_restart),
                 gateway: row.gateway_url.is_some(),
-                template_available: !row.compose_file.is_empty(),
+                template_available: row.template_available,
+                repository: row.checkout_path.is_some(),
+                cleanup: row.cleanup_target.is_some(),
             },
             ctx,
         );
@@ -530,7 +535,8 @@ impl App {
             match action {
                 action_menu::Action::CopyTemplateName
                 | action_menu::Action::CopyInstanceName
-                | action_menu::Action::CopyServiceName => {
+                | action_menu::Action::CopyServiceName
+                | action_menu::Action::CopyCheckoutPath => {
                     self.copy_selected_name(ctx);
                     return;
                 }
@@ -574,13 +580,13 @@ impl App {
         self.name.clear();
         match index {
             0 => {
-                if let Some(row) = row {
+                if let Some(row) = row.filter(|row| !row.informational) {
                     self.intent = None;
                     self.open_details(&row, ctx);
                 }
             }
             1 => {
-                if let Some(row) = row.filter(|row| !row.compose_file.is_empty()) {
+                if let Some(row) = row.filter(|row| row.template_available) {
                     self.intent = Some(Intent::CreateInstance(row.template.clone()));
                     self.open_name_entry(ctx);
                 }
@@ -635,14 +641,14 @@ impl App {
             5 => {
                 if let Some(row) = row
                     .as_ref()
-                    .filter(|row| row.parent.is_none() && !row.compose_file.is_empty())
+                    .filter(|row| row.parent.is_none() && row.template_available)
                 {
                     self.intent = Some(Intent::RemoveTemplate(row.template.clone()));
                     self.open(
                         dialogs::confirm_remove_template(&row.template, &row.directory),
                         ctx,
                     );
-                } else if let Some(name) = row.and_then(|row| row.instance) {
+                } else if let Some(name) = row.and_then(|row| row.cleanup_target.or(row.instance)) {
                     self.intent = Some(Intent::Delete(name.clone()));
                     self.open(dialogs::confirm_delete(&name), ctx);
                 }

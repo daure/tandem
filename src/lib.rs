@@ -39,6 +39,7 @@ pub fn run_http(bind: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn run_dev(bind: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     let service = AppService::initialize()?;
+    let _dev_server = service.replace_dev_server(bind.port())?;
     let (startup_tx, startup_rx) = mpsc::channel();
     let http_service = service.clone();
     thread::Builder::new()

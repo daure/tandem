@@ -1,17 +1,17 @@
 # {{instance}}
 
-This workspace contains application repositories and Docker Compose development services.
+{{workspace_description}}
 
-## Services
+{{#inventory}}## {{inventory_heading}}
 
 {{repositories}}
 
-Code paths in containers can differ from their configured working directories.
+{{/inventory}}{{#code_paths}}Code paths in containers can differ from their configured working directories.
 
-{{repository_guidance}}Edit source files and run Git commands in the checked-out repositories.
-Run tools and tests locally when their dependencies are available; use the service containers when commands need the environment’s runtime or dependencies.
+{{/code_paths}}{{#repositories}}{{repository_guidance}}Edit source files and run Git commands in the checked-out repositories.
+{{/repositories}}{{#services}}Run tools and tests locally when their dependencies are available; use the service containers when commands need the environment’s runtime or dependencies.
 {{http_guidance}}
-This Docker environment supports a self-evaluation loop for code changes: exercise the application running in its containers, inspect logs and database state, then use the results to refine and recheck the changes.
+Verify the running services with their tools and healthchecks, inspect relevant logs and data, then refine and recheck changes.
 
 ## Docker
 
@@ -28,4 +28,4 @@ To run a command in a running service, substitute its service name and code path
 
 For replicated services, use `exec --index N` to select a replica.
 Omit `-w CODE_PATH` for services without a code path.
-Building or recreating services also requires the instance's rendered Compose configuration.{{http_section}}
+Building or recreating services also requires the instance's rendered Compose configuration.{{/services}}{{http_section}}

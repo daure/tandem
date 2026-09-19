@@ -10,7 +10,7 @@ use std::{
 use super::{
     command::{Progress, docker, remaining, run},
     config::Config,
-    docker as runtime, gateway, lifecycle, ownership, templates,
+    docker as runtime, gateway, journal, lifecycle, ownership, templates,
 };
 use crate::store::environments::{Instance, validate_instance_name};
 
@@ -43,9 +43,13 @@ pub(super) fn template_with(
     crate::store::environments::validate_name(name)?;
     let _template_lock = gateway::lock(config, &format!("template-{name}"))?;
     let directory = templates::removal_directory(config, name)?;
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+    if remove_workspace_template(config, name, &directory, deadline, &progress, close_command)? {
+        return Ok(());
+    }
     let mut remover = Remover {
         config,
-        deadline: Instant::now() + Duration::from_secs(timeout),
+        deadline,
         progress,
         close_command,
         execute,
@@ -120,6 +124,7 @@ pub(super) fn template_with(
     }
     for plan in &plans {
         remover.remove_instance(plan)?;
+        journal::forget(config, &plan.name)?;
     }
     if !remover.template_containers(&directory)?.is_empty() {
         return Err("template still has containers; retry deletion".into());
@@ -128,6 +133,47 @@ pub(super) fn template_with(
     let directory = templates::removal_directory(config, name)?;
     (remover.progress)(format!("Deleting template {name} and its files"));
     fs::remove_dir_all(directory).map_err(|error| format!("delete template {name}: {error}"))
+}
+
+fn remove_workspace_template(
+    config: &Config,
+    name: &str,
+    directory: &Path,
+    deadline: Instant,
+    progress: &Progress,
+    close_command: &super::close_command::CloseCommand,
+) -> Result<bool, String> {
+    if directory.join("compose.yaml").exists() {
+        return Ok(false);
+    }
+    let mut names = ownership::instances(config, name, directory)?;
+    names.extend(
+        journal::workspaces(config)?
+            .into_iter()
+            .filter(|instance| instance.template == name)
+            .map(|instance| instance.name),
+    );
+    let mut locks = Vec::new();
+    for instance_name in &names {
+        remaining(deadline)?;
+        let Some(instance) = journal::workspace_instance(config, instance_name)? else {
+            return Ok(false);
+        };
+        if instance.template != name {
+            return Err("instance belongs to another template".into());
+        }
+        locks.push(gateway::lock(config, &format!("instance-{instance_name}"))?);
+        validate_workspace(config, instance_name)?;
+    }
+    for instance_name in &names {
+        remaining(deadline)?;
+        lifecycle::remove_workspace(config, instance_name, progress.clone(), close_command)?;
+        ownership::forget(config, name, instance_name)?;
+        journal::forget(config, instance_name)?;
+    }
+    remaining(deadline)?;
+    fs::remove_dir_all(directory).map_err(|error| format!("delete template {name}: {error}"))?;
+    Ok(true)
 }
 
 struct Remover<'a, F> {
@@ -260,7 +306,7 @@ impl<F: FnMut(Command, Duration, Option<Progress>) -> Result<String, String>> Re
     }
 }
 
-fn validate_workspace(config: &Config, name: &str) -> Result<(), String> {
+pub(super) fn validate_workspace(config: &Config, name: &str) -> Result<(), String> {
     let path = config.workspaces.join(name);
     match fs::symlink_metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),

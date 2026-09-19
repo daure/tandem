@@ -23,6 +23,7 @@ pub(super) enum Action {
     CopyTemplateName,
     CopyInstanceName,
     CopyServiceName,
+    CopyCheckoutPath,
     CopyGatewayUrl,
     OpenBrowser,
     OpenCommand,
@@ -36,6 +37,7 @@ pub(super) enum Action {
     RestartService,
     StopTemplate,
     Delete,
+    RetryCleanup,
     DeleteTemplate,
     RemoveTemplate,
 }
@@ -46,6 +48,7 @@ impl Action {
             Self::CopyTemplateName
             | Self::CopyInstanceName
             | Self::CopyServiceName
+            | Self::CopyCheckoutPath
             | Self::CopyGatewayUrl => unreachable!("copy actions have fixed hotkeys"),
             Self::OpenBrowser | Self::OpenCommand => 10,
             Self::RestartInstance | Self::RestartService => 7,
@@ -56,7 +59,7 @@ impl Action {
             | Self::StartService
             | Self::StopService
             | Self::StopTemplate => 3,
-            Self::Delete | Self::RemoveTemplate => 5,
+            Self::Delete | Self::RetryCleanup | Self::RemoveTemplate => 5,
             Self::DeleteTemplate => 6,
         }
     }
@@ -66,6 +69,7 @@ impl Action {
             Self::CopyTemplateName => "Copy template name",
             Self::CopyInstanceName => "Copy instance name",
             Self::CopyServiceName => "Copy service name",
+            Self::CopyCheckoutPath => "Copy checkout directory",
             Self::CopyGatewayUrl => "Copy gateway URL",
             Self::OpenBrowser => "Open in browser",
             Self::OpenCommand => "Run open command",
@@ -79,6 +83,7 @@ impl Action {
             Self::RestartService => "Restart service",
             Self::StopTemplate => "Stop all instances",
             Self::Delete => "Delete instance",
+            Self::RetryCleanup => "Retry cleanup",
             Self::DeleteTemplate => "Purge all instances",
             Self::RemoveTemplate => "Delete template",
         }
@@ -100,6 +105,8 @@ pub(super) struct Target {
     pub capabilities: (bool, bool, bool),
     pub gateway: bool,
     pub template_available: bool,
+    pub repository: bool,
+    pub cleanup: bool,
 }
 
 impl ActionMenu {
@@ -141,7 +148,19 @@ impl ActionMenu {
     }
 
     pub(super) fn open(&mut self, target: Target, ctx: &mut EventCtx<Msg>) {
-        self.actions = if target.gateway {
+        self.actions = if target.cleanup {
+            vec![
+                Action::CopyInstanceName,
+                Action::Details,
+                Action::RetryCleanup,
+            ]
+        } else if target.repository {
+            vec![
+                Action::CopyCheckoutPath,
+                Action::Details,
+                Action::NewInstance,
+            ]
+        } else if target.gateway {
             vec![
                 Action::CopyServiceName,
                 Action::CopyGatewayUrl,
@@ -221,9 +240,10 @@ impl ActionMenu {
 fn action_text(action: Action, keys: &[KeySpec; 11], enabled: bool) -> Text<'static> {
     let label = action.label();
     let hotkey = match action {
-        Action::CopyTemplateName | Action::CopyInstanceName | Action::CopyServiceName => {
-            "yy".into()
-        }
+        Action::CopyTemplateName
+        | Action::CopyInstanceName
+        | Action::CopyServiceName
+        | Action::CopyCheckoutPath => "yy".into(),
         Action::CopyGatewayUrl => "yu".into(),
         _ => keys
             .get(action.index())

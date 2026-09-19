@@ -1,10 +1,10 @@
 # Using Tandem
 
-A template is a shared Compose recipe; an instance has its own name and workspace.
+A template is a shared development recipe; an instance has its own name and workspace.
 
 ## Templates
 
-- Edit `compose.yaml` in the returned template directory; keep reusable scripts beside it.
+- Edit template files in the returned directory; keep reusable scripts there.
   Template edits are shared across instances; keep application edits in instance workspaces.
 - Use `manifest_schema` from the `get_instructions` response to construct `tandem.json`.
   Save complete manifests through
@@ -14,19 +14,23 @@ A template is a shared Compose recipe; an instance has its own name and workspac
 - `compose.yaml` defines services and dependencies. Optional `tandem.json` declares `repositories`,
   setup services in `one_shots`, and service-keyed `routes` with internal `port`,
   `strip_prefix`, relative `readiness_path`, and nonempty `readiness_contains`.
-- Optional `tandem-agents.md` beside `compose.yaml` supplies template-specific workspace guidance.
+  Compose-only templates use empty manifest defaults. Repository-only templates omit `compose.yaml`
+  and declare at least one repository in `tandem.json`; routes and one-shots require Compose.
+  Guidance-only templates need only `tandem-agents.md`: creation prepares a workspace and `AGENTS.md`
+  without Git or Docker. Their manifest is optional. An instance retains its execution kind;
+  use a new name when switching between workspace-only and container-backed execution.
+- Optional `tandem-agents.md` in the template directory supplies template-specific workspace guidance.
   Its UTF-8 contents (up to 256 KiB) are appended verbatim to generated workspace `AGENTS.md`,
   including literal `{{...}}`. The file must resolve within the template directory. Read errors block
   generation, and edits apply to future generation; existing workspace guidance is preserved.
-- Generated workspace guidance supplies the instance title, service/repository/code-path mappings,
-  repository guidance references, generic Compose commands, gateway URLs, and a general self-verification
-  mandate. Add template-specific procedures rather than repeating that content: how applications are
-  compiled or built, whether hot reload is configured and which changes require rebuilding or restarting,
-  how logs are captured and viewed, and how to verify changes with expected results. Specify
-  host/container execution locations, working directories and prerequisites. Ensure the template exposes
-  usable logs; generic Compose logs commands alone do not guarantee application log access. Start with
+- Generated workspace guidance includes repository instructions when repositories are identified,
+  Compose controls when services are identified, and HTTP testing instructions when URLs exist.
+  Write `tandem-agents.md` for verified template-specific development and self-verification:
+  build/reload behavior, host or container commands, working directories, prerequisites, tests or smoke
+  checks with expected results, data access and diagnostic hazards. Service templates must expose usable
+  logs; generic Compose commands alone do not guarantee application log access. Refer to generated
+  mappings and controls rather than repeating them, repository guidance, or MCP schemas. Start with
   `## Title` and use deeper headings for subsections.
-- Write `tandem-agents.md` for development, debugging, navigation, and self-verification. Document verified template-specific facts: reload/build and restart behavior; host or container commands, working directories, prerequisites, and data access; executable tests or a smoke check with expected results; and service-specific logs, inspection, lifecycle actions, and hazards needed to diagnose failures. Refer to generated service mappings, gateway URLs, and project-scoped Compose controls. Do not repeat repository guidance, generic Tandem operations, or MCP schemas; verify every command and path against the template.
 - Route HTTP through Tandem's gateway at `/<instance>/<service>/`; only the gateway publishes ports.
   Prefix stripping affects incoming requests; verify browser assets, redirects, and API paths too.
   Leave `traefik.*`/`io.tandem.*` labels to Tandem; omit `container_name` and `profiles`.
@@ -49,7 +53,7 @@ A template is a shared Compose recipe; an instance has its own name and workspac
   Git updates require explicit user approval. Failed provisioning stops startup; completed checkouts
   survive retries. Resolve mismatches explicitly; never delete or reset user work to make a retry pass.
 - Provisioning requires Linux, host Git with `switch` support, and noninteractive credentials;
-  SSH requires known hosts with strict host-key checking. Configure Compose workspace mounts/build
+  SSH requires known hosts with strict host-key checking. For service templates, configure workspace mounts/build
   contexts, dependencies, migrations and app-specific setup.
   Declare app setup jobs in `one_shots` and gate dependents on successful completion.
   Do not add clone scripts or `repo-sync` services for declared repositories.
@@ -58,9 +62,9 @@ A template is a shared Compose recipe; an instance has its own name and workspac
 
 ## Operations
 
-- Tandem writes workspace-root `AGENTS.md` before container startup and generates it if missing before
-  opening a workspace. Read it and the repository guidance it lists for service/repository mappings,
-  scoped Compose commands and gateway URLs. Inspect containers for missing mappings and runtime state
+- Tandem writes workspace-root `AGENTS.md` after repository preparation and before any container startup,
+  and generates it if missing before opening a workspace. Read it and the repository guidance it lists.
+  For service instances, inspect containers for missing mappings and runtime state
   for current health. The base template at `workspace_agents_template` affects future generation;
   bundled updates replace it after backing up local edits.
 - Workspace open and close commands are shared within a Tandem home and execute through host `sh -c` in the
@@ -75,8 +79,17 @@ A template is a shared Compose recipe; an instance has its own name and workspac
   Keep environments local; gateway routes share a browser origin.
 - Stop preserves instance data; deletion permanently removes its workspace and owned resources.
   Preserve Tandem-generated `.tandem-*` files for ownership checks and cleanup.
+  Failed deletion can be retried when containers are absent: cleanup validates the retained instance
+  record and template ownership receipt, then checks project membership. Missing execution-kind metadata
+  requires Docker access for recovery; unverifiable ownership blocks deletion and preserves data.
 - Inspect `list_instances` for runtime evidence and retained failures. Running is not proof of health;
   Docker healthchecks and gateway content readiness are separate checks.
+  Workspace-only instances (repository-only or guidance-only) are retained across processes and report
+  `Workspace ready` after any provisioning and guidance generation; this does not certify application tests.
+  Their lifecycle requires no Docker.
+  Stop preserves them without work, and container restart/service actions do not apply. Retry failed
+  preparation with instance creation after correcting the cause. A listing with `runtime_error` contains
+  workspace-only inventory while Docker inventory is unavailable; it is not a complete container listing.
 - Restart and service start/stop require approval and use existing containers with their current
   configuration and data; they exclude setup jobs and the gateway. Service actions affect only the
   named service, leaving dependencies untouched. These actions do not build or apply template edits.

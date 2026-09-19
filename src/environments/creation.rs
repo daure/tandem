@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use super::{Environments, docker, gateway, lifecycle};
+use super::{Environments, docker, gateway, journal, lifecycle, templates};
 use crate::store::environments::{Instance, validate_instance_name, validate_name};
 
 #[derive(Default)]
@@ -19,6 +19,18 @@ impl Environments {
         validate_instance_name(name)?;
         validate_name(template)?;
         let lock = gateway::lock(&self.config, &format!("instance-{name}"))?;
+        if let Some(instance) = journal::workspace_instance(&self.config, name)? {
+            if instance.template != template {
+                return Err("instance name belongs to another template or workspace".into());
+            }
+            return Ok((instance.runtime.workspace_ready.then_some(instance), lock));
+        }
+        if templates::get(&self.config, template).is_ok_and(|template| template.workspace_only()) {
+            if journal::recorded(&self.config, name)?.is_some() {
+                return Err("instance name belongs to a container-backed instance".into());
+            }
+            return Ok((None, lock));
+        }
         let deadline = Instant::now() + Duration::from_secs(30);
         if docker::project_ids(&self.config, name, deadline)?.is_empty() {
             return Ok((None, lock));

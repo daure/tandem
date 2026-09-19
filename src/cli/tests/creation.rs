@@ -11,8 +11,10 @@ use std::{
 
 use serde_json::json;
 
+mod cleanup;
 mod deletion;
 mod existing;
+mod workspaces;
 
 struct Fixture {
     _directory: tempfile::TempDir,

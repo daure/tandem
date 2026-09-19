@@ -286,3 +286,63 @@ fn duplicate_new_instance_focuses_existing_and_notifies_without_another_operatio
         assert_eq!(notice.kind(), tuicore::NotificationKind::Info);
     }
 }
+
+#[test]
+fn failed_instance_cleanup_rows_offer_confirmed_deletion_but_active_and_template_rows_do_not() {
+    tuicore::init();
+    for (action, finished, enabled) in [
+        ("delete_instance", true, true),
+        ("delete_instance", false, false),
+        ("remove_template", true, false),
+    ] {
+        let mut inventory = snapshot();
+        inventory.instances.clear();
+        inventory
+            .activities
+            .push(crate::store::environments::Activity {
+                id: "cleanup".into(),
+                name: "review".into(),
+                template: Some("website".into()),
+                service: None,
+                action: action.into(),
+                owner_pid: 1,
+                started_at: 1,
+                deadline: u64::MAX,
+                error: finished.then(|| "instance not found".into()),
+                finished,
+            });
+        let mut app = root(AppService::for_tests());
+        app.snapshot = inventory.clone();
+        app.set_rows_for_tests(rows::from_snapshot(&inventory));
+        instances::set_highlighted(&app.instances, Some("operation:cleanup:review".into()));
+        app.action(5, &mut EventCtx::new(AnimationSettings::default()));
+        assert_eq!(
+            matches!(&app.intent, Some(crate::app::Intent::Delete(name)) if name == "review"),
+            enabled,
+            "{action}, finished={finished}"
+        );
+        assert_eq!(app.view.first().is_active(), enabled);
+        assert!(app.service.operations().is_empty());
+        if enabled {
+            app.handle_message(Msg::Close, &mut EventCtx::new(AnimationSettings::default()));
+            let area = Rect::new(0, 0, 130, 40);
+            app.layout(area, &mut tuicore::LayoutCtx::new());
+            instances::set_highlighted(&app.instances, Some("operation:cleanup:review".into()));
+            assert!(app.open_action_menu(&mut EventCtx::new(AnimationSettings::default())));
+            app.layout(area, &mut tuicore::LayoutCtx::new());
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut render = RenderCtx::new();
+                    app.render(frame, area, &mut render);
+                    render.flush(frame);
+                })
+                .unwrap();
+            assert!(
+                rendered_lines(&terminal, area)
+                    .iter()
+                    .any(|line| line.contains("Retry cleanup"))
+            );
+        }
+    }
+}

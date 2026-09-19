@@ -11,8 +11,9 @@ use serde_json::Value;
 use super::{
     compose,
     config::{Config, private_file, read_text},
+    templates,
 };
-use crate::store::environments::{validate_instance_name, validate_name};
+use crate::store::environments::{Instance, validate_instance_name, validate_name};
 
 #[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -63,6 +64,33 @@ pub(super) fn forget(config: &Config, template: &str, name: &str) -> Result<(), 
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.to_string()),
     }
+}
+
+pub(super) fn verify(config: &Config, instance: &Instance) -> Result<(), String> {
+    validate_instance_name(&instance.name)?;
+    let directory = templates::removal_directory(config, &instance.template)?;
+    if Path::new(&instance.template_directory) != directory {
+        return Err("cleanup template directory does not match instance ownership".into());
+    }
+    let path = record_path(config, &directory, &instance.name);
+    let owner: Owner = serde_json::from_str(&read_record(&path).map_err(|error| {
+        format!(
+            "cannot verify cleanup ownership for {}: {error}",
+            instance.name
+        )
+    })?)
+    .map_err(|error| format!("invalid cleanup ownership record: {error}"))?;
+    if owner.namespace != config.namespace
+        || owner.template != instance.template
+        || owner.directory != directory
+        || owner.instance != instance.name
+    {
+        return Err(format!(
+            "conflicting cleanup ownership for {}",
+            instance.name
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn instances(

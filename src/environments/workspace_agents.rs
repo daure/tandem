@@ -83,8 +83,23 @@ pub(super) fn generate(
         shell_quote(&instance.template_directory),
         shell_quote(&compose_file.display().to_string()),
     );
-    let (repository_lines, has_repository_guidance) =
-        repositories::table(config, instance, repositories, &compose_file)?;
+    let inventory = repositories::table(config, instance, repositories, &compose_file)?;
+    let conditions = BTreeMap::from([
+        (
+            "inventory",
+            !instance.workspace_only || inventory.has_repositories || inventory.has_services,
+        ),
+        ("repositories", inventory.has_repositories),
+        ("services", inventory.has_services),
+        (
+            "code_paths",
+            inventory.has_repositories && inventory.has_services,
+        ),
+        (
+            "local_only",
+            inventory.has_repositories && !inventory.has_services,
+        ),
+    ]);
     let http_urls = http_url_lines(instance);
     let (http_guidance, http_section) = if instance
         .services
@@ -101,14 +116,34 @@ pub(super) fn generate(
     } else {
         (String::new(), String::new())
     };
+    let heading = if inventory.has_services {
+        "Services"
+    } else if inventory.has_repositories {
+        "Repositories"
+    } else {
+        "Workspace"
+    };
+    let description = match (inventory.has_repositories, inventory.has_services) {
+        (true, true) => {
+            "This workspace contains application repositories and Docker Compose development services."
+        }
+        (true, false) => "This workspace contains Git repositories for local development.",
+        (false, true) => "This workspace contains Docker Compose development services.",
+        (false, false) if instance.workspace_only => {
+            "This workspace is for local work. Follow the template guidance below."
+        }
+        (false, false) => "This workspace has no identified repositories or services.",
+    };
     let values = BTreeMap::from([
         ("instance", instance.name.clone()),
         ("template", code(&instance.template)),
         ("project", code(&instance.project)),
-        ("repositories", repository_lines),
+        ("repositories", inventory.markdown),
+        ("inventory_heading", heading.into()),
+        ("workspace_description", description.into()),
         (
             "repository_guidance",
-            if has_repository_guidance {
+            if inventory.has_guidance {
                 "Read the agents.md files listed above before starting any work.\n".into()
             } else {
                 String::new()
@@ -135,14 +170,12 @@ pub(super) fn generate(
         ("http_section", http_section),
     ]);
     let source = read_text(&config.workspace_agents_template())?;
-    let mut markdown = render(&source, &values)?;
+    let mut markdown = render(&source, &values, &conditions)?;
     if let Some(guidance) = templates::read_guidance(Path::new(&instance.template_directory))?
         && !guidance.is_empty()
     {
-        if !markdown.ends_with('\n') {
-            markdown.push('\n');
-        }
-        markdown.push('\n');
+        markdown.truncate(markdown.trim_end_matches(['\r', '\n']).len());
+        markdown.push_str("\n\n");
         markdown.push_str(&guidance);
     }
     let mut file = tempfile::NamedTempFile::new_in(workspace).map_err(|error| error.to_string())?;
@@ -211,20 +244,49 @@ fn service_lines(instance: &Instance) -> String {
         .join("\n")
 }
 
-fn render(source: &str, values: &BTreeMap<&str, String>) -> Result<String, String> {
+fn render(
+    source: &str,
+    values: &BTreeMap<&str, String>,
+    conditions: &BTreeMap<&str, bool>,
+) -> Result<String, String> {
     let mut result = String::new();
     let mut remaining = source;
+    let mut enabled = true;
+    let mut sections = Vec::new();
     while let Some((before, after)) = remaining.split_once("{{") {
-        result.push_str(before);
+        if enabled {
+            result.push_str(before);
+        }
         let (key, rest) = after
             .split_once("}}")
             .ok_or("unclosed workspace AGENTS.md template placeholder")?;
-        result.push_str(
-            values.get(key.trim()).ok_or_else(|| {
+        let key = key.trim();
+        if let Some(section) = key.strip_prefix('#') {
+            let condition = conditions
+                .get(section)
+                .ok_or_else(|| format!("unknown workspace AGENTS.md section: {section}"))?;
+            sections.push((section, enabled));
+            enabled &= condition;
+        } else if let Some(section) = key.strip_prefix('/') {
+            let (opening, previous) = sections
+                .pop()
+                .ok_or("unexpected workspace AGENTS.md section end")?;
+            if opening != section {
+                return Err("mismatched workspace AGENTS.md section end".into());
+            }
+            enabled = previous;
+        } else {
+            let value = values.get(key).ok_or_else(|| {
                 format!("unknown workspace AGENTS.md template placeholder: {key}")
-            })?,
-        );
+            })?;
+            if enabled {
+                result.push_str(value);
+            }
+        }
         remaining = rest;
+    }
+    if !sections.is_empty() {
+        return Err("unclosed workspace AGENTS.md section".into());
     }
     result.push_str(remaining);
     if result.trim().is_empty() {

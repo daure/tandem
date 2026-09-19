@@ -10,6 +10,16 @@ import sys
 import tomllib
 
 
+RELEASE_CHECK_ENV = {
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "target/release-check",
+    "RUST_TEST_THREADS": "2",
+}
+
+
 def run(*args, **kwargs):
     environment = {
         **os.environ,
@@ -48,8 +58,17 @@ def preflight():
         run("python3", "-W", "error", "-m", "unittest", "discover", "-s", directory,
             env={"PYTHONDONTWRITEBYTECODE": "1"})
     run("cargo", "update", "--workspace")
-    run("cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings")
-    run("cargo", "test", "--locked")
+    run(
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings",
+        env=RELEASE_CHECK_ENV,
+    )
+    run("cargo", "test", "--locked", env=RELEASE_CHECK_ENV)
 
 
 def release(bump):

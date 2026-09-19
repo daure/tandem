@@ -62,6 +62,7 @@ fn provision(
         branch,
         Instant::now() + Duration::from_secs(15),
         Arc::new(|_| {}),
+        |_| Ok(()),
     )
 }
 
@@ -319,6 +320,7 @@ fn repository_preparation_respects_the_startup_deadline() {
         Some("review"),
         Instant::now(),
         Arc::new(|_| {}),
+        |_| Ok(()),
     )
     .unwrap_err();
     assert!(error.contains("deadline"));

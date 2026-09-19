@@ -8,7 +8,7 @@ use std::{
 };
 
 use super::{
-    Startup,
+    Startup, cleanup,
     command::{Progress, docker, remaining, run},
     compose,
     config::Config,
@@ -39,7 +39,11 @@ pub(crate) fn start(
         journal::activity_template(config, name, template_name)?;
         let _template_lock = gateway::shared_lock(config, &format!("template-{template_name}"))?;
         let template = templates::get(config, template_name)?;
-        let existing_ids = runtime::project_ids(config, name, deadline)?;
+        let existing_ids = if template.workspace_only() {
+            Vec::new()
+        } else {
+            runtime::project_ids(config, name, deadline)?
+        };
         if !existing_ids.is_empty() {
             let existing = runtime::inspect_until(config, deadline)?
                 .into_iter()
@@ -54,6 +58,7 @@ pub(crate) fn start(
             }
         }
         let branch = startup.branch_instances.then_some(name);
+        journal::prepare(config, &template, name)?;
         ownership::record(config, template_name, Path::new(&template.directory), name)?;
         let workspace = config.workspaces.join(name);
         fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
@@ -70,7 +75,21 @@ pub(crate) fn start(
             branch,
             deadline,
             progress.clone(),
+            |checkout| journal::checkout(config, name, checkout),
         )?;
+        if template.workspace_only() {
+            let instance =
+                journal::workspace_instance(config, name)?.ok_or("workspace record missing")?;
+            workspace_agents::generate(config, &instance, &template.manifest.repositories)?;
+            journal::workspace_ready(config, name)?;
+            if let Some(sender) = startup.workspace_ready {
+                let _ = sender.send(workspace.display().to_string());
+            }
+            pending_services(Vec::new());
+            progress("Workspace ready; no services specified".into());
+            return journal::workspace_instance(config, name)?
+                .ok_or("workspace record missing".into());
+        }
         progress("Validating Compose and rendering instance routes".into());
         let rendered = compose::render(
             config,
@@ -248,6 +267,10 @@ pub(crate) fn stop(config: &Config, name: &str, progress: Progress) -> Result<()
     let result = (|| {
         let (instance, _) = managed_instance(config, name, deadline)?;
         journal::activity_template(config, name, &instance.template)?;
+        if instance.workspace_only {
+            progress("No services specified; workspace preserved".into());
+            return Ok(());
+        }
         progress("Stopping instance containers; keeping workspace, volumes, and networks".into());
         journal::stop(
             config,
@@ -272,14 +295,18 @@ pub(super) fn delete(
     let _lock = gateway::lock(config, &format!("instance-{name}"))?;
     let activity = journal::ActivityGuard::begin(config, name, "delete_instance", None, 60)?;
     let result = (|| {
-        let (instance, ids) = managed_instance(config, name, deadline)?;
+        let (instance, ids) = cleanup::target(config, name, deadline, &progress)?;
         journal::activity_template(config, name, &instance.template)?;
-        progress("Removing instance containers".into());
-        let mut command = docker();
-        command.args(["rm", "--force", "--volumes"]).args(&ids);
-        run(command, remaining(deadline)?, Some(progress.clone()))?;
-        remove_networks(config, name, deadline, progress.clone())?;
-        remove_volumes(config, name, deadline, progress.clone())?;
+        if !instance.workspace_only {
+            if !ids.is_empty() {
+                progress("Removing instance containers".into());
+                let mut command = docker();
+                command.args(["rm", "--force", "--volumes"]).args(&ids);
+                run(command, remaining(deadline)?, Some(progress.clone()))?;
+            }
+            remove_networks(config, name, deadline, progress.clone())?;
+            remove_volumes(config, name, deadline, progress.clone())?;
+        }
         remove_workspace(config, name, progress.clone(), close_command)?;
         remove_rendered_compose(config, &instance.template, name, progress)?;
         ownership::forget(config, &instance.template, name)?;
@@ -328,12 +355,29 @@ fn template_instances(config: &Config, template_name: &str) -> Result<Vec<Instan
     validate_name(template_name)?;
     let deadline = Instant::now() + Duration::from_secs(60);
     let _lock = gateway::lock(config, &format!("template-{template_name}"))?;
-    runtime::inspect_until(config, deadline).map(|instances| {
-        instances
-            .into_iter()
-            .filter(|instance| instance.template == template_name)
-            .collect()
-    })
+    let mut instances = journal::workspaces(config)?;
+    let directory = config.templates.join(template_name);
+    let names = if directory.is_dir() {
+        ownership::instances(config, template_name, &directory)?
+    } else {
+        BTreeSet::new()
+    };
+    let only_workspaces = (instances
+        .iter()
+        .any(|instance| instance.template == template_name)
+        || templates::get(config, template_name).is_ok_and(|template| template.workspace_only()))
+        && names.iter().all(|name| {
+            instances
+                .iter()
+                .any(|instance| &instance.name == name && instance.template == template_name)
+        });
+    if !only_workspaces {
+        instances.extend(runtime::inspect_until(config, deadline)?);
+    }
+    Ok(instances
+        .into_iter()
+        .filter(|instance| instance.template == template_name)
+        .collect())
 }
 
 pub(super) fn managed_instance(
@@ -341,11 +385,22 @@ pub(super) fn managed_instance(
     name: &str,
     deadline: Instant,
 ) -> Result<(Instance, Vec<String>), String> {
+    if let Some(instance) = journal::workspace_instance(config, name)? {
+        return Ok((instance, Vec::new()));
+    }
     let instance = runtime::inspect_until(config, deadline)?
         .into_iter()
         .find(|instance| instance.name == name)
         .ok_or("instance not found")?;
-    let ids = runtime::project_ids(config, name, deadline)?;
+    checked_project(config, instance, deadline)
+}
+
+pub(super) fn checked_project(
+    config: &Config,
+    instance: Instance,
+    deadline: Instant,
+) -> Result<(Instance, Vec<String>), String> {
+    let ids = runtime::project_ids(config, &instance.name, deadline)?;
     let owned: BTreeSet<_> = instance
         .services
         .iter()

@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECKOUT = ROOT.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(CHECKOUT / "src/mcp/tests"))
-from generate import generate
+from generate import MINIMAL_FIXTURES, generate
 from stdio_smoke import Client
 from templates import FIXTURES
 
@@ -98,7 +98,10 @@ class Smoke:
         for template in FIXTURES:
             instance = f"{template}-one"
             self.start(template, instance)
-            self.check_routes_and_git(template, instance)
+            if "web" in FIXTURES[template]:
+                self.check_routes_and_git(template, instance)
+            else:
+                self.check_minimal(template, instance)
 
         self.start("guestbook", "guestbook-two")
         self.api("guestbook-one", "greeting", method="PUT", body={"message": "Hello from one"})
@@ -158,6 +161,64 @@ class Smoke:
         self.check_routes_and_git("postcard", "postcard-broken")
         self.standalone_apps()
         print("Routes, independent clones, dirty restart, SQL isolation/persistence, jobs, and injected failures passed.", flush=True)
+
+    def exercise_minimal(self):
+        for template in MINIMAL_FIXTURES:
+            name = f"{template}-one"
+            self.start(template, name)
+            self.check_minimal(template, name)
+            self.stop(name)
+            self.start(template, name)
+            self.check_minimal(template, name)
+        self.check_cleanup_recovery("guidance-only-one")
+        print("Minimal fixture creation, guidance, inventory, lifecycle, and damaged-record cleanup passed.", flush=True)
+
+    def check_cleanup_recovery(self, name):
+        environment = json.loads((self.root / "fixtures.json").read_text())["environment"]
+        record_path = self.root / ".tandem/runtime" / environment["TANDEM_NAMESPACE"] / f"{name}.json"
+        record = json.loads(record_path.read_text())
+        record["expected"].pop("workspace_only")
+        record["expected"].pop("repositories", None)
+        record["expected"]["runtime"].pop("workspace_ready", None)
+        record.pop("repositories", None)
+        record["activity"].update(action="delete_instance", finished=True, error="instance not found")
+        record_path.write_text(json.dumps(record))
+        inventory = self.client.tool("list_instances")
+        assert not any(instance["name"] == name for instance in inventory["instances"])
+        assert any(activity["name"] == name and activity["error"] for activity in inventory["activities"])
+        result = subprocess.run([self.client.process.args[0], "delete-instance", name],
+                                env={**os.environ, **environment}, capture_output=True, text=True, timeout=90)
+        assert result.returncode == 0, result.stderr
+        assert not record_path.exists()
+        assert not (self.root / ".tandem/workspaces" / name).exists()
+        assert not any(activity["name"] == name for activity in self.client.tool("list_instances")["activities"])
+
+    def check_minimal(self, template, name):
+        instance = next(instance for instance in self.client.tool("list_instances")["instances"] if instance["name"] == name)
+        workspace = self.root / ".tandem/workspaces" / name
+        guidance = (workspace / "AGENTS.md").read_text()
+        assert "## HTTP URLs" not in guidance
+        if template == "guidance-only":
+            assert instance["summary"]["status"] == "workspace_ready", instance
+            assert not instance["services"] and not instance["repositories"]
+            assert "## Scratch workspace" in guidance
+            assert "## Docker" not in guidance and "## Repositories" not in guidance
+            assert {path.name for path in workspace.iterdir()} == {"AGENTS.md"}
+        elif template == "repo-only":
+            assert instance["summary"]["status"] == "workspace_ready", instance
+            assert not instance["services"]
+            assert instance["repositories"][0]["path"] == str(workspace / "app")
+            assert "## Docker" not in guidance
+            subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"],
+                           cwd=workspace / "app", check=True, timeout=20)
+        else:
+            assert not instance["repositories"]
+            assert instance["services"][0]["summary"]["status"] == "healthy", instance
+            assert "## Docker" in guidance
+            assert "Edit source files" not in guidance
+            result = subprocess.run(["docker", "exec", instance["services"][0]["container_id"],
+                                     "redis-cli", "ping"], check=True, capture_output=True, text=True, timeout=10)
+            assert result.stdout.strip() == "PONG"
 
     def standalone_apps(self):
         namespace = json.loads((self.root / "fixtures.json").read_text())["environment"]["TANDEM_NAMESPACE"]
@@ -221,6 +282,7 @@ def cleanup(root, namespace):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=CHECKOUT / "target/debug/tandem")
+    parser.add_argument("--minimal", action="store_true", help="Exercise repo-only, compose-only and guidance-only fixtures")
     options = parser.parse_args()
     if not options.binary.is_file():
         parser.error("Build Tandem first with cargo build")
@@ -238,7 +300,11 @@ def main():
     client = Client(options.binary.resolve(), environment)
     succeeded = False
     try:
-        Smoke(root, client, port).exercise()
+        smoke = Smoke(root, client, port)
+        if options.minimal:
+            smoke.exercise_minimal()
+        else:
+            smoke.exercise()
         succeeded = True
     finally:
         client.close()

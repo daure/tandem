@@ -1,6 +1,6 @@
 # Development fixtures
 
-Generate five Git repositories and four Tandem templates under the ignored `projects/` directory.
+Generate six Git repositories and seven Tandem templates under the ignored `projects/` directory.
 Python 3.11+, Git, local Docker Engine, and Docker Compose 2.20+ are required.
 
 | Template | Repositories | Minimal feature | Coverage |
@@ -9,6 +9,9 @@ Python 3.11+, Git, local Docker Engine, and Docker Compose 2.20+ are required.
 | `greetings` | `greetings-api`, `greetings-ui` | Save a greeting in PostgreSQL | Multiple repos, API-owned Compose include, migration, persistent volume |
 | `postcard` | `postcard` | Static hello-world page | Assets, nested links, redirects, fast baseline |
 | `mailroom` | `mailroom` | Queue a greeting and poll its delivery | Redis, worker heartbeat, asynchronous completion |
+| `repo-only` | `repo-only` cloned as `app` | Local Python greeting and unit tests | Manifest-only template, Git Setup row, checkout-path copy, local guidance |
+| `compose-only` | — | Redis with a healthcheck and persistent volume | Compose without a manifest, service-only guidance, no routes |
+| `guidance-only` | — | Scratch workspace for notes and research | Guidance-only discovery, empty workspace, custom `AGENTS.md`, no Git or Docker |
 
 ## Generate and run
 
@@ -19,8 +22,29 @@ python3 projects-generators/generate.py --seed-commits
 cargo run -- dev
 ```
 
-The TUI lists all four templates. Start one with a distinct instance name, such as `guestbook-one`.
-Its website is `http://localhost:9886/guestbook-one/web/`; APIs use the sibling `api/` route.
+To append the three minimal fixtures to an existing `projects/` setup:
+
+```sh
+python3 projects-generators/generate.py --add-minimal --seed-commits
+```
+
+This refuses occupied minimal-fixture paths, preserves existing sources/templates/workspaces and
+environment settings, and adds the fixture names to the inventory. Refresh templates in the TUI afterward.
+If `repo-only` and `compose-only` are already installed, use `--add-guidance` to add only `guidance-only`;
+that operation creates no repository and needs no seed commit.
+
+For a focused live lifecycle check, build Tandem and run
+`python3 projects-generators/tests/live_smoke.py --minimal`; it uses an isolated temporary fixture root
+and cleans up its containers, networks and volumes.
+
+The TUI lists all seven templates. Start one with a distinct instance name, such as `guestbook-one`.
+Web fixtures use `http://localhost:9886/guestbook-one/web/`; APIs use the sibling `api/` route.
+`repo-only` completes without Docker and exposes its checkout beneath Setup; `yy` copies its absolute
+directory. Run `python3 -m unittest discover -s tests -v` there. `compose-only` has no HTTP URL;
+use its generated Compose command with `exec -T redis redis-cli ping` and expect `PONG`.
+`guidance-only` creates a folder containing `AGENTS.md` with the template's scratch-workspace instructions;
+open the workspace and follow that guidance to create notes locally.
+Expand `greetings` Setup to compare its sorted Git rows with the migration job beneath them.
 On Unix, every `cargo run` invocation of Tandem sources the checkout's `projects/env.sh` when it
 exists, including plain TUI, `dev`, `new-instance` and MCP modes. Its exports override inherited
 values in the child process; the calling shell stays unchanged. Treat this file as trusted shell
@@ -50,10 +74,11 @@ projects/
   greetings-ui/              # .git, browser UI
   postcard/                  # .git, static site
   mailroom/                  # .git, backend/, frontend/, Redis infrastructure
+  repo-only/                 # .git, greeting.py, tests/, AGENTS.md; local execution
   env.sh                    # source this to select the fixture environment
   fixtures.json             # generated inventory and environment
   .tandem/
-    templates/              # Compose recipes, tandem.json and tandem-agents.md
+    templates/              # Compose and/or manifest recipes with tandem-agents.md
     workspaces/<instance>/  # independent writable clones of the relevant repos
 ```
 
@@ -67,7 +92,7 @@ behavior and a fixture-specific evaluation cycle. The tracked originals live in
 are appended to newly generated workspace `AGENTS.md` files. Browser guidance uses
 host-installed `agent-browser` and its version-matched `skills get core --full` guide.
 
-Templates declare repositories in `tandem.json`. Tandem clones them with host Git before Compose,
+Repository-bearing templates declare repositories in `tandem.json`. Tandem clones them with host Git before any Compose,
 under your UID/GID, using `--no-local` so objects do not depend on shared hardlinks. With Branch
 instances enabled, it checks out the instance-named branch when available or creates it locally from
 the source's default branch. With the setting disabled, it checks out the default branch.
@@ -87,7 +112,7 @@ code changes. To change dependencies or image build rules, edit the source repos
 rebuild the template's image. Template infrastructure is shared across instances; database volumes,
 Redis volumes, and source workspaces are instance-specific.
 
-Each source repository also has standalone Compose infrastructure. From that repository,
+The web fixture source repositories also have standalone Compose infrastructure. From that repository,
 `docker compose up --build -d` starts it; its README lists the loopback URL. Greetings API owns its
 database and migration. Start the full Greetings app from `greetings-ui`: it includes its sibling
 API's Compose file and proxies to the internal API service. Start from `greetings-api` to run only

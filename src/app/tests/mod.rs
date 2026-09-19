@@ -22,6 +22,7 @@ mod restart;
 mod service_state;
 mod template_actions;
 mod toolbar;
+mod workspaces;
 
 fn snapshot() -> EnvironmentSnapshot {
     EnvironmentSnapshot {

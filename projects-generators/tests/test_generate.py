@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from generate import generate
+from generate import MINIMAL_FIXTURES, add_minimal, generate
 from recipes import ASSETS, REPOSITORIES
 from templates import FIXTURES
 
@@ -89,15 +89,17 @@ class GeneratorTests(unittest.TestCase):
                        "TANDEM_UID": str(os.getuid()), "TANDEM_GID": str(os.getgid())}
         for name, fixture in FIXTURES.items():
             template = self.root / ".tandem/templates" / name
+            if name in ("repo-only", "guidance-only"):
+                continue
             result = subprocess.run(["docker", "compose", "-f", str(template / "compose.yaml"),
                                      "config", "--format", "json"], env=environment,
                                     check=True, capture_output=True, text=True)
             self.assertEqual(result.stderr, "")
             model = json.loads(result.stdout)
-            manifest = json.loads((template / "tandem.json").read_text())
-            self.assertEqual(manifest["repositories"],
+            manifest = json.loads((template / "tandem.json").read_text()) if (template / "tandem.json").exists() else {}
+            self.assertEqual(manifest.get("repositories", []),
                              [{"source": str(self.root / repo), "target": repo} for repo in fixture["repos"]])
-            self.assertLessEqual(set(manifest["routes"]) | set(manifest["one_shots"]), set(model["services"]))
+            self.assertLessEqual(set(manifest.get("routes", {})) | set(manifest.get("one_shots", [])), set(model["services"]))
             for service in model["services"].values():
                 self.assertNotIn("ports", service)
                 self.assertNotIn("container_name", service)
@@ -112,9 +114,55 @@ class GeneratorTests(unittest.TestCase):
                 self.assertIn("redis", model["services"])
                 self.assertIn("worker", model["services"])
         for name in REPOSITORIES:
+            if name == "repo-only":
+                continue
             result = subprocess.run(["docker", "compose", "-f", str(self.root / name / "compose.yaml"),
                                      "config", "--quiet"], check=True, capture_output=True, text=True)
             self.assertEqual(result.stderr, "")
+
+    def test_minimal_templates_cover_repository_and_service_only_workflows(self):
+        self.generate()
+        templates = self.root / ".tandem/templates"
+        repo = templates / "repo-only"
+        self.assertFalse((repo / "compose.yaml").exists())
+        manifest = json.loads((repo / "tandem.json").read_text())
+        self.assertEqual(manifest["repositories"], [{"source": str(self.root / "repo-only"), "target": "app"}])
+        self.assertFalse((templates / "compose-only/tandem.json").exists())
+        model = json.loads((templates / "compose-only/compose.yaml").read_text())
+        self.assertEqual(set(model["services"]), {"redis"})
+        self.assertEqual(model["services"]["redis"]["healthcheck"]["test"], ["CMD", "redis-cli", "ping"])
+        guidance = templates / "guidance-only"
+        self.assertEqual({path.name for path in guidance.iterdir()}, {"tandem-agents.md"})
+        self.assertIn("## Scratch workspace", (guidance / "tandem-agents.md").read_text())
+        subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"],
+                       cwd=self.root / "repo-only", check=True, capture_output=True)
+
+    def test_minimal_addition_preserves_existing_fixtures_and_rejects_overwrites(self):
+        self.generate()
+        for path in [self.root / "repo-only", *(self.root / ".tandem/templates" / name for name in MINIMAL_FIXTURES)]:
+            shutil.rmtree(path)
+        source = self.root / "guestbook/README.md"
+        source.write_text("User work")
+        environment = (self.root / "env.sh").read_text()
+        with contextlib.redirect_stdout(io.StringIO()):
+            add_minimal(self.root, seed_commits=True)
+        self.assertEqual(source.read_text(), "User work")
+        self.assertEqual((self.root / "env.sh").read_text(), environment)
+        self.assertEqual(git(self.root / "repo-only", "rev-list", "--count", "HEAD"), "1")
+        self.assertEqual(set(json.loads((self.root / "fixtures.json").read_text())["templates"]), set(FIXTURES))
+        with self.assertRaisesRegex(ValueError, "Refusing to overwrite"):
+            add_minimal(self.root, seed_commits=True)
+
+    def test_guidance_addition_preserves_existing_repositories_and_seed_status(self):
+        self.generate()
+        directory = self.root / ".tandem/templates/guidance-only"
+        shutil.rmtree(directory)
+        before = json.loads((self.root / "fixtures.json").read_text())
+        head = git(self.root / "repo-only", "rev-parse", "HEAD")
+        add_minimal(self.root, names=("guidance-only",))
+        self.assertTrue((directory / "tandem-agents.md").is_file())
+        self.assertEqual(json.loads((self.root / "fixtures.json").read_text()), before)
+        self.assertEqual(git(self.root / "repo-only", "rev-parse", "HEAD"), head)
 
 
 if __name__ == "__main__":

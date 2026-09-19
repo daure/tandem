@@ -32,14 +32,16 @@ pub(super) fn details(row: &Row) -> Modal {
     };
     let mut tabs = vec![Tab::new(title, Properties::new(row.details.clone()))];
     if row.parent.is_none() {
-        tabs.push(Tab::new(
-            "Compose",
-            SyntaxHighlighter::new(
-                row.compose_source.clone(),
-                Language::guess(Some(&row.compose_file), &row.compose_source),
-            )
-            .wrap(true),
-        ));
+        if !row.compose_file.is_empty() {
+            tabs.push(Tab::new(
+                "Compose",
+                SyntaxHighlighter::new(
+                    row.compose_source.clone(),
+                    Language::guess(Some(&row.compose_file), &row.compose_source),
+                )
+                .wrap(true),
+            ));
+        }
         tabs.push(match &row.manifest_source {
             Some(source) => Tab::new(
                 "Manifest",
@@ -51,7 +53,7 @@ pub(super) fn details(row: &Row) -> Modal {
             ),
             None => Tab::new(
                 "Manifest",
-                Paragraph::new("tandem.json is unavailable. Check Metadata for template errors."),
+                Paragraph::new("No tandem.json specified; default template settings apply. Check Metadata for errors."),
             ),
         });
         if let Some(source) = &row.guidance_source {

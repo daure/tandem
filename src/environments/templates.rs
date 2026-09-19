@@ -15,7 +15,11 @@ pub(crate) fn list(config: &Config) -> Result<Vec<Template>, String> {
     for entry in fs::read_dir(&config.templates).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if validate_name(&name).is_ok() && entry.path().join("compose.yaml").is_file() {
+        if validate_name(&name).is_ok()
+            && (entry.path().join("compose.yaml").is_file()
+                || entry.path().join("tandem.json").is_file()
+                || fs::symlink_metadata(entry.path().join("tandem-agents.md")).is_ok())
+        {
             match read_template(config, &name) {
                 Ok(template) => templates.push(template),
                 Err(error) => templates.push(Template {
@@ -70,6 +74,11 @@ pub(crate) fn update_manifest(
         _ => {}
     }
     let mut template = read_template(config, name)?;
+    validate_workspace_template(
+        &manifest,
+        !template.workspace_only(),
+        template.guidance_source.is_some(),
+    )?;
     let mut temporary = tempfile::Builder::new()
         .prefix(".tandem-manifest-")
         .tempfile_in(&directory)
@@ -125,19 +134,55 @@ fn read_template(config: &Config, name: &str) -> Result<Template, String> {
             validate_manifest(&manifest)?;
             Ok(manifest)
         });
+    let compose_path = directory.join("compose.yaml");
+    let compose_source = compose_path
+        .try_exists()
+        .map_err(|error| error.to_string())?
+        .then(|| read_text(&compose_path))
+        .transpose()?;
+    let guidance_source = read_guidance(&directory)?;
+    let manifest = manifest.and_then(|manifest| {
+        validate_workspace_template(
+            &manifest,
+            compose_source.is_some(),
+            guidance_source.is_some(),
+        )?;
+        Ok(manifest)
+    });
     let error = manifest.as_ref().err().cloned();
     Ok(Template {
         name: name.into(),
         directory: directory.display().to_string(),
-        compose_file: directory.join("compose.yaml").display().to_string(),
+        compose_file: compose_source
+            .as_ref()
+            .map(|_| compose_path.display().to_string())
+            .unwrap_or_default(),
         manifest_file: manifest_path.display().to_string(),
         guidance_file: directory.join("tandem-agents.md").display().to_string(),
-        compose_source: read_text(&directory.join("compose.yaml"))?,
+        compose_source: compose_source.unwrap_or_default(),
         manifest_source,
-        guidance_source: read_guidance(&directory)?,
+        guidance_source,
         manifest: manifest.unwrap_or_default(),
         error,
     })
+}
+
+fn validate_workspace_template(
+    manifest: &Manifest,
+    has_compose: bool,
+    has_guidance: bool,
+) -> Result<(), String> {
+    if !has_compose {
+        if manifest.repositories.is_empty() && !has_guidance {
+            return Err(
+                "templates without compose.yaml must declare repositories or supply tandem-agents.md".into(),
+            );
+        }
+        if !manifest.routes.is_empty() || !manifest.one_shots.is_empty() {
+            return Err("routes and one_shots require compose.yaml".into());
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn read_guidance(directory: &Path) -> Result<Option<String>, String> {

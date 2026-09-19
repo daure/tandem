@@ -13,6 +13,7 @@ mod manifest_updates;
 mod restart;
 mod template_removal;
 mod template_removal_live;
+mod workspaces;
 
 fn fixture() -> (tempfile::TempDir, Config) {
     let directory = tempfile::tempdir().unwrap();

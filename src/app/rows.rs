@@ -11,6 +11,8 @@ use ratatui::{
 
 use super::{details, properties::Property};
 
+mod setup;
+
 const TEMPLATE_ICON: &str = "󰠲";
 const GATEWAY_ICON: &str = "";
 const PORT_ICON: &str = "󰈀";
@@ -56,7 +58,7 @@ fn status_icon(status: Status) -> &'static str {
     match status {
         Status::NotStarted | Status::Waiting => "",
         Status::Running => "",
-        Status::Healthy => "",
+        Status::Healthy | Status::WorkspaceReady => "",
         Status::Completed => "",
         Status::Unhealthy => "",
         Status::Paused => "",
@@ -155,6 +157,10 @@ pub(super) struct Row {
     pub directory: String,
     pub compose_file: String,
     pub compose_source: String,
+    pub template_available: bool,
+    pub checkout_path: Option<String>,
+    pub informational: bool,
+    pub cleanup_target: Option<String>,
     pub manifest_source: Option<String>,
     pub guidance_source: Option<String>,
     pub instance: Option<String>,
@@ -194,15 +200,23 @@ impl Row {
         let mut lines = self.label.lines();
         let icon = if self.loading { spinner } else { self.icon };
         let first = lines.next().unwrap_or_default();
-        let mut first_line = vec![Span::styled(
-            format!("{icon} "),
-            Style::default().fg(self.tone.color()),
-        )];
+        let mut first_line = Vec::new();
+        if !icon.is_empty() {
+            first_line.push(Span::styled(
+                format!("{icon} "),
+                Style::default().fg(self.tone.color()),
+            ));
+        }
         if let Some(status) = &self.status {
             let name = first.strip_suffix(status).unwrap_or(first);
             first_line.push(Span::raw(name.to_owned()));
             first_line.push(Span::styled(
                 status.clone(),
+                Style::default().fg(self.tone.color()),
+            ));
+        } else if self.informational {
+            first_line.push(Span::styled(
+                first.to_owned(),
                 Style::default().fg(self.tone.color()),
             ));
         } else {
@@ -232,9 +246,11 @@ impl Row {
     }
 
     pub(super) fn name_value(&self) -> Option<String> {
-        self.service_name
+        self.checkout_path
             .clone()
+            .or_else(|| self.service_name.clone())
             .or_else(|| self.instance.clone())
+            .or_else(|| self.cleanup_target.clone())
             .or_else(|| self.parent.is_none().then(|| self.template.clone()))
     }
 }
@@ -442,6 +458,8 @@ pub(super) fn from_snapshot_with_operations(
             directory: template.directory.clone(),
             compose_file: template.compose_file.clone(),
             compose_source: template.compose_source.clone(),
+            template_available: true,
+            hide_resources: template.workspace_only(),
             manifest_source: template.manifest_source.clone(),
             guidance_source: template.guidance_source.clone(),
             instance: None,
@@ -523,6 +541,7 @@ pub(super) fn from_snapshot_with_operations(
         let directory = template_row.directory.clone();
         let compose_file = template_row.compose_file.clone();
         let compose_source = template_row.compose_source.clone();
+        let template_available = template_row.template_available;
         let instance_id = format!("instance:{}", instance.name);
         let summary = instance_summary(instance, snapshot.startup.get(&instance.name));
         let secondary_label = operation_progress(operations, "create_instance", &instance.name)
@@ -544,6 +563,10 @@ pub(super) fn from_snapshot_with_operations(
             directory: directory.clone(),
             compose_file: compose_file.clone(),
             compose_source: compose_source.clone(),
+            template_available,
+            checkout_path: None,
+            informational: false,
+            cleanup_target: None,
             manifest_source: None,
             instance: Some(instance.name.clone()),
             guidance_source: None,
@@ -556,38 +579,13 @@ pub(super) fn from_snapshot_with_operations(
             status_detail: summary.detail,
             detail_tone: summary.detail_tone,
             metrics: UsageSummary::instance(instance),
-            hide_resources: false,
+            hide_resources: instance.workspace_only,
             can_start: instance.can_start() && !compose_file.is_empty(),
             can_stop: instance.can_stop(),
             can_restart: instance.can_restart(),
         });
-        let completed = instance
-            .services
-            .iter()
-            .filter(|service| {
-                service.one_shot && service.status_summary().status == Status::Completed
-            })
-            .count();
         let setup_id = format!("setup:{}", instance.name);
-        if completed > 0 {
-            let mut group = rows.last().expect("instance row").clone();
-            group.id = setup_id.clone();
-            group.parent = Some(instance_id.clone());
-            group.label = format!("Setup · {completed} completed");
-            group.status = None;
-            group.status_detail = None;
-            group.icon = "";
-            group.tone = Tone::Success;
-            group.loading = false;
-            group.instance = None;
-            group.can_start = false;
-            group.can_stop = false;
-            group.can_restart = false;
-            group.usage = None;
-            group.metrics = UsageSummary::default();
-            group.hide_resources = true;
-            rows.push(group);
-        }
+        setup::append(&mut rows, instance);
         for service in &instance.services {
             let service_id = if service.runtime.replica > 1 {
                 format!(
@@ -637,6 +635,10 @@ pub(super) fn from_snapshot_with_operations(
                 directory: directory.clone(),
                 compose_file: compose_file.clone(),
                 compose_source: compose_source.clone(),
+                template_available,
+                checkout_path: None,
+                informational: false,
+                cleanup_target: None,
                 manifest_source: None,
                 instance: None,
                 guidance_source: None,
@@ -729,6 +731,9 @@ pub(super) fn from_snapshot_with_operations(
         row.usage = None;
         row.metrics = UsageSummary::default();
         row.hide_resources = true;
+        row.cleanup_target =
+            (activity.action == "delete_instance" && activity.finished && activity.error.is_some())
+                .then(|| activity.name.clone());
         row.details = vec![
             Property::new("Operation", &activity.action),
             Property::new("Instance", &activity.name),
@@ -740,7 +745,7 @@ pub(super) fn from_snapshot_with_operations(
         rows.push(row);
     }
     for row in &mut rows {
-        if row.parent.is_none() {
+        if row.parent.is_none() && !row.hide_resources {
             details::resources(&mut row.details, row.usage, row.memory_limit_bytes);
             details::usage_details(&mut row.details, &row.metrics);
         }

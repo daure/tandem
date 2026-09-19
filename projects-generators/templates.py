@@ -3,13 +3,16 @@
 import copy
 import json
 
-from recipes import asset, healthy, write, write_json
+from recipes import asset, healthy, redis_infrastructure, write, write_json
 
 FIXTURES = {
     "guestbook": {"repos": ["guestbook"], "web": "guestbook/frontend", "api": "guestbook/backend"},
     "greetings": {"repos": ["greetings-api", "greetings-ui"], "web": "greetings-ui", "api": "greetings-api"},
     "postcard": {"repos": ["postcard"], "web": "postcard"},
     "mailroom": {"repos": ["mailroom"], "web": "mailroom/frontend", "api": "mailroom/backend"},
+    "repo-only": {"repos": ["repo-only"]},
+    "compose-only": {"repos": []},
+    "guidance-only": {"repos": []},
 }
 WORKSPACE = {"type": "bind", "source": "${TANDEM_WORKSPACE:?Tandem supplies the workspace}",
              "target": "/workspace", "bind": {"create_host_path": False}}
@@ -24,10 +27,27 @@ def workspace_service(service, source, root):
     return service
 
 
-def create_templates(root):
-    for name, fixture in FIXTURES.items():
+def create_templates(root, names=FIXTURES):
+    for name in names:
+        fixture = FIXTURES[name]
         directory = root / ".tandem/templates" / name
         directory.mkdir(parents=True)
+        if name == "guidance-only":
+            asset("guidance/guidance-only.md", directory / "tandem-agents.md")
+            continue
+        if name == "repo-only":
+            write_json(directory / "tandem.json", {
+                "description": "Local Python development without services",
+                "repositories": [{"source": str(root / "repo-only"), "target": "app"}],
+            })
+            asset("guidance/repo-only.md", directory / "tandem-agents.md")
+            write(directory / ".gitignore", ".tandem-*\n")
+            continue
+        if name == "compose-only":
+            write_json(directory / "compose.yaml", redis_infrastructure())
+            asset("guidance/compose-only.md", directory / "tandem-agents.md")
+            write(directory / ".gitignore", ".tandem-*\n")
+            continue
         seed = root / fixture["repos"][0]
         model = json.loads((seed / "compose.yaml").read_text())
         if "include" in model:

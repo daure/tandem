@@ -18,11 +18,16 @@ use crate::store::environments::{
 };
 
 mod launch;
+mod workspaces;
+pub(super) use workspaces::{
+    checkout, forget, prepare, recorded, workspace_instance, workspace_ready, workspaces,
+};
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(default)]
 struct Record {
     expected: Option<Instance>,
+    repositories: Vec<crate::store::environments::RepositoryCheckout>,
     stops: BTreeMap<String, StopReceipt>,
     activity: Option<Activity>,
     whole_stop: Vec<(String, Option<String>)>,
@@ -64,7 +69,7 @@ fn read(config: &Config, name: &str) -> Result<Record, String> {
     match fs::symlink_metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Record::default()),
         Err(error) => return Err(error.to_string()),
-        Ok(metadata) if !metadata.is_file() => {
+        Ok(metadata) if !metadata.file_type().is_file() => {
             return Err("runtime journal must be a regular file".into());
         }
         Ok(_) => {}
@@ -283,6 +288,7 @@ pub(super) fn enrich(config: &Config, instances: &mut [Instance]) -> Result<Vec<
         if let Some(expected) = &record.expected {
             if expected.project != instance.project
                 || expected.template_directory != instance.template_directory
+                || expected.workspace_only != instance.workspace_only
             {
                 return Err(format!(
                     "runtime topology ownership mismatch for {}",
@@ -290,6 +296,7 @@ pub(super) fn enrich(config: &Config, instances: &mut [Instance]) -> Result<Vec<
                 ));
             }
             instance.runtime.topology_known = true;
+            instance.runtime.workspace_ready = expected.runtime.workspace_ready;
             for service in &mut instance.services {
                 service.runtime.unexpected = !expected.services.iter().any(|slot| {
                     slot.name == service.name
@@ -312,6 +319,7 @@ pub(super) fn enrich(config: &Config, instances: &mut [Instance]) -> Result<Vec<
                 instance.services.push(missing);
             }
         }
+        instance.repositories = record.repositories.clone();
         instance.runtime.activity = record
             .activity
             .as_ref()
@@ -321,6 +329,13 @@ pub(super) fn enrich(config: &Config, instances: &mut [Instance]) -> Result<Vec<
             .activity
             .as_ref()
             .and_then(|activity| activity.error.clone());
+        if instance.workspace_only
+            && !fs::symlink_metadata(&instance.workspace)
+                .is_ok_and(|metadata| metadata.file_type().is_dir())
+        {
+            instance.runtime.workspace_ready = false;
+            instance.runtime.issue = Some("workspace is missing or is not a real directory".into());
+        }
         instance.runtime.whole_stop = !record.whole_stop.is_empty()
             && instance.services.iter().all(|service| {
                 record

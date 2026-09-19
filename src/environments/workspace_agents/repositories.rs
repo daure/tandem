@@ -35,17 +35,30 @@ struct Mount {
     target: String,
 }
 
+pub(super) struct Inventory {
+    pub markdown: String,
+    pub has_guidance: bool,
+    pub has_repositories: bool,
+    pub has_services: bool,
+}
+
 pub(super) fn table(
     config: &Config,
     instance: &Instance,
     repositories: &[Repository],
     compose_file: &Path,
-) -> Result<(String, bool), String> {
+) -> Result<Inventory, String> {
     let workspace = Path::new(&instance.workspace);
     let mut targets: BTreeSet<String> = repositories
         .iter()
         .map(|repo| repo.target.clone())
         .collect();
+    targets.extend(
+        instance
+            .repositories
+            .iter()
+            .map(|repository| repository.target.clone()),
+    );
     for entry in fs::read_dir(workspace).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
         if entry
@@ -57,7 +70,11 @@ pub(super) fn table(
             targets.insert(entry.file_name().to_string_lossy().into_owned());
         }
     }
-    let services = services(config, instance, compose_file)?;
+    let services = if instance.workspace_only {
+        BTreeMap::new()
+    } else {
+        services(config, instance, compose_file)?
+    };
     let mut unmapped_services: BTreeSet<String> = if services.is_empty() {
         instance
             .services
@@ -68,13 +85,24 @@ pub(super) fn table(
         services.keys().cloned().collect()
     };
     unmapped_services.remove("repo-sync");
+    let has_repositories = !targets.is_empty();
+    let has_services = !unmapped_services.is_empty();
     if targets.is_empty() && unmapped_services.is_empty() {
-        return Ok(("No services or repositories identified.".into(), false));
+        return Ok(Inventory {
+            markdown: "No services or repositories identified.".into(),
+            has_guidance: false,
+            has_repositories,
+            has_services,
+        });
     }
-    let mut lines = vec![
-        "| Repository | Service | Code path in container | Agent guidance |".into(),
-        "|---|---|---|---|".into(),
-    ];
+    let mut lines = if has_services {
+        vec![
+            "| Repository | Service | Code path in container | Agent guidance |".into(),
+            "|---|---|---|---|".into(),
+        ]
+    } else {
+        vec!["| Repository | Agent guidance |".into(), "|---|---|".into()]
+    };
     let mut has_guidance = false;
     for target in targets {
         let root = workspace.join(&target);
@@ -89,6 +117,10 @@ pub(super) fn table(
         } else {
             guidance.join(" and ")
         };
+        if !has_services {
+            lines.push(format!("| {} | {guidance} |", cell(&format!("./{target}"))));
+            continue;
+        }
         let source = repositories
             .iter()
             .find(|repo| repo.target == target)
@@ -116,7 +148,12 @@ pub(super) fn table(
     for service in unmapped_services {
         lines.push(format!("| — | {} | — | — |", cell(&service)));
     }
-    Ok((lines.join("\n"), has_guidance))
+    Ok(Inventory {
+        markdown: lines.join("\n"),
+        has_guidance,
+        has_repositories,
+        has_services,
+    })
 }
 
 fn services(

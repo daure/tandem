@@ -131,6 +131,23 @@ class ReleaseGitTests(unittest.TestCase):
                         ("cargo", "update", "--workspace"),
                     ],
                 )
+                expected_release_check_env = {
+                    "CARGO_BUILD_JOBS": "2",
+                    "CARGO_PROFILE_DEV_DEBUG": "0",
+                    "CARGO_PROFILE_TEST_DEBUG": "0",
+                    "CARGO_INCREMENTAL": "0",
+                    "CARGO_TARGET_DIR": "target/release-check",
+                    "RUST_TEST_THREADS": "2",
+                }
+                self.assertEqual(release.RELEASE_CHECK_ENV, expected_release_check_env)
+                for command in (
+                    ("cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings"),
+                    ("cargo", "test", "--locked"),
+                ):
+                    self.assertEqual(
+                        next(kwargs for call, kwargs in calls if call == command),
+                        {"env": expected_release_check_env},
+                    )
                 for directory in ("scripts/tests", "projects-generators/tests"):
                     self.assertIn(
                         (("python3", "-W", "error", "-m", "unittest", "discover", "-s", directory),
