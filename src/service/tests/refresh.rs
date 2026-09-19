@@ -203,6 +203,11 @@ fn service_mutations_update_an_independent_observer_and_rejected_manifests_do_no
         .block_on(writer.configure_open_command("editor .".into(), true))
         .unwrap();
     wait_for(|| observer.open_command() == "editor .");
+    writer
+        .runtime
+        .block_on(writer.configure_close_command("close-editor".into(), true))
+        .unwrap();
+    wait_for(|| observer.close_command() == "close-editor");
 }
 
 #[test]

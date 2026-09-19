@@ -88,6 +88,7 @@ fn active_startup_rows_show_the_latest_progress_beneath_the_status() {
         service: None,
         state: OperationState::Running,
         progress: vec!["Queued".into(), progress.into()],
+        warnings: Vec::new(),
         elapsed_seconds: 0,
         elapsed_milliseconds: 0,
         error: None,

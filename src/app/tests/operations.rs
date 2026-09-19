@@ -13,6 +13,7 @@ fn operation(action: &str, name: &str) -> Operation {
         service: None,
         state: OperationState::Running,
         progress: Vec::new(),
+        warnings: Vec::new(),
         elapsed_seconds: 0,
         elapsed_milliseconds: 0,
         error: None,
@@ -30,6 +31,27 @@ fn template_operation_scope_ignores_unrelated_instances_with_the_same_name() {
     assert!(operation("stop_instance", "website").targets(&other));
     other.template = "website".into();
     assert!(operation("stop_template", "website").targets(&other));
+}
+
+#[test]
+fn successful_deletion_with_close_failure_shows_a_warning_once() {
+    let mut op = operation("delete_instance", "review");
+    let mut deletion = Deletion::new(op.clone()).unwrap();
+    op.state = OperationState::Succeeded;
+    op.warnings
+        .push("Close command for review failed; continuing deletion".into());
+    let mut notifications = Vec::new();
+    for _ in 0..2 {
+        deletion.project(&mut snapshot(), |_| Ok(op.clone()), &mut notifications);
+    }
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].kind(), tuicore::NotificationKind::Warning);
+    assert_eq!(notifications[0].title(), "Instance deleted");
+    assert!(
+        notifications[0]
+            .body()
+            .contains("Close command for review failed")
+    );
 }
 
 #[test]

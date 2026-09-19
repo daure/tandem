@@ -16,19 +16,34 @@ use super::AppService;
 
 const BRANCH_INSTANCES_SETTING: &str = "instances.branch";
 const OPEN_COMMAND_SETTING: &str = "instances.open_command";
-type OpenCommandReply = oneshot::Sender<Result<String, String>>;
+type CommandReply = oneshot::Sender<Result<String, String>>;
+
+#[derive(Clone, Copy)]
+pub(super) enum WorkspaceCommand {
+    Open,
+    Close,
+}
+
+impl WorkspaceCommand {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Open => OPEN_COMMAND_SETTING,
+            Self::Close => "instances.close_command",
+        }
+    }
+}
 
 pub(super) struct Settings {
     branch_instances: AtomicBool,
-    open_command: Arc<RwLock<String>>,
+    workspace_commands: Arc<[RwLock<String>; 2]>,
     startup_history: Arc<RwLock<BTreeMap<String, Vec<u64>>>>,
     commands: mpsc::Sender<SettingsRequest>,
 }
 
 enum SettingsRequest {
     SetBranchInstances(bool),
-    SetOpenCommand(String, OpenCommandReply),
-    ReadOpenCommand(Option<OpenCommandReply>),
+    SetCommand(WorkspaceCommand, String, CommandReply),
+    ReadCommand(WorkspaceCommand, CommandReply),
     RecordStartup {
         template: String,
         duration_milliseconds: u64,
@@ -50,20 +65,28 @@ impl Settings {
             )
             .optional()?
             .is_none_or(|value| value == "true");
-        let open_command = Arc::new(RwLock::new(read_open_command(&connection)?));
+        let workspace_commands = Arc::new([
+            RwLock::new(read_command(&connection, WorkspaceCommand::Open)?),
+            RwLock::new(read_command(&connection, WorkspaceCommand::Close)?),
+        ]);
         let startup_history = Arc::new(RwLock::new(read_startup_history(&connection)?));
-        let cached_command = Arc::clone(&open_command);
+        let cached_commands = Arc::clone(&workspace_commands);
         let cached_startup_history = Arc::clone(&startup_history);
         let (commands, receiver) = mpsc::channel();
         thread::Builder::new()
             .name("tandem-settings".into())
             .spawn(move || {
-                persist_settings(connection, receiver, cached_command, cached_startup_history)
+                persist_settings(
+                    connection,
+                    receiver,
+                    cached_commands,
+                    cached_startup_history,
+                )
             })
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         Ok(Self {
             branch_instances: AtomicBool::new(branch_instances),
-            open_command,
+            workspace_commands,
             startup_history,
             commands,
         })
@@ -81,46 +104,60 @@ impl Settings {
         Ok(())
     }
 
-    fn open_command(&self) -> String {
-        self.open_command
+    fn command(&self, kind: WorkspaceCommand) -> String {
+        self.workspace_commands[kind as usize]
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
     }
 
-    fn set_open_command(
+    fn set_command(
         &self,
+        kind: WorkspaceCommand,
         command: String,
     ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
         if command.contains('\0') {
-            return Err("open command must not contain NUL bytes".into());
+            return Err("workspace command must not contain NUL bytes".into());
         }
         let (sender, receiver) = oneshot::channel();
         self.commands
-            .send(SettingsRequest::SetOpenCommand(command, sender))
+            .send(SettingsRequest::SetCommand(kind, command, sender))
             .map_err(|_| "settings worker stopped".to_owned())?;
         Ok(receiver)
     }
 
     pub(super) async fn read_open_command(&self) -> Result<String, String> {
+        self.read_command(WorkspaceCommand::Open).await
+    }
+
+    async fn read_command(&self, kind: WorkspaceCommand) -> Result<String, String> {
         let (sender, receiver) = oneshot::channel();
         self.commands
-            .send(SettingsRequest::ReadOpenCommand(Some(sender)))
+            .send(SettingsRequest::ReadCommand(kind, sender))
             .map_err(|_| "settings worker stopped".to_owned())?;
         receiver
             .await
             .map_err(|_| "settings worker stopped".to_owned())?
     }
 
-    pub(super) fn refresh_open_command(&self) -> Result<(), String> {
+    pub(super) fn read_close_command(&self) -> Result<String, String> {
+        self.read_command_blocking(WorkspaceCommand::Close)
+    }
+
+    pub(super) fn refresh_commands(&self) -> Result<(), String> {
+        self.read_command_blocking(WorkspaceCommand::Open)?;
+        self.read_close_command()?;
+        Ok(())
+    }
+
+    fn read_command_blocking(&self, kind: WorkspaceCommand) -> Result<String, String> {
         let (sender, receiver) = oneshot::channel();
         self.commands
-            .send(SettingsRequest::ReadOpenCommand(Some(sender)))
+            .send(SettingsRequest::ReadCommand(kind, sender))
             .map_err(|_| "settings worker stopped".to_owned())?;
         receiver
             .blocking_recv()
-            .map_err(|_| "settings worker stopped".to_owned())??;
-        Ok(())
+            .map_err(|_| "settings worker stopped".to_owned())?
     }
 
     pub(super) fn startup_averages(&self) -> BTreeMap<String, u64> {
@@ -160,11 +197,14 @@ impl Settings {
     }
 }
 
-fn read_open_command(connection: &Connection) -> Result<String, rusqlite::Error> {
+fn read_command(
+    connection: &Connection,
+    kind: WorkspaceCommand,
+) -> Result<String, rusqlite::Error> {
     connection
         .query_row(
             "SELECT value FROM app_settings WHERE key = ?1",
-            [OPEN_COMMAND_SETTING],
+            [kind.key()],
             |row| row.get(0),
         )
         .optional()
@@ -194,7 +234,7 @@ fn read_startup_history(
 fn persist_settings(
     connection: Connection,
     receiver: mpsc::Receiver<SettingsRequest>,
-    open_command: Arc<RwLock<String>>,
+    workspace_commands: Arc<[RwLock<String>; 2]>,
     startup_history: Arc<RwLock<BTreeMap<String, Vec<u64>>>>,
 ) {
     for command in receiver {
@@ -207,15 +247,15 @@ fn persist_settings(
                     crate::diagnostics::record_error("could not persist settings", &error);
                 }
             }
-            SettingsRequest::SetOpenCommand(value, reply) => {
+            SettingsRequest::SetCommand(kind, value, reply) => {
                 let result = connection.execute(
                     "INSERT INTO app_settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    params![OPEN_COMMAND_SETTING, value],
+                    params![kind.key(), value],
                 ).map(|_| value);
-                finish_open_command(result, &open_command, Some(reply));
+                finish_command(result, &workspace_commands[kind as usize], reply);
             }
-            SettingsRequest::ReadOpenCommand(reply) => {
-                finish_open_command(read_open_command(&connection), &open_command, reply);
+            SettingsRequest::ReadCommand(kind, reply) => {
+                finish_command(read_command(&connection, kind), &workspace_commands[kind as usize], reply);
             }
             SettingsRequest::RecordStartup {
                 template,
@@ -263,18 +303,16 @@ fn record_startup(
     Ok(())
 }
 
-fn finish_open_command(
+fn finish_command(
     result: Result<String, rusqlite::Error>,
     cache: &RwLock<String>,
-    reply: Option<OpenCommandReply>,
+    reply: CommandReply,
 ) {
     match &result {
         Ok(value) => *cache.write().unwrap_or_else(|error| error.into_inner()) = value.clone(),
-        Err(error) => crate::diagnostics::record_error("open command settings failed", error),
+        Err(error) => crate::diagnostics::record_error("workspace command settings failed", error),
     }
-    if let Some(reply) = reply {
-        let _ = reply.send(result.map_err(|error| error.to_string()));
-    }
+    let _ = reply.send(result.map_err(|error| error.to_string()));
 }
 
 impl AppService {
@@ -295,14 +333,53 @@ impl AppService {
     }
 
     pub(crate) fn open_command(&self) -> String {
-        self.settings.open_command()
+        self.settings.command(WorkspaceCommand::Open)
     }
 
     pub(crate) fn set_open_command(
         &self,
         command: String,
     ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
-        let saved = self.settings.set_open_command(command)?;
+        self.set_workspace_command(WorkspaceCommand::Open, command)
+    }
+
+    pub(crate) async fn configure_close_command(
+        &self,
+        command: String,
+        confirmed: bool,
+    ) -> Result<String, String> {
+        if !confirmed {
+            return Err(
+                "confirmation_required: the close command executes with local host privileges"
+                    .into(),
+            );
+        }
+        self.set_close_command(command)?
+            .await
+            .map_err(|_| "settings worker stopped".to_owned())?
+    }
+
+    pub(crate) fn close_command(&self) -> String {
+        self.settings.command(WorkspaceCommand::Close)
+    }
+
+    pub(crate) fn set_close_command(
+        &self,
+        command: String,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
+        self.set_workspace_command(WorkspaceCommand::Close, command)
+    }
+
+    pub(crate) async fn get_close_command(&self) -> Result<String, String> {
+        self.settings.read_command(WorkspaceCommand::Close).await
+    }
+
+    fn set_workspace_command(
+        &self,
+        kind: WorkspaceCommand,
+        command: String,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
+        let saved = self.settings.set_command(kind, command)?;
         let notifier = self.refresh.notifier.clone();
         let (sender, receiver) = oneshot::channel();
         self.runtime.spawn(async move {

@@ -63,9 +63,13 @@ A template is a shared Compose recipe; an instance has its own name and workspac
   scoped Compose commands and gateway URLs. Inspect containers for missing mappings and runtime state
   for current health. The base template at `workspace_agents_template` affects future generation;
   bundled updates replace it after backing up local edits.
-- Workspace open commands are shared within a Tandem home and execute through host `sh -c` in the
+- Workspace open and close commands are shared within a Tandem home and execute through host `sh -c` in the
   workspace. Configure and run only trusted commands with approval; quote `"$TANDEM_WORKSPACE"`
   and `"$TANDEM_INSTANCE"` when using them.
+  MCP deletion and purges run the saved close command before removing each existing workspace, after
+  Docker cleanup; CLI `delete-instance` opts in with `--close-command` or `-cc`, including headless runs.
+  Empty disables it; failures and ten-second timeouts produce operation warnings while
+  deletion continues within its cleanup deadline. Use repeat-safe commands for deletion retries.
 - Run trusted templates with approval: repository provisioning uses host Git and credentials;
   Docker execution grants local privileges.
   Keep environments local; gateway routes share a browser origin.

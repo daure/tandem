@@ -119,7 +119,7 @@ impl RefreshWorker {
                         environments.refresh_templates();
                     }
                     if targets[2]
-                        && let Err(error) = settings.refresh_open_command()
+                        && let Err(error) = settings.refresh_commands()
                     {
                         errors.push(format!("Settings: {error}"));
                     }

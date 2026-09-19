@@ -101,13 +101,19 @@ pub(super) fn name_entry(
     )
 }
 
-pub(super) fn settings(branch_instances: bool, open_command: &str) -> Modal {
+pub(super) fn settings(branch_instances: bool, open_command: &str, close_command: &str) -> Modal {
     let mut input = TextInput::new()
         .placeholder("Empty: open workspace folder")
         .on_change(Msg::OpenCommandChanged);
     input.set_value(open_command);
-    input.set_insert_mode(true);
+    input.set_insert_mode(false);
     input.move_cursor_to_end();
+    let mut close_input = TextInput::new()
+        .placeholder("Empty: no command before workspace deletion")
+        .on_change(Msg::CloseCommandChanged);
+    close_input.set_value(close_command);
+    close_input.set_insert_mode(false);
+    close_input.move_cursor_to_end();
     Box::new(
         Dialog::new()
             .top_left("Settings")
@@ -128,6 +134,11 @@ pub(super) fn settings(branch_instances: bool, open_command: &str) -> Modal {
                     .child(
                         "open-command",
                         FormField::new("Open command", input),
+                        FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
+                    )
+                    .child(
+                        "close-command",
+                        FormField::new("Close command", close_input),
                         FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
                     ),
             ),

@@ -53,6 +53,7 @@ pub(crate) enum Msg {
     NameChanged(String),
     OpenSettings,
     OpenCommandChanged(String),
+    CloseCommandChanged(String),
     NewTemplate,
     Refresh,
     StopAll,
@@ -254,6 +255,10 @@ impl App {
                     }
                 }
             }
+            Msg::CloseCommandChanged(command) => match self.service.set_close_command(command) {
+                Ok(reply) => self.settings_save = Some(reply),
+                Err(error) => ctx.notify(Notification::error("Cannot save close command", error)),
+            },
             Msg::NewTemplate => self.action(2, ctx),
             Msg::Refresh => self.action(4, ctx),
             Msg::StopAll => self.confirm_stop_all(ctx),
@@ -467,7 +472,11 @@ impl App {
         self.settings_save = None;
         self.open_command = self.service.open_command();
         self.open(
-            dialogs::settings(self.service.branch_instances(), &self.open_command),
+            dialogs::settings(
+                self.service.branch_instances(),
+                &self.open_command,
+                &self.service.close_command(),
+            ),
             ctx,
         );
     }
@@ -847,7 +856,7 @@ impl TuiNode<Msg> for App {
         if let Some(reply) = &mut self.settings_save {
             let message = match reply.try_recv() {
                 Ok(Ok(_)) => None,
-                Ok(Err(error)) => Some(format!("Cannot save open command: {error}")),
+                Ok(Err(error)) => Some(format!("Cannot save workspace command: {error}")),
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                     Some("Settings worker stopped".to_owned())
                 }

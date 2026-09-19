@@ -1,5 +1,6 @@
 use super::super::AppService;
 
+mod close_command;
 mod instance_batch;
 mod open_command;
 

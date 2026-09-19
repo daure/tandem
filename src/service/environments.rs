@@ -180,15 +180,29 @@ impl AppService {
             .map(|operation| CreateInstanceOutcome::Started(Box::new(operation)))
     }
 
-    pub(crate) fn delete_instance(&self, name: &str) -> Result<(), String> {
-        let operation = self.submit_operation("delete_instance", name, None, 60, true)?;
+    pub(crate) fn delete_instance(
+        &self,
+        name: &str,
+        close_command: bool,
+    ) -> Result<Vec<String>, String> {
+        let operation = self.environments.begin("delete_instance", name, None)?;
+        let operation = self.schedule_operation_with_close_command(
+            operation,
+            60,
+            Startup::default(),
+            close_command,
+        );
         let operation = self.runtime.block_on(self.wait_operation(&operation.id))?;
         if operation.state != OperationState::Succeeded {
-            return Err(operation
+            let mut error = operation
                 .error
-                .unwrap_or_else(|| "instance deletion failed".into()));
+                .unwrap_or_else(|| "instance deletion failed".into());
+            for warning in operation.warnings {
+                error.push_str(&format!("\nWarning: {warning}"));
+            }
+            return Err(error);
         }
-        Ok(())
+        Ok(operation.warnings)
     }
 
     #[cfg(test)]
@@ -307,7 +321,17 @@ impl AppService {
         &self,
         operation: Operation,
         timeout: u64,
+        startup: Startup,
+    ) -> Operation {
+        self.schedule_operation_with_close_command(operation, timeout, startup, true)
+    }
+
+    fn schedule_operation_with_close_command(
+        &self,
+        operation: Operation,
+        timeout: u64,
         mut startup: Startup,
+        run_close_command: bool,
     ) -> Operation {
         let action = operation.action.as_str();
         let operation_id = operation.id.clone();
@@ -322,7 +346,16 @@ impl AppService {
         let settings = Arc::clone(&self.settings);
         self.runtime.spawn_blocking(move || {
             notifier.publish(refresh);
-            environments.execute(worker_operation, timeout, startup);
+            let close_command = if run_close_command
+                && matches!(
+                    worker_operation.action.as_str(),
+                    "delete_instance" | "delete_template" | "remove_template"
+                ) {
+                settings.read_close_command()
+            } else {
+                Ok(String::new())
+            };
+            environments.execute(worker_operation, timeout, startup, close_command);
             if let Some(template) = startup_template
                 && let Ok(operation) = environments.operation(&operation_id)
                 && operation.state == OperationState::Succeeded

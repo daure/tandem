@@ -142,6 +142,11 @@ fn saved_open_command_runs_from_the_instance_shortcut_and_menu() {
         .unwrap();
     let route = EventRoute::new(input.path.clone());
     let mut input_ctx = EventCtx::new(settings);
+    app.dispatch_event(
+        &route,
+        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &mut input_ctx,
+    );
     app.dispatch_event(&route, &TuiEvent::Paste(command.into()), &mut input_ctx);
     let value = input_ctx
         .messages()
@@ -156,6 +161,45 @@ fn saved_open_command_runs_from_the_instance_shortcut_and_menu() {
     app.service.flush_settings();
     assert_eq!(app.service.open_command(), command);
     assert!(!workspace.path().join("opened").exists());
+    let close_command = "printf '%s' \"$TANDEM_INSTANCE\" > closed";
+    let close_input = layout
+        .focus_targets()
+        .iter()
+        .find(|target| {
+            target
+                .path
+                .keys()
+                .iter()
+                .any(|key| key.as_str() == "close-command")
+        })
+        .unwrap();
+    let mut close_ctx = EventCtx::new(settings);
+    app.dispatch_event(
+        &EventRoute::new(close_input.path.clone()),
+        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &mut close_ctx,
+    );
+    app.dispatch_event(
+        &EventRoute::new(close_input.path.clone()),
+        &TuiEvent::Paste(close_command.into()),
+        &mut close_ctx,
+    );
+    let value = close_ctx
+        .messages()
+        .iter()
+        .find_map(|message| match message {
+            Msg::CloseCommandChanged(value) => Some(value.clone()),
+            _ => None,
+        })
+        .expect("editing the close input emits its command");
+    assert_eq!(value, close_command);
+    app.handle_message(
+        Msg::CloseCommandChanged(value),
+        &mut EventCtx::new(settings),
+    );
+    app.service.flush_settings();
+    assert_eq!(app.service.close_command(), close_command);
+    assert!(!workspace.path().join("closed").exists());
     app.handle_message(Msg::Close, &mut EventCtx::new(settings));
     app.handle_message(Msg::OpenSettings, &mut EventCtx::new(settings));
     assert_eq!(app.open_command, command);
@@ -170,7 +214,9 @@ fn saved_open_command_runs_from_the_instance_shortcut_and_menu() {
         .unwrap();
     let text = rendered_lines(&terminal, area).join("\n");
     assert!(text.contains("Open command"), "{text}");
+    assert!(text.contains("Close command"), "{text}");
     assert!(text.contains(command), "{text}");
+    assert!(text.contains(close_command), "{text}");
 
     app.handle_message(Msg::Close, &mut EventCtx::new(settings));
     let mut snapshot = snapshot();

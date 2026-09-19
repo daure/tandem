@@ -52,9 +52,14 @@ impl Docker {
     }
 
     fn remove(&mut self, config: &Config, name: &str) -> Result<(), String> {
-        removal::template_with(config, name, 60, Arc::new(|_| {}), |command, _, _| {
-            self.run(command)
-        })
+        removal::template_with(
+            config,
+            name,
+            60,
+            Arc::new(|_| {}),
+            &Default::default(),
+            |command, _, _| self.run(command),
+        )
     }
 
     fn run(&mut self, command: Command) -> Result<String, String> {
@@ -179,7 +184,30 @@ fn template_deletion_cleans_running_stopped_paused_and_orphaned_instances() {
     .unwrap();
     fs::write(&template.manifest_file, "invalid manifest").unwrap();
 
-    docker.remove(&config, "website").unwrap();
+    let warnings = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let received = warnings.clone();
+    let close = crate::environments::close_command::CloseCommand::new(
+        Ok(
+            "test -f data || exit 12; printf '%s\\n' \"$TANDEM_INSTANCE\" >> ../closed; exit 23"
+                .into(),
+        ),
+        Arc::new(move |warning| received.lock().unwrap().push(warning)),
+    );
+    removal::template_with(
+        &config,
+        "website",
+        60,
+        Arc::new(|_| {}),
+        &close,
+        |command, _, _| docker.run(command),
+    )
+    .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(config.workspaces.join("closed")).unwrap(),
+        "failed-start\norphan\nrunning\nstopped\n"
+    );
+    assert_eq!(warnings.lock().unwrap().len(), 4);
 
     assert!(!Path::new(&template.directory).exists());
     for name in ["running", "stopped", "orphan", "failed-start"] {

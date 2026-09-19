@@ -5,6 +5,7 @@ use crate::service::AppService;
 
 use super::{McpServer, StdioHandshakeBuffer};
 
+mod close_command;
 mod manifests;
 
 #[test]

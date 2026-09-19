@@ -261,7 +261,12 @@ pub(crate) fn stop(config: &Config, name: &str, progress: Progress) -> Result<()
     activity.finish(result)
 }
 
-pub(crate) fn delete(config: &Config, name: &str, progress: Progress) -> Result<(), String> {
+pub(super) fn delete(
+    config: &Config,
+    name: &str,
+    progress: Progress,
+    close_command: &super::close_command::CloseCommand,
+) -> Result<(), String> {
     validate_instance_name(name)?;
     let deadline = Instant::now() + Duration::from_secs(60);
     let _lock = gateway::lock(config, &format!("instance-{name}"))?;
@@ -275,7 +280,7 @@ pub(crate) fn delete(config: &Config, name: &str, progress: Progress) -> Result<
         run(command, remaining(deadline)?, Some(progress.clone()))?;
         remove_networks(config, name, deadline, progress.clone())?;
         remove_volumes(config, name, deadline, progress.clone())?;
-        remove_workspace(config, name, progress.clone())?;
+        remove_workspace(config, name, progress.clone(), close_command)?;
         remove_rendered_compose(config, &instance.template, name, progress)?;
         ownership::forget(config, &instance.template, name)?;
         Ok(())
@@ -303,17 +308,18 @@ pub(crate) fn stop_template(
     Ok(())
 }
 
-pub(crate) fn delete_template(
+pub(super) fn delete_template(
     config: &Config,
     template_name: &str,
     progress: Progress,
+    close_command: &super::close_command::CloseCommand,
 ) -> Result<(), String> {
     let instances = template_instances(config, template_name)?;
     if instances.is_empty() {
         return Err("template has no instances".into());
     }
     for instance in instances {
-        delete(config, &instance.name, progress.clone())?;
+        delete(config, &instance.name, progress.clone(), close_command)?;
     }
     Ok(())
 }
@@ -429,6 +435,7 @@ pub(super) fn remove_workspace(
     config: &Config,
     name: &str,
     progress: Progress,
+    close_command: &super::close_command::CloseCommand,
 ) -> Result<(), String> {
     validate_instance_name(name)?;
     let workspace = config.workspaces.join(name);
@@ -445,6 +452,7 @@ pub(super) fn remove_workspace(
     if workspace.parent() != Some(root.as_path()) {
         return Err("workspace escapes workspace root".into());
     }
+    close_command.run(name, &workspace, &progress);
     progress("Removing instance workspace".into());
     fs::remove_dir_all(workspace).map_err(|error| error.to_string())
 }

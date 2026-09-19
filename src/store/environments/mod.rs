@@ -220,6 +220,7 @@ pub(crate) struct Operation {
     pub service: Option<String>,
     pub state: OperationState,
     pub progress: Vec<String>,
+    pub warnings: Vec<String>,
     pub elapsed_seconds: u64,
     pub elapsed_milliseconds: u64,
     pub error: Option<String>,

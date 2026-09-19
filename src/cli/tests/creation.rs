@@ -11,6 +11,7 @@ use std::{
 
 use serde_json::json;
 
+mod deletion;
 mod existing;
 
 struct Fixture {
@@ -391,6 +392,13 @@ fn delete_instance_removes_owned_resources_and_workspace() {
     fs::create_dir_all(fixture.home.join("workspaces/review")).unwrap();
     fs::write(fixture.home.join("workspaces/review/keep"), "local work").unwrap();
     fs::write(fixture.home.join("started"), "").unwrap();
+    rusqlite::Connection::open(fixture.home.join("settings.sqlite3"))
+        .unwrap()
+        .execute(
+            "INSERT INTO app_settings(key, value) VALUES ('instances.close_command', ?1)",
+            ["touch \"$TANDEM_HOME/closed\"; exit 23"],
+        )
+        .unwrap();
 
     let output = fixture.run(&["delete-instance", "review"]);
 
@@ -401,6 +409,8 @@ fn delete_instance_removes_owned_resources_and_workspace() {
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("Instance review deleted"));
     assert!(!fixture.home.join("workspaces/review").exists());
+    assert!(!fixture.home.join("closed").exists());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Close command"));
     assert!(
         fs::read_to_string(fixture.home.join("docker-calls"))
             .unwrap()
@@ -410,33 +420,50 @@ fn delete_instance_removes_owned_resources_and_workspace() {
 
 #[test]
 fn headless_delete_returns_before_deletion_finishes() {
-    let fixture = Fixture::new();
-    fs::create_dir_all(fixture.home.join("workspaces/review")).unwrap();
-    fs::write(fixture.home.join("started"), "").unwrap();
+    for close_command in [false, true] {
+        let fixture = Fixture::new();
+        fs::create_dir_all(fixture.home.join("workspaces/review")).unwrap();
+        fs::write(fixture.home.join("started"), "").unwrap();
+        rusqlite::Connection::open(fixture.home.join("settings.sqlite3")).unwrap().execute(
+        "INSERT INTO app_settings(key, value) VALUES ('instances.close_command', ?1)",
+        ["test -d \"$TANDEM_WORKSPACE\" && printf '%s' \"$TANDEM_INSTANCE\" > \"$TANDEM_HOME/closed\""],
+    ).unwrap();
 
-    let output = wait_output(
-        fixture
-            .command(&["delete-instance", "review", "--headless"])
-            .env("BLOCK_DELETE", "1")
-            .spawn()
-            .unwrap(),
-    );
-
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("deletion started"));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !fixture.home.join("deleting").exists() {
-        assert!(Instant::now() < deadline, "headless deletion did not start");
-        thread::sleep(Duration::from_millis(20));
-    }
-    assert!(fixture.home.join("workspaces/review").exists());
-    fs::write(fixture.home.join("release-delete"), "").unwrap();
-    while fixture.home.join("workspaces/review").exists() {
-        assert!(
-            Instant::now() < deadline,
-            "headless deletion did not finish"
+        let mut arguments = vec!["delete-instance", "review", "--headless"];
+        if close_command {
+            arguments.push("-cc");
+        }
+        let output = wait_output(
+            fixture
+                .command(&arguments)
+                .env("BLOCK_DELETE", "1")
+                .spawn()
+                .unwrap(),
         );
-        thread::sleep(Duration::from_millis(20));
+
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("deletion started"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !fixture.home.join("deleting").exists() {
+            assert!(Instant::now() < deadline, "headless deletion did not start");
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(fixture.home.join("workspaces/review").exists());
+        fs::write(fixture.home.join("release-delete"), "").unwrap();
+        while fixture.home.join("workspaces/review").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "headless deletion did not finish"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(fixture.home.join("closed").exists(), close_command);
+        if close_command {
+            assert_eq!(
+                fs::read_to_string(fixture.home.join("closed")).unwrap(),
+                "review"
+            );
+        }
     }
 }
 

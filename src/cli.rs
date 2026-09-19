@@ -43,6 +43,11 @@ enum Commands {
             help = "Launch deletion in a detached process and return immediately"
         )]
         headless: bool,
+        #[arg(
+            long,
+            help = "Run the saved close command before removing the workspace (alias: -cc)"
+        )]
+        close_command: bool,
     },
     #[command(about = "Run protocol-only MCP server over stdin/stdout")]
     Mcp,
@@ -107,26 +112,40 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
             Ok(())
         }
-        Some(Commands::DeleteInstance { name, headless, .. }) if headless => {
-            spawn_headless_delete(&name)?;
+        Some(Commands::DeleteInstance {
+            name,
+            headless,
+            close_command,
+        }) if headless => {
+            spawn_headless_delete(&name, close_command)?;
             println!("Instance {name} deletion started");
             Ok(())
         }
-        Some(Commands::DeleteInstance { name, .. }) => {
+        Some(Commands::DeleteInstance {
+            name,
+            close_command,
+            ..
+        }) => {
             let service = crate::service::AppService::initialize()?;
             eprintln!("Deleting {name} and its data...");
-            service.delete_instance(&name)?;
+            for warning in service.delete_instance(&name, close_command)? {
+                eprintln!("Warning: {warning}");
+            }
             println!("Instance {name} deleted");
             Ok(())
         }
     }
 }
 
-fn spawn_headless_delete(name: &str) -> Result<(), String> {
+fn spawn_headless_delete(name: &str, close_command: bool) -> Result<(), String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("cannot locate Tandem executable: {error}"))?;
-    Command::new(executable)
-        .args(["delete-instance", name])
+    let mut command = Command::new(executable);
+    command.args(["delete-instance", name]);
+    if close_command {
+        command.arg("--close-command");
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -137,9 +156,11 @@ fn spawn_headless_delete(name: &str) -> Result<(), String> {
 
 fn normalize_arguments(arguments: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
     let mut arguments: Vec<_> = arguments.into_iter().collect();
-    if arguments
-        .get(1)
-        .is_some_and(|argument| argument == "new-instance")
+    let alias = match arguments.get(1).and_then(|argument| argument.to_str()) {
+        Some("new-instance") => ("-oc", "--open-command"),
+        Some("delete-instance") => ("-cc", "--close-command"),
+        _ => return arguments,
+    };
     {
         // Clap short options are single characters; preserve values and the `--` boundary.
         let mut template_value = false;
@@ -148,10 +169,10 @@ fn normalize_arguments(arguments: impl IntoIterator<Item = OsString>) -> Vec<OsS
                 template_value = false;
             } else if argument == "--" {
                 break;
-            } else if argument == "-t" || argument == "--template" {
+            } else if alias.0 == "-oc" && (argument == "-t" || argument == "--template") {
                 template_value = true;
-            } else if argument == "-oc" {
-                *argument = "--open-command".into();
+            } else if argument == alias.0 {
+                *argument = alias.1.into();
             }
         }
     }

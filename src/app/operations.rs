@@ -37,12 +37,21 @@ impl Deletion {
                         "remove_template" => "Template deleted",
                         _ => "Instances purged",
                     };
-                    notifications.push(Notification::success(title, &operation.name));
+                    notifications.push(if operation.warnings.is_empty() {
+                        Notification::success(title, &operation.name)
+                    } else {
+                        Notification::warning(title, operation.warnings.join("\n"))
+                    });
                 }
                 result => {
                     let error = match result {
                         Ok(operation) => {
-                            operation.error.unwrap_or_else(|| "Operation failed".into())
+                            let mut error =
+                                operation.error.unwrap_or_else(|| "Operation failed".into());
+                            for warning in operation.warnings {
+                                error.push_str(&format!("\n{warning}"));
+                            }
+                            error
                         }
                         Err(error) => error,
                     };

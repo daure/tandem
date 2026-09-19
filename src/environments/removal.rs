@@ -22,13 +22,14 @@ struct InstancePlan {
     volumes: Vec<String>,
 }
 
-pub(crate) fn template(
+pub(super) fn template(
     config: &Config,
     name: &str,
     timeout: u64,
     progress: Progress,
+    close_command: &super::close_command::CloseCommand,
 ) -> Result<(), String> {
-    template_with(config, name, timeout, progress, run)
+    template_with(config, name, timeout, progress, close_command, run)
 }
 
 pub(super) fn template_with(
@@ -36,6 +37,7 @@ pub(super) fn template_with(
     name: &str,
     timeout: u64,
     progress: Progress,
+    close_command: &super::close_command::CloseCommand,
     execute: impl FnMut(Command, Duration, Option<Progress>) -> Result<String, String>,
 ) -> Result<(), String> {
     crate::store::environments::validate_name(name)?;
@@ -45,6 +47,7 @@ pub(super) fn template_with(
         config,
         deadline: Instant::now() + Duration::from_secs(timeout),
         progress,
+        close_command,
         execute,
     };
     let inventory = runtime::inspect_with(config, remover.deadline, &mut remover.execute)?;
@@ -131,6 +134,7 @@ struct Remover<'a, F> {
     config: &'a Config,
     deadline: Instant,
     progress: Progress,
+    close_command: &'a super::close_command::CloseCommand,
     execute: F,
 }
 
@@ -247,7 +251,12 @@ impl<F: FnMut(Command, Duration, Option<Progress>) -> Result<String, String>> Re
                 ));
             }
         }
-        lifecycle::remove_workspace(self.config, &plan.name, self.progress.clone())
+        lifecycle::remove_workspace(
+            self.config,
+            &plan.name,
+            self.progress.clone(),
+            self.close_command,
+        )
     }
 }
 

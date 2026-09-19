@@ -83,7 +83,8 @@ tandem new-instance review --template website
 tandem new-instance review -t website --open-command
 tandem new-instance review -t website -oc
 tandem delete-instance review
-tandem delete-instance review --headless
+tandem delete-instance review --close-command
+tandem delete-instance review -cc --headless
 ```
 
 For a new instance, the template must exist. Invoking this command authorizes host Git provisioning
@@ -111,8 +112,11 @@ observed while the CLI runs are logged.
 
 `delete-instance` permanently removes the named instance's owned containers, workspace, private volumes,
 networks, rendered Compose file, and ownership receipt. It leaves templates, shared images, and the gateway intact.
+`--close-command` (also `-cc`) opts into running the saved close command before workspace removal;
+without it, CLI deletion skips that command. An empty saved command does nothing.
 `--headless` (also `-h`) launches deletion in a detached Tandem process and returns after that process starts.
-It cannot report the deletion result; inspect diagnostic logs or runtime state for failures.
+It preserves the close-command flag but cannot report the deletion result; inspect diagnostic logs or
+runtime state for failures.
 
 ### Workspace agent context
 
@@ -310,7 +314,7 @@ and `TANDEM_KEY_OPEN_COMMAND` also accepts `ctrl+;`. Shared navigation, focus, a
 tuicore configuration. The TUI displays resolved key labels. Ctrl+; requires a terminal that reports
 the modifier; the Actions menu or a letter override works when the terminal cannot send it.
 
-### Workspace open command
+### Workspace commands
 
 In Settings, edits to **Open command** save immediately. Press `Ctrl+;` on an instance or choose
 **Run open command** from its `.` Actions menu to execute it. An empty or whitespace-only setting
@@ -332,6 +336,22 @@ with `confirmed=true`. It accepts stopped instances whose workspace remains avai
 Commands inherit the TUI process's environment, including terminal-multiplexer session variables,
 but have disconnected stdin/stdout/stderr. Use noninteractive launcher commands; failures are
 recorded in Tandem's diagnostic logs. Commands run asynchronously and do not block keyboard input.
+
+**Close command** in Settings saves immediately. TUI and MCP deletion run it automatically before
+removing an existing instance workspace, after its Docker resources are removed; CLI deletion requires
+`--close-command` or `-cc`. It uses host `sh -c`, the
+workspace as its working directory, and the same `TANDEM_INSTANCE` and `TANDEM_WORKSPACE` variables.
+An empty or whitespace-only command disables the hook. Individual deletion, Purge all, template
+purges, and template deletion use it; stop and restart preserve workspaces and do not run it.
+The command has a ten-second limit. Launch failures, nonzero exits, and timeouts produce warnings
+while deletion continues. Warnings appear in TUI completion notifications, CLI stderr, MCP operation
+`warnings`, and diagnostic logs. Cleanup remains subject to its operation deadline.
+Missing workspaces skip the hook; unsafe workspace paths fail validation before command execution.
+Use repeat-safe commands because a failed filesystem removal can cause the hook to run again on retry.
+
+MCP agents read and save this shared setting through `get_close_command` and `set_close_command`;
+saving requires approval with `confirmed=true` and does not execute it. Deletion reads the persisted
+value, including changes from another process. Configure only trusted host commands.
 
 ## Safety and lifecycle
 
