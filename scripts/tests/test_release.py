@@ -128,6 +128,7 @@ class ReleaseGitTests(unittest.TestCase):
                         ("cargo", "update", "--workspace"),
                         ("cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings"),
                         ("cargo", "test", "--locked"),
+                        ("cargo", "build", "--locked"),
                         ("cargo", "update", "--workspace"),
                     ],
                 )
@@ -143,6 +144,7 @@ class ReleaseGitTests(unittest.TestCase):
                 for command in (
                     ("cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings"),
                     ("cargo", "test", "--locked"),
+                    ("cargo", "build", "--locked"),
                 ):
                     self.assertEqual(
                         next(kwargs for call, kwargs in calls if call == command),
@@ -154,6 +156,11 @@ class ReleaseGitTests(unittest.TestCase):
                          {"env": {"PYTHONDONTWRITEBYTECODE": "1"}}),
                         calls,
                     )
+                self.assertIn(
+                    (("python3", "-W", "error", "-m", "unittest", "discover", "-s", "src/mcp/tests"),
+                     {"env": {"PYTHONDONTWRITEBYTECODE": "1"}}),
+                    calls,
+                )
                 self.assertEqual(tomllib.loads((repo / "Cargo.toml").read_text())["dependencies"]["tuicore"], {"path": "../tuicore"})
                 packages = tomllib.loads((repo / "Cargo.lock").read_text())["package"]
                 self.assertIn({"name": "tuicore", "version": "2.0.0"}, packages)

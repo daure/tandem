@@ -69,6 +69,11 @@ def preflight():
         env=RELEASE_CHECK_ENV,
     )
     run("cargo", "test", "--locked", env=RELEASE_CHECK_ENV)
+    run("cargo", "build", "--locked", env=RELEASE_CHECK_ENV)
+    run(
+        "python3", "-W", "error", "-m", "unittest", "discover", "-s", "src/mcp/tests",
+        env={"PYTHONDONTWRITEBYTECODE": "1"},
+    )
 
 
 def release(bump):

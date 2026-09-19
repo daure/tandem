@@ -66,6 +66,7 @@ class RuntimeTests(unittest.TestCase):
                     command = 'printf \'%s\' "$TANDEM_WORKSPACE" > "$TANDEM_HOME/unexpected"'
                     workspace = root / "workspaces" / "review"
                     workspace.mkdir()
+                    (workspace / "AGENTS.md").write_text("Workspace guidance\n")
                     rejected = writer.request("tools/call", {
                         "name": "set_open_command", "arguments": {"command": command},
                     })
