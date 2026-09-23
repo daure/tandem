@@ -197,7 +197,7 @@ fn instance_rows_sort_by_name_before_rendering() {
 }
 
 #[test]
-fn tree_secondary_lines_are_muted_and_align_with_the_row_icon() {
+fn tree_secondary_lines_use_semantic_colors_and_align_with_the_row_icon() {
     tuicore::init();
     for routed in [true, false] {
         let mut snapshot = snapshot();
@@ -232,10 +232,11 @@ fn tree_secondary_lines_are_muted_and_align_with_the_row_icon() {
         } else {
             "nginx:latest"
         };
-        for (row, detail) in
-            rows.iter()
-                .zip([" 1 · 󰜗 1m24s · 󰈸 12s", "(no description)", service_detail])
-        {
+        for (row, (detail, color)) in rows.iter().zip([
+            (" 1 · 󰜗 1m24s · 󰈸 12s", tuicore::theme().muted_fg()),
+            ("(no description)", tuicore::theme().subtle_fg()),
+            (service_detail, tuicore::theme().muted_fg()),
+        ]) {
             let y = lines
                 .iter()
                 .position(|line| line.contains(row.label.lines().next().unwrap()))
@@ -252,7 +253,7 @@ fn tree_secondary_lines_are_muted_and_align_with_the_row_icon() {
                     .cell((x as u16, y as u16 + 1))
                     .unwrap()
                     .fg,
-                tuicore::theme().muted_fg()
+                color
             );
         }
     }
