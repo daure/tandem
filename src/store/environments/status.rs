@@ -604,18 +604,17 @@ impl Instance {
             .max_by_key(|(_, severity)| matches!(severity, Severity::Error));
         if let Some((issue, severity)) = issue {
             result = result.detail(issue, severity);
-        } else if status == Status::Degraded {
-            if let Some(service) = self
+        } else if status == Status::Degraded
+            && let Some(service) = self
                 .services
                 .iter()
                 .find(|service| !service.ready() && service.status_summary().busy)
                 .or_else(|| self.services.iter().find(|service| !service.ready()))
-            {
-                result = result.detail(
-                    format!("{}: {}", service.name, service.status_summary().label),
-                    Severity::Warning,
-                );
-            }
+        {
+            result = result.detail(
+                format!("{}: {}", service.name, service.status_summary().label),
+                Severity::Warning,
+            );
         }
         if let Some(issue) = &self.runtime.issue {
             let detail = result
