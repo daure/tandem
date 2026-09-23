@@ -19,6 +19,7 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
     tuicore::init();
     let mut app = root(AppService::for_tests());
     let mut inventory = snapshot();
+    inventory.available_memory_bytes = Some(8 * 1073741824);
     inventory.instances[0].services[0].usage = Some(crate::store::environments::ResourceUsage {
         memory_bytes: 500 * 1048576,
         cpu_basis_points: Some(25_000),
@@ -31,9 +32,9 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
     inventory.instances.push(second);
     app.update_snapshot(inventory.clone());
 
-    for width in [60, 130] {
+    for width in [80, 130] {
         let line = toolbar_line(&mut app, width);
-        assert!(line.contains("󰑹 1000 MiB  500%"), "{line}");
+        assert!(line.contains("1 GiB / 8 GiB · 500%"), "{line}");
         assert!(line.find("500%").unwrap() < line.find("󰑓").unwrap());
     }
 
@@ -53,7 +54,7 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
             &mut EventCtx::new(AnimationSettings::default()),
         );
     }
-    assert!(toolbar_line(&mut app, 130).contains("󰑹 1000 MiB  500%"));
+    assert!(toolbar_line(&mut app, 130).contains("1 GiB / 8 GiB · 500%"));
 
     inventory.instances.pop();
     app.update_snapshot(inventory);
@@ -62,15 +63,15 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
             .tick(std::time::Duration::ZERO, AnimationSettings::default())
             .layout
     );
-    assert!(toolbar_line(&mut app, 130).contains("󰑹 500 MiB  250%"));
+    assert!(toolbar_line(&mut app, 130).contains("500 MiB / 8 GiB · 250%"));
 }
 
 #[test]
-fn toolbar_totals_preserve_unknown_partial_and_paused_states() {
+fn toolbar_totals_show_unavailable_and_paused_states() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     app.update_snapshot(Default::default());
-    assert!(toolbar_line(&mut app, 130).contains("󰑹 —  —"));
+    assert!(toolbar_line(&mut app, 130).contains("— · —"));
 
     let mut inventory = snapshot();
     inventory.instances[0].services[0].usage = Some(crate::store::environments::ResourceUsage {
@@ -84,8 +85,9 @@ fn toolbar_totals_preserve_unknown_partial_and_paused_states() {
     inventory.instances.push(starting);
     app.update_snapshot(inventory.clone());
     let line = toolbar_line(&mut app, 130);
+    let spinner = tuicore::Spinner::new().glyph().to_owned();
     assert!(
-        line.contains("󰑹 20 MiB · partial  500% · partial"),
+        line.contains(&format!("20 MiB {spinner} · 500% {spinner}")),
         "{line}"
     );
     let narrow = toolbar_line(&mut app, 40);
@@ -95,13 +97,13 @@ fn toolbar_totals_preserve_unknown_partial_and_paused_states() {
     );
     assert!(
         !narrow.contains("MiB"),
-        "totals must not lose their qualifiers: {narrow}"
+        "unavailable totals should remain hidden when they do not fit: {narrow}"
     );
 
     inventory.instances.pop();
     inventory.instances[0].services[0].status = "paused".into();
     app.update_snapshot(inventory);
-    assert!(toolbar_line(&mut app, 130).contains("󰑹 20 MiB  — · paused"));
+    assert!(toolbar_line(&mut app, 130).contains("20 MiB · — · paused"));
 }
 
 #[test]

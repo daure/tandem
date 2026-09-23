@@ -76,6 +76,21 @@ fn instance_operations_only_block_their_target_instance() {
 }
 
 #[test]
+fn stop_shortcut_notifies_when_instance_startup_is_active() {
+    tuicore::init();
+    let service = AppService::for_tests();
+    service.queue_instance_for_tests("review", "website");
+    let mut app = root(service);
+    instances::set_highlighted(&app.instances, Some("instance:review".into()));
+
+    app.action(3, &mut EventCtx::new(AnimationSettings::default()));
+
+    assert_eq!(app.service.operations().len(), 1);
+    let notification = app.notifications.center().history().last().unwrap();
+    assert_eq!(notification.title(), "Operation in progress");
+}
+
+#[test]
 fn pending_container_operations_keep_notifications_silent() {
     tuicore::init();
     for action in [

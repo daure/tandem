@@ -186,11 +186,22 @@ fn open_aliases_launch_once_after_checkout_before_compose_startup() {
 }
 
 #[test]
-fn open_command_extra_is_available_to_the_saved_command() {
+fn open_command_parameters_are_available_to_the_saved_command() {
     let fixture = Fixture::new();
-    fixture.save_command("printf '%s' \"$TANDEM_EXTRA\" > \"$TANDEM_HOME/opened-extra\"");
+    fixture.save_command(
+        "printf '%s\n%s' \"$TANDEM_OPEN_PARAM\" \"$TANDEM_DESCRIPTION\" > \"$TANDEM_HOME/opened-parameters\"",
+    );
 
-    let output = fixture.run(&["new-instance", "review", "-t", "website", "-oc", "from CLI"]);
+    let output = fixture.run(&[
+        "new-instance",
+        "review",
+        "-t",
+        "website",
+        "-oc",
+        "from CLI",
+        "-d",
+        "Review environment",
+    ]);
 
     assert!(
         output.status.success(),
@@ -198,8 +209,8 @@ fn open_command_extra_is_available_to_the_saved_command() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        fs::read_to_string(fixture.home.join("opened-extra")).unwrap(),
-        "from CLI"
+        fs::read_to_string(fixture.home.join("opened-parameters")).unwrap(),
+        "from CLI\nReview environment"
     );
 }
 

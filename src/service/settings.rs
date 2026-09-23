@@ -13,10 +13,12 @@ use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::oneshot;
 
 use super::AppService;
+use crate::store::environments::StartupKind;
 
 const BRANCH_INSTANCES_SETTING: &str = "instances.branch";
 const OPEN_COMMAND_SETTING: &str = "instances.open_command";
 type CommandReply = oneshot::Sender<Result<String, String>>;
+type StartupHistory = BTreeMap<(String, StartupKind), Vec<u64>>;
 
 #[derive(Clone, Copy)]
 pub(super) enum WorkspaceCommand {
@@ -36,7 +38,7 @@ impl WorkspaceCommand {
 pub(super) struct Settings {
     branch_instances: AtomicBool,
     workspace_commands: Arc<[RwLock<String>; 2]>,
-    startup_history: Arc<RwLock<BTreeMap<String, Vec<u64>>>>,
+    startup_history: Arc<RwLock<StartupHistory>>,
     commands: mpsc::Sender<SettingsRequest>,
 }
 
@@ -46,6 +48,7 @@ enum SettingsRequest {
     ReadCommand(WorkspaceCommand, CommandReply),
     RecordStartup {
         template: String,
+        kind: StartupKind,
         duration_milliseconds: u64,
     },
     #[cfg(test)]
@@ -57,6 +60,9 @@ impl Settings {
         let connection = Connection::open(path)?;
         connection.execute_batch(include_str!("../../migrations/0001_app_settings.sql"))?;
         connection.execute_batch(include_str!("../../migrations/0002_instance_startups.sql"))?;
+        connection.execute_batch(include_str!(
+            "../../migrations/0003_hot_instance_startups.sql"
+        ))?;
         let branch_instances = connection
             .query_row(
                 "SELECT value FROM app_settings WHERE key = ?1",
@@ -160,14 +166,15 @@ impl Settings {
             .map_err(|_| "settings worker stopped".to_owned())?
     }
 
-    pub(super) fn startup_averages(&self) -> BTreeMap<String, u64> {
+    pub(super) fn startup_averages(&self, kind: StartupKind) -> BTreeMap<String, u64> {
         let history = self
             .startup_history
             .read()
             .unwrap_or_else(|error| error.into_inner());
         history
             .iter()
-            .map(|(template, durations)| {
+            .filter(|((_, stored_kind), _)| *stored_kind == kind)
+            .map(|((template, _), durations)| {
                 (
                     template.clone(),
                     durations.iter().sum::<u64>() / durations.len() as u64,
@@ -179,11 +186,13 @@ impl Settings {
     pub(super) fn record_startup(
         &self,
         template: String,
+        kind: StartupKind,
         duration_milliseconds: u64,
     ) -> Result<(), String> {
         self.commands
             .send(SettingsRequest::RecordStartup {
                 template,
+                kind,
                 duration_milliseconds,
             })
             .map_err(|_| "settings worker stopped".to_owned())
@@ -211,31 +220,40 @@ fn read_command(
         .map(Option::unwrap_or_default)
 }
 
-fn read_startup_history(
+fn read_startup_history(connection: &Connection) -> Result<StartupHistory, rusqlite::Error> {
+    let mut history = BTreeMap::new();
+    read_startup_table(connection, StartupKind::Cold, &mut history)?;
+    read_startup_table(connection, StartupKind::Hot, &mut history)?;
+    Ok(history)
+}
+
+fn read_startup_table(
     connection: &Connection,
-) -> Result<BTreeMap<String, Vec<u64>>, rusqlite::Error> {
-    let mut statement = connection.prepare(
-        "SELECT template, duration_milliseconds FROM instance_startups ORDER BY template, id DESC",
-    )?;
+    kind: StartupKind,
+    history: &mut StartupHistory,
+) -> Result<(), rusqlite::Error> {
+    let mut statement = connection.prepare(&format!(
+        "SELECT template, duration_milliseconds FROM {} ORDER BY template, id DESC",
+        startup_table(kind)
+    ))?;
     let rows = statement.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
     })?;
-    let mut history = BTreeMap::<String, Vec<u64>>::new();
     for row in rows {
         let (template, duration) = row?;
-        let durations = history.entry(template).or_default();
+        let durations = history.entry((template, kind)).or_default();
         if durations.len() < 5 {
             durations.push(duration);
         }
     }
-    Ok(history)
+    Ok(())
 }
 
 fn persist_settings(
     connection: Connection,
     receiver: mpsc::Receiver<SettingsRequest>,
     workspace_commands: Arc<[RwLock<String>; 2]>,
-    startup_history: Arc<RwLock<BTreeMap<String, Vec<u64>>>>,
+    startup_history: Arc<RwLock<StartupHistory>>,
 ) {
     for command in receiver {
         match command {
@@ -259,12 +277,14 @@ fn persist_settings(
             }
             SettingsRequest::RecordStartup {
                 template,
+                kind,
                 duration_milliseconds,
             } => {
                 if let Err(error) = record_startup(
                     &connection,
                     &startup_history,
                     template,
+                    kind,
                     duration_milliseconds,
                 ) {
                     crate::diagnostics::record_error("could not persist startup timing", &error);
@@ -280,27 +300,38 @@ fn persist_settings(
 
 fn record_startup(
     connection: &Connection,
-    cache: &RwLock<BTreeMap<String, Vec<u64>>>,
+    cache: &RwLock<StartupHistory>,
     template: String,
+    kind: StartupKind,
     duration_milliseconds: u64,
 ) -> Result<(), rusqlite::Error> {
+    let table = startup_table(kind);
     connection.execute(
-        "INSERT INTO instance_startups (template, duration_milliseconds) VALUES (?1, ?2)",
+        &format!("INSERT INTO {table} (template, duration_milliseconds) VALUES (?1, ?2)"),
         params![template, duration_milliseconds],
     )?;
     connection.execute(
-        "DELETE FROM instance_startups
+        &format!(
+            "DELETE FROM {table}
          WHERE template = ?1
            AND id NOT IN (
-             SELECT id FROM instance_startups WHERE template = ?1 ORDER BY id DESC LIMIT 5
-           )",
+             SELECT id FROM {table} WHERE template = ?1 ORDER BY id DESC LIMIT 5
+           )"
+        ),
         [&template],
     )?;
     let mut cache = cache.write().unwrap_or_else(|error| error.into_inner());
-    let durations = cache.entry(template).or_default();
+    let durations = cache.entry((template, kind)).or_default();
     durations.insert(0, duration_milliseconds);
     durations.truncate(5);
     Ok(())
+}
+
+fn startup_table(kind: StartupKind) -> &'static str {
+    match kind {
+        StartupKind::Cold => "instance_startups",
+        StartupKind::Hot => "hot_instance_startups",
+    }
 }
 
 fn finish_command(
@@ -446,14 +477,25 @@ mod tests {
         let path = directory.path().join("settings.sqlite3");
         let settings = Settings::open(path.clone()).unwrap();
         for duration in [1_000, 2_000, 3_000, 4_000, 5_000, 6_000] {
-            settings.record_startup("website".into(), duration).unwrap();
+            settings
+                .record_startup("website".into(), StartupKind::Cold, duration)
+                .unwrap();
         }
-        settings.record_startup("api".into(), 9_000).unwrap();
+        settings
+            .record_startup("api".into(), StartupKind::Cold, 9_000)
+            .unwrap();
+        settings
+            .record_startup("website".into(), StartupKind::Hot, 2_000)
+            .unwrap();
         settings.flush();
 
         assert_eq!(
-            settings.startup_averages(),
+            settings.startup_averages(StartupKind::Cold),
             [("website".into(), 4_000), ("api".into(), 9_000)].into()
+        );
+        assert_eq!(
+            settings.startup_averages(StartupKind::Hot),
+            [("website".into(), 2_000)].into()
         );
         let count = Connection::open(path)
             .unwrap()
@@ -472,19 +514,40 @@ mod tests {
         assert!(
             service
                 .environment_snapshot()
-                .startup_averages_milliseconds
+                .cold_startup_averages_milliseconds
                 .is_empty()
         );
         for duration in [80_000, 88_000] {
             service
                 .settings
-                .record_startup("website".into(), duration)
+                .record_startup("website".into(), StartupKind::Cold, duration)
                 .unwrap();
         }
+        service
+            .settings
+            .record_startup("website".into(), StartupKind::Hot, 12_000)
+            .unwrap();
         service.flush_settings();
+        let cold = service.queue_instance_for_tests("review", "website");
+        let snapshot = service.environment_snapshot();
         assert_eq!(
-            service.environment_snapshot().startup_averages_milliseconds["website"],
+            snapshot.cold_startup_averages_milliseconds["website"],
             84_000
+        );
+        assert_eq!(
+            snapshot.hot_startup_averages_milliseconds["website"],
+            12_000
+        );
+        assert_eq!(
+            snapshot.startup["review"].estimate_milliseconds,
+            Some(84_000)
+        );
+
+        service.complete_instance_for_tests(&cold.id, snapshot.instances[0].clone());
+        service.queue_instance_for_tests("review", "website");
+        assert_eq!(
+            service.environment_snapshot().startup["review"].estimate_milliseconds,
+            Some(12_000)
         );
     }
 }

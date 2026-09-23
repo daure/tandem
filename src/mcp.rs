@@ -56,7 +56,7 @@ struct UpdateTemplateManifestInput {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SetOpenCommandInput {
-    /// Trusted host shell command. Use "$TANDEM_INSTANCE" for the instance name and "$TANDEM_WORKSPACE" for its path; empty restores the folder opener.
+    /// Trusted host shell command. Use "$TANDEM_INSTANCE" for the instance name, "$TANDEM_WORKSPACE" for its path, and "$TANDEM_DESCRIPTION" for its description; empty restores the folder opener.
     command: String,
     /// Approval to configure host command execution when a user opens an instance.
     #[serde(default)]
@@ -294,7 +294,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Save a trusted workspace open command after user approval (confirmed=true). Saving does not execute it. On instance opening, runs via sh -c in the workspace with TANDEM_INSTANCE and TANDEM_WORKSPACE set; quote the variables. Empty restores the folder opener."
+        description = "Save a trusted workspace open command after user approval (confirmed=true). Saving does not execute it. On instance opening, runs via sh -c in the workspace with TANDEM_INSTANCE, TANDEM_WORKSPACE and TANDEM_DESCRIPTION set; quote the variables. CLI open parameters are exposed as TANDEM_OPEN_PARAM. Empty restores the folder opener."
     )]
     async fn set_open_command(
         &self,
@@ -308,7 +308,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Run the saved workspace open command for a named instance. Requires confirmed=true after user approval; runs through sh -c in the workspace with TANDEM_INSTANCE and TANDEM_WORKSPACE set. An empty saved command uses the system folder opener."
+        description = "Run the saved workspace open command for a named instance. Requires confirmed=true after user approval; runs through sh -c in the workspace with TANDEM_INSTANCE, TANDEM_WORKSPACE and TANDEM_DESCRIPTION set. An empty saved command uses the system folder opener."
     )]
     async fn run_open_command(
         &self,

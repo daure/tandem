@@ -14,7 +14,7 @@ fn workspace_template(config: &Config) -> Template {
 }
 
 fn ready_workspace(config: &Config, template: &Template, name: &str) {
-    journal::prepare(config, template, name).unwrap();
+    journal::prepare(config, template, name, None).unwrap();
     ownership::record(
         config,
         &template.name,
@@ -165,7 +165,7 @@ fn launch_kind_changes_and_forged_workspace_ownership_are_rejected() {
     )
     .unwrap();
     let compose = templates::get(&config, "local").unwrap();
-    assert!(journal::prepare(&config, &compose, "review").is_err());
+    assert!(journal::prepare(&config, &compose, "review", None).is_err());
     let record_path = config
         .home
         .join("runtime")

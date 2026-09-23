@@ -1,7 +1,7 @@
 use ratatui::widgets::Borders;
 use tuicore::{
     CrossSize, Dialog, DialogAction, Flex, FlexItem, FormField, KeySpec, Language, Paragraph,
-    SyntaxHighlighter, Tab, Tabs, TabsVariant, TextInput, Toggle,
+    SyntaxHighlighter, Tab, Tabs, TabsVariant, TextInput, TextareaInput, Toggle,
 };
 
 use super::{Modal, Msg, properties::Properties, rows::Row};
@@ -53,7 +53,7 @@ pub(super) fn details(row: &Row) -> Modal {
             ),
             None => Tab::new(
                 "Manifest",
-                Paragraph::new("No tandem.json specified; default template settings apply. Check Metadata for errors."),
+                Paragraph::new("No tandem.json specified; default template settings apply."),
             ),
         });
         if let Some(source) = &row.guidance_source {
@@ -100,6 +100,55 @@ pub(super) fn name_entry(
                 input,
                 FlexItem::fit_content().cross_size(CrossSize::Fixed(50)),
             )),
+    )
+}
+
+pub(super) fn instance_entry(
+    title: &str,
+    value: &str,
+    description: &str,
+    placeholder: &str,
+    allowed_chars: Option<&str>,
+) -> Modal {
+    let mut name = TextInput::new()
+        .placeholder(placeholder)
+        .panel(if allowed_chars.is_some() {
+            "Branch"
+        } else {
+            "Instance"
+        })
+        .on_change(Msg::NameChanged);
+    if let Some(allowed_chars) = allowed_chars {
+        name = name.allowed_chars(allowed_chars).max_len(40);
+    }
+    name.set_value(value);
+    name.set_insert_mode(true);
+    name.move_cursor_to_end();
+    let mut description_input = TextareaInput::new()
+        .placeholder("Description")
+        .panel("Description")
+        .min_rows(2)
+        .max_rows(2)
+        .on_change(Msg::DescriptionChanged);
+    description_input.set_value(description);
+    Box::new(
+        Dialog::new()
+            .top_left(title)
+            .on_close(|_| Msg::Close)
+            .actions([create_new(), cancel()])
+            .host(
+                Flex::column()
+                    .child(
+                        "name",
+                        name,
+                        FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
+                    )
+                    .child(
+                        "description",
+                        description_input,
+                        FlexItem::content().cross_size(CrossSize::Fixed(64)),
+                    ),
+            ),
     )
 }
 

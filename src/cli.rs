@@ -28,10 +28,12 @@ enum Commands {
         #[arg(
             long,
             num_args = 0..=1,
-            value_name = "EXTRA",
-            help = "Run the saved open command when workspace repositories are on disk, optionally setting TANDEM_EXTRA (alias: -oc)"
+            value_name = "OPEN_PARAM",
+            help = "Run the saved open command when workspace repositories are on disk, optionally setting TANDEM_OPEN_PARAM (alias: -oc)"
         )]
         open_command: Option<Option<String>>,
+        #[arg(short = 'd', long)]
+        description: Option<String>,
     },
     #[command(
         about = "Permanently delete an instance, its workspace, volumes, and networks",
@@ -94,15 +96,17 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             name,
             template,
             open_command,
+            description,
         }) => {
             let service = crate::service::AppService::initialize()?;
             eprintln!("Checking {name} for template {template}...");
-            let (instance, status) = match service.new_instance(&name, template, open_command)? {
-                crate::service::NewInstanceOutcome::Created(instance) => (instance, "ready"),
-                crate::service::NewInstanceOutcome::Existing(instance) => {
-                    (instance, "already exists; left unchanged")
-                }
-            };
+            let (instance, status) =
+                match service.new_instance(&name, template, open_command, description)? {
+                    crate::service::NewInstanceOutcome::Created(instance) => (instance, "ready"),
+                    crate::service::NewInstanceOutcome::Existing(instance) => {
+                        (instance, "already exists; left unchanged")
+                    }
+                };
             println!(
                 "Instance {} {status}\nWorkspace: {}",
                 instance.name, instance.workspace

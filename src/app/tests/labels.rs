@@ -1,37 +1,6 @@
 use super::*;
 use crate::app::instances::{self, Instances};
-use crate::store::environments::{Activity, Operation, OperationState, StartupTiming};
-
-#[test]
-fn workspace_labels_abbreviate_only_paths_inside_home() {
-    for (home, workspace, display) in [
-        (Some("/home/test"), "/home/test/dev/review", "~/dev/review"),
-        (Some("/home/test"), "/home/test", "~"),
-        (
-            Some("/home/test"),
-            "/home/testing/review",
-            "/home/testing/review",
-        ),
-        (Some("/home/test"), "/var/tmp/review", "/var/tmp/review"),
-        (None, "/home/test/dev/review", "/home/test/dev/review"),
-    ] {
-        let mut snapshot = snapshot();
-        snapshot.home_directory = home.map(str::to_owned);
-        snapshot.instances[0].workspace = workspace.into();
-        let tree = rows::from_snapshot(&snapshot);
-        assert_eq!(tree[1].label, format!("review · Running\n{display}"));
-        assert_eq!(tree[1].workspace.as_deref(), Some(workspace));
-        assert_eq!(
-            tree[1]
-                .details
-                .iter()
-                .find(|row| row.name == "Workspace")
-                .unwrap()
-                .value,
-            workspace
-        );
-    }
-}
+use crate::store::environments::{Activity, Operation, OperationState, StartupKind, StartupTiming};
 
 #[test]
 fn starting_instances_show_a_bounded_countdown_then_an_overrun() {
@@ -42,6 +11,7 @@ fn starting_instances_show_a_bounded_countdown_then_an_overrun() {
         StartupTiming {
             elapsed_milliseconds: 6_001,
             estimate_milliseconds: Some(18_000),
+            kind: StartupKind::Cold,
         },
     );
     assert_eq!(
@@ -50,20 +20,21 @@ fn starting_instances_show_a_bounded_countdown_then_an_overrun() {
             .lines()
             .next()
             .unwrap(),
-        "review · Creating · 12s"
+        "review · 󰜗 Creating 12s"
     );
     service.status = "boot".into();
     snapshot.instances[0].services.push(service);
     for (elapsed, expected) in [
-        (6_001, "Starting · 12s"),
-        (18_000, "Starting · taking longer than usual"),
-        (31_001, "Starting · 14s over estimate"),
+        (6_001, "󰜗 Starting 12s"),
+        (18_000, "󰜗 Starting taking longer than usual"),
+        (31_001, "󰜗 Starting 14s over estimate"),
     ] {
         snapshot.startup.insert(
             "review".into(),
             StartupTiming {
                 elapsed_milliseconds: elapsed,
                 estimate_milliseconds: Some(18_000),
+                kind: StartupKind::Cold,
             },
         );
         assert_eq!(
@@ -75,6 +46,43 @@ fn starting_instances_show_a_bounded_countdown_then_an_overrun() {
             format!("review · {expected}")
         );
     }
+    snapshot.startup.insert(
+        "review".into(),
+        StartupTiming {
+            elapsed_milliseconds: 6_001,
+            estimate_milliseconds: Some(18_000),
+            kind: StartupKind::Hot,
+        },
+    );
+    assert_eq!(
+        rows::from_snapshot(&snapshot)[1]
+            .label
+            .lines()
+            .next()
+            .unwrap(),
+        "review · 󰈸 Starting 12s"
+    );
+}
+
+#[test]
+fn startup_detail_separator_uses_the_normal_text_color() {
+    tuicore::init();
+    let mut snapshot = snapshot();
+    snapshot.startup.insert(
+        "review".into(),
+        StartupTiming {
+            elapsed_milliseconds: 6_001,
+            estimate_milliseconds: Some(18_000),
+            kind: StartupKind::Hot,
+        },
+    );
+
+    let text = rows::from_snapshot(&snapshot)[1].text("⠋", None);
+    assert_eq!(text.lines[0].spans[3].content, " · ");
+    assert_eq!(
+        text.lines[0].spans[3].style.fg,
+        Some(tuicore::theme().text_fg())
+    );
 }
 
 #[test]
@@ -97,12 +105,17 @@ fn active_startup_rows_show_the_latest_progress_beneath_the_status() {
 
     let mut pending = snapshot();
     pending.instances[0].pending = true;
+    pending.instances[0].description = "Review environment".into();
     pending.instances[0].services.clear();
     let instance = rows::from_snapshot_with_operations(&pending, std::slice::from_ref(&operation))
         .into_iter()
         .find(|row| row.id == "instance:review")
         .unwrap();
-    assert_eq!(instance.label, format!("review · Creating\n{progress}"));
+    assert_eq!(instance.label, "review · Creating");
+    assert_eq!(instance.status_detail.as_deref(), Some(progress));
+    let text = instance.text("⠋", None);
+    assert!(text.lines[0].to_string().contains(progress));
+    assert_eq!(text.lines[1].to_string(), "Review environment");
 
     let mut activity = snapshot();
     activity.instances.clear();
@@ -139,12 +152,33 @@ fn active_startup_rows_show_the_latest_progress_beneath_the_status() {
 fn instance_status_label_uses_its_semantic_color() {
     tuicore::init();
     let row = rows::from_snapshot(&snapshot())[1].clone();
-    let text = row.text("⠋");
+    let text = row.text("⠋", None);
     assert_eq!(text.lines[0].spans[1].content, "review · ");
     assert_eq!(text.lines[0].spans[2].content, "Running");
     assert_eq!(
         text.lines[0].spans[2].style.fg,
         Some(tuicore::theme().info_fg())
+    );
+}
+
+#[test]
+fn instance_description_always_uses_the_muted_second_line() {
+    tuicore::init();
+    let mut row = rows::from_snapshot(&snapshot())[1].clone();
+    row.description = "A long description for this environment".into();
+    let text = row.text("⠋", Some(70));
+    assert_eq!(text.lines[1].to_string(), row.description);
+    assert_eq!(
+        text.lines[1].spans[0].style.fg,
+        Some(tuicore::theme().muted_fg())
+    );
+
+    row.description.clear();
+    let text = row.text("⠋", Some(70));
+    assert_eq!(text.lines[1].to_string(), "(no description)");
+    assert_eq!(
+        text.lines[1].spans[0].style.fg,
+        Some(tuicore::theme().subtle_fg())
     );
 }
 
@@ -169,8 +203,11 @@ fn tree_secondary_lines_are_muted_and_align_with_the_row_icon() {
         let mut snapshot = snapshot();
         snapshot.home_directory = Some("/home/test".into());
         snapshot
-            .startup_averages_milliseconds
+            .cold_startup_averages_milliseconds
             .insert("website".into(), 84_000);
+        snapshot
+            .hot_startup_averages_milliseconds
+            .insert("website".into(), 12_000);
         snapshot.instances[0].workspace = "/home/test/dev/review".into();
         if !routed {
             snapshot.instances[0].services[0].url = None;
@@ -195,9 +232,9 @@ fn tree_secondary_lines_are_muted_and_align_with_the_row_icon() {
         } else {
             "nginx:latest"
         };
-        for (row, detail) in rows
-            .iter()
-            .zip([" 1 ·  1m24s", "~/dev/review", service_detail])
+        for (row, detail) in
+            rows.iter()
+                .zip([" 1 · 󰜗 1m24s · 󰈸 12s", "(no description)", service_detail])
         {
             let y = lines
                 .iter()
@@ -239,7 +276,7 @@ fn template_secondary_counts_cover_empty_plural_and_missing_templates() {
 }
 
 #[test]
-fn template_startup_averages_use_compact_durations_for_loaded_and_missing_templates() {
+fn template_startup_averages_show_cold_and_hot_compact_durations() {
     let mut snapshot = snapshot();
     for name in ["second", "third", "fourth"] {
         let mut instance = snapshot.instances[0].clone();
@@ -254,16 +291,19 @@ fn template_startup_averages_use_compact_durations_for_loaded_and_missing_templa
         (125_000, "2m05s"),
     ] {
         snapshot
-            .startup_averages_milliseconds
+            .cold_startup_averages_milliseconds
             .insert("website".into(), milliseconds);
+        snapshot
+            .hot_startup_averages_milliseconds
+            .insert("website".into(), 12_000);
         assert_eq!(
             rows::from_snapshot(&snapshot)[0].label,
-            format!("website\n 4 ·  {duration}")
+            format!("website\n 4 · 󰜗 {duration} · 󰈸 12s")
         );
     }
     snapshot.templates.clear();
     assert_eq!(
         rows::from_snapshot(&snapshot)[0].label,
-        "website [missing]\n 4 ·  2m05s"
+        "website [missing]\n 4 · 󰜗 2m05s · 󰈸 12s"
     );
 }

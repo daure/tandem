@@ -105,7 +105,7 @@ fn tree_search_matches_service_labels_and_resource_values() {
             "{query}: {lines:#?}"
         );
         assert!(
-            lines.iter().any(|line| line.contains("󰑹 2 MiB")),
+            lines.iter().any(|line| line.contains("2 MiB")),
             "{lines:#?}"
         );
     }

@@ -332,13 +332,13 @@ fn declared_and_legacy_templates_have_one_repository_provisioner() {
     let (_home, config, mut template, _workspace) = fixture();
     let mut model = serde_json::json!({"services": {"web": {"image": "nginx"}, "repo-sync": {"image": "alpine/git"}}});
     assert!(
-        crate::environments::compose::decorate(&config, &template, "review", &mut model)
+        crate::environments::compose::decorate(&config, &template, "review", "", &mut model)
             .unwrap_err()
             .contains("repo-sync")
     );
     template.manifest.repositories.clear();
     template.manifest.one_shots.push("repo-sync".into());
-    crate::environments::compose::decorate(&config, &template, "review", &mut model).unwrap();
+    crate::environments::compose::decorate(&config, &template, "review", "", &mut model).unwrap();
     assert_eq!(
         model["services"]["repo-sync"]["labels"]["io.tandem.role"],
         "oneshot"

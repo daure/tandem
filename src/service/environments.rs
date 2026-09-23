@@ -8,7 +8,8 @@ use super::refresh::Refresh;
 use crate::{
     environments::{Environments, Startup},
     store::environments::{
-        EnvironmentSnapshot, Instructions, Operation, OperationState, RuntimeInventory, Template,
+        EnvironmentSnapshot, Instructions, Operation, OperationState, RuntimeInventory,
+        StartupKind, Template,
     },
 };
 
@@ -26,13 +27,21 @@ pub(crate) struct InstanceBatch {
 impl AppService {
     pub(crate) fn environment_snapshot(&self) -> EnvironmentSnapshot {
         let mut snapshot = self.environments.snapshot();
-        snapshot.startup_averages_milliseconds = self.settings.startup_averages();
+        snapshot.cold_startup_averages_milliseconds =
+            self.settings.startup_averages(StartupKind::Cold);
+        snapshot.hot_startup_averages_milliseconds =
+            self.settings.startup_averages(StartupKind::Hot);
         for instance in &snapshot.instances {
             if let Some(startup) = snapshot.startup.get_mut(&instance.name) {
-                startup.estimate_milliseconds = snapshot
-                    .startup_averages_milliseconds
-                    .get(&instance.template)
-                    .copied();
+                startup.estimate_milliseconds = match startup.kind {
+                    StartupKind::Cold => snapshot
+                        .cold_startup_averages_milliseconds
+                        .get(&instance.template),
+                    StartupKind::Hot => snapshot
+                        .hot_startup_averages_milliseconds
+                        .get(&instance.template),
+                }
+                .copied();
             }
         }
         snapshot
@@ -80,8 +89,9 @@ impl AppService {
             let result = async {
                 let target = workspace.clone();
                 let name = instance.clone();
+                let workspace_environments = Arc::clone(&environments);
                 tokio::task::spawn_blocking(move || {
-                    environments.prepare_workspace_open(&target, &name)
+                    workspace_environments.prepare_workspace_open(&target, &name)
                 })
                 .await
                 .map_err(|error| error.to_string())??;
@@ -91,7 +101,16 @@ impl AppService {
                     state.opened_system_targets.lock().unwrap().push(workspace);
                     return Ok(());
                 }
-                run_workspace_command(&command, &workspace, &instance, None).await
+                let description = environments
+                    .snapshot()
+                    .instances
+                    .iter()
+                    .find(|candidate| candidate.name == instance)
+                    .map(|candidate| candidate.description.as_str())
+                    .unwrap_or_default()
+                    .to_owned();
+                run_workspace_command(&command, &workspace, &instance, None, Some(&description))
+                    .await
             }
             .await;
             if let Err(error) = &result {
@@ -166,6 +185,7 @@ impl AppService {
         &self,
         name: &str,
         template: String,
+        description: String,
     ) -> Result<CreateInstanceOutcome, String> {
         if let Some(instance) = self
             .environments
@@ -188,8 +208,19 @@ impl AppService {
                 return Err("instance name belongs to another template".into());
             }
         }
-        self.submit_operation("create_instance", name, Some(template), 600, true)
-            .map(|operation| CreateInstanceOutcome::Started(Box::new(operation)))
+        let operation = self
+            .environments
+            .begin("create_instance", name, Some(template))?;
+        Ok(CreateInstanceOutcome::Started(Box::new(
+            self.schedule_operation(
+                operation,
+                600,
+                Startup {
+                    description: Some(description),
+                    ..Default::default()
+                },
+            ),
+        )))
     }
 
     pub(crate) fn delete_instance(
@@ -349,8 +380,13 @@ impl AppService {
         let operation_id = operation.id.clone();
         let environments = Arc::clone(&self.environments);
         let worker_operation = operation.clone();
-        let startup_template = (action == "create_instance")
-            .then(|| worker_operation.template.clone())
+        let startup_timing = (action == "create_instance")
+            .then(|| {
+                worker_operation
+                    .template
+                    .clone()
+                    .zip(self.environments.startup_kind(&worker_operation.id))
+            })
             .flatten();
         let notifier = self.refresh.notifier.clone();
         let refresh = Refresh::for_operation(action);
@@ -368,11 +404,11 @@ impl AppService {
                 Ok(String::new())
             };
             environments.execute(worker_operation, timeout, startup, close_command);
-            if let Some(template) = startup_template
+            if let Some((template, kind)) = startup_timing
                 && let Ok(operation) = environments.operation(&operation_id)
                 && operation.state == OperationState::Succeeded
                 && let Err(error) =
-                    settings.record_startup(template, operation.elapsed_milliseconds)
+                    settings.record_startup(template, kind, operation.elapsed_milliseconds)
             {
                 crate::diagnostics::record_error(
                     "cannot save startup timing",
@@ -454,9 +490,10 @@ async fn run_workspace_command(
     command: &str,
     workspace: &str,
     instance: &str,
-    extra: Option<&str>,
+    open_param: Option<&str>,
+    description: Option<&str>,
 ) -> Result<(), String> {
-    let status = spawn_workspace_command(command, workspace, instance, extra)?
+    let status = spawn_workspace_command(command, workspace, instance, open_param, description)?
         .wait()
         .await
         .map_err(|error| format!("cannot wait for workspace opener: {error}"))?;
@@ -470,7 +507,8 @@ pub(super) fn spawn_workspace_command(
     command: &str,
     workspace: &str,
     instance: &str,
-    extra: Option<&str>,
+    open_param: Option<&str>,
+    description: Option<&str>,
 ) -> Result<tokio::process::Child, String> {
     let mut process = if command.trim().is_empty() {
         let mut process = tokio::process::Command::new("xdg-open");
@@ -484,8 +522,11 @@ pub(super) fn spawn_workspace_command(
             .env("TANDEM_INSTANCE", instance)
             .env("TANDEM_WORKSPACE", workspace)
             .current_dir(workspace);
-        if let Some(extra) = extra {
-            process.env("TANDEM_EXTRA", extra);
+        if let Some(open_param) = open_param {
+            process.env("TANDEM_OPEN_PARAM", open_param);
+        }
+        if let Some(description) = description {
+            process.env("TANDEM_DESCRIPTION", description);
         }
         process
     };

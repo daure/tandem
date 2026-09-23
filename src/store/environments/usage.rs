@@ -10,28 +10,31 @@ pub(crate) struct UsageSummary {
     pub memory_limit_bytes: Option<u64>,
     pub memory_partial: bool,
     pub cpu_partial: bool,
+    pub memory_waiting: bool,
+    pub cpu_waiting: bool,
     pub age_seconds: Option<u64>,
     pub paused: bool,
 }
 
 impl UsageSummary {
     pub fn service(service: &InstanceService) -> Self {
-        let mut result = Self::total(std::iter::once(service), false);
-        result.memory_partial = false;
-        result.cpu_partial = false;
-        result
+        Self::total(std::iter::once(service), false)
     }
 
     pub fn instance(instance: &Instance) -> Self {
         if instance.suppress_resources() {
-            return Self::default();
+            return Self {
+                memory_waiting: true,
+                cpu_waiting: true,
+                ..Self::default()
+            };
         }
         Self::total(instance.services.iter(), false)
     }
 
     pub fn instances<'a>(instances: impl Iterator<Item = &'a Instance>) -> Self {
         let instances: Vec<_> = instances.collect();
-        let partial = instances
+        let waiting = instances
             .iter()
             .any(|instance| instance.suppress_resources());
         Self::total(
@@ -39,36 +42,41 @@ impl UsageSummary {
                 .into_iter()
                 .filter(|instance| !instance.suppress_resources())
                 .flat_map(|instance| &instance.services),
-            partial,
+            waiting,
         )
     }
 
-    fn total<'a>(services: impl Iterator<Item = &'a InstanceService>, excluded: bool) -> Self {
+    fn total<'a>(services: impl Iterator<Item = &'a InstanceService>, waiting: bool) -> Self {
         let mut result = Self {
-            memory_partial: excluded,
-            cpu_partial: excluded,
+            memory_waiting: waiting,
+            cpu_waiting: waiting,
             ..Self::default()
         };
         let mut memory = 0_u64;
         let mut cpu = 0_u64;
         let mut limit = 0_u64;
         let (mut memory_count, mut cpu_count) = (0, 0);
+        let (mut memory_samples, mut cpu_samples) = (0, 0);
         let (mut memory_missing, mut cpu_missing, mut uncapped) = (false, false, false);
         let mut collection_error = false;
         for service in services
             .filter(|service| service.consumes_resources() && !service.runtime.resources_suppressed)
         {
             memory_count += 1;
-            collection_error |= service.runtime.resource_error.is_some() || service.runtime.stale;
+            let failed = service.runtime.resource_error.is_some() || service.runtime.stale;
+            collection_error |= failed;
             result.age_seconds = result.age_seconds.max(service.runtime.resource_age_seconds);
-            if let Some(usage) = service.usage {
+            if failed {
+                memory_missing = true;
+            } else if let Some(usage) = service.usage {
                 if let Some(total) = memory.checked_add(usage.memory_bytes) {
                     memory = total;
+                    memory_samples += 1;
                 } else {
                     memory_missing = true;
                 }
             } else {
-                memory_missing = true;
+                result.memory_waiting = true;
             }
             match service
                 .memory_limit_bytes
@@ -80,23 +88,30 @@ impl UsageSummary {
             }
             if service.state() == ContainerState::Running {
                 cpu_count += 1;
-                match service
-                    .usage
-                    .and_then(|usage| usage.cpu_basis_points)
-                    .and_then(|value| cpu.checked_add(value))
-                {
-                    Some(total) => cpu = total,
-                    None => cpu_missing = true,
+                if failed {
+                    cpu_missing = true;
+                } else if let Some(value) = service.usage.and_then(|usage| usage.cpu_basis_points) {
+                    if let Some(total) = cpu.checked_add(value) {
+                        cpu = total;
+                        cpu_samples += 1;
+                    } else {
+                        cpu_missing = true;
+                    }
+                } else {
+                    result.cpu_waiting = true;
                 }
             }
         }
-        result.memory_bytes = (memory_count > 0 && !memory_missing).then_some(memory);
-        result.cpu_basis_points = (cpu_count > 0 && !cpu_missing).then_some(cpu);
-        result.memory_partial |= memory_missing;
-        result.cpu_partial |= cpu_missing;
-        result.memory_limit_bytes =
-            (memory_count > 0 && !uncapped && !result.memory_partial && !collection_error)
-                .then_some(limit);
+        result.memory_bytes = (memory_samples > 0).then_some(memory);
+        result.cpu_basis_points = (cpu_samples > 0).then_some(cpu);
+        result.memory_partial = memory_missing && memory_samples > 0;
+        result.cpu_partial = cpu_missing && cpu_samples > 0;
+        result.memory_limit_bytes = (memory_count > 0
+            && !uncapped
+            && !result.memory_partial
+            && !result.memory_waiting
+            && !collection_error)
+            .then_some(limit);
         result.paused = memory_count > 0 && cpu_count == 0;
         result
     }

@@ -6,9 +6,9 @@ use ratatui::{
     text::{Line, Span},
 };
 use tuicore::{
-    AnimationSettings, Button, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
-    FocusTarget, HotkeyLabelMode, KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
-    LifecycleCtx, RenderCtx, TickResult, TuiEvent, TuiNode,
+    Animated, AnimationSettings, Button, ChildKey, EventCtx, EventOutcome, EventRoute, FocusCtx,
+    FocusId, FocusTarget, HotkeyLabelMode, KeySpec, LayoutCtx, LayoutProposal, LayoutResult,
+    LayoutSizeHint, LifecycleCtx, RenderCtx, Spinner, TickResult, TuiEvent, TuiNode,
 };
 
 use super::{MOBILE_TABS_WIDTH, Msg, rows};
@@ -17,6 +17,7 @@ use crate::store::environments::{EnvironmentSnapshot, UsageSummary};
 #[derive(Default)]
 pub(super) struct State {
     pub totals: UsageSummary,
+    pub available_memory_bytes: Option<u64>,
     pub stop_targets: Vec<String>,
     pub purge_targets: Vec<String>,
 }
@@ -25,6 +26,7 @@ impl State {
     pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Self {
         Self {
             totals: UsageSummary::instances(snapshot.instances.iter()),
+            available_memory_bytes: snapshot.available_memory_bytes,
             stop_targets: snapshot
                 .instances
                 .iter()
@@ -54,6 +56,7 @@ pub(super) struct Toolbar {
     stop_area: Rect,
     purge_area: Rect,
     state: SharedState,
+    spinner: Spinner,
     totals_area: Rect,
     totals_width: usize,
 }
@@ -102,6 +105,7 @@ impl Toolbar {
             stop_area: Rect::default(),
             purge_area: Rect::default(),
             state,
+            spinner: Spinner::new(),
             totals_area: Rect::default(),
             totals_width: 0,
         }
@@ -109,9 +113,16 @@ impl Toolbar {
 
     fn totals_text(&self) -> Line<'static> {
         let mut spans = Vec::new();
-        for line in rows::resource_text(&self.state.borrow().totals).lines {
+        let state = self.state.borrow();
+        for line in rows::resource_text_with_spinner(
+            &state.totals,
+            state.available_memory_bytes,
+            self.spinner.glyph(),
+        )
+        .lines
+        {
             if !spans.is_empty() {
-                spans.push(Span::raw(" "));
+                spans.push(Span::raw(" · "));
             }
             spans.extend(line.spans);
         }
@@ -306,6 +317,13 @@ impl TuiNode<Msg> for Toolbar {
         let mut result = TickResult::IDLE;
         for (_, button) in self.buttons_mut() {
             result = result.merge(<Button<Msg> as TuiNode<Msg>>::tick(button, dt, settings));
+        }
+        let totals_waiting = {
+            let totals = &self.state.borrow().totals;
+            totals.memory_waiting || totals.cpu_waiting
+        };
+        if totals_waiting {
+            result = result.merge(Animated::tick(&mut self.spinner, dt, settings));
         }
         if disabled_changed || self.totals_text().width() != self.totals_width {
             result.changed = true;

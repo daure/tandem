@@ -1,8 +1,8 @@
-use std::{collections::HashSet, path::Path};
+use std::collections::HashSet;
 
 use crate::store::environments::{
     EnvironmentSnapshot, Instance, InstanceService, Operation, OperationState, ResourceUsage,
-    Severity, StartupTiming, Status, UsageSummary,
+    Severity, StartupKind, StartupTiming, Status, UsageSummary,
 };
 use ratatui::{
     style::{Color, Style},
@@ -16,6 +16,8 @@ mod setup;
 const TEMPLATE_ICON: &str = "󰠲";
 const GATEWAY_ICON: &str = "";
 const PORT_ICON: &str = "󰈀";
+const COLD_START_ICON: &str = "󰜗";
+const HOT_START_ICON: &str = "󰈸";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Tone {
@@ -120,20 +122,27 @@ fn instance_summary(instance: &Instance, startup: Option<&StartupTiming>) -> Ins
 }
 
 fn startup_label(status: &str, startup: &StartupTiming) -> String {
+    let status = format!(
+        "{} {status}",
+        match startup.kind {
+            StartupKind::Cold => COLD_START_ICON,
+            StartupKind::Hot => HOT_START_ICON,
+        }
+    );
     let Some(estimate) = startup.estimate_milliseconds else {
-        return status.into();
+        return status;
     };
     if startup.elapsed_milliseconds < estimate {
         return format!(
-            "{status} · {}",
+            "{status} {}",
             format_seconds(estimate - startup.elapsed_milliseconds)
         );
     }
     if startup.elapsed_milliseconds == estimate {
-        return format!("{status} · taking longer than usual");
+        return format!("{status} taking longer than usual");
     }
     format!(
-        "{status} · {} over estimate",
+        "{status} {} over estimate",
         format_seconds(startup.elapsed_milliseconds - estimate)
     )
 }
@@ -164,6 +173,7 @@ pub(super) struct Row {
     pub manifest_source: Option<String>,
     pub guidance_source: Option<String>,
     pub instance: Option<String>,
+    pub description: String,
     pub service: Option<(String, String)>,
     pub service_name: Option<String>,
     pub workspace: Option<String>,
@@ -181,7 +191,9 @@ pub(super) struct Row {
 
 impl Row {
     pub(super) fn height(&self) -> u16 {
-        if self.hide_resources {
+        if self.instance.is_some() {
+            2
+        } else if self.hide_resources {
             self.label.lines().count().clamp(1, 2) as u16
         } else {
             2
@@ -196,7 +208,7 @@ impl Row {
         )
     }
 
-    pub(super) fn text(&self, spinner: &str) -> Text<'static> {
+    pub(super) fn text(&self, spinner: &str, _available_width: Option<u16>) -> Text<'static> {
         let mut lines = self.label.lines();
         let icon = if self.loading { spinner } else { self.icon };
         let first = lines.next().unwrap_or_default();
@@ -224,25 +236,64 @@ impl Row {
         }
         if let Some(detail) = &self.status_detail {
             first_line.push(Span::styled(
-                format!(" · {}", detail.lines().next().unwrap_or_default()),
+                " · ",
+                Style::default().fg(Tone::Normal.color()),
+            ));
+            first_line.push(Span::styled(
+                detail.lines().next().unwrap_or_default().to_owned(),
                 Style::default().fg(self.detail_tone.color()),
             ));
         }
         let mut text = vec![Line::from(first_line)];
-        text.extend(lines.map(|line| {
-            Line::from(Span::styled(
-                line.to_owned(),
-                Style::default().fg(tuicore::theme().muted_fg()),
-            ))
-        }));
+        if self.instance.is_some() {
+            let description = self.description.trim();
+            let description_tone = if description.is_empty() {
+                tuicore::theme().subtle_fg()
+            } else {
+                tuicore::theme().muted_fg()
+            };
+            text.push(Line::from(Span::styled(
+                if description.is_empty() {
+                    "(no description)".to_owned()
+                } else {
+                    description.to_owned()
+                },
+                Style::default().fg(description_tone),
+            )));
+        } else {
+            text.extend(lines.map(|line| {
+                Line::from(Span::styled(
+                    line.to_owned(),
+                    Style::default().fg(tuicore::theme().muted_fg()),
+                ))
+            }));
+        }
         Text::from(text)
     }
 
     pub(super) fn resource_text(&self) -> Text<'static> {
+        self.resource_text_with_spinner("…")
+    }
+
+    pub(super) fn resource_text_with_spinner(&self, spinner: &str) -> Text<'static> {
         if self.hide_resources {
             return Text::default();
         }
-        resource_text(&self.metrics)
+        resource_text_with_spinner(&self.metrics, None, spinner)
+    }
+
+    pub(super) fn memory_text_with_spinner(&self, spinner: &str) -> Line<'static> {
+        if self.hide_resources || self.metrics.memory_bytes.is_none() {
+            return Line::default();
+        }
+        resource_memory_text_with_spinner(&self.metrics, None, spinner)
+    }
+
+    pub(super) fn cpu_text_with_spinner(&self, spinner: &str) -> Line<'static> {
+        if self.hide_resources || self.metrics.cpu_basis_points.is_none() {
+            return Line::default();
+        }
+        resource_cpu_text_with_spinner(&self.metrics, spinner)
     }
 
     pub(super) fn name_value(&self) -> Option<String> {
@@ -255,52 +306,62 @@ impl Row {
     }
 }
 
-pub(super) fn resource_text(metrics: &UsageSummary) -> Text<'static> {
-    let memory = metrics
-        .memory_bytes
-        .map_or_else(|| "—".into(), details::memory);
-    let cpu = metrics.cpu_basis_points;
-    let suffix = |partial: bool| {
-        if partial { " · partial" } else { "" }
-    };
+pub(super) fn resource_text_with_spinner(
+    metrics: &UsageSummary,
+    available_memory_bytes: Option<u64>,
+    spinner: &str,
+) -> Text<'static> {
     Text::from(vec![
-        Line::from(Span::styled(
-            format!("󰑹 {memory}{}", suffix(metrics.memory_partial)),
-            Style::default().fg(details::memory_tone(
-                metrics.memory_bytes.map(|memory_bytes| ResourceUsage {
-                    memory_bytes,
-                    ..Default::default()
-                }),
-                metrics.memory_limit_bytes,
-            )
-            .color()),
-        )),
-        Line::from(Span::styled(
-            format!(
-                " {}{}",
-                cpu.map_or_else(|| "—".into(), details::cpu),
-                if metrics.paused {
-                    " · paused"
-                } else {
-                    suffix(metrics.cpu_partial)
-                }
-            ),
-            Style::default().fg(if cpu.is_some() {
-                Tone::Normal
-            } else {
-                Tone::Muted
-            }
-            .color()),
-        )),
+        resource_memory_text_with_spinner(metrics, available_memory_bytes, spinner),
+        resource_cpu_text_with_spinner(metrics, spinner),
     ])
 }
 
-fn workspace_label(workspace: &str, home: Option<&str>) -> String {
-    match home.and_then(|home| Path::new(workspace).strip_prefix(home).ok()) {
-        Some(relative) if relative.as_os_str().is_empty() => "~".into(),
-        Some(relative) => format!("~/{}", relative.display()),
-        None => workspace.to_owned(),
+fn resource_memory_text_with_spinner(
+    metrics: &UsageSummary,
+    available_memory_bytes: Option<u64>,
+    spinner: &str,
+) -> Line<'static> {
+    let memory_bytes = metrics.memory_bytes;
+    let memory = memory_bytes.map_or_else(|| "—".into(), details::memory);
+    let mut memory = available_memory_bytes.map_or(memory.clone(), |available| {
+        format!("{memory} / {}", details::memory(available))
+    });
+    if metrics.memory_waiting {
+        memory.push_str(&format!(" {spinner}"));
     }
+    Line::from(Span::styled(
+        memory,
+        Style::default().fg(details::memory_tone(
+            memory_bytes.map(|memory_bytes| ResourceUsage {
+                memory_bytes,
+                ..Default::default()
+            }),
+            metrics.memory_limit_bytes,
+        )
+        .color()),
+    ))
+}
+
+fn resource_cpu_text_with_spinner(metrics: &UsageSummary, spinner: &str) -> Line<'static> {
+    let cpu = metrics.cpu_basis_points;
+    let mut cpu_text = cpu.map_or_else(|| "—".into(), details::cpu);
+    if metrics.cpu_waiting {
+        cpu_text.push_str(&format!(" {spinner}"));
+    }
+    Line::from(Span::styled(
+        format!(
+            "{}{}",
+            cpu_text,
+            if metrics.paused { " · paused" } else { "" }
+        ),
+        Style::default().fg(if cpu.is_some() && !metrics.cpu_waiting {
+            Tone::Normal
+        } else {
+            Tone::Muted
+        }
+        .color()),
+    ))
 }
 
 fn tree_row_ids(
@@ -355,16 +416,32 @@ pub(super) fn assign_alternating_backgrounds(rows: &mut [Row], query: &str) {
     }
 }
 
-fn template_summary(count: usize, average_milliseconds: Option<&u64>) -> String {
+fn compact_duration(milliseconds: u64) -> String {
+    let seconds = milliseconds.div_ceil(1_000);
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m{:02}s", seconds / 60, seconds % 60)
+    }
+}
+
+fn template_summary(
+    count: usize,
+    cold_average_milliseconds: Option<&u64>,
+    hot_average_milliseconds: Option<&u64>,
+) -> String {
     let mut summary = format!(" {count}");
-    if let Some(milliseconds) = average_milliseconds {
-        let seconds = milliseconds.div_ceil(1_000);
-        let duration = if seconds < 60 {
-            format!("{seconds}s")
-        } else {
-            format!("{}m{:02}s", seconds / 60, seconds % 60)
-        };
-        summary.push_str(&format!(" ·  {duration}"));
+    if let Some(milliseconds) = cold_average_milliseconds {
+        summary.push_str(&format!(
+            " · {COLD_START_ICON} {}",
+            compact_duration(*milliseconds)
+        ));
+    }
+    if let Some(milliseconds) = hot_average_milliseconds {
+        summary.push_str(&format!(
+            " · {HOT_START_ICON} {}",
+            compact_duration(*milliseconds)
+        ));
     }
     summary
 }
@@ -438,7 +515,12 @@ pub(super) fn from_snapshot_with_operations(
                 },
                 template_summary(
                     instance_count,
-                    snapshot.startup_averages_milliseconds.get(&template.name)
+                    snapshot
+                        .cold_startup_averages_milliseconds
+                        .get(&template.name),
+                    snapshot
+                        .hot_startup_averages_milliseconds
+                        .get(&template.name),
                 ),
             ),
             status: None,
@@ -494,8 +576,11 @@ pub(super) fn from_snapshot_with_operations(
                     template_summary(
                         instance_count,
                         snapshot
-                            .startup_averages_milliseconds
-                            .get(&instance.template)
+                            .cold_startup_averages_milliseconds
+                            .get(&instance.template),
+                        snapshot
+                            .hot_startup_averages_milliseconds
+                            .get(&instance.template),
                     )
                 ),
                 status: None,
@@ -544,15 +629,12 @@ pub(super) fn from_snapshot_with_operations(
         let template_available = template_row.template_available;
         let instance_id = format!("instance:{}", instance.name);
         let summary = instance_summary(instance, snapshot.startup.get(&instance.name));
-        let secondary_label = operation_progress(operations, "create_instance", &instance.name)
-            .map(str::to_owned)
-            .unwrap_or_else(|| {
-                workspace_label(&instance.workspace, snapshot.home_directory.as_deref())
-            });
+        let operation_progress =
+            operation_progress(operations, "create_instance", &instance.name).map(str::to_owned);
         rows.push(Row {
             id: instance_id.clone(),
             parent: Some(parent),
-            label: format!("{} · {}\n{}", instance.name, summary.label, secondary_label),
+            label: format!("{} · {}", instance.name, summary.label),
             status: Some(summary.label),
             icon: summary.icon,
             tone: summary.tone,
@@ -569,6 +651,7 @@ pub(super) fn from_snapshot_with_operations(
             cleanup_target: None,
             manifest_source: None,
             instance: Some(instance.name.clone()),
+            description: instance.description.clone(),
             guidance_source: None,
             service: None,
             service_name: None,
@@ -576,8 +659,12 @@ pub(super) fn from_snapshot_with_operations(
             alternate_background: false,
             gateway_url: None,
             details: details::instance(instance),
-            status_detail: summary.detail,
-            detail_tone: summary.detail_tone,
+            status_detail: operation_progress.clone().or(summary.detail),
+            detail_tone: if operation_progress.is_some() {
+                Tone::Muted
+            } else {
+                summary.detail_tone
+            },
             metrics: UsageSummary::instance(instance),
             hide_resources: instance.workspace_only,
             can_start: instance.can_start() && !compose_file.is_empty(),
@@ -644,6 +731,7 @@ pub(super) fn from_snapshot_with_operations(
                 guidance_source: None,
                 service: (!service.one_shot).then(|| (instance.name.clone(), service.name.clone())),
                 service_name: Some(service.name.clone()),
+                description: String::new(),
                 workspace: None,
                 alternate_background: false,
                 gateway_url: service.url.clone(),

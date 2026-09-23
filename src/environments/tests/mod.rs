@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::{Environments, compose, config::Config, docker, gateway, lifecycle, templates};
 use crate::store::environments::{
-    InstanceService, OperationState, validate_instance_name, validate_name,
+    Instance, InstanceService, OperationState, StartupKind, validate_instance_name, validate_name,
 };
 
 mod concurrency;
@@ -175,6 +175,73 @@ fn pending_instance_creation_is_visible_before_containers_exist() {
 }
 
 #[test]
+fn startup_kind_distinguishes_new_and_existing_instances() {
+    let (_directory, config) = fixture();
+    let environment = Environments::new(config);
+    let cold = environment
+        .begin("create_instance", "review", Some("website".into()))
+        .unwrap();
+    assert_eq!(environment.startup_kind(&cold.id), Some(StartupKind::Cold));
+
+    let ready = environment.snapshot().instances[0].clone();
+    environment.complete_instance_for_tests(&cold.id, ready);
+    let hot = environment
+        .begin("create_instance", "review", Some("website".into()))
+        .unwrap();
+    assert_eq!(environment.startup_kind(&hot.id), Some(StartupKind::Hot));
+}
+
+#[test]
+fn completed_stop_remains_projected_until_fresh_inventory_arrives() {
+    let (_directory, config) = fixture();
+    let environment = Environments::new(config);
+    let instance = Instance {
+        name: "review".into(),
+        template: "website".into(),
+        template_directory: "/tmp/templates/website".into(),
+        workspace: "/tmp/workspaces/review".into(),
+        ..Default::default()
+    };
+    environment
+        .snapshot
+        .lock()
+        .unwrap()
+        .instances
+        .push(instance.clone());
+    let operation = environment.begin("stop_instance", "review", None).unwrap();
+
+    environment.finish_operation(&operation.id, Ok(None));
+
+    let waiting = environment.snapshot();
+    assert_eq!(
+        waiting.instances[0]
+            .runtime
+            .activity
+            .as_ref()
+            .map(|activity| activity.status()),
+        Some(crate::store::environments::Status::Stopping)
+    );
+    environment.publish_instances(Ok(vec![instance.clone()]), 0);
+    assert_eq!(
+        environment.snapshot().instances[0]
+            .runtime
+            .activity
+            .as_ref()
+            .map(|activity| activity.status()),
+        Some(crate::store::environments::Status::Stopping)
+    );
+    let mut stopped = instance;
+    stopped.runtime.whole_stop = true;
+    environment.publish_instances(Ok(vec![stopped]), 1);
+    assert!(
+        environment.snapshot().instances[0]
+            .runtime
+            .activity
+            .is_none()
+    );
+}
+
+#[test]
 fn pending_instance_shows_expected_services_before_docker_discovers_containers() {
     let (_directory, config) = fixture();
     let environment = Environments::new(config.clone());
@@ -228,10 +295,18 @@ fn gateway_labels_use_instance_service_boundaries_and_opt_in_prefix_stripping() 
     let (_directory, config) = fixture();
     let mut template = templates::create(&config, "web-app").unwrap();
     let mut model = json!({"services":{"web":{"image":"nginx","volumes":[{"type":"bind","source":"/template/site","target":"/srv"}]}},"networks":{"default":{}}});
-    compose::decorate(&config, &template, "review", &mut model).unwrap();
+    compose::decorate(
+        &config,
+        &template,
+        "review",
+        "Review environment",
+        &mut model,
+    )
+    .unwrap();
     let labels = &model["services"]["web"]["labels"];
     assert_eq!(labels[compose::URL], "http://localhost:9876/review/web/");
     assert_eq!(labels[compose::PORT], "80");
+    assert_eq!(labels[compose::DESCRIPTION], "Review environment");
     assert_eq!(
         labels["traefik.http.routers.tandem-test-i6-review-s3-web.rule"],
         "PathPrefix(`/review/web/`)"
@@ -253,7 +328,7 @@ fn gateway_labels_use_instance_service_boundaries_and_opt_in_prefix_stripping() 
         .unwrap()
         .strip_prefix = false;
     let mut model = json!({"services":{"web":{"image":"nginx"}}});
-    compose::decorate(&config, &template, "review", &mut model).unwrap();
+    compose::decorate(&config, &template, "review", "", &mut model).unwrap();
     assert!(
         model["services"]["web"]["labels"]
             .get("traefik.http.routers.tandem-test-i6-review-s3-web.middlewares")
@@ -273,13 +348,14 @@ fn compose_rejects_host_ports_conflicting_labels_and_unknown_routes() {
         json!({"labels":{"traefik.enable":"true"}}),
     ] {
         let mut model = json!({"services":{"web":service}});
-        assert!(compose::decorate(&config, &template, "review", &mut model).is_err());
+        assert!(compose::decorate(&config, &template, "review", "", &mut model).is_err());
     }
     assert!(
         compose::decorate(
             &config,
             &template,
             "review",
+            "",
             &mut json!({"services":{"database":{}}})
         )
         .is_err()
@@ -364,6 +440,26 @@ fn inventory_uses_container_labels_and_excludes_the_gateway() {
         docker::instances(&config, &[uncapped]).unwrap()[0].services[0].memory_limit_bytes,
         None
     );
+}
+
+#[test]
+fn inventory_retries_when_a_container_disappears_between_listing_and_inspection() {
+    let (_directory, config) = fixture();
+    let mut responses = std::collections::VecDeque::from([
+        Ok("removed-container".into()),
+        Err("Docker exited 1: Error: No such object: removed-container".into()),
+        Ok(String::new()),
+    ]);
+
+    let instances = docker::inspect_with(
+        &config,
+        std::time::Instant::now() + Duration::from_secs(1),
+        &mut |_, _, _| responses.pop_front().unwrap(),
+    )
+    .unwrap();
+
+    assert!(instances.is_empty());
+    assert!(responses.is_empty());
 }
 
 #[test]

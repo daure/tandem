@@ -6,6 +6,7 @@ use crate::store::environments::{Instance, validate_instance_name, validate_name
 #[derive(Default)]
 pub(crate) struct Startup {
     pub branch_instances: bool,
+    pub description: Option<String>,
     pub workspace_ready: Option<tokio::sync::oneshot::Sender<String>>,
     pub instance_lock: Option<gateway::Lock>,
 }

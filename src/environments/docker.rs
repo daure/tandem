@@ -28,6 +28,22 @@ pub(super) fn inspect_with(
     deadline: Instant,
     execute: &mut impl FnMut(Command, Duration, Option<Progress>) -> Result<String, String>,
 ) -> Result<Vec<Instance>, String> {
+    for attempt in 0..3 {
+        match inspect_once(config, deadline, execute) {
+            Err(error) if attempt < 2 && container_disappeared(&error) => {
+                std::thread::sleep(Duration::from_millis(40));
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded inspection retry returns from every iteration")
+}
+
+fn inspect_once(
+    config: &Config,
+    deadline: Instant,
+    execute: &mut impl FnMut(Command, Duration, Option<Progress>) -> Result<String, String>,
+) -> Result<Vec<Instance>, String> {
     let mut command = docker();
     command.args([
         "ps",
@@ -57,6 +73,11 @@ pub(super) fn inspect_with(
     instances(config, &containers)
 }
 
+fn container_disappeared(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("no such object") || error.contains("no such container")
+}
+
 pub(crate) fn instances(config: &Config, containers: &[Value]) -> Result<Vec<Instance>, String> {
     let mut instances = BTreeMap::<String, Instance>::new();
     let prefix = format!("{}-", config.namespace);
@@ -75,6 +96,7 @@ pub(crate) fn instances(config: &Config, containers: &[Value]) -> Result<Vec<Ins
         validate_instance_name(name)?;
         let instance = instances.entry(name.into()).or_insert_with(|| Instance {
             name: name.into(),
+            description: label(compose::DESCRIPTION).into(),
             project: project.into(),
             template: label(compose::TEMPLATE).into(),
             template_directory: label(compose::DIRECTORY).into(),
@@ -83,7 +105,8 @@ pub(crate) fn instances(config: &Config, containers: &[Value]) -> Result<Vec<Ins
             services: Vec::new(),
             ..Default::default()
         });
-        if instance.template_directory != label(compose::DIRECTORY)
+        if instance.description != label(compose::DESCRIPTION)
+            || instance.template_directory != label(compose::DIRECTORY)
             || instance.template != label(compose::TEMPLATE)
         {
             return Err(format!("conflicting template labels on project {project}"));

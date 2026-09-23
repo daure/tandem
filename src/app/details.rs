@@ -23,8 +23,12 @@ fn rounded_units(value: u64, divisor: u64) -> String {
     if value > 0 && value < divisor {
         "<1".into()
     } else {
-        (value / divisor + u64::from(value % divisor >= divisor / 2)).to_string()
+        rounded_unit_count(value, divisor).to_string()
     }
+}
+
+fn rounded_unit_count(value: u64, divisor: u64) -> u64 {
+    value / divisor + u64::from(value % divisor >= divisor / 2)
 }
 
 pub(super) fn cpu(basis_points: u64) -> String {
@@ -32,7 +36,15 @@ pub(super) fn cpu(basis_points: u64) -> String {
 }
 
 pub(super) fn memory(bytes: u64) -> String {
-    format!("{} MiB", rounded_units(bytes, 1048576))
+    const MIB: u64 = 1024 * 1024;
+    const GIB: u64 = 1024 * MIB;
+    const GIB_DISPLAY_THRESHOLD: u64 = 1000 * MIB;
+
+    if bytes >= GIB_DISPLAY_THRESHOLD {
+        format!("{} GiB", rounded_unit_count(bytes, GIB))
+    } else {
+        format!("{} MiB", rounded_units(bytes, MIB))
+    }
 }
 
 pub(super) fn template(template: &Template, count: usize) -> Vec<Property> {
@@ -228,29 +240,25 @@ pub(super) fn resources(
 pub(super) fn usage_details(rows: &mut Vec<Property>, usage: &UsageSummary) {
     for row in rows.iter_mut() {
         if row.name == "Memory" {
-            row.value = usage.memory_bytes.map_or_else(|| "—".into(), memory);
+            let memory_bytes = usage.memory_bytes;
+            row.value = memory_bytes.map_or_else(|| "—".into(), memory);
             row.tone = memory_tone(
-                usage.memory_bytes.map(|memory_bytes| ResourceUsage {
+                memory_bytes.map(|memory_bytes| ResourceUsage {
                     memory_bytes,
                     ..Default::default()
                 }),
                 usage.memory_limit_bytes,
             );
-            if usage.memory_partial {
-                row.value.push_str(" · partial");
-            }
         } else if row.name == "CPU" {
-            row.value = usage.cpu_basis_points.map_or_else(|| "—".into(), cpu);
-            row.tone = if usage.cpu_basis_points.is_some() {
+            let cpu_basis_points = usage.cpu_basis_points;
+            row.value = cpu_basis_points.map_or_else(|| "—".into(), cpu);
+            row.tone = if cpu_basis_points.is_some() {
                 Tone::Normal
             } else {
                 Tone::Muted
             };
             if usage.paused {
                 row.value.push_str(" · paused");
-            }
-            if usage.cpu_partial {
-                row.value.push_str(" · partial");
             }
         }
     }

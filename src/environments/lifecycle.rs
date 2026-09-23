@@ -58,7 +58,10 @@ pub(crate) fn start(
             }
         }
         let branch = startup.branch_instances.then_some(name);
-        journal::prepare(config, &template, name)?;
+        journal::prepare(config, &template, name, startup.description.as_deref())?;
+        let description = journal::recorded(config, name)?
+            .ok_or("instance record missing")?
+            .description;
         ownership::record(config, template_name, Path::new(&template.directory), name)?;
         let workspace = config.workspaces.join(name);
         fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
@@ -95,6 +98,7 @@ pub(crate) fn start(
             config,
             &template,
             name,
+            &description,
             branch,
             remaining(deadline)?.min(Duration::from_secs(30)),
         )?;
@@ -107,6 +111,7 @@ pub(crate) fn start(
             config,
             &Instance {
                 name: name.into(),
+                description: description.clone(),
                 template: template.name.clone(),
                 template_directory: template.directory.clone(),
                 workspace: workspace.display().to_string(),
@@ -119,7 +124,7 @@ pub(crate) fn start(
         if let Some(sender) = startup.workspace_ready {
             let _ = sender.send(workspace.display().to_string());
         }
-        journal::topology(config, template_name, name, services.clone())?;
+        journal::topology(config, template_name, name, &description, services.clone())?;
         pending_services(services);
         gateway::ensure(config, progress.clone(), remaining(deadline)?)?;
         progress(format!(

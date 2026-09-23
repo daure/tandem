@@ -56,7 +56,7 @@ fn stopped_exit_codes_are_evidence_not_instance_failure() {
 }
 
 #[test]
-fn running_counts_include_unhealthy_containers_but_health_requires_every_probe() {
+fn running_counts_only_include_ready_services() {
     let healthy = service("web", ContainerState::Running, HealthState::Healthy);
     let mut app = instance(vec![healthy.clone()]);
     assert_eq!(app.status_summary().status, Status::Healthy);
@@ -67,12 +67,14 @@ fn running_counts_include_unhealthy_containers_but_health_requires_every_probe()
     ));
     assert_eq!(app.status_summary().status, Status::Running);
     app.services[1].runtime.health = HealthState::Checking;
-    assert_eq!(app.status_summary().status, Status::Running);
+    let summary = app.status_summary();
+    assert_eq!((summary.status, summary.running), (Status::Running, 1));
+    assert_eq!(summary.detail, None);
     app.services[1].runtime.health = HealthState::Unhealthy;
     let summary = app.status_summary();
     assert_eq!(
         (summary.status, summary.running, summary.expected),
-        (Status::Degraded, 2, 2)
+        (Status::Degraded, 1, 2)
     );
     assert_eq!(summary.detail_severity, Severity::Error);
     app.services[1].runtime.state = ContainerState::Missing;
@@ -161,6 +163,20 @@ fn lifecycle_actions_follow_target_roles_and_state_instead_of_metrics() {
 }
 
 #[test]
+fn degraded_instances_report_active_health_checks_before_stopped_services() {
+    let mut api = service("api", ContainerState::Exited, HealthState::Healthy);
+    api.runtime.requested_stop = true;
+    let db = service("db", ContainerState::Running, HealthState::Checking);
+    let mut web = service("web", ContainerState::Exited, HealthState::Healthy);
+    web.runtime.requested_stop = true;
+
+    let summary = instance(vec![api, db, web]).status_summary();
+
+    assert_eq!(summary.status, Status::Degraded);
+    assert_eq!(summary.detail.as_deref(), Some("db: Checking health"));
+}
+
+#[test]
 fn scoped_activity_preserves_failure_and_staleness_qualifiers() {
     let mut app = instance(vec![service(
         "web",
@@ -207,12 +223,15 @@ fn memory_and_cpu_coverage_are_independent_and_paused_memory_counts() {
     assert_eq!(usage.memory_bytes, Some(100));
     assert_eq!(usage.cpu_basis_points, None);
     assert!(!usage.memory_partial);
-    assert!(usage.cpu_partial);
+    assert!(!usage.cpu_partial);
+    assert!(usage.cpu_waiting);
     let mut app = app;
     app.services[0].usage.as_mut().unwrap().cpu_basis_points = Some(15000);
     let usage = UsageSummary::instance(&app);
     assert_eq!(usage.cpu_basis_points, Some(15000));
     let mut pending = instance(vec![]);
     pending.pending = true;
-    assert!(UsageSummary::instances([&app, &pending].into_iter()).memory_partial);
+    let usage = UsageSummary::instances([&app, &pending].into_iter());
+    assert!(usage.memory_waiting);
+    assert!(usage.cpu_waiting);
 }

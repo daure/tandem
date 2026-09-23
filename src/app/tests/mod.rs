@@ -112,7 +112,7 @@ fn tree_rows_show_routed_services_without_gateway_children() {
     assert_eq!(rows[0].label, "website\n 1");
     assert_eq!(rows[0].icon, "󰠲");
     assert_eq!(rows[1].parent, Some(rows[0].id.clone()));
-    assert_eq!(rows[1].label, "review · Running\n/tmp/workspaces/review");
+    assert_eq!(rows[1].label, "review · Running");
     assert_eq!(rows[1].icon, "");
     assert_eq!(rows[2].parent, Some(rows[1].id.clone()));
     assert_eq!(
@@ -608,8 +608,13 @@ fn entered_names_are_preserved() {
         Msg::NameChanged("Feature Branch".into()),
         &mut EventCtx::new(AnimationSettings::default()),
     );
+    app.handle_message(
+        Msg::DescriptionChanged("Review environment".into()),
+        &mut EventCtx::new(AnimationSettings::default()),
+    );
 
     assert_eq!(app.name, "Feature Branch");
+    assert_eq!(app.description, "Review environment");
 }
 
 #[test]
@@ -644,9 +649,9 @@ fn template_name_entry_contains_only_a_wide_input() {
 }
 
 #[test]
-fn details_hotkey_uses_full_width_on_mobile_and_sixty_percent_on_desktop() {
+fn details_hotkey_uses_full_width_on_mobile_and_seventy_five_percent_on_desktop() {
     assert_eq!(super::details_width_percent(99), 100);
-    assert_eq!(super::details_width_percent(100), 60);
+    assert_eq!(super::details_width_percent(100), 75);
     tuicore::init();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));

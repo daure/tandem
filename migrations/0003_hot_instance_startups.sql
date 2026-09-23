@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS hot_instance_startups (
+  id INTEGER PRIMARY KEY,
+  template TEXT NOT NULL,
+  duration_milliseconds INTEGER NOT NULL CHECK (duration_milliseconds >= 0)
+);

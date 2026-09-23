@@ -29,6 +29,7 @@ pub(in crate::environments) fn prepare(
     config: &Config,
     template: &Template,
     name: &str,
+    description: Option<&str>,
 ) -> Result<(), String> {
     let existing = recorded(config, name)?;
     if existing.as_ref().is_some_and(|instance| {
@@ -42,6 +43,7 @@ pub(in crate::environments) fn prepare(
     let mut record = read(config, name)?;
     let instance = record.expected.get_or_insert_with(|| Instance {
         name: name.into(),
+        description: description.unwrap_or_default().into(),
         template: template.name.clone(),
         template_directory: template.directory.clone(),
         workspace: config.workspaces.join(name).display().to_string(),
@@ -49,6 +51,9 @@ pub(in crate::environments) fn prepare(
         workspace_only: template.workspace_only(),
         ..Default::default()
     });
+    if let Some(description) = description {
+        instance.description = description.into();
+    }
     instance.runtime.workspace_ready = false;
     record.repositories.clear();
     write(config, name, &record)

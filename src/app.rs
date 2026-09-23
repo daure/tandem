@@ -51,6 +51,7 @@ pub(crate) fn initial_focus() -> tuicore::FocusRequest {
 pub(crate) enum Msg {
     Close,
     NameChanged(String),
+    DescriptionChanged(String),
     OpenSettings,
     OpenCommandChanged(String),
     CloseCommandChanged(String),
@@ -121,6 +122,7 @@ pub(crate) struct App {
     container_operations: Vec<crate::store::environments::Operation>,
     intent: Option<Intent>,
     name: String,
+    description: String,
     open_command: String,
     settings_save: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
     area: Rect,
@@ -191,6 +193,7 @@ pub(crate) fn root(service: AppService) -> App {
         container_operations: Vec::new(),
         intent: None,
         name: String::new(),
+        description: String::new(),
         open_command: String::new(),
         settings_save: None,
         area: Rect::default(),
@@ -243,6 +246,7 @@ impl App {
                 self.details_open = false;
             }
             Msg::NameChanged(name) => self.name = name,
+            Msg::DescriptionChanged(description) => self.description = description,
             Msg::OpenSettings => self.open_settings(ctx),
             Msg::OpenCommandChanged(command) => {
                 self.open_command = command;
@@ -289,10 +293,11 @@ impl App {
                         return;
                     }
                     Some(Intent::CreateInstance(template)) => {
-                        match self
-                            .service
-                            .submit_new_instance(&self.name, template.clone())
-                        {
+                        match self.service.submit_new_instance(
+                            &self.name,
+                            template.clone(),
+                            self.description.clone(),
+                        ) {
                             Ok(crate::service::CreateInstanceOutcome::Existing) => {
                                 self.sync_environment();
                                 instances::select_instance(&self.instances, &self.name);
@@ -401,6 +406,10 @@ impl App {
         let Some(name) = self.intent_instance_target() else {
             return false;
         };
+        self.instance_has_operation(name)
+    }
+
+    fn instance_has_operation(&self, name: &str) -> bool {
         self.snapshot
             .activities
             .iter()
@@ -443,9 +452,10 @@ impl App {
         let dialog = match &self.intent {
             Some(Intent::CreateInstance(_)) => {
                 let branch_instances = self.service.branch_instances();
-                dialogs::name_entry(
+                dialogs::instance_entry(
                     "New instance",
                     &self.name,
+                    &self.description,
                     if branch_instances {
                         "branch-name"
                     } else {
@@ -491,7 +501,7 @@ impl App {
     }
 
     fn resize_details_dialog(&mut self) {
-        let dock = DockSpec::bottom(50).cross_percent(details_width_percent(self.area.width));
+        let dock = DockSpec::bottom(80).cross_percent(details_width_percent(self.area.width));
         let layer = self.view.first_mut();
         layer.set_dock(dock);
         layer.layer_mut().set_dock_edge_borders(dock.edge_borders());
@@ -578,6 +588,7 @@ impl App {
     fn action(&mut self, index: usize, ctx: &mut EventCtx<Msg>) {
         let row = self.selected();
         self.name.clear();
+        self.description.clear();
         match index {
             0 => {
                 if let Some(row) = row.filter(|row| !row.informational) {
@@ -596,6 +607,13 @@ impl App {
                 self.open_name_entry(ctx);
             }
             3 => {
+                if let Some(name) = row.as_ref().and_then(|row| row.instance.as_ref())
+                    && self.instance_has_operation(name)
+                {
+                    self.intent = Some(Intent::Stop(name.clone()));
+                    self.block_operation(ctx);
+                    return;
+                }
                 if let Some(row) = row.as_ref().filter(|row| row.parent.is_none()) {
                     let template = row.template.clone();
                     self.intent = Some(Intent::StopTemplate(template.clone()));
@@ -740,9 +758,10 @@ impl App {
                 Some(Intent::CreateInstance(_) | Intent::NewTemplate)
             )
             && let TuiEvent::Key(key) = event
-            && (KeySpec::key(tuicore::Key::Enter).matches(*key)
-                || KeySpec::key_with_modifiers(tuicore::Key::Enter, tuicore::KeyModifiers::CONTROL)
-                    .matches(*key))
+            && (KeySpec::key_with_modifiers(tuicore::Key::Enter, tuicore::KeyModifiers::CONTROL)
+                .matches(*key)
+                || matches!(self.intent, Some(Intent::NewTemplate))
+                    && KeySpec::key(tuicore::Key::Enter).matches(*key))
         {
             self.handle_message(Msg::Submit, ctx);
             ctx.stop_propagation();
@@ -915,7 +934,7 @@ impl TuiNode<Msg> for App {
 }
 
 fn details_width_percent(width: u16) -> u16 {
-    if width < MOBILE_TABS_WIDTH { 100 } else { 60 }
+    if width < MOBILE_TABS_WIDTH { 100 } else { 75 }
 }
 
 #[cfg(test)]

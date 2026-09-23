@@ -27,12 +27,11 @@ fn resource_values_round_to_whole_units_and_preserve_tiny_nonzero_samples() {
         (250, 2621440, "3%", "3 MiB"),
         (4380, 30723277, "44%", "29 MiB"),
         (12550, 1048576, "126%", "1 MiB"),
-        (
-            u64::MAX,
-            u64::MAX,
-            "184467440737095516%",
-            "17592186044416 MiB",
-        ),
+        (100, 999 * 1048576, "1%", "999 MiB"),
+        (100, 1000 * 1048576, "1%", "1 GiB"),
+        (100, 1073741824, "1%", "1 GiB"),
+        (100, 1610612736, "1%", "2 GiB"),
+        (u64::MAX, u64::MAX, "184467440737095516%", "17179869184 GiB"),
     ] {
         let mut snapshot = snapshot();
         snapshot.instances[0].services[0].usage = Some(ResourceUsage {
@@ -44,7 +43,7 @@ fn resource_values_round_to_whole_units_and_preserve_tiny_nonzero_samples() {
         let row = &tree[2];
         assert_eq!(
             row.resource_text().to_string(),
-            format!("󰑹 {memory_text}\n {cpu_text}")
+            format!("{memory_text}\n{cpu_text}")
         );
         assert_eq!(
             row.resource_text().lines[1].spans[0].style.fg,
@@ -65,7 +64,7 @@ fn resource_values_round_to_whole_units_and_preserve_tiny_nonzero_samples() {
     snapshot.instances.clear();
     let tree = rows::from_snapshot(&snapshot);
     let text = tree[0].resource_text();
-    assert_eq!(text.to_string(), "󰑹 —\n —");
+    assert_eq!(text.to_string(), "—\n—");
     assert_eq!(text.lines[1].spans[0].style.fg, Some(Tone::Muted.color()));
 }
 
@@ -128,7 +127,7 @@ fn memory_color_tracks_explicit_limits_in_tree_and_details() {
         rows::from_snapshot(&snapshot)[0]
             .resource_text()
             .to_string(),
-        "󰑹 — · partial\n — · partial"
+        "90 MiB …\n1% …"
     );
 }
 
@@ -157,41 +156,43 @@ fn resources_sum_services_and_active_setup_into_instances_and_templates() {
     let row = |id: &str| tree.iter().find(|row| row.id == id).unwrap();
     assert_eq!(
         row("service:review:web").resource_text().to_string(),
-        "󰑹 180 MiB\n 2%"
+        "180 MiB\n2%"
     );
     assert_eq!(
         row("service:review:db").resource_text().to_string(),
-        "󰑹 64 MiB\n <1%"
+        "64 MiB\n<1%"
     );
     assert_eq!(
         row("instance:review").resource_text().to_string(),
-        "󰑹 254 MiB\n 4%"
+        "254 MiB\n4%"
     );
     assert_eq!(
         row("template:/tmp/templates/website")
             .resource_text()
             .to_string(),
-        "󰑹 354 MiB\n 6%"
+        "354 MiB\n6%"
     );
     assert!(tree.iter().any(|row| row.id == "service:review:setup"));
 
     snapshot.instances[0].services[1].usage = None;
+    snapshot.instances[0].services[1].runtime.resource_error = Some("stats unavailable".into());
     let tree = rows::from_snapshot(&snapshot);
     let row = |id: &str| tree.iter().find(|row| row.id == id).unwrap();
     assert_eq!(
         row("template:/tmp/templates/website")
             .resource_text()
             .to_string(),
-        "󰑹 — · partial\n — · partial"
+        "290 MiB\n5%"
     );
     assert_eq!(
         row("instance:review").resource_text().to_string(),
-        "󰑹 — · partial\n — · partial"
+        "190 MiB\n3%"
     );
+    assert_eq!(row("service:review:db").resource_text().to_string(), "—\n—");
     snapshot.instances[0].services[1].status = "down (exit 0)".into();
     snapshot.templates.clear();
     let tree = rows::from_snapshot(&snapshot);
-    assert_eq!(tree[0].resource_text().to_string(), "󰑹 290 MiB\n 5%");
+    assert_eq!(tree[0].resource_text().to_string(), "290 MiB\n5%");
 }
 
 #[test]
@@ -208,15 +209,9 @@ fn memory_stays_visible_while_cpu_baselines_are_pending() {
     worker.usage = Some(usage(100, 64));
     snapshot.instances[0].services.push(worker);
     let tree = rows::from_snapshot(&snapshot);
-    assert_eq!(
-        tree[0].resource_text().to_string(),
-        "󰑹 244 MiB\n — · partial"
-    );
-    assert_eq!(
-        tree[1].resource_text().to_string(),
-        "󰑹 244 MiB\n — · partial"
-    );
-    assert_eq!(tree[2].resource_text().to_string(), "󰑹 180 MiB\n —");
+    assert_eq!(tree[0].resource_text().to_string(), "244 MiB\n1% …");
+    assert_eq!(tree[1].resource_text().to_string(), "244 MiB\n1% …");
+    assert_eq!(tree[2].resource_text().to_string(), "180 MiB\n— …");
     assert_eq!(
         tree[2].resource_text().lines[1].spans[0].style.fg,
         Some(Tone::Muted.color())
@@ -304,20 +299,17 @@ fn instance_summaries_use_the_most_actionable_service_state() {
                 service.port = None;
             }
             let tree = rows::from_snapshot(&snapshot);
-            assert_eq!(
-                tree[1].label,
-                format!("review · {summary}\n/tmp/workspaces/review")
-            );
+            assert_eq!(tree[1].label, format!("review · {summary}"));
             assert_eq!(tree[1].icon, icon);
             assert_eq!(tree[1].tone, instance_tone);
             assert_eq!(
-                tree[1].text("⠋").lines[0].spans[0].style.fg,
+                tree[1].text("⠋", None).lines[0].spans[0].style.fg,
                 Some(instance_tone.color())
             );
             assert_eq!(tree[1].loading, loading);
             assert_eq!(tree[2].tone, service_tone);
             assert!(!tree[2].icon.is_empty());
-            let text = tree[2].text("⠋");
+            let text = tree[2].text("⠋", None);
             assert_eq!(text.lines[0].spans[0].style.fg, Some(service_tone.color()));
             assert_eq!(text.lines[0].spans[1].content, "web · ");
             assert_eq!(
@@ -377,7 +369,7 @@ fn search_results_restripe_the_visible_tree_rows() {
 }
 
 #[test]
-fn resource_rows_stack_memory_above_cpu_at_the_right_edge() {
+fn resource_rows_show_right_aligned_memory_and_cpu_columns() {
     tuicore::init();
     let mut snapshot = snapshot();
     snapshot.instances[0].services[0].status = "healthy".into();
@@ -391,12 +383,11 @@ fn resource_rows_stack_memory_above_cpu_at_the_right_edge() {
         .iter()
         .position(|line| line.contains(" web"))
         .expect("routed service");
-    assert!(lines[service_line].contains("󰑹 180 MiB"), "{lines:#?}");
+    assert!(lines[service_line].contains(" 180 MiB 2% "), "{lines:#?}");
     assert!(lines[service_line + 1].contains("http://localhost:9876/review/web/ · 󰈀 8080"));
     for offset in [0, 2, 4] {
         let row_line = service_line - offset;
-        assert!(lines[row_line].ends_with("󰑹 180 MiB "), "{lines:#?}");
-        assert!(lines[row_line + 1].ends_with(" 2% "), "{lines:#?}");
+        assert!(lines[row_line].ends_with(" 180 MiB 2% "), "{lines:#?}");
     }
     let buffer = terminal.backend().buffer();
     assert_eq!(
@@ -412,12 +403,18 @@ fn resource_rows_stack_memory_above_cpu_at_the_right_edge() {
     let narrow = render(&mut tree, 60);
     let lines = rendered_lines(&narrow, Rect::new(0, 0, 60, 18));
     assert!(
-        lines.iter().any(|line| line.contains("󰑹 180 MiB")),
+        lines.iter().any(|line| line.contains(" 180 MiB 2% ")),
         "{lines:#?}"
     );
-    assert_eq!(lines.iter().filter(|line| line.contains(" 2%")).count(), 3);
-    for line in lines.iter().filter(|line| line.contains(" 2%")) {
-        assert!(line.ends_with(" 2% "), "{lines:#?}");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.ends_with(" 180 MiB 2% "))
+            .count(),
+        3
+    );
+    for line in lines.iter().filter(|line| line.contains("180 MiB")) {
+        assert!(line.ends_with(" 180 MiB 2% "), "{lines:#?}");
     }
 
     snapshot.instances[0].services[0].usage = None;
@@ -433,8 +430,7 @@ fn resource_rows_stack_memory_above_cpu_at_the_right_edge() {
         .position(|line| line.contains(" web"))
         .unwrap();
     for offset in [0, 2, 4] {
-        assert!(lines[service_line - offset].contains("󰑹 —"));
-        assert!(lines[service_line - offset + 1].contains(" —"));
+        assert!(!lines[service_line - offset].contains('—'));
     }
 }
 
@@ -514,7 +510,7 @@ fn health_check_loader_animates_on_the_service_until_ready() {
         .buffer()
         .content
         .iter()
-        .find(|cell| cell.symbol() == "⠙")
+        .find(|cell| cell.symbol() == "⠙" && cell.fg == tuicore::theme().info_fg())
         .unwrap();
     assert_eq!(spinner.fg, tuicore::theme().info_fg());
     snapshot.instances[0].services[0].status = "healthy".into();
@@ -668,7 +664,7 @@ fn template_totals_exclude_instances_that_are_still_starting() {
         rows::from_snapshot(&inventory)[0]
             .resource_text()
             .to_string(),
-        "󰑹 180 MiB · partial\n 2% · partial"
+        "180 MiB …\n2% …"
     );
     inventory.startup.clear();
     inventory.instances[1].pending = false;
@@ -677,6 +673,6 @@ fn template_totals_exclude_instances_that_are_still_starting() {
         rows::from_snapshot(&inventory)[0]
             .resource_text()
             .to_string(),
-        "󰑹 200 MiB\n 3%"
+        "200 MiB\n3%"
     );
 }

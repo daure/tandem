@@ -101,15 +101,17 @@ paused. The CLI reports that it exists without checking readiness. With `--open-
 it only launches the saved opener in that instance's workspace; template files and repository sources
 are not needed. Ownership mismatches and concurrent instance operations are rejected.
 
-`--open-command` (also spelled `-oc`) optionally accepts an extra argument. For a new instance, the workspace-ready signal
+`--open-command` (also spelled `-oc`) optionally accepts an open parameter. `--description` (also spelled `-d`)
+sets the instance description. For a new instance, the workspace-ready signal
 triggers the saved opener after declared repositories have been cloned or validated, any Compose configuration
 has been rendered, and the workspace `AGENTS.md` has been written. Opening and container startup then
 proceed independently. Template-owned
 clone scripts and container-created files are outside this milestone; declare repositories for early
 source access.
 An empty saved command uses the system folder opener. Without the flag, nothing is opened.
-The opener inherits the CLI's environment; custom commands run in the workspace with `TANDEM_INSTANCE`
-and `TANDEM_WORKSPACE` set. When `--open-command` has an extra argument, it is available as `TANDEM_EXTRA`.
+The opener inherits the CLI's environment; custom commands run in the workspace with `TANDEM_INSTANCE`,
+`TANDEM_WORKSPACE`, and `TANDEM_DESCRIPTION` set. When `--open-command` has an open parameter, it is
+available as `TANDEM_OPEN_PARAM`.
 Editor lifetime does not delay startup or CLI exit. Settings/launch failures
 make the CLI fail after startup completes, or immediately for an existing instance. Opener exit failures
 observed while the CLI runs are logged.
@@ -357,7 +359,8 @@ In Settings, edits to **Open command** save immediately. Press `Ctrl+;` on an in
 **Run open command** from its `.` Actions menu to execute it. An empty or whitespace-only setting
 opens the workspace with `xdg-open`.
 A custom command runs on the host via `sh -c`, with the workspace as its working directory, the
-instance name in `TANDEM_INSTANCE`, and the absolute path in `TANDEM_WORKSPACE`. Quote it as `"$TANDEM_WORKSPACE"`; paths are passed as
+instance name in `TANDEM_INSTANCE`, the absolute path in `TANDEM_WORKSPACE`, and its description in
+`TANDEM_DESCRIPTION`. Quote `"$TANDEM_WORKSPACE"`; paths are passed as
 environment data, not interpolated into shell code. Choose **Open in browser** from a routed service's
 `.` Actions menu to open its URL.
 

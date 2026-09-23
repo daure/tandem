@@ -69,7 +69,8 @@ A template is a shared development recipe; an instance has its own name and work
   bundled updates replace it after backing up local edits.
 - Workspace open and close commands are shared within a Tandem home and execute through host `sh -c` in the
   workspace. Configure and run only trusted commands with approval; quote `"$TANDEM_WORKSPACE"`
-  and `"$TANDEM_INSTANCE"` when using them.
+  and `"$TANDEM_INSTANCE"` when using them. Open commands also receive the instance description in
+  `TANDEM_DESCRIPTION`; CLI `--open-command` values are exposed as `TANDEM_OPEN_PARAM`.
   MCP deletion and purges run the saved close command before removing each existing workspace, after
   Docker cleanup; CLI `delete-instance` opts in with `--close-command` or `-cc`, including headless runs.
   Empty disables it; failures and ten-second timeouts produce operation warnings while

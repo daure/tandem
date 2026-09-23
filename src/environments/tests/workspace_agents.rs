@@ -128,7 +128,14 @@ fn rendered_compose(
     let mut template = templates::create(config, &instance.template).unwrap();
     template.manifest = Default::default();
     let mut model = serde_json::json!({"services": services});
-    crate::environments::compose::decorate(config, &template, &instance.name, &mut model).unwrap();
+    crate::environments::compose::decorate(
+        config,
+        &template,
+        &instance.name,
+        &instance.description,
+        &mut model,
+    )
+    .unwrap();
     let path = Path::new(&instance.template_directory).join(format!(
         ".tandem-{}-{}.compose.json",
         config.namespace, instance.name

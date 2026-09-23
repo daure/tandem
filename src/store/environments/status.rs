@@ -489,10 +489,7 @@ impl Instance {
             .iter()
             .filter(|service| service.one_shot && !service.runtime.unexpected)
             .collect();
-        let count = running
-            .iter()
-            .filter(|service| service.state() == ContainerState::Running)
-            .count();
+        let count = running.iter().filter(|service| service.ready()).count();
         let active_jobs = jobs.iter().any(|service| {
             matches!(
                 service.state(),
@@ -608,25 +605,17 @@ impl Instance {
         if let Some((issue, severity)) = issue {
             result = result.detail(issue, severity);
         } else if status == Status::Degraded {
-            if let Some(service) = self.services.iter().find(|service| !service.ready()) {
+            if let Some(service) = self
+                .services
+                .iter()
+                .find(|service| !service.ready() && service.status_summary().busy)
+                .or_else(|| self.services.iter().find(|service| !service.ready()))
+            {
                 result = result.detail(
                     format!("{}: {}", service.name, service.status_summary().label),
                     Severity::Warning,
                 );
             }
-        } else if status == Status::Running {
-            let unchecked = running
-                .iter()
-                .filter(|service| service.health_state() == HealthState::Unconfigured)
-                .count();
-            let checking = running
-                .iter()
-                .filter(|service| service.health_state() == HealthState::Checking)
-                .count();
-            result = result.detail(
-                format!("{unchecked} unchecked · {checking} checking"),
-                Severity::Info,
-            );
         }
         if let Some(issue) = &self.runtime.issue {
             let detail = result

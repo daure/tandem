@@ -13,6 +13,7 @@ impl AppService {
         name: &str,
         template: String,
         open_command: Option<Option<String>>,
+        description: Option<String>,
     ) -> Result<NewInstanceOutcome, String> {
         let (existing, instance_lock) = self.environments.admit_new_instance(name, &template)?;
         if let Some(instance) = existing {
@@ -22,6 +23,7 @@ impl AppService {
                     &workspace,
                     name,
                     open_command.flatten().as_deref(),
+                    description.as_deref().unwrap_or(&instance.description),
                 ))?;
             }
             return Ok(NewInstanceOutcome::Existing(instance));
@@ -37,6 +39,7 @@ impl AppService {
             600,
             Startup {
                 instance_lock: Some(instance_lock),
+                description: description.clone(),
                 workspace_ready: open_command.is_some().then_some(sender),
                 ..Default::default()
             },
@@ -50,8 +53,13 @@ impl AppService {
                 let Ok(workspace) = ready.await else {
                     return Ok(());
                 };
-                self.launch_workspace_opener(&workspace, name, open_command.flatten().as_deref())
-                    .await
+                self.launch_workspace_opener(
+                    &workspace,
+                    name,
+                    open_command.flatten().as_deref(),
+                    description.as_deref().unwrap_or_default(),
+                )
+                .await
             };
             let (operation, opened) = tokio::join!(self.wait_operation(&operation.id), open);
             let operation = operation?;
@@ -78,7 +86,8 @@ impl AppService {
         &self,
         workspace: &str,
         name: &str,
-        extra: Option<&str>,
+        open_param: Option<&str>,
+        description: &str,
     ) -> Result<(), String> {
         let environments = std::sync::Arc::clone(&self.environments);
         let target = workspace.to_owned();
@@ -89,7 +98,8 @@ impl AppService {
         .await
         .map_err(|error| error.to_string())??;
         let command = self.settings.read_open_command().await?;
-        let mut child = spawn_workspace_command(&command, workspace, name, extra)?;
+        let mut child =
+            spawn_workspace_command(&command, workspace, name, open_param, Some(description))?;
         // Editors may stay running after startup. Reap while Tandem is alive without
         // making instance readiness depend on the editor's lifetime.
         self.runtime.spawn(async move {

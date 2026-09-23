@@ -176,7 +176,7 @@ fn template_deletion_cleans_running_stopped_paused_and_orphaned_instances() {
     )
     .unwrap();
     let mut model = json!({"services": {"web": {"image": "nginx"}}});
-    compose::decorate(&config, &template, "orphan", &mut model).unwrap();
+    compose::decorate(&config, &template, "orphan", "", &mut model).unwrap();
     fs::write(
         Path::new(&template.directory).join(".tandem-tandem-test-orphan.compose.json"),
         serde_json::to_vec(&model).unwrap(),

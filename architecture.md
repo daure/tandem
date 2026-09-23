@@ -1,67 +1,64 @@
 # Tandem architecture
 
-Tandem is a keyboard-first terminal application that exposes domain capabilities through a TUI, CLI and MCP server.
+Tandem is a keyboard-first terminal application that exposes one domain through TUI, CLI, and MCP interfaces. It remains a single Rust package while those interfaces share the same application and domain boundaries.
 
-## Boundaries
-
-- `main.rs` installs diagnostics and delegates to `cli`.
-- `cli.rs` selects TUI, stdio MCP, loopback HTTP MCP, or combined development mode, and adapts direct instance command arguments and output through `AppService`.
-- `lib.rs` initializes and wires `AppService` for TUI/MCP modes; direct CLI commands initialize their own service. Each process uses one `AppService`.
-- `service.rs` owns domain operations, persistence, external clients, synchronization, background work, errors, and notifications.
-- `environments/` implements template discovery, Compose rendering, Docker inspection, gateway provisioning, readiness, and scoped lifecycle operations for `AppService` only.
-- `store/environments/` defines domain snapshots, template manifests, operation outcomes, and naming validation.
-- `app.rs` builds presentation-only `tuicore` nodes. Nodes read service snapshots and request operations through the service.
-- `mcp.rs` defines typed MCP tools. Tools adapt input and output only, then call `AppService`.
-
-## Invariants
-
-1. The TUI and MCP surface use the same `AppService` contract.
-2. Rendering performs no I/O, blocking work, or domain mutation.
-3. Blocking work runs outside the TUI event loop and async MCP executor.
-4. MCP HTTP binds only to loopback and validates loopback Host headers and same-origin browser requests. Remote transport requires authentication design and review.
-5. Terminal lifecycle, themes, focus, and shared component keys come from `tuicore`.
-6. Domain state and validation live by capability under `store/<domain>/`; domain I/O is requested through `AppService`.
-7. App-specific keys are configurable and displayed from their resolved `KeySpec` labels.
-8. Docker labels and runtime state own container-backed inventory. Workspace-only instance identity and preparation completion are owned by namespace-scoped runtime journals, with validated instance/template/workspace paths and an explicit execution kind; empty container observations never imply workspace-only execution. Templates and workspaces are filesystem resources; operation IDs/history and cached samples are process-local. Atomically written journals retain launch topology, per-repository preparation outcomes, run-specific stop evidence, route-check timestamps, and bounded activity under the instance mutation lock. Journals annotate discovered containers; an activity/cleanup row can survive without containers. Readers detect an expired deadline or released operation lock as interrupted activity. Workspace-only instances survive process restart independently of Docker; Docker inspection failures retain their inventory without marking it stale, and partial MCP listings expose `runtime_error`.
-9. The TUI refreshes runtime inventory asynchronously every ten seconds while terminal-focused and every five minutes while unfocused, with an immediate request on focus gain. Terminals without focus reporting retain the focused cadence. Templates load at startup and manual refresh. Service mutations publish scoped SQLite revision counters shared across processes using the same Tandem home; an activated TUI observer checks these once per second and refreshes only affected domains. Runtime counters are namespace-scoped. The serial refresh worker coalesces requests and observes mutations that arrive during a refresh; MCP-only processes publish without activating an observer. Local UI state is read every 250 ms. Rendering performs no subprocess or filesystem work.
-10. Instance mutations and gateway provisioning use advisory locks beneath the shared Tandem home, explicitly unlocked on guard drop. Stop preserves source workspaces and volumes; success requires both a successful Docker command and fresh inspection of the same targeted container runs as exited/created. Requested-stop evidence requires an observed exit after the request and matches container ID, start time, finish time and exit code; partial results annotate only confirmed targets. OOM/error evidence stays visible independently.
-    Instance and service restarts share the instance lock and verify Docker ownership before restarting existing containers. Instance restart excludes one-shot jobs; service restart selects exact service names within the instance. Both preserve configuration and data and leave the gateway untouched. Completion requires the original targeted containers to run and pass configured healthchecks and gateway content assertions within a ten-minute budget. Routed targets use a snapshot of current template readiness configuration under a shared template lock; targets without healthchecks or routes are verified only as running. The TUI emits one terminal success or failure notification per restart.
-    Service start/stop selects an exact long-running service and uses the same ownership checks and instance lock. Both preserve existing containers and data, leaving dependencies and the gateway untouched. Start uses the restart readiness contract; stop requires no template and has a one-minute budget. Both emit one terminal success or failure notification.
-    Instance starts hold shared template locks; template mutations hold exclusive locks. Distinct instances can start concurrently, and shared gateway provisioning waits for its exclusive lock within the startup deadline. Template deletion preflights ownership and instance locks, stops all owned containers, removes instance resources and workspaces, then removes template files. Cleanup receipts preserve ownership across failed starts and partial deletion; Docker labels remain the runtime inventory authority.
-    Toolbar Stop all and Purge all capture instance names across templates when confirmation opens. AppService admits each confirmed target through the per-instance lifecycle path, deduplicates names, and reports admission failures alongside accepted operations. Execution failures remain per-instance; templates and the gateway are outside the batch scope.
-11. The gateway is a long-lived Traefik container on a shared external ingress network, with a loopback-only published port. Routes are generated from instance/service labels, never a route registry.
-12. HTTP routes use `/<instance>/<service>/`; readiness checks assert configured content through the gateway, with bounded waits. Template authors own prefix-aware application configuration.
-    Templates may supply Compose with optional manifest metadata, a manifest declaring repositories without Compose, or guidance alone. Without Compose, validation requires repositories or a readable `tandem-agents.md` and rejects routes and one-shots. Workspace-only creation provisions any declared repositories and writes guidance before reporting `Workspace ready`; it skips Docker, gateway provisioning and container readiness. Guidance-only creation performs no Git work and prepares an otherwise empty folder containing generated `AGENTS.md`. Stop is a preserving no-op, service actions are inapplicable, and deletion removes the owned workspace and records under the instance lock. Template removal and purges include these instances. Instance execution kind is fixed at preparation; switching between workspace-only and container-backed execution requires a new name.
-    Failed instance-deletion activities expose a distinct cleanup target for the TUI's confirmed retry action; active and template-level activities do not become instance targets. Deletion can resolve a missing runtime instance through a path-validated journal and a matching regular template ownership receipt, independently of the current template's service definitions. Successful Docker inspection and exact project-membership validation are required for this recovery; an empty container list never reclassifies execution kind. Cleanup retains its evidence until workspace and resource removal succeed, and unverifiable ownership prevents mutation.
-13. Agent guidance is authored in `agent-instructions.md`, seeded to an editable runtime Markdown file and read through `AppService` on each `get_instructions` call. Responses include a `manifest_schema` generated from the Rust manifest types independently of the user-owned Markdown. Manifest updates pass through `AppService`, require approval, validate before atomic replacement under the template lock, and perform no Docker/Git work; Compose references are checked at startup.
-14. Resource sampling is due every minute and runs after inventory refresh, normally every five minutes when unfocused. New runs, pause/resume transitions and failed readings trigger targeted samples on the next eligible inventory poll without shifting the periodic deadline. Manual requests force eligible containers through one-shot sampling; valid first readings trigger a second reading after a one-second pause. Memory publishes first, CPU requires a valid same-run baseline, and manual completion waits for sampling. The serial worker coalesces requests and prevents overlap. Each reading has a ten-second budget and at most eight parallel Unix-socket requests. Late results from replaced/restarted/stopped containers are discarded. Template errors permit sampling; runtime inspection errors block it. Failures retain per-container last readings and error provenance until recovery.
-    Pending instances and active startup activities suppress their subtree's metrics until success, failure or expiry. Only running/paused containers contribute memory; only running containers contribute CPU. Health does not gate sampling. Paused CPU is unknown; pause/resume invalidates its baseline. Memory and CPU totals track coverage independently, and startup exclusions produce partial totals. Resource values display the last successful readings; sample age and collection errors are available in details. Resource failures do not change lifecycle/health. Collapsed, filtered and offscreen rows do not affect sampling or totals. The toolbar displays instance-wide memory then CPU totals left of Refresh, excluding the gateway. CPU uses one-core percentages and can exceed 100%. Totals share the tree's coverage labels and hide when the full label cannot fit beside the controls.
-15. Status classification lives in pure domain projections shared by TUI/MCP. Typed runtime observations remain separate from interpreted summaries, operation outcomes, and resource samples. Expected replica slots come from the journal or an ownership-verified rendered Compose artifact; unknown topology prevents a healthy-instance claim. Completed setup jobs form a collapsed group; other setup states remain visible. Status icons and labels use semantic theme colors, with independently colored issue qualifiers; tuicore's spinner marks activity. Docker health does not certify gateway reachability.
-    Docker inspection supplies explicit memory limits. Memory pressure uses 70% warning/90% error thresholds; aggregate pressure requires complete coverage, caps for every contributor and successful collection/inspection. Searchable headerless property/value DataViews present metadata/details. Resource-bearing tree rows are two lines high, with memory above CPU in a right-aligned, content-sized column. Setup groups occupy one line; setup jobs use up to two label lines. Both omit tree metrics. Templates start expanded and instances collapsed; New instance resolves the template from any selected row. Template secondary lines show instance counts and the latest-five successful-startup average, which also supplies instance countdown estimates.
-16. Workspace opening and saved-command execution read the persisted open command through the settings worker. Empty commands use the system folder opener; trusted custom commands run asynchronously through `sh -c` in the workspace with `TANDEM_INSTANCE` and `TANDEM_WORKSPACE` set as environment data. CLI `new-instance --open-command [EXTRA]` passes its optional argument as `TANDEM_EXTRA` to a custom saved command. TUI and MCP saves share the service, and MCP command execution requires user approval. Child process streams stay detached from the terminal and MCP protocol.
-    Destructive instance operations read the persisted close command through the settings worker. Individual deletion, purges, and template removal invoke it under the instance lock after Docker cleanup and validated workspace resolution, immediately before removing each existing workspace. It uses the opener's shell/environment contract; empty commands and missing workspaces skip execution. Execution has a ten-second bound with process-group termination on Unix timeout. Failures are logged and retained in operation warnings without vetoing workspace removal; normal cleanup deadlines still apply. TUI completion notifications and CLI stderr surface warnings; MCP returns them on the operation. Stops and restarts preserve workspaces and do not invoke close commands.
-    CLI instance creation can opt into opening at the typed workspace-ready milestone, emitted under the instance/template locks after declared repositories are prepared, Compose configuration is rendered, and workspace guidance is written. AppService launches the saved command once and waits independently for startup readiness; editor lifetime does not delay CLI exit. Template-owned clone jobs and container-created files are outside this milestone. Preparation failures suppress opening; opener launch failures are reported after startup completes, and opener exit failures observed while the CLI runs are logged.
-    `workspace-agents.template.md` is bundled in the binary and installed under Tandem home during service configuration, exposed by `get_instructions`. A home-wide lock serializes installation across namespaces. Bundled-content changes atomically replace the runtime template after preserving a differing local copy in a unique backup; a private bundled-content record is written last. Unchanged bundle content preserves local edits, and missing runtime templates are restored. Existing workspace guidance and runtime MCP instructions remain untouched by template installation.
-    Optional template-local `tandem-agents.md` is loaded through the environment boundary and exposed with its absolute path in template snapshots. Template details show a fourth Guidance tab with Markdown syntax highlighting when its source is present, including empty files. Workspace generation appends its contents literally after rendering the base template. Reads enforce the template directory boundary, regular-file type, UTF-8 and 256 KiB limit; failures prevent workspace guidance installation.
-    Instance creation writes workspace-root `AGENTS.md` atomically after repository preparation and before any container startup. Every workspace opener ensures this file exists before executing; missing guidance for existing instances uses available template declarations and instance metadata. Default guidance uses the instance name as its heading and conditions repository, container and HTTP instructions on identified resources. Without services, repositories use a two-column repository/guidance table and local verification instructions. With services, the table covers every configured service except `repo-sync`, including infrastructure, setup jobs and zero-replica services, plus declared, recorded and top-level Git repositories. Missing rendered configuration falls back to deduplicated instance service names. Repository/code-path mappings use ownership-verified rendered Compose bind mounts; whole-workspace mounts require working-directory, argv-path or local build-context evidence. Services without identified repository mappings have empty-marked repository/code-path/guidance cells; unmapped repositories remain explicit. Existing regular files remain user-owned; symlinks and directories fail generation. The snapshot excludes live health, metrics and environment secrets. Generation I/O runs on blocking workers behind AppService.
-    CLI admission checks journal ownership for workspace-only instances and Docker ownership for container-backed instances under the instance lock. Prepared workspaces and existing container instances matching the requested template/workspace are returned without scheduling startup or recording a startup duration; optional opening requires a valid workspace and prepared guidance, independently of container readiness. Failed workspace-only preparation is retried through creation. Vacant admission transfers its held lock to the startup worker, preventing concurrent creation between inspection and execution. Existing container instances are reported independently of readiness or container state.
-    CLI deletion runs the saved close command only when `--close-command` or `-cc` is supplied; AppService applies this per-operation choice without changing the shared setting. TUI and MCP deletions enable the saved hook. Headless CLI deletion forwards this choice to a detached foreground-delete child and returns once that child starts. The child owns lifecycle execution and diagnostic reporting; it has no operation ID or result channel to its parent.
-17. Manifest `repositories` opt into core-managed provisioning before Compose configuration under the instance lock and startup deadline. Host Git clones into temporary sibling directories and installs complete checkouts with Linux no-replace rename. Branch instances selects the remote instance branch or creates a local branch from the remote default. Existing checkout roots and exact origins are validated without fetching or changing user work. A workspace ownership receipt binds provisioning to its template. Template authors own sources, targets, host credential access and app setup; undeclared templates keep their own checkout workflows. Git prompts, repository hooks and recursive submodule initialization are disabled.
-    Each successful preparation records the repository target, absolute checkout path and cloned/existing outcome before proceeding. Partial failures preserve completed outcomes and checkouts. Setup groups count these records alongside completed one-shot jobs; repository children sort by target above jobs and use one line with a success-colored Git icon. Their copy action copies the absolute checkout path. Workspace-only instances hide resource metrics and show an informational one-line service placeholder, while retaining workspace actions and preparation failures.
-
-## Growth shape
+## System shape
 
 ```text
-src/
-  app.rs
-  cli.rs
-  diagnostics.rs
-  mcp.rs
-  service.rs
-  environments/
-  store/<domain>/
-  pages/<page>/
-  components/
+TUI (`app`)      CLI (`cli`)      MCP (`mcp`)
+       \             |             /
+                    AppService
+                        |
+          domain state and environment adapters
+                        |
+        Docker · filesystem · Git · SQLite · HTTP · processes
 ```
 
-Keep Tandem as one package until another client needs its domain engine, build times create pressure, or a real platform/security boundary requires a crate split.
+Presentation layers adapt input and output. `AppService` is the sole application boundary for domain operations, persistence, external clients, background work, and notifications. Environment modules perform infrastructure I/O for the service; store modules define domain state and pure projections.
+
+## Module responsibilities
+
+- `main.rs` installs diagnostics and enters the selected interface.
+- `lib.rs` initializes one `AppService` per process and wires long-running interfaces.
+- `cli.rs`, `mcp.rs`, and `app.rs` translate their transports into service calls. They contain no domain rules or infrastructure I/O.
+- `service.rs` and `service/` coordinate use cases, workers, persistence, and external adapters.
+- `environments/` owns Docker, Compose, gateway, repository, filesystem, and process integration.
+- `store/<domain>/` owns domain types, validation, state transitions, and pure summaries.
+- `app/` contains presentation-only TUI state, composition, and projections.
+
+## Architectural invariants
+
+1. **One application contract.** TUI, CLI, and MCP behavior converges in `AppService`; adding an interface must not create a second domain path.
+2. **Pure presentation.** TUI render and projection paths perform no I/O, blocking work, or domain mutation. `tuicore` owns terminal lifecycle, layout, focus, themes, and configurable keybindings.
+3. **Explicit blocking boundaries.** Docker, Git, filesystem, database, HTTP, and child-process work runs outside the TUI event loop and async MCP executor.
+4. **Transport isolation.** MCP stdio reserves stdout for protocol data. HTTP MCP remains loopback-only unless a separate authenticated remote-access design is approved.
+5. **Typed domain state.** Raw runtime observations, interpreted status, operation outcomes, and resource samples remain distinct types. Shared projections classify status for every interface.
+6. **Ownership before mutation.** Paths, Docker resources, repositories, and persisted records are validated against Tandem ownership before destructive or state-changing work.
+7. **Serialized conflicting work.** Per-instance locks protect lifecycle changes; template and gateway locks protect shared resources. Unrelated instances may proceed concurrently.
+8. **Snapshots for readers.** Interfaces consume snapshots rather than reaching into adapters. Background workers publish completed observations and retain the last trustworthy state when an external dependency fails.
+
+## State ownership
+
+- Docker labels and inspected containers are authoritative for container-backed runtime inventory.
+- Runtime journals own workspace-only identity, preparation outcomes, launch topology, and recoverable activity evidence.
+- The filesystem owns templates, generated configuration, repositories, and workspaces.
+- SQLite owns settings, startup history, and cross-process refresh revisions.
+- Operation history, resource samples, and transient UI state are process-local caches.
+
+An empty or failed Docker observation never proves that an instance is workspace-only. Recovery and cleanup require positive ownership evidence from the appropriate source.
+
+## Background work and refresh
+
+A serial refresh worker coalesces inventory requests and uses persisted revision counters to observe changes from other Tandem processes. Resource collection augments inventory snapshots but does not determine lifecycle or health. Sampling failures retain valid prior readings with error provenance.
+
+Long-running mutations publish progress through operation records. Completion is based on fresh observations of the targeted resources, not command exit alone. External commands run with bounded lifetimes and keep their output away from terminal and MCP protocol streams.
+
+## Template and workspace model
+
+A template may describe a Compose environment, a repository-backed workspace, or guidance-only setup. Instance execution kind is fixed when prepared because container-backed and workspace-only instances have different ownership evidence and lifecycle behavior.
+
+Template manifests declare core-managed repositories, routes, and setup jobs. Template authors own application-specific setup and prefix-aware routing. Tandem owns safe provisioning, generated workspace guidance, and lifecycle coordination.
+
+## Growth rules
+
+Keep Tandem as one package until a real boundary appears: another client needs the domain engine, build pressure warrants separation, or deployment/security requires an independent process. Split modules by capability before splitting crates. New infrastructure integrations sit behind `AppService`; new interfaces remain adapters over it.

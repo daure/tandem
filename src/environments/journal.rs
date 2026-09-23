@@ -202,11 +202,13 @@ pub(super) fn topology(
     config: &Config,
     template: &str,
     name: &str,
+    description: &str,
     services: Vec<InstanceService>,
 ) -> Result<(), String> {
     let mut record = read(config, name)?;
     record.expected = Some(Instance {
         name: name.into(),
+        description: description.into(),
         template: template.into(),
         template_directory: config.templates.join(template).display().to_string(),
         workspace: config.workspaces.join(name).display().to_string(),

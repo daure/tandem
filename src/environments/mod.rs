@@ -30,7 +30,7 @@ use std::{
 
 use crate::store::environments::{
     EnvironmentSnapshot, Instance, InstanceService, Instructions, Operation, OperationState,
-    StartupTiming, Template, validate_instance_name, validate_name,
+    StartupKind, StartupTiming, Template, validate_instance_name, validate_name,
 };
 use command::Progress;
 use config::Config;
@@ -43,6 +43,7 @@ pub(crate) struct Environments {
     operations: Mutex<BTreeMap<String, Job>>,
     next_id: AtomicU64,
     instance_revision: AtomicU64,
+    inventory_generation: AtomicU64,
     resources: Mutex<resources::ResourceCache>,
 }
 
@@ -52,12 +53,22 @@ struct Job {
     pending_services: Vec<InstanceService>,
     started_at: u64,
     timeout_seconds: u64,
+    startup_kind: Option<StartupKind>,
+    completion_generation: Option<u64>,
 }
 
 impl Job {
     fn running(&self) -> bool {
         self.operation.state == OperationState::Running
             && self.started.elapsed().as_secs() < self.timeout_seconds
+    }
+
+    fn projecting(&self, inventory_generation: u64) -> bool {
+        self.running()
+            || self.operation.state == OperationState::Succeeded
+                && self
+                    .completion_generation
+                    .is_some_and(|generation| inventory_generation <= generation)
     }
 }
 
@@ -76,6 +87,7 @@ impl Environments {
             operations: Mutex::new(BTreeMap::new()),
             next_id: AtomicU64::new(1),
             instance_revision: AtomicU64::new(0),
+            inventory_generation: AtomicU64::new(0),
             resources: Mutex::new(resources::ResourceCache::default()),
         }
     }
@@ -86,6 +98,7 @@ impl Environments {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let mut snapshot = stored.clone();
+        let inventory_generation = self.inventory_generation.load(Ordering::SeqCst);
         let jobs = self
             .operations
             .lock()
@@ -104,6 +117,7 @@ impl Environments {
                         .try_into()
                         .unwrap_or(u64::MAX),
                     estimate_milliseconds: None,
+                    kind: job.startup_kind.unwrap_or_default(),
                 },
             );
         }
@@ -118,9 +132,9 @@ impl Environments {
             }
             if let Some(job) = jobs
                 .values()
-                .find(|job| job.operation.targets(instance) && job.running())
+                .find(|job| job.operation.targets(instance) && job.projecting(inventory_generation))
             {
-                instance.runtime.activity = Some(activity_from_job(job));
+                instance.runtime.activity = Some(activity_from_job(job, true));
             } else if jobs.values().any(|job| {
                 job.operation.targets(instance)
                     && job.operation.state == OperationState::Running
@@ -148,7 +162,7 @@ impl Environments {
                 && job.operation.state != OperationState::Succeeded
             {
                 activity.finished = true;
-                activity.error = activity_from_job(job).error;
+                activity.error = activity_from_job(job, false).error;
                 return true;
             }
             false
@@ -162,7 +176,7 @@ impl Environments {
                 .iter()
                 .any(|activity| activity.id == job.operation.id)
             {
-                snapshot.activities.push(activity_from_job(job));
+                snapshot.activities.push(activity_from_job(job, true));
             }
         }
         if !snapshot.instances.iter().any(|instance| {
@@ -209,6 +223,10 @@ impl Environments {
 
     pub fn refresh_instances(&self) {
         let revision = self.instance_revision.load(Ordering::SeqCst);
+        let mut system = sysinfo::System::new();
+        system.refresh_memory();
+        let available_memory = system.available_memory();
+        let available_memory_bytes = (available_memory > 0).then_some(available_memory);
         let instances = docker::inspect(&self.config).and_then(|mut instances| {
             let activities = journal::enrich(&self.config, &mut instances)?;
             self.snapshot
@@ -217,6 +235,10 @@ impl Environments {
                 .activities = activities;
             Ok(instances)
         });
+        self.snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .available_memory_bytes = available_memory_bytes;
         self.publish_instances(instances, revision);
     }
 
@@ -271,12 +293,16 @@ impl Environments {
         }
         merge_pending_instances(&mut snapshot.instances, &pending);
         snapshot.runtime_error = error.clone();
+        let inventory_observed = error.is_none();
         self.set_inventory_error(&mut snapshot, 1, error);
         snapshot.loading = false;
         self.resources
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .apply(&mut snapshot.instances);
+        if inventory_observed {
+            self.inventory_generation.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     pub fn list_templates(&self) -> Result<Vec<Template>, String> {
@@ -415,6 +441,21 @@ impl Environments {
         if let Some(template) = &template {
             validate_name(template)?;
         }
+        let startup_kind = (action == "create_instance").then(|| {
+            let snapshot = self
+                .snapshot
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if snapshot
+                .instances
+                .iter()
+                .any(|instance| instance.name == name)
+            {
+                StartupKind::Hot
+            } else {
+                StartupKind::Cold
+            }
+        });
         let mut operations = self
             .operations
             .lock()
@@ -466,6 +507,8 @@ impl Environments {
                 pending_services: Vec::new(),
                 started_at: journal::now(),
                 timeout_seconds: 900,
+                startup_kind,
+                completion_generation: None,
             },
         );
         drop(operations);
@@ -584,6 +627,14 @@ impl Environments {
                 operation
             })
             .collect()
+    }
+
+    pub(crate) fn startup_kind(&self, id: &str) -> Option<StartupKind> {
+        self.operations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(id)
+            .and_then(|job| job.startup_kind)
     }
 
     pub fn operation(&self, id: &str) -> Result<Operation, String> {
@@ -721,6 +772,16 @@ impl Environments {
                     .unwrap_or(u64::MAX);
                 match result {
                     Ok(mut instance) => {
+                        let wait_for_inventory = instance.is_none()
+                            && matches!(
+                                job.operation.action.as_str(),
+                                "stop_instance"
+                                    | "stop_template"
+                                    | "restart_instance"
+                                    | "restart_service"
+                                    | "start_service"
+                                    | "stop_service"
+                            );
                         if let Some(ready) = &mut instance {
                             ready.pending = false;
                             ready.runtime.activity = None;
@@ -744,6 +805,11 @@ impl Environments {
                         }
                         job.operation.state = OperationState::Succeeded;
                         job.operation.instance = instance;
+                        job.completion_generation = wait_for_inventory
+                            .then(|| self.inventory_generation.load(Ordering::SeqCst));
+                        if wait_for_inventory {
+                            self.instance_revision.fetch_add(1, Ordering::SeqCst);
+                        }
                     }
                     Err(error) => {
                         job.operation.state = OperationState::Failed;
@@ -784,7 +850,7 @@ fn merge_pending_instances(instances: &mut Vec<Instance>, pending: &[Instance]) 
     }
 }
 
-fn activity_from_job(job: &Job) -> crate::store::environments::Activity {
+fn activity_from_job(job: &Job, active: bool) -> crate::store::environments::Activity {
     let operation = &job.operation;
     crate::store::environments::Activity {
         id: operation.id.clone(),
@@ -808,7 +874,7 @@ fn activity_from_job(job: &Job) -> crate::store::environments::Activity {
             (operation.state == OperationState::Running && !job.running())
                 .then(|| "Operation timed out; refresh required".into())
         }),
-        finished: !job.running(),
+        finished: !active,
     }
 }
 

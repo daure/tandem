@@ -6,20 +6,30 @@ fn parse(arguments: &[&str]) -> Result<Cli, clap::Error> {
 
 #[test]
 fn new_instance_accepts_long_short_and_mixed_options() {
-    for (options, expected_open_command) in [
-        (vec!["review", "--template", "website"], None),
+    for (options, expected_open_command, expected_description) in [
+        (vec!["review", "--template", "website"], None, None),
         (
             vec!["review", "-t", "website", "--open-command"],
             Some(None),
+            None,
         ),
-        (vec!["review", "-twebsite", "-oc"], Some(None)),
+        (vec!["review", "-twebsite", "-oc"], Some(None), None),
         (
             vec!["review", "-t", "website", "-oc", "extra value"],
             Some(Some("extra value")),
+            None,
         ),
         (
-            vec!["review", "-t", "website", "--open-command=extra value"],
+            vec![
+                "review",
+                "-t",
+                "website",
+                "--open-command=extra value",
+                "-d",
+                "Review environment",
+            ],
             Some(Some("extra value")),
+            Some("Review environment"),
         ),
     ] {
         let mut arguments = vec!["tandem", "new-instance"];
@@ -28,6 +38,7 @@ fn new_instance_accepts_long_short_and_mixed_options() {
             name,
             template,
             open_command,
+            description,
         }) = parse(&arguments).unwrap().command
         else {
             panic!("expected new-instance");
@@ -38,6 +49,7 @@ fn new_instance_accepts_long_short_and_mixed_options() {
             open_command.as_ref().map(|extra| extra.as_deref()),
             expected_open_command
         );
+        assert_eq!(description.as_deref(), expected_description);
     }
 }
 

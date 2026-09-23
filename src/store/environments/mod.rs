@@ -159,6 +159,8 @@ impl InstanceService {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub(crate) struct Instance {
     pub name: String,
+    #[serde(default)]
+    pub description: String,
     pub template: String,
     pub template_directory: String,
     pub workspace: String,
@@ -202,7 +204,8 @@ pub(crate) struct EnvironmentSnapshot {
     pub templates: Vec<Template>,
     pub instances: Vec<Instance>,
     pub startup: BTreeMap<String, StartupTiming>,
-    pub startup_averages_milliseconds: BTreeMap<String, u64>,
+    pub cold_startup_averages_milliseconds: BTreeMap<String, u64>,
+    pub hot_startup_averages_milliseconds: BTreeMap<String, u64>,
     pub templates_root: String,
     pub home_directory: Option<String>,
     pub gateway_origin: String,
@@ -210,15 +213,25 @@ pub(crate) struct EnvironmentSnapshot {
     pub loading: bool,
     pub resource_error: Option<String>,
     pub resource_sample_duration_ms: Option<u64>,
+    pub available_memory_bytes: Option<u64>,
     pub observed_at_unix_seconds: Option<u64>,
     pub runtime_error: Option<String>,
     pub activities: Vec<Activity>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StartupKind {
+    #[default]
+    Cold,
+    Hot,
 }
 
 #[derive(Clone, Debug, Default, Serialize, JsonSchema, PartialEq, Eq)]
 pub(crate) struct StartupTiming {
     pub elapsed_milliseconds: u64,
     pub estimate_milliseconds: Option<u64>,
+    pub kind: StartupKind,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq)]

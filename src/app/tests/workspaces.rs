@@ -40,7 +40,7 @@ fn repository_setup_rows_precede_jobs_and_copy_absolute_checkout_paths() {
         assert_eq!(row.height(), 1);
         assert_eq!(row.icon, "");
         assert_eq!(
-            row.text("").lines[0].spans[0].style.fg,
+            row.text("", None).lines[0].spans[0].style.fg,
             Some(tuicore::theme().success_fg())
         );
         assert!(row.tone == crate::app::rows::Tone::Success);
@@ -77,11 +77,11 @@ fn workspace_rows_have_ready_status_and_an_informational_service_placeholder() {
         .find(|row| row.id == "no-services:review")
         .unwrap();
     assert_eq!(empty.parent.as_deref(), Some("instance:review"));
-    assert_eq!(empty.text("").to_string(), "(no services configured)");
+    assert_eq!(empty.text("", None).to_string(), "(no services configured)");
     assert_eq!(empty.height(), 1);
     assert!(empty.informational);
     assert_eq!(
-        empty.text("").lines[0].spans[0].style.fg,
+        empty.text("", None).lines[0].spans[0].style.fg,
         Some(tuicore::theme().muted_fg())
     );
     let mut app = root(AppService::for_tests());

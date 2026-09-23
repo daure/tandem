@@ -19,6 +19,7 @@ pub(crate) const URL: &str = "io.tandem.url";
 pub(crate) const PORT: &str = "io.tandem.port";
 pub(crate) const KIND: &str = "io.tandem.kind";
 pub(crate) const INSTANCE: &str = "io.tandem.instance";
+pub(crate) const DESCRIPTION: &str = "io.tandem.description";
 
 pub(crate) struct Rendered {
     pub path: std::path::PathBuf,
@@ -67,6 +68,7 @@ pub(crate) fn render(
     config: &Config,
     template: &Template,
     name: &str,
+    description: &str,
     branch: Option<&str>,
     timeout: Duration,
 ) -> Result<Rendered, String> {
@@ -81,7 +83,7 @@ pub(crate) fn render(
     cmd.args(["config", "--format", "json"]);
     let mut model: Value =
         serde_json::from_str(&run(cmd, timeout, None)?).map_err(|error| error.to_string())?;
-    decorate(config, template, name, &mut model)?;
+    decorate(config, template, name, description, &mut model)?;
     let rendered = directory.join(format!(".tandem-{}-{name}.compose.json", config.namespace));
     // Compose will interpolate this resolved model once more when launching it.
     let text = serde_json::to_string_pretty(&model)
@@ -151,6 +153,7 @@ pub(crate) fn decorate(
     config: &Config,
     template: &Template,
     name: &str,
+    description: &str,
     model: &mut Value,
 ) -> Result<(), String> {
     validate_instance_name(name)?;
@@ -215,6 +218,7 @@ pub(crate) fn decorate(
             (NAMESPACE, config.namespace.clone()),
             (KIND, "instance".into()),
             (INSTANCE, name.into()),
+            (DESCRIPTION, description.into()),
             (TEMPLATE, template.name.clone()),
             (DIRECTORY, template.directory.clone()),
             (

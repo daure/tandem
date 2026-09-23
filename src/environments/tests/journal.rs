@@ -73,6 +73,7 @@ fn topology_preserves_missing_replica_slots_and_job_roles() {
         &config,
         "website",
         "review",
+        "",
         vec![app.services[0].clone(), second],
     )
     .unwrap();
@@ -114,7 +115,7 @@ fn lost_operation_lock_ends_activity_and_startup_suppression() {
 #[test]
 fn failed_cleanup_remains_observable_without_containers() {
     let (_directory, config, app) = fixture();
-    topology(&config, "website", "review", app.services).unwrap();
+    topology(&config, "website", "review", "", app.services).unwrap();
     let _lock = gateway::lock(&config, "instance-review").unwrap();
     let guard = ActivityGuard::begin(&config, "review", "delete_instance", None, 60).unwrap();
     assert!(guard.finish::<()>(Err("volume busy".into())).is_err());

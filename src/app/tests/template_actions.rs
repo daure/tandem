@@ -130,6 +130,10 @@ fn new_instance_uses_a_mode_specific_placeholder() {
         lines.iter().any(|line| line.contains("Instance name")),
         "{lines:#?}"
     );
+    assert!(
+        lines.iter().any(|line| line.contains("Description")),
+        "{lines:#?}"
+    );
 
     app.handle_message(
         Msg::SetBranchInstances(true),
@@ -142,6 +146,34 @@ fn new_instance_uses_a_mode_specific_placeholder() {
             .iter()
             .any(|line| line.contains("branch-name"))
     );
+}
+
+#[test]
+fn new_instance_dialog_has_a_fixed_wider_width() {
+    tuicore::init();
+    let short = crate::app::dialogs::instance_entry(
+        "New instance",
+        "review",
+        "Short",
+        "Instance name",
+        None,
+    )
+    .measure(tuicore::LayoutProposal::unbounded())
+    .preferred
+    .width;
+    let long = crate::app::dialogs::instance_entry(
+        "New instance",
+        "review",
+        &"A long description ".repeat(20),
+        "Instance name",
+        None,
+    )
+    .measure(tuicore::LayoutProposal::unbounded())
+    .preferred
+    .width;
+
+    assert_eq!(short, 66);
+    assert_eq!(long, short);
 }
 
 #[test]

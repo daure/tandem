@@ -107,6 +107,8 @@ impl Instances {
             .collect::<Vec<_>>();
         let spinner = Rc::new(RefCell::new(Spinner::new()));
         let cell_spinner = Rc::clone(&spinner);
+        let memory_spinner = Rc::clone(&spinner);
+        let cpu_spinner = Rc::clone(&spinner);
         let tree = DataView::new(rows, |row: &Row| row.id.clone())
             .focus_id(TREE_FOCUS)
             .columns(vec![
@@ -114,23 +116,32 @@ impl Instances {
                     "name",
                     "Templates / instances",
                     Constraint::Fill(1),
-                    move |row: &Row, _| row.text(cell_spinner.borrow().glyph()),
+                    move |row: &Row, context| {
+                        row.text(cell_spinner.borrow().glyph(), context.available_width)
+                    },
                 )
                 .search_key(Row::search_text)
                 .constrained(),
                 Column::multiline(
-                    "resources",
-                    "Memory / CPU",
+                    "memory",
+                    "Memory",
                     Constraint::Min(0),
-                    |row: &Row, _| {
-                        let mut resources = row.resource_text();
-                        for line in &mut resources.lines {
-                            line.spans.push(Span::raw(" "));
-                            line.alignment = Some(Alignment::Right);
-                        }
-                        resources
+                    move |row: &Row, _| {
+                        let mut memory =
+                            row.memory_text_with_spinner(memory_spinner.borrow().glyph());
+                        memory.spans.insert(0, Span::raw(" "));
+                        memory.alignment = Some(Alignment::Right);
+                        memory
                     },
                 )
+                .search_key(|row| row.resource_text().to_string())
+                .fit_content(),
+                Column::multiline("cpu", "CPU", Constraint::Min(0), move |row: &Row, _| {
+                    let mut cpu = row.cpu_text_with_spinner(cpu_spinner.borrow().glyph());
+                    cpu.spans.push(Span::raw(" "));
+                    cpu.alignment = Some(Alignment::Right);
+                    cpu
+                })
                 .search_key(|row| row.resource_text().to_string())
                 .fit_content(),
             ])
@@ -306,7 +317,13 @@ impl TuiNode<Msg> for Instances {
         let changed = self.sync_rows();
         let mut result =
             <DataView<Row, String> as TuiNode<Msg>>::tick(&mut self.tree, dt, settings);
-        if self.state.borrow().rows.iter().any(|row| row.loading) {
+        if self
+            .state
+            .borrow()
+            .rows
+            .iter()
+            .any(|row| row.loading || row.metrics.memory_waiting || row.metrics.cpu_waiting)
+        {
             result = result.merge(Animated::tick(
                 &mut *self.spinner.borrow_mut(),
                 dt,
