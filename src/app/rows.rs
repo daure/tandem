@@ -282,18 +282,33 @@ impl Row {
         resource_text_with_spinner(&self.metrics, None, spinner)
     }
 
-    pub(super) fn memory_text_with_spinner(&self, spinner: &str) -> Line<'static> {
-        if self.hide_resources || self.metrics.memory_bytes.is_none() {
+    pub(super) fn memory_text(&self) -> Line<'static> {
+        let waiting = self.metrics.memory_waiting || self.metrics.cpu_waiting;
+        let complete =
+            self.metrics.memory_bytes.is_some() && self.metrics.cpu_basis_points.is_some();
+        if self.hide_resources || self.metrics.memory_bytes.is_none() || waiting && !complete {
             return Line::default();
         }
-        resource_memory_text_with_spinner(&self.metrics, None, spinner)
+        resource_memory_text_with_spinner(&self.metrics, None, None)
     }
 
     pub(super) fn cpu_text_with_spinner(&self, spinner: &str) -> Line<'static> {
-        if self.hide_resources || self.metrics.cpu_basis_points.is_none() {
+        if self.hide_resources {
             return Line::default();
         }
-        resource_cpu_text_with_spinner(&self.metrics, spinner)
+        let waiting = self.metrics.memory_waiting || self.metrics.cpu_waiting;
+        let complete =
+            self.metrics.memory_bytes.is_some() && self.metrics.cpu_basis_points.is_some();
+        if waiting && !complete {
+            return Line::from(Span::styled(
+                spinner.to_owned(),
+                Style::default().fg(Tone::Muted.color()),
+            ));
+        }
+        if self.metrics.cpu_basis_points.is_none() {
+            return Line::default();
+        }
+        resource_cpu_text_with_spinner(&self.metrics, waiting.then_some(spinner))
     }
 
     pub(super) fn name_value(&self) -> Option<String> {
@@ -312,41 +327,60 @@ pub(super) fn resource_text_with_spinner(
     spinner: &str,
 ) -> Text<'static> {
     Text::from(vec![
-        resource_memory_text_with_spinner(metrics, available_memory_bytes, spinner),
-        resource_cpu_text_with_spinner(metrics, spinner),
+        resource_memory_text_with_spinner(
+            metrics,
+            available_memory_bytes,
+            metrics.memory_waiting.then_some(spinner),
+        ),
+        resource_cpu_text_with_spinner(metrics, metrics.cpu_waiting.then_some(spinner)),
+    ])
+}
+
+pub(super) fn resource_text_with_single_spinner(
+    metrics: &UsageSummary,
+    available_memory_bytes: Option<u64>,
+    spinner: &str,
+) -> Text<'static> {
+    Text::from(vec![
+        resource_memory_text_with_spinner(metrics, available_memory_bytes, None),
+        resource_cpu_text_with_spinner(
+            metrics,
+            (metrics.memory_waiting || metrics.cpu_waiting).then_some(spinner),
+        ),
     ])
 }
 
 fn resource_memory_text_with_spinner(
     metrics: &UsageSummary,
     available_memory_bytes: Option<u64>,
-    spinner: &str,
+    spinner: Option<&str>,
 ) -> Line<'static> {
     let memory_bytes = metrics.memory_bytes;
     let memory = memory_bytes.map_or_else(|| "—".into(), details::memory);
     let mut memory = available_memory_bytes.map_or(memory.clone(), |available| {
         format!("{memory} / {}", details::memory(available))
     });
-    if metrics.memory_waiting {
+    if let Some(spinner) = spinner {
         memory.push_str(&format!(" {spinner}"));
     }
-    Line::from(Span::styled(
-        memory,
-        Style::default().fg(details::memory_tone(
+    let tone = if metrics.memory_waiting {
+        Tone::Muted
+    } else {
+        details::memory_tone(
             memory_bytes.map(|memory_bytes| ResourceUsage {
                 memory_bytes,
                 ..Default::default()
             }),
             metrics.memory_limit_bytes,
         )
-        .color()),
-    ))
+    };
+    Line::from(Span::styled(memory, Style::default().fg(tone.color())))
 }
 
-fn resource_cpu_text_with_spinner(metrics: &UsageSummary, spinner: &str) -> Line<'static> {
+fn resource_cpu_text_with_spinner(metrics: &UsageSummary, spinner: Option<&str>) -> Line<'static> {
     let cpu = metrics.cpu_basis_points;
     let mut cpu_text = cpu.map_or_else(|| "—".into(), details::cpu);
-    if metrics.cpu_waiting {
+    if let Some(spinner) = spinner {
         cpu_text.push_str(&format!(" {spinner}"));
     }
     Line::from(Span::styled(

@@ -8,6 +8,66 @@ fn popup_route(app: &mut super::super::App, area: Rect) -> EventRoute {
     EventRoute::new(layout.overlays().last().unwrap().route_path.clone())
 }
 
+fn rendered_app(app: &mut super::super::App, area: Rect) -> String {
+    LayoutEngine::new().layout(app, area);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            app.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    rendered_lines(&terminal, area).join("\n")
+}
+
+#[test]
+fn unfocus_keys_clear_an_applied_instance_search() {
+    tuicore::init();
+    for key in [
+        KeyEvent::from(Key::Esc),
+        KeyEvent {
+            code: Key::Char('['),
+            modifiers: KeyModifiers::CONTROL,
+        },
+    ] {
+        let mut app = root(AppService::for_tests());
+        app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
+        let area = Rect::new(0, 0, 130, 40);
+        let settings = AnimationSettings::default();
+        let mut layout = LayoutEngine::new();
+        layout.layout(&mut app, area);
+        let tree = layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.id.as_str() == super::super::TREE_FOCUS)
+            .unwrap()
+            .clone();
+        app.dispatch_focus(&tree, true, &mut tuicore::FocusCtx::default());
+        let route = EventRoute::new(tree.path);
+        for character in "/zzzz".chars() {
+            app.dispatch_event(
+                &route,
+                &TuiEvent::Key(KeyEvent::from(Key::Char(character))),
+                &mut EventCtx::new(settings),
+            );
+        }
+        app.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut EventCtx::new(settings),
+        );
+        assert!(!super::super::instances::is_searching(&app.instances));
+        let filtered = rendered_app(&mut app, area);
+        assert!(!filtered.contains("review"), "{filtered}");
+
+        app.dispatch_event(&route, &TuiEvent::Key(key), &mut EventCtx::new(settings));
+
+        let cleared = rendered_app(&mut app, area);
+        assert!(cleared.contains("review"), "{cleared}");
+    }
+}
+
 #[test]
 fn status_bar_search_keeps_app_shortcuts_as_text() {
     tuicore::init();

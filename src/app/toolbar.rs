@@ -3,6 +3,7 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 use ratatui::{
     Frame,
     layout::Rect,
+    style::Style,
     text::{Line, Span},
 };
 use tuicore::{
@@ -11,7 +12,7 @@ use tuicore::{
     LayoutSizeHint, LifecycleCtx, RenderCtx, Spinner, TickResult, TuiEvent, TuiNode,
 };
 
-use super::{MOBILE_TABS_WIDTH, Msg, rows};
+use super::{MOBILE_TABS_WIDTH, Msg, details, rows};
 use crate::store::environments::{EnvironmentSnapshot, UsageSummary};
 
 #[derive(Default)]
@@ -112,19 +113,51 @@ impl Toolbar {
     }
 
     fn totals_text(&self) -> Line<'static> {
-        let mut spans = Vec::new();
         let state = self.state.borrow();
-        for line in rows::resource_text_with_spinner(
-            &state.totals,
-            state.available_memory_bytes,
-            self.spinner.glyph(),
-        )
-        .lines
-        {
-            if !spans.is_empty() {
-                spans.push(Span::raw(" · "));
+        let totals = &state.totals;
+        let waiting = totals.memory_waiting || totals.cpu_waiting;
+        let complete = totals.memory_bytes.is_some() && totals.cpu_basis_points.is_some();
+        if waiting && !complete {
+            return Line::from(Span::styled(
+                self.spinner.glyph().to_owned(),
+                Style::default().fg(tuicore::theme().muted_fg()),
+            ));
+        }
+        let mut resources =
+            rows::resource_text_with_single_spinner(totals, None, self.spinner.glyph()).lines;
+        let mut cpu = resources.pop().unwrap_or_default();
+        let memory = resources.pop().unwrap_or_default();
+        if totals.cpu_basis_points.is_none() {
+            for span in &mut cpu.spans {
+                let content = span.content.trim_start_matches('—').trim_start();
+                let content = content
+                    .strip_prefix('·')
+                    .map(str::trim_start)
+                    .unwrap_or(content);
+                span.content = content.to_owned().into();
             }
-            spans.extend(line.spans);
+            cpu.spans.retain(|span| !span.content.is_empty());
+        }
+        let memory_style = memory
+            .spans
+            .first()
+            .map(|span| span.style)
+            .unwrap_or_default();
+        let mut spans = vec![
+            Span::raw(" "),
+            Span::raw(
+                state
+                    .available_memory_bytes
+                    .map(details::memory)
+                    .unwrap_or_else(|| "—".into()),
+            ),
+        ];
+        spans.push(Span::raw(" · "));
+        spans.push(Span::styled(" ", memory_style));
+        spans.extend(memory.spans);
+        if !cpu.spans.is_empty() {
+            spans.push(Span::raw(" · "));
+            spans.extend(cpu.spans);
         }
         Line::from(spans)
     }

@@ -358,11 +358,16 @@ the modifier; the Actions menu or a letter override works when the terminal cann
 In Settings, edits to **Open command** save immediately. Press `Ctrl+;` on an instance or choose
 **Run open command** from its `.` Actions menu to execute it. An empty or whitespace-only setting
 opens the workspace with `xdg-open`.
+Press `y`, or choose **Yank** from the `.` Actions menu, to open the copy menu for the selected
+instance or routed service. For an instance, `i` copies its name and `w` copies its absolute workspace path;
+for a routed service, `u` copies its URL.
 A custom command runs on the host via `sh -c`, with the workspace as its working directory, the
 instance name in `TANDEM_INSTANCE`, the absolute path in `TANDEM_WORKSPACE`, and its description in
 `TANDEM_DESCRIPTION`. Quote `"$TANDEM_WORKSPACE"`; paths are passed as
 environment data, not interpolated into shell code. Choose **Open in browser** from a routed service's
-`.` Actions menu to open its URL.
+`.` Actions menu, or press `Ctrl+Enter` on that service, to open its URL. On an instance,
+`Ctrl+Enter` opens its only routed service directly or displays a chooser when several are available;
+each chooser option is shown as `<service> - <url>`.
 
 The setting is stored in `$TANDEM_HOME/settings.sqlite3`. MCP agents can read it with
 `get_open_command` and save it with `set_open_command` using `command` and `confirmed=true`

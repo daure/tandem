@@ -38,10 +38,15 @@ pub(super) fn cpu(basis_points: u64) -> String {
 pub(super) fn memory(bytes: u64) -> String {
     const MIB: u64 = 1024 * 1024;
     const GIB: u64 = 1024 * MIB;
-    const GIB_DISPLAY_THRESHOLD: u64 = 1000 * MIB;
+    const GIB_DISPLAY_THRESHOLD: u64 = 100 * MIB;
 
-    if bytes >= GIB_DISPLAY_THRESHOLD {
-        format!("{} GiB", rounded_unit_count(bytes, GIB))
+    if bytes > GIB_DISPLAY_THRESHOLD {
+        let tenths = (u128::from(bytes) * 10 + u128::from(GIB / 2)) / u128::from(GIB);
+        if tenths % 10 == 0 {
+            format!("{} GiB", tenths / 10)
+        } else {
+            format!("{}.{:01} GiB", tenths / 10, tenths % 10)
+        }
     } else {
         format!("{} MiB", rounded_units(bytes, MIB))
     }

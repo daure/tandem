@@ -13,7 +13,7 @@ use tuicore::{
     TuiEvent, TuiNode, line_width,
 };
 
-use super::Msg;
+use super::{Msg, open_route_key};
 
 const MENU_FIELD_WIDTH: u16 = 42;
 const MENU_CONTENT_WIDTH: u16 = MENU_FIELD_WIDTH - 2;
@@ -24,7 +24,7 @@ pub(super) enum Action {
     CopyInstanceName,
     CopyServiceName,
     CopyCheckoutPath,
-    CopyGatewayUrl,
+    Yank,
     OpenBrowser,
     OpenCommand,
     Details,
@@ -48,8 +48,8 @@ impl Action {
             Self::CopyTemplateName
             | Self::CopyInstanceName
             | Self::CopyServiceName
-            | Self::CopyCheckoutPath
-            | Self::CopyGatewayUrl => unreachable!("copy actions have fixed hotkeys"),
+            | Self::CopyCheckoutPath => unreachable!("copy actions have fixed hotkeys"),
+            Self::Yank => unreachable!("yank opens its own menu"),
             Self::OpenBrowser | Self::OpenCommand => 10,
             Self::RestartInstance | Self::RestartService => 7,
             Self::Details => 0,
@@ -70,7 +70,7 @@ impl Action {
             Self::CopyInstanceName => "Copy instance name",
             Self::CopyServiceName => "Copy service name",
             Self::CopyCheckoutPath => "Copy checkout directory",
-            Self::CopyGatewayUrl => "Copy gateway URL",
+            Self::Yank => "Yank",
             Self::OpenBrowser => "Open in browser",
             Self::OpenCommand => "Run open command",
             Self::Details => "View details",
@@ -117,7 +117,7 @@ impl ActionMenu {
         let enabled_for_renderer = Rc::clone(&enabled);
         let labels = keys;
         let dropdown = Dropdown::single_rich(
-            [Action::OpenBrowser],
+            [Action::Yank],
             |action| *action,
             |action| action.label().to_owned(),
             move |action, _, _| {
@@ -162,8 +162,7 @@ impl ActionMenu {
             ]
         } else if target.gateway {
             vec![
-                Action::CopyServiceName,
-                Action::CopyGatewayUrl,
+                Action::Yank,
                 Action::OpenBrowser,
                 Action::Details,
                 Action::NewInstance,
@@ -182,7 +181,7 @@ impl ActionMenu {
             ]
         } else if target.instance {
             vec![
-                Action::CopyInstanceName,
+                Action::Yank,
                 Action::Details,
                 Action::OpenCommand,
                 Action::NewInstance,
@@ -240,11 +239,11 @@ impl ActionMenu {
 fn action_text(action: Action, keys: &[KeySpec; 11], enabled: bool) -> Text<'static> {
     let label = action.label();
     let hotkey = match action {
-        Action::CopyTemplateName
-        | Action::CopyInstanceName
-        | Action::CopyServiceName
-        | Action::CopyCheckoutPath => "yy".into(),
-        Action::CopyGatewayUrl => "yu".into(),
+        Action::CopyTemplateName | Action::CopyCheckoutPath => "yy".into(),
+        Action::CopyInstanceName => "yi".into(),
+        Action::CopyServiceName => String::new(),
+        Action::Yank => "y".into(),
+        Action::OpenBrowser => open_route_key().label(),
         _ => keys
             .get(action.index())
             .copied()

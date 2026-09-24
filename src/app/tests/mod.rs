@@ -271,11 +271,9 @@ fn routed_service_action_menu_opens_the_gateway_in_the_browser() {
         })
         .unwrap();
     let lines = rendered_lines(&terminal, area);
-    for (label, hotkey) in [
-        ("Copy service name", "yy"),
-        ("Copy gateway URL", "yu"),
-        ("Open in browser", "⌃;"),
-    ] {
+    assert!(!lines.iter().any(|line| line.contains("Copy service name")));
+    assert!(!lines.iter().any(|line| line.contains("Copy gateway URL")));
+    for (label, hotkey) in [("Yank", "y"), ("Open in browser", "⌃Enter")] {
         let line = lines.iter().find(|line| line.contains(label)).unwrap();
         assert!(
             line.trim_end_matches([' ', '┃']).ends_with(hotkey),
@@ -283,11 +281,26 @@ fn routed_service_action_menu_opens_the_gateway_in_the_browser() {
         );
     }
     super::instances::set_highlighted(&app.instances, Some("service:review:web".into()));
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut events);
+    assert!(!app.menu_layer().is_active());
+    assert!(app.yank_layer().is_active());
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut events);
+    assert!(!app.yank_layer().is_active());
+
+    super::instances::set_highlighted(&app.instances, Some("service:review:web".into()));
     app.menu_layer_mut()
         .set_active_with_context(false, &mut events);
     app.event(
         &TuiEvent::Key(KeyEvent {
             code: Key::Char(';'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut events,
+    );
+    assert!(app.service.opened_system_targets().is_empty());
+    app.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Enter,
             modifiers: KeyModifiers::CONTROL,
         }),
         &mut events,
@@ -300,27 +313,151 @@ fn routed_service_action_menu_opens_the_gateway_in_the_browser() {
 }
 
 #[test]
-fn yank_copies_the_selected_row_name_and_yu_copies_its_gateway_url() {
+fn instance_control_enter_opens_its_only_service_route_without_a_menu() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
-    app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
-    for (id, value) in [
-        ("template:/tmp/templates/website", "website"),
-        ("instance:review", "review"),
-        ("service:review:web", "web"),
-    ] {
-        super::instances::set_highlighted(&app.instances, Some(id.into()));
+    app.update_snapshot(snapshot());
+    super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
+
+    app.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Enter,
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut EventCtx::new(AnimationSettings::default()),
+    );
+
+    assert!(!app.route_layer().is_active());
+    assert_eq!(
+        app.service.opened_system_targets(),
+        ["http://localhost:9876/review/web/"]
+    );
+}
+
+#[test]
+fn instance_control_enter_chooses_a_service_route_to_open() {
+    tuicore::init();
+    let mut snapshot = snapshot();
+    snapshot.instances[0].services.push(InstanceService {
+        name: "api".into(),
+        container_id: "api-container-id".into(),
+        status: "up".into(),
+        url: Some("http://localhost:9876/review/api/".into()),
+        ..Default::default()
+    });
+    let mut app = root(AppService::for_tests());
+    app.update_snapshot(snapshot);
+    super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
+    let mut events = EventCtx::new(AnimationSettings::default());
+
+    app.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Enter,
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut events,
+    );
+
+    assert!(app.route_layer().is_active());
+    let area = Rect::new(0, 0, 130, 40);
+    app.layout(area, &mut tuicore::LayoutCtx::new());
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            app.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    let rendered = rendered_lines(&terminal, area).join("\n");
+    assert!(
+        rendered.contains("api - http://localhost:9876/review/api/"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("web - http://localhost:9876/review/web/"),
+        "{rendered}"
+    );
+
+    app.event(
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut events,
+    );
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut events);
+
+    assert!(!app.route_layer().is_active());
+    assert_eq!(
+        app.service.opened_system_targets(),
+        ["http://localhost:9876/review/api/"]
+    );
+    super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
+
+    let mut reopen = EventCtx::new(AnimationSettings::default());
+    assert!(app.open_selected_route(&mut reopen));
+    assert!(app.route_layer().is_active());
+    app.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &mut EventCtx::new(AnimationSettings::default()),
+    );
+
+    assert_eq!(
+        app.service.opened_system_targets(),
+        [
+            "http://localhost:9876/review/api/",
+            "http://localhost:9876/review/web/"
+        ]
+    );
+}
+
+#[test]
+fn instance_yank_menu_copies_the_name_or_full_workspace_path() {
+    tuicore::init();
+    for (hotkey, value) in [('i', "review"), ('w', "/tmp/workspaces/review")] {
+        let mut app = root(AppService::for_tests());
+        app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
+        super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
         let mut events = EventCtx::new(AnimationSettings::default());
 
         app.event(&TuiEvent::Yank, &mut events);
+        assert!(app.yank_layer().is_active());
+        app.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char(hotkey))),
+            &mut events,
+        );
 
         assert_eq!(events.clipboard_request(), Some(value));
+        assert!(!app.yank_layer().is_active());
     }
+}
 
+#[test]
+fn routed_service_yank_menu_only_copies_its_url() {
+    tuicore::init();
+    let mut app = root(AppService::for_tests());
+    app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     super::instances::set_highlighted(&app.instances, Some("service:review:web".into()));
     let mut events = EventCtx::new(AnimationSettings::default());
 
-    app.handle_message(Msg::CopyGatewayUrl, &mut events);
+    app.event(&TuiEvent::Yank, &mut events);
+    assert!(app.yank_layer().is_active());
+    let area = Rect::new(0, 0, 130, 40);
+    app.layout(area, &mut tuicore::LayoutCtx::new());
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            app.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    let lines = rendered_lines(&terminal, area);
+    assert!(lines.iter().any(|line| line.trim() == "URL"));
+    assert!(!lines.iter().any(|line| line.trim() == "Workspace"));
+
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('u'))), &mut events);
 
     assert_eq!(
         events.clipboard_request(),
@@ -349,7 +486,7 @@ fn copy_hotkeys_are_registered_on_the_instances_tab() {
         .path
         .clone();
 
-    for sequence in ["yy", "yu"] {
+    for sequence in ["yy", "yi", "yw", "yu"] {
         let mut events = EventCtx::new(AnimationSettings::default());
         app.dispatch_event(
             &EventRoute::new(path.clone()),
@@ -359,7 +496,9 @@ fn copy_hotkeys_are_registered_on_the_instances_tab() {
 
         assert!(matches!(
             (sequence, events.messages()),
-            ("yy", [Msg::CopyName]) | ("yu", [Msg::CopyGatewayUrl])
+            ("yy" | "yi", [Msg::CopyName])
+                | ("yw", [Msg::CopyWorkspace])
+                | ("yu", [Msg::CopyGatewayUrl])
         ));
     }
 }
@@ -423,7 +562,7 @@ fn data_view_starts_with_templates_expanded_and_instances_collapsed() {
 }
 
 #[test]
-fn global_h_focuses_the_first_template_and_collapses_instances() {
+fn global_h_clears_search_focuses_the_first_template_and_collapses_instances() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
@@ -440,11 +579,17 @@ fn global_h_focuses_the_first_template_and_collapses_instances() {
     }));
     expand_first_instance(&mut tree);
     let mut ctx = EventCtx::new(AnimationSettings::default());
+    tree.focus(None, true, &mut tuicore::FocusCtx::default());
+    for key in [Key::Char('/'), Key::Char('z')] {
+        tree.event(&TuiEvent::Key(KeyEvent::from(key)), &mut ctx);
+    }
+    assert_eq!(tree.search_query(), "z");
     tree.event(
         &TuiEvent::Hotkey(HotkeyEvent::Commit("shift+h".into())),
         &mut ctx,
     );
 
+    assert_eq!(tree.search_query(), "");
     assert_eq!(
         super::instances::selected(&app.instances).unwrap().template,
         "website"
@@ -807,7 +952,7 @@ fn instance_action_menu_lists_instance_actions() {
         .unwrap();
     let lines = rendered_lines(&terminal, area);
     for (label, hotkey) in [
-        ("Copy instance name", "yy"),
+        ("Yank", "y"),
         ("View details", "Enter"),
         ("Run open command", "⌃;"),
         ("New instance", "n"),
@@ -821,6 +966,11 @@ fn instance_action_menu_lists_instance_actions() {
             "{line}"
         );
     }
+    assert!(!lines.iter().any(|line| line.contains("Copy instance name")));
+
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut events);
+    assert!(!app.menu_layer().is_active());
+    assert!(app.yank_layer().is_active());
 }
 
 fn expand_first_instance(tree: &mut crate::app::Instances) {

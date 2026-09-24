@@ -107,7 +107,6 @@ impl Instances {
             .collect::<Vec<_>>();
         let spinner = Rc::new(RefCell::new(Spinner::new()));
         let cell_spinner = Rc::clone(&spinner);
-        let memory_spinner = Rc::clone(&spinner);
         let cpu_spinner = Rc::clone(&spinner);
         let tree = DataView::new(rows, |row: &Row| row.id.clone())
             .focus_id(TREE_FOCUS)
@@ -127,8 +126,7 @@ impl Instances {
                     "Memory",
                     Constraint::Min(0),
                     move |row: &Row, _| {
-                        let mut memory =
-                            row.memory_text_with_spinner(memory_spinner.borrow().glyph());
+                        let mut memory = row.memory_text();
                         memory.spans.insert(0, Span::raw(" "));
                         memory.alignment = Some(Alignment::Right);
                         memory
@@ -248,6 +246,7 @@ impl Instances {
     }
 
     fn focus_first_template(&mut self, ctx: &mut EventCtx<Msg>) {
+        self.tree.clear_search();
         let template_ids = self
             .tree
             .rows()
@@ -263,8 +262,13 @@ impl Instances {
             self.tree.highlight_id(id);
             self.tree.reveal_highlighted();
         }
-        self.record_highlighted();
+        self.after_event();
         ctx.focus(super::initial_focus());
+    }
+
+    #[cfg(test)]
+    pub(super) fn search_query(&self) -> &str {
+        &self.tree.transform_state().search
     }
 }
 

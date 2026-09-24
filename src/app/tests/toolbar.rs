@@ -1,6 +1,6 @@
 use super::*;
 
-fn toolbar_line(app: &mut super::super::App, width: u16) -> String {
+fn toolbar_terminal(app: &mut super::super::App, width: u16) -> Terminal<TestBackend> {
     let area = Rect::new(0, 0, width, 30);
     app.layout(area, &mut tuicore::LayoutCtx::new());
     let mut terminal = Terminal::new(TestBackend::new(width, area.height)).unwrap();
@@ -11,7 +11,11 @@ fn toolbar_line(app: &mut super::super::App, width: u16) -> String {
             ctx.flush(frame);
         })
         .unwrap();
-    rendered_lines(&terminal, area)[1].clone()
+    terminal
+}
+
+fn toolbar_line(app: &mut super::super::App, width: u16) -> String {
+    rendered_lines(&toolbar_terminal(app, width), Rect::new(0, 0, width, 30))[1].clone()
 }
 
 #[test]
@@ -34,7 +38,10 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
 
     for width in [80, 130] {
         let line = toolbar_line(&mut app, width);
-        assert!(line.contains("1 GiB / 8 GiB · 500%"), "{line}");
+        assert!(line.contains(" 8 GiB ·  1 GiB · 500%"), "{line}");
+        for label in ["used", "available", "CPU"] {
+            assert!(!line.contains(label), "{line}");
+        }
         assert!(line.find("500%").unwrap() < line.find("󰑓").unwrap());
     }
 
@@ -54,7 +61,7 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
             &mut EventCtx::new(AnimationSettings::default()),
         );
     }
-    assert!(toolbar_line(&mut app, 130).contains("1 GiB / 8 GiB · 500%"));
+    assert!(toolbar_line(&mut app, 130).contains(" 8 GiB ·  1 GiB · 500%"));
 
     inventory.instances.pop();
     app.update_snapshot(inventory);
@@ -63,7 +70,7 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
             .tick(std::time::Duration::ZERO, AnimationSettings::default())
             .layout
     );
-    assert!(toolbar_line(&mut app, 130).contains("500 MiB / 8 GiB · 250%"));
+    assert!(toolbar_line(&mut app, 130).contains(" 8 GiB ·  0.5 GiB · 250%"));
 }
 
 #[test]
@@ -71,7 +78,16 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     app.update_snapshot(Default::default());
-    assert!(toolbar_line(&mut app, 130).contains("— · —"));
+    let line = toolbar_line(&mut app, 130);
+    assert!(line.contains(" — ·  —"), "{line}");
+
+    let spinner = tuicore::Spinner::new().glyph().to_owned();
+    let mut initial = snapshot();
+    initial.available_memory_bytes = Some(20 * 1073741824);
+    app.update_snapshot(initial);
+    let line = toolbar_line(&mut app, 130);
+    assert!(line.contains(&spinner), "{line}");
+    assert!(!line.contains("GiB") && !line.contains(''), "{line}");
 
     let mut inventory = snapshot();
     inventory.instances[0].services[0].usage = Some(crate::store::environments::ResourceUsage {
@@ -85,10 +101,15 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
     inventory.instances.push(starting);
     app.update_snapshot(inventory.clone());
     let line = toolbar_line(&mut app, 130);
-    let spinner = tuicore::Spinner::new().glyph().to_owned();
     assert!(
-        line.contains(&format!("20 MiB {spinner} · 500% {spinner}")),
+        line.contains(&format!(" — ·  20 MiB · 500% {spinner}")),
         "{line}"
+    );
+    let terminal = toolbar_terminal(&mut app, 130);
+    let x = line.chars().position(|character| character == '').unwrap() as u16;
+    assert_eq!(
+        terminal.backend().buffer().cell((x, 1)).unwrap().fg,
+        tuicore::theme().muted_fg()
     );
     let narrow = toolbar_line(&mut app, 40);
     assert!(
@@ -101,9 +122,19 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
     );
 
     inventory.instances.pop();
+    inventory.instances[0].services[0]
+        .usage
+        .as_mut()
+        .unwrap()
+        .cpu_basis_points = None;
+    app.update_snapshot(inventory.clone());
+    let line = toolbar_line(&mut app, 130);
+    assert!(line.contains(&spinner), "{line}");
+    assert!(!line.contains("MiB") && !line.contains(''), "{line}");
+
     inventory.instances[0].services[0].status = "paused".into();
     app.update_snapshot(inventory);
-    assert!(toolbar_line(&mut app, 130).contains("20 MiB · — · paused"));
+    assert!(toolbar_line(&mut app, 130).contains(" — ·  20 MiB · paused"));
 }
 
 #[test]

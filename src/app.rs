@@ -26,11 +26,15 @@ mod instances;
 mod operations;
 mod properties;
 mod refresh;
+mod route_menu;
 mod rows;
 mod toolbar;
+mod yank_menu;
 use action_menu::ActionMenu;
 use instances::{Instances, SharedState};
+use route_menu::{RouteChoice, RouteMenu};
 use rows::Row;
+use yank_menu::{YankMenu, YankTarget};
 
 const TREE_FOCUS: &str = "environments";
 const MOBILE_TABS_WIDTH: u16 = 100;
@@ -47,6 +51,10 @@ pub(crate) fn initial_focus() -> tuicore::FocusRequest {
     tuicore::FocusRequest::Target(FocusId::new(TREE_FOCUS))
 }
 
+pub(super) fn open_route_key() -> KeySpec {
+    KeySpec::key_with_modifiers(tuicore::Key::Enter, tuicore::KeyModifiers::CONTROL)
+}
+
 #[derive(Debug)]
 pub(crate) enum Msg {
     Close,
@@ -61,6 +69,7 @@ pub(crate) enum Msg {
     PurgeAll,
     SetBranchInstances(bool),
     CopyName,
+    CopyWorkspace,
     CopyGatewayUrl,
     Submit,
 }
@@ -105,7 +114,9 @@ impl ModalNode for Tabs<Msg> {}
 
 type Modal = Box<dyn ModalNode>;
 type MenuLayer = DialogLayer<Content, ActionMenu>;
-type MainView = DialogLayer<MenuLayer, Modal>;
+type YankLayer = DialogLayer<MenuLayer, YankMenu>;
+type RouteLayer = DialogLayer<YankLayer, RouteMenu>;
+type MainView = DialogLayer<RouteLayer, Modal>;
 type View = Split<MainView, StatusBar<Msg>>;
 
 pub(crate) struct App {
@@ -150,19 +161,32 @@ pub(crate) fn root(service: AppService) -> App {
     )])
     .variant(TabsVariant::OneRow)
     .action_hotkey("yy", |_| Msg::CopyName)
+    .action_hotkey("yi", |_| Msg::CopyName)
+    .action_hotkey("yw", |_| Msg::CopyWorkspace)
     .action_hotkey("yu", |_| Msg::CopyGatewayUrl);
-    content.set_action_hotkey_visible("yy", false);
-    content.set_action_hotkey_visible("yu", false);
+    for sequence in ["yy", "yi", "yw", "yu"] {
+        content.set_action_hotkey_visible(sequence, false);
+    }
     let menu = DialogLayer::new(content, ActionMenu::new(keys))
         .active(false)
         .fit_content()
         .fit_content_max(42, 9);
+    let yank = DialogLayer::new(menu, YankMenu::new())
+        .active(false)
+        .fit_content()
+        .fit_content_max(42, 3)
+        .child_overlays_use_base_bounds(true);
+    let routes = DialogLayer::new(yank, RouteMenu::new())
+        .active(false)
+        .fit_content()
+        .fit_content_max(110, 12)
+        .child_overlays_use_base_bounds(true);
     let modal: Modal = Box::new(
         Dialog::<Msg>::new()
             .on_close(|_| Msg::Close)
             .host(Flex::column()),
     );
-    let main = DialogLayer::new(menu, modal)
+    let main = DialogLayer::new(routes, modal)
         .active(false)
         .fit_content()
         .fit_content_max(110, 34)
@@ -222,11 +246,43 @@ impl App {
     }
 
     fn menu_layer(&self) -> &MenuLayer {
-        self.view.first().base()
+        self.view.first().base().base().base()
     }
 
     fn menu_layer_mut(&mut self) -> &mut MenuLayer {
+        self.view.first_mut().base_mut().base_mut().base_mut()
+    }
+
+    fn yank_layer(&self) -> &YankLayer {
+        self.view.first().base().base()
+    }
+
+    fn yank_layer_mut(&mut self) -> &mut YankLayer {
+        self.view.first_mut().base_mut().base_mut()
+    }
+
+    fn route_layer(&self) -> &RouteLayer {
+        self.view.first().base()
+    }
+
+    fn route_layer_mut(&mut self) -> &mut RouteLayer {
         self.view.first_mut().base_mut()
+    }
+
+    fn transient_menu_active(&self) -> bool {
+        self.route_layer().is_active()
+            || self.yank_layer().is_active()
+            || self.menu_layer().is_active()
+    }
+
+    fn transient_menu_event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
+        if self.route_layer().is_active() {
+            self.route_layer_mut().event(event, ctx)
+        } else if self.yank_layer().is_active() {
+            self.yank_layer_mut().event(event, ctx)
+        } else {
+            self.menu_layer_mut().event(event, ctx)
+        }
     }
 
     #[cfg(test)]
@@ -274,6 +330,9 @@ impl App {
             }
             Msg::CopyName => {
                 self.copy_selected_name(ctx);
+            }
+            Msg::CopyWorkspace => {
+                self.copy_selected_workspace(ctx);
             }
             Msg::CopyGatewayUrl => {
                 self.copy_gateway_url(ctx);
@@ -550,8 +609,16 @@ impl App {
                     self.copy_selected_name(ctx);
                     return;
                 }
-                action_menu::Action::CopyGatewayUrl => {
-                    self.copy_gateway_url(ctx);
+                action_menu::Action::Yank => {
+                    self.open_yank_menu(ctx);
+                    return;
+                }
+                action_menu::Action::OpenBrowser => {
+                    self.open_gateway(ctx);
+                    return;
+                }
+                action_menu::Action::OpenCommand => {
+                    self.open_workspace(ctx);
                     return;
                 }
                 _ => {}
@@ -583,6 +650,109 @@ impl App {
             }
             self.action(action.index(), ctx);
         }
+    }
+
+    fn yank_requested(event: &TuiEvent) -> bool {
+        matches!(event, TuiEvent::Yank)
+            || matches!(event, TuiEvent::Key(key) if key.code == tuicore::Key::Char('y') && key.modifiers == tuicore::KeyModifiers::NONE)
+            || matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Pending(sequence)) if sequence == "y")
+    }
+
+    fn open_yank_menu(&mut self, ctx: &mut EventCtx<Msg>) -> bool {
+        let Some(row) = self.selected() else {
+            return false;
+        };
+        let target = if let Some(url) = row.gateway_url {
+            YankTarget::Service { url }
+        } else if row.service.is_none() {
+            let (Some(name), Some(workspace)) = (row.instance, row.workspace) else {
+                return false;
+            };
+            YankTarget::Instance { name, workspace }
+        } else {
+            return false;
+        };
+        let menu = self.yank_layer_mut();
+        menu.layer_mut().open(target, ctx);
+        menu.set_active_with_context(true, ctx);
+        true
+    }
+
+    fn drain_yank_menu(&mut self, ctx: &mut EventCtx<Msg>) {
+        if !self.yank_layer().is_active() {
+            return;
+        }
+        let selection = self.yank_layer_mut().layer_mut().take_selection();
+        if selection.is_none() && self.yank_layer().layer().is_open() {
+            return;
+        }
+        self.yank_layer_mut().set_active_with_context(false, ctx);
+        if let Some((action, target)) = selection
+            && let Some(value) = action.text(&target)
+        {
+            ctx.copy_to_clipboard(value);
+        }
+        ctx.focus(initial_focus());
+    }
+
+    fn selected_instance_routes(&self) -> Vec<RouteChoice> {
+        let Some(name) = self
+            .selected()
+            .filter(|row| row.service.is_none())
+            .and_then(|row| row.instance)
+        else {
+            return Vec::new();
+        };
+        self.snapshot
+            .instances
+            .iter()
+            .find(|instance| instance.name == name)
+            .into_iter()
+            .flat_map(|instance| &instance.services)
+            .filter_map(|service| {
+                service
+                    .url
+                    .as_ref()
+                    .filter(|url| !url.trim().is_empty())
+                    .map(|url| RouteChoice {
+                        service: service.name.clone(),
+                        url: url.clone(),
+                    })
+            })
+            .collect()
+    }
+
+    fn open_selected_route(&mut self, ctx: &mut EventCtx<Msg>) -> bool {
+        if self.open_gateway(ctx) {
+            return true;
+        }
+        let routes = self.selected_instance_routes();
+        if routes.is_empty() {
+            return false;
+        }
+        if routes.len() == 1 {
+            self.open_gateway_url(&routes[0].url, ctx);
+            return true;
+        }
+        let menu = self.route_layer_mut();
+        menu.layer_mut().open(routes, ctx);
+        menu.set_active_with_context(true, ctx);
+        true
+    }
+
+    fn drain_route_menu(&mut self, ctx: &mut EventCtx<Msg>) {
+        if !self.route_layer().is_active() {
+            return;
+        }
+        let route = self.route_layer_mut().layer_mut().take_selection();
+        if route.is_none() && self.route_layer().layer().is_open() {
+            return;
+        }
+        self.route_layer_mut().set_active_with_context(false, ctx);
+        if let Some(route) = route {
+            self.open_gateway_url(&route.url, ctx);
+        }
+        ctx.focus(initial_focus());
     }
 
     fn action(&mut self, index: usize, ctx: &mut EventCtx<Msg>) {
@@ -685,9 +855,7 @@ impl App {
             8 => self.confirm_stop_all(ctx),
             9 => self.confirm_purge_all(ctx),
             10 => {
-                if !self.open_gateway(ctx) {
-                    self.open_workspace(ctx);
-                }
+                self.open_workspace(ctx);
             }
             6 => {
                 if let Some(row) = row.as_ref().filter(|row| row.parent.is_none()) {
@@ -707,10 +875,14 @@ impl App {
         let Some(url) = self.selected().and_then(|row| row.gateway_url) else {
             return false;
         };
-        if let Err(error) = self.service.open_gateway(&url) {
+        self.open_gateway_url(&url, ctx);
+        true
+    }
+
+    fn open_gateway_url(&self, url: &str, ctx: &mut EventCtx<Msg>) {
+        if let Err(error) = self.service.open_gateway(url) {
             ctx.notify(Notification::error("Cannot open gateway", error));
         }
-        true
     }
 
     fn copy_selected_name(&self, ctx: &mut EventCtx<Msg>) -> bool {
@@ -729,9 +901,22 @@ impl App {
         true
     }
 
+    fn copy_selected_workspace(&self, ctx: &mut EventCtx<Msg>) -> bool {
+        let Some(value) = self
+            .selected()
+            .filter(|row| row.service.is_none())
+            .and_then(|row| row.workspace)
+        else {
+            return false;
+        };
+        ctx.copy_to_clipboard(value);
+        true
+    }
+
     fn open_workspace(&self, ctx: &mut EventCtx<Msg>) -> bool {
         let Some((workspace, instance)) = self
             .selected()
+            .filter(|row| row.service.is_none())
             .and_then(|row| Some((row.workspace?, row.instance?)))
         else {
             return false;
@@ -767,11 +952,22 @@ impl App {
             ctx.stop_propagation();
             return true;
         }
-        if self.menu_layer().is_active() || self.view.first().is_active() {
+        if self.transient_menu_active() || self.view.first().is_active() {
             return false;
         }
         if instances::is_searching(&self.instances) {
             return false;
+        }
+        if let TuiEvent::Key(key) = event
+            && open_route_key().matches(*key)
+            && self.open_selected_route(ctx)
+        {
+            ctx.stop_propagation();
+            return true;
+        }
+        if Self::yank_requested(event) && self.open_yank_menu(ctx) {
+            ctx.stop_propagation();
+            return true;
         }
         if matches!(event, TuiEvent::Yank) && self.copy_selected_name(ctx) {
             ctx.stop_propagation();
@@ -796,6 +992,8 @@ impl App {
 
     fn after_event(&mut self, ctx: &mut EventCtx<Msg>) {
         self.drain_action_menu(ctx);
+        self.drain_yank_menu(ctx);
+        self.drain_route_menu(ctx);
         ctx.request_redraw();
     }
 }
@@ -822,8 +1020,8 @@ impl TuiNode<Msg> for App {
         if self.handle_key(event, ctx) {
             return EventOutcome::Handled;
         }
-        let outcome = if self.menu_layer().is_active() {
-            self.menu_layer_mut().event(event, ctx)
+        let outcome = if self.transient_menu_active() {
+            self.transient_menu_event(event, ctx)
         } else {
             self.view.event(event, ctx)
         };
@@ -854,7 +1052,7 @@ impl TuiNode<Msg> for App {
             .keys()
             .iter()
             .any(|key| key.as_str() == "instances");
-        if Self::returns_to_data_view(event) && (toolbar_route || data_view_route) {
+        if Self::returns_to_data_view(event) && toolbar_route {
             ctx.focus(initial_focus());
             ctx.stop_propagation();
             return EventOutcome::Handled;
@@ -865,12 +1063,18 @@ impl TuiNode<Msg> for App {
         if self.handle_key(event, ctx) {
             return EventOutcome::Handled;
         }
-        let outcome = if self.menu_layer().is_active() {
-            self.menu_layer_mut().event(event, ctx)
+        let outcome = if self.transient_menu_active() {
+            self.transient_menu_event(event, ctx)
         } else {
             self.view.dispatch_event(route, event, ctx)
         };
         self.after_event(ctx);
+        if Self::returns_to_data_view(event) && data_view_route && outcome == EventOutcome::Ignored
+        {
+            ctx.focus(initial_focus());
+            ctx.stop_propagation();
+            return EventOutcome::Handled;
+        }
         outcome
     }
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
