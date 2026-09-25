@@ -1,6 +1,6 @@
 [package]
 name = "tandem"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 default-run = "tandem"
 description = "A keyboard-first TUI with MCP access"
