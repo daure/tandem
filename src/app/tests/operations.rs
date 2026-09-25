@@ -76,6 +76,72 @@ fn instance_operations_only_block_their_target_instance() {
 }
 
 #[test]
+fn instance_descriptions_can_be_edited_and_saved_during_lifecycle_operations() {
+    tuicore::init();
+    for action in ["create_instance", "stop_instance"] {
+        let service = AppService::for_tests();
+        let operation = service.queue_instance_for_tests("review", "website");
+        if action == "stop_instance" {
+            service.complete_instance_for_tests(&operation.id, snapshot().instances.remove(0));
+        }
+        let mut app = root(service);
+        if action == "stop_instance" {
+            let mut inventory = app.service.environment_snapshot();
+            inventory
+                .activities
+                .push(crate::store::environments::Activity {
+                    id: "external-stop".into(),
+                    name: "review".into(),
+                    template: Some("website".into()),
+                    service: None,
+                    action: action.into(),
+                    owner_pid: std::process::id(),
+                    started_at: 1,
+                    deadline: u64::MAX,
+                    error: None,
+                    finished: false,
+                });
+            app.update_snapshot(inventory);
+        }
+        instances::set_highlighted(&app.instances, Some("instance:review".into()));
+        assert!(app.instance_has_operation("review"));
+        let mut ctx = EventCtx::new(AnimationSettings::default());
+
+        app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('d'))), &mut ctx);
+
+        assert!(app.view.first().is_active(), "{action}");
+        app.handle_message(
+            Msg::DescriptionChanged("Updated while busy".into()),
+            &mut ctx,
+        );
+        app.handle_message(Msg::Submit, &mut ctx);
+
+        assert!(!app.view.first().is_active());
+        app.description_save
+            .take()
+            .unwrap()
+            .blocking_recv()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            app.service.environment_snapshot().instances[0].description,
+            "Updated while busy"
+        );
+        assert_eq!(app.service.operations().len(), 1);
+        assert_eq!(
+            app.service.get_operation(&operation.id).unwrap().state,
+            if action == "create_instance" {
+                OperationState::Running
+            } else {
+                OperationState::Succeeded
+            }
+        );
+        assert!(app.instance_has_operation("review"));
+        assert_eq!(app.notifications.center().history().len(), 0);
+    }
+}
+
+#[test]
 fn instances_from_one_template_can_start_concurrently() {
     tuicore::init();
     let mut inventory = snapshot();

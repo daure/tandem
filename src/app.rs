@@ -565,9 +565,9 @@ impl App {
             | Intent::Stop(name)
             | Intent::Purge(name)
             | Intent::ServiceState { name, .. }
-            | Intent::Restart { name, .. }
-            | Intent::UpdateDescription(name) => Some(name),
-            Intent::NewTemplate
+            | Intent::Restart { name, .. } => Some(name),
+            Intent::UpdateDescription(_)
+            | Intent::NewTemplate
             | Intent::StopTemplate(_)
             | Intent::DeleteTemplate(_)
             | Intent::RemoveTemplate(_)

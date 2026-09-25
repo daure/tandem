@@ -243,7 +243,7 @@ impl Environments {
     }
 
     fn publish_instances(&self, instances: Result<Vec<Instance>, String>, revision: u64) {
-        let pending = self.pending_instances();
+        let mut pending = self.pending_instances();
         let mut snapshot = self
             .snapshot
             .lock()
@@ -251,6 +251,16 @@ impl Environments {
         // An inspection begun before readiness completed must not replace the ready snapshot.
         if revision != self.instance_revision.load(Ordering::SeqCst) {
             return;
+        }
+        // Placeholder metadata must survive observations made before containers exist.
+        for instance in &mut pending {
+            if let Some(current) = snapshot
+                .instances
+                .iter()
+                .find(|current| current.name == instance.name)
+            {
+                instance.description.clone_from(&current.description);
+            }
         }
         let error = match instances {
             Ok(mut instances) => {

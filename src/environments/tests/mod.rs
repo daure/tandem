@@ -201,17 +201,38 @@ fn pending_instance_creation_is_visible_before_containers_exist() {
     templates::create(&config, "website").unwrap();
 
     environment
-        .begin("create_instance", "review", Some("website".into()))
+        .begin_instance("review", "website".into(), Some("Review environment"))
         .unwrap();
 
     let snapshot = environment.snapshot();
     assert_eq!(snapshot.instances.len(), 1);
     assert_eq!(snapshot.instances[0].name, "review");
+    assert_eq!(snapshot.instances[0].description, "Review environment");
     assert!(snapshot.instances[0].pending);
     assert_eq!(
         snapshot.instances[0].workspace,
         config.workspaces.join("review").display().to_string()
     );
+
+    for description in ["Review environment", "Updated during startup", ""] {
+        if description != "Review environment" {
+            environment
+                .update_instance_description("review", description.into())
+                .unwrap();
+        }
+        for _ in 0..2 {
+            environment.publish_instances(
+                Ok(Vec::new()),
+                environment
+                    .instance_revision
+                    .load(std::sync::atomic::Ordering::SeqCst),
+            );
+            let snapshot = environment.snapshot();
+            assert_eq!(snapshot.instances.len(), 1);
+            assert!(snapshot.instances[0].pending);
+            assert_eq!(snapshot.instances[0].description, description);
+        }
+    }
 }
 
 #[test]
