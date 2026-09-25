@@ -17,11 +17,12 @@ use tuicore::{
 use super::Msg;
 
 const MENU_ANCHOR_WIDTH: u16 = 1;
-const MENU_HEIGHT: u16 = 3;
+const MENU_HEIGHT: u16 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum YankAction {
     Instance,
+    Description,
     Workspace,
     Url,
 }
@@ -30,6 +31,7 @@ impl YankAction {
     fn hotkey(self) -> char {
         match self {
             Self::Instance => 'i',
+            Self::Description => 'd',
             Self::Workspace => 'w',
             Self::Url => 'u',
         }
@@ -38,6 +40,7 @@ impl YankAction {
     fn label(self) -> &'static str {
         match self {
             Self::Instance => "Instance",
+            Self::Description => "Description",
             Self::Workspace => "Workspace",
             Self::Url => "URL",
         }
@@ -46,6 +49,9 @@ impl YankAction {
     pub(super) fn text(self, target: &YankTarget) -> Option<String> {
         match (self, target) {
             (Self::Instance, YankTarget::Instance { name, .. }) => Some(name.clone()),
+            (Self::Description, YankTarget::Instance { description, .. }) => {
+                Some(description.clone())
+            }
             (Self::Workspace, YankTarget::Instance { workspace, .. }) => Some(workspace.clone()),
             (Self::Url, YankTarget::Service { url }) => Some(url.clone()),
             _ => None,
@@ -55,14 +61,24 @@ impl YankAction {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum YankTarget {
-    Instance { name: String, workspace: String },
-    Service { url: String },
+    Instance {
+        name: String,
+        description: String,
+        workspace: String,
+    },
+    Service {
+        url: String,
+    },
 }
 
 impl YankTarget {
     fn actions(&self) -> Vec<YankAction> {
         match self {
-            Self::Instance { .. } => vec![YankAction::Instance, YankAction::Workspace],
+            Self::Instance { .. } => vec![
+                YankAction::Instance,
+                YankAction::Description,
+                YankAction::Workspace,
+            ],
             Self::Service { .. } => vec![YankAction::Url],
         }
     }

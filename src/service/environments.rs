@@ -54,6 +54,19 @@ impl AppService {
         self.refresh.request(Refresh::Instances);
     }
 
+    pub(crate) fn update_instance_description(
+        &self,
+        name: String,
+        description: String,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), String>> {
+        let environments = Arc::clone(&self.environments);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.runtime.spawn_blocking(move || {
+            let _ = sender.send(environments.update_instance_description(&name, description));
+        });
+        receiver
+    }
+
     pub(crate) fn refresh_environments(&self) {
         self.refresh.request(Refresh::All);
     }
@@ -210,7 +223,7 @@ impl AppService {
         }
         let operation = self
             .environments
-            .begin("create_instance", name, Some(template))?;
+            .begin_instance(name, template, Some(&description))?;
         Ok(CreateInstanceOutcome::Started(Box::new(
             self.schedule_operation(
                 operation,

@@ -1,4 +1,5 @@
 use super::super::AppService;
+use crate::store::environments::Instance;
 
 mod close_command;
 mod instance_batch;
@@ -45,4 +46,64 @@ fn mutations_require_confirmation_before_admission() {
             )
             .is_err()
     );
+}
+
+#[test]
+fn description_updates_run_off_thread_and_publish_to_the_snapshot() {
+    let service = AppService::for_tests();
+    let operation = service.queue_instance_for_tests("review", "website");
+    service.complete_instance_for_tests(
+        &operation.id,
+        Instance {
+            name: "review".into(),
+            description: "Original description".into(),
+            template: "website".into(),
+            template_directory: service
+                .environments
+                .config
+                .templates
+                .join("website")
+                .display()
+                .to_string(),
+            workspace: service
+                .environments
+                .config
+                .workspaces
+                .join("review")
+                .display()
+                .to_string(),
+            project: service.environments.config.project("review"),
+            ..Default::default()
+        },
+    );
+
+    let reply = service.update_instance_description("review".into(), "Updated".into());
+    service.runtime.block_on(reply).unwrap().unwrap();
+
+    assert_eq!(
+        service.environment_snapshot().instances[0].description,
+        "Updated"
+    );
+}
+
+#[test]
+fn new_instance_description_is_visible_while_creation_is_pending() {
+    let service = AppService::for_tests();
+
+    let outcome = service
+        .submit_new_instance("review", "website".into(), "Review environment".into())
+        .unwrap();
+
+    assert!(matches!(
+        outcome,
+        crate::service::CreateInstanceOutcome::Started(_)
+    ));
+    let snapshot = service.environment_snapshot();
+    let instance = snapshot
+        .instances
+        .iter()
+        .find(|instance| instance.name == "review")
+        .unwrap();
+    assert!(instance.pending);
+    assert_eq!(instance.description, "Review environment");
 }

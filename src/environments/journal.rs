@@ -223,6 +223,29 @@ pub(super) fn topology(
     write(config, name, &record)
 }
 
+pub(super) fn update_description(
+    config: &Config,
+    instance: &Instance,
+    description: &str,
+) -> Result<(), String> {
+    let mut record = read(config, &instance.name)?;
+    let expected = record.expected.get_or_insert_with(|| instance.clone());
+    if expected.name != instance.name
+        || expected.project != instance.project
+        || expected.template != instance.template
+        || expected.template_directory != instance.template_directory
+        || expected.workspace != instance.workspace
+        || expected.workspace_only != instance.workspace_only
+    {
+        return Err(format!(
+            "runtime topology ownership mismatch for {}",
+            instance.name
+        ));
+    }
+    expected.description = description.into();
+    write(config, &instance.name, &record)
+}
+
 pub(super) fn activity_template(config: &Config, name: &str, template: &str) -> Result<(), String> {
     let mut record = read(config, name)?;
     if let Some(activity) = &mut record.activity {
@@ -298,6 +321,7 @@ pub(super) fn enrich(config: &Config, instances: &mut [Instance]) -> Result<Vec<
                 ));
             }
             instance.runtime.topology_known = true;
+            instance.description.clone_from(&expected.description);
             instance.runtime.workspace_ready = expected.runtime.workspace_ready;
             for service in &mut instance.services {
                 service.runtime.unexpected = !expected.services.iter().any(|slot| {

@@ -17,6 +17,7 @@ use super::{Msg, open_route_key};
 
 const MENU_FIELD_WIDTH: u16 = 42;
 const MENU_CONTENT_WIDTH: u16 = MENU_FIELD_WIDTH - 2;
+const MENU_HEIGHT: u16 = 10;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum Action {
@@ -25,6 +26,7 @@ pub(super) enum Action {
     CopyServiceName,
     CopyCheckoutPath,
     Yank,
+    UpdateDescription,
     OpenBrowser,
     OpenCommand,
     Details,
@@ -50,6 +52,7 @@ impl Action {
             | Self::CopyServiceName
             | Self::CopyCheckoutPath => unreachable!("copy actions have fixed hotkeys"),
             Self::Yank => unreachable!("yank opens its own menu"),
+            Self::UpdateDescription => unreachable!("description editing opens its own dialog"),
             Self::OpenBrowser | Self::OpenCommand => 10,
             Self::RestartInstance | Self::RestartService => 7,
             Self::Details => 0,
@@ -71,6 +74,7 @@ impl Action {
             Self::CopyServiceName => "Copy service name",
             Self::CopyCheckoutPath => "Copy checkout directory",
             Self::Yank => "Yank",
+            Self::UpdateDescription => "Update description",
             Self::OpenBrowser => "Open in browser",
             Self::OpenCommand => "Run open command",
             Self::Details => "View details",
@@ -136,7 +140,7 @@ impl ActionMenu {
         .centered(true)
         .show_field_when_open(false)
         .tab_stop(false)
-        .max_popup_height(9)
+        .max_popup_height(MENU_HEIGHT)
         .on_select(move |actions| *selection.borrow_mut() = actions.first().copied());
         Self {
             dropdown,
@@ -182,6 +186,7 @@ impl ActionMenu {
         } else if target.instance {
             vec![
                 Action::Yank,
+                Action::UpdateDescription,
                 Action::Details,
                 Action::OpenCommand,
                 Action::NewInstance,
@@ -243,6 +248,7 @@ fn action_text(action: Action, keys: &[KeySpec; 11], enabled: bool) -> Text<'sta
         Action::CopyInstanceName => "yi".into(),
         Action::CopyServiceName => String::new(),
         Action::Yank => "y".into(),
+        Action::UpdateDescription => "d".into(),
         Action::OpenBrowser => open_route_key().label(),
         _ => keys
             .get(action.index())
@@ -269,7 +275,7 @@ fn action_text(action: Action, keys: &[KeySpec; 11], enabled: bool) -> Text<'sta
 
 impl TuiNode<Msg> for ActionMenu {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
-        LayoutSizeHint::content(MENU_FIELD_WIDTH, 9).normalized(proposal)
+        LayoutSizeHint::content(MENU_FIELD_WIDTH, MENU_HEIGHT).normalized(proposal)
     }
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {

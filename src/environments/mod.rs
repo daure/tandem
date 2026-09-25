@@ -352,6 +352,35 @@ impl Environments {
             runtime_error,
         })
     }
+    pub fn update_instance_description(
+        &self,
+        name: &str,
+        description: String,
+    ) -> Result<(), String> {
+        validate_instance_name(name)?;
+        let instance = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .instances
+            .iter()
+            .find(|instance| instance.name == name)
+            .cloned()
+            .ok_or_else(|| format!("instance {name} not found"))?;
+        journal::update_description(&self.config, &instance, &description)?;
+        self.instance_revision.fetch_add(1, Ordering::SeqCst);
+        if let Some(instance) = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .instances
+            .iter_mut()
+            .find(|instance| instance.name == name)
+        {
+            instance.description = description;
+        }
+        Ok(())
+    }
     pub fn workspace(&self, name: &str) -> Result<String, String> {
         validate_instance_name(name)?;
         let root = fs::canonicalize(&self.config.workspaces).map_err(|error| error.to_string())?;
@@ -393,6 +422,27 @@ impl Environments {
         template: Option<String>,
     ) -> Result<Operation, String> {
         self.begin_scoped(action, name, template, None)
+    }
+
+    pub(crate) fn begin_instance(
+        &self,
+        name: &str,
+        template: String,
+        description: Option<&str>,
+    ) -> Result<Operation, String> {
+        let operation = self.begin("create_instance", name, Some(template))?;
+        if let Some(description) = description
+            && let Some(instance) = self
+                .snapshot
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .instances
+                .iter_mut()
+                .find(|instance| instance.pending && instance.name == name)
+        {
+            instance.description = description.into();
+        }
+        Ok(operation)
     }
 
     pub fn begin_restart(&self, name: &str, service: Option<String>) -> Result<Operation, String> {

@@ -1,7 +1,7 @@
 use ratatui::widgets::Borders;
 use tuicore::{
-    CrossSize, Dialog, DialogAction, Flex, FlexItem, FormField, KeySpec, Language, Paragraph,
-    SyntaxHighlighter, Tab, Tabs, TabsVariant, TextInput, TextareaInput, Toggle,
+    CrossSize, Dialog, DialogAction, Flex, FlexItem, FormField, KeySpec, Language, Padding,
+    Paragraph, SyntaxHighlighter, Tab, Tabs, TabsVariant, TextInput, Toggle,
 };
 
 use super::{Modal, Msg, properties::Properties, rows::Row};
@@ -124,11 +124,9 @@ pub(super) fn instance_entry(
     name.set_value(value);
     name.set_insert_mode(true);
     name.move_cursor_to_end();
-    let mut description_input = TextareaInput::new()
+    let mut description_input = TextInput::new()
         .placeholder("Description")
         .panel("Description")
-        .min_rows(2)
-        .max_rows(2)
         .on_change(Msg::DescriptionChanged);
     description_input.set_value(description);
     Box::new(
@@ -146,9 +144,30 @@ pub(super) fn instance_entry(
                     .child(
                         "description",
                         description_input,
-                        FlexItem::content().cross_size(CrossSize::Fixed(64)),
+                        FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
                     ),
             ),
+    )
+}
+
+pub(super) fn description_entry(value: &str) -> Modal {
+    let mut input = TextInput::new()
+        .placeholder("Description")
+        .on_change(Msg::DescriptionChanged);
+    input.set_value(value);
+    input.set_insert_mode(true);
+    input.move_cursor_to_end();
+    Box::new(
+        Dialog::new()
+            .top_left("Update description")
+            .content_padding(Padding::default())
+            .on_close(|_| Msg::Close)
+            .actions([confirm("Save", KeySpec::plain('s')), cancel()])
+            .host(Flex::column().child(
+                "description",
+                input,
+                FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
+            )),
     )
 }
 

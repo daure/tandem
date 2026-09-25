@@ -413,11 +413,17 @@ fn instance_control_enter_chooses_a_service_route_to_open() {
 }
 
 #[test]
-fn instance_yank_menu_copies_the_name_or_full_workspace_path() {
+fn instance_yank_menu_copies_the_name_description_or_full_workspace_path() {
     tuicore::init();
-    for (hotkey, value) in [('i', "review"), ('w', "/tmp/workspaces/review")] {
+    for (hotkey, value) in [
+        ('i', "review"),
+        ('d', "Review environment"),
+        ('w', "/tmp/workspaces/review"),
+    ] {
+        let mut environment = snapshot();
+        environment.instances[0].description = "Review environment".into();
         let mut app = root(AppService::for_tests());
-        app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
+        app.set_rows_for_tests(rows::from_snapshot(&environment));
         super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
         let mut events = EventCtx::new(AnimationSettings::default());
 
@@ -486,7 +492,7 @@ fn copy_hotkeys_are_registered_on_the_instances_tab() {
         .path
         .clone();
 
-    for sequence in ["yy", "yi", "yw", "yu"] {
+    for sequence in ["yy", "yi", "yd", "yw", "yu"] {
         let mut events = EventCtx::new(AnimationSettings::default());
         app.dispatch_event(
             &EventRoute::new(path.clone()),
@@ -497,6 +503,7 @@ fn copy_hotkeys_are_registered_on_the_instances_tab() {
         assert!(matches!(
             (sequence, events.messages()),
             ("yy" | "yi", [Msg::CopyName])
+                | ("yd", [Msg::CopyDescription])
                 | ("yw", [Msg::CopyWorkspace])
                 | ("yu", [Msg::CopyGatewayUrl])
         ));
@@ -747,6 +754,34 @@ fn new_instance_dialog_validates_input_without_losing_the_dialog() {
 }
 
 #[test]
+fn new_instance_description_uses_a_text_input() {
+    tuicore::init();
+    let mut dialog = super::dialogs::instance_entry(
+        "New instance",
+        "review",
+        "Review environment",
+        "Instance name",
+        None,
+    );
+    let mut layout = LayoutEngine::new();
+    layout.layout(&mut dialog, Rect::new(0, 0, 80, 20));
+    let targets = layout.focus_targets();
+
+    assert_eq!(
+        targets
+            .iter()
+            .filter(|target| target.id.as_str() == "input")
+            .count(),
+        2
+    );
+    assert!(
+        targets
+            .iter()
+            .all(|target| target.id.as_str() != "textarea")
+    );
+}
+
+#[test]
 fn entered_names_are_preserved() {
     let mut app = root(AppService::for_tests());
     app.handle_message(
@@ -760,6 +795,71 @@ fn entered_names_are_preserved() {
 
     assert_eq!(app.name, "Feature Branch");
     assert_eq!(app.description, "Review environment");
+}
+
+#[test]
+fn description_hotkey_opens_an_unpadded_text_editor_in_insert_mode() {
+    tuicore::init();
+    let mut environment = snapshot();
+    environment.instances[0].description = "Review environment".into();
+    let mut app = root(AppService::for_tests());
+    app.set_rows_for_tests(rows::from_snapshot(&environment));
+    super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
+    let area = Rect::new(0, 0, 130, 40);
+    let mut events = EventCtx::new(AnimationSettings::default());
+
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('d'))), &mut events);
+
+    assert!(app.view.first().is_active());
+    let mut layout = LayoutEngine::new();
+    layout.layout(&mut app, area);
+    let input = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.id.as_str() == "input")
+        .unwrap()
+        .clone();
+    app.dispatch_focus(&input, true, &mut tuicore::FocusCtx::default());
+    let route = EventRoute::new(input.path);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            app.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    let rendered = rendered_lines(&terminal, area).join("\n");
+    assert!(rendered.contains("Update description"), "{rendered}");
+    assert!(rendered.contains("Save"), "{rendered}");
+    assert!(rendered.contains("Cancel"), "{rendered}");
+
+    let mut edit = EventCtx::new(AnimationSettings::default());
+    app.dispatch_event(
+        &route,
+        &TuiEvent::Key(KeyEvent::from(Key::Char('!'))),
+        &mut edit,
+    );
+    let value = match edit.messages() {
+        [Msg::DescriptionChanged(value)] => value.clone(),
+        messages => panic!("unexpected edit messages: {messages:?}"),
+    };
+    assert_eq!(value, "Review environment!");
+    app.handle_message(
+        Msg::DescriptionChanged(value),
+        &mut EventCtx::new(AnimationSettings::default()),
+    );
+    let mut submit = EventCtx::new(AnimationSettings::default());
+    app.dispatch_event(
+        &route,
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Enter,
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut submit,
+    );
+    assert!(!app.view.first().is_active());
+    assert!(app.description_save.is_some());
 }
 
 #[test]
@@ -953,6 +1053,7 @@ fn instance_action_menu_lists_instance_actions() {
     let lines = rendered_lines(&terminal, area);
     for (label, hotkey) in [
         ("Yank", "y"),
+        ("Update description", "d"),
         ("View details", "Enter"),
         ("Run open command", "⌃;"),
         ("New instance", "n"),

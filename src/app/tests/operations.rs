@@ -76,6 +76,86 @@ fn instance_operations_only_block_their_target_instance() {
 }
 
 #[test]
+fn instances_from_one_template_can_start_concurrently() {
+    tuicore::init();
+    let mut inventory = snapshot();
+    inventory.instances[0].services[0].status = "down (exit 0)".into();
+    let mut other = inventory.instances[0].clone();
+    other.name = "other".into();
+    inventory.instances.push(other);
+    let service = AppService::for_tests();
+    service.queue_instance_for_tests("review", "website");
+    let mut app = root(service);
+    app.update_snapshot(inventory);
+    instances::set_highlighted(&app.instances, Some("instance:other".into()));
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+
+    app.action(3, &mut ctx);
+
+    assert!(matches!(
+        app.intent,
+        Some(crate::app::Intent::Resume { ref name, .. }) if name == "other"
+    ));
+    assert!(app.view.first().is_active());
+    app.handle_message(Msg::Submit, &mut ctx);
+    let operations = app.service.operations();
+    assert_eq!(operations.len(), 2);
+    assert!(
+        operations
+            .iter()
+            .any(|operation| operation.name == "review")
+    );
+    assert!(operations.iter().any(|operation| operation.name == "other"));
+}
+
+#[test]
+fn one_template_can_create_multiple_instances_concurrently() {
+    tuicore::init();
+    let service = AppService::for_tests();
+    service.queue_instance_for_tests("review", "website");
+    let mut app = root(service);
+    app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
+    instances::set_highlighted(
+        &app.instances,
+        Some("template:/tmp/templates/website".into()),
+    );
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+
+    app.action(1, &mut ctx);
+    app.handle_message(Msg::NameChanged("other".into()), &mut ctx);
+    app.handle_message(Msg::Submit, &mut ctx);
+
+    let operations = app.service.operations();
+    assert_eq!(operations.len(), 2);
+    assert!(
+        operations
+            .iter()
+            .any(|operation| operation.name == "review")
+    );
+    assert!(operations.iter().any(|operation| operation.name == "other"));
+}
+
+#[test]
+fn new_instance_form_ignores_an_active_operation_for_the_draft_name() {
+    tuicore::init();
+    let service = AppService::for_tests();
+    service.queue_instance_for_tests("review", "website");
+    let mut app = root(service);
+    app.name = "review".into();
+    app.intent = Some(crate::app::Intent::CreateInstance("website".into()));
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+
+    app.open_name_entry(&mut ctx);
+
+    assert!(app.view.first().is_active());
+    assert!(matches!(
+        app.intent,
+        Some(crate::app::Intent::CreateInstance(ref template)) if template == "website"
+    ));
+    assert_eq!(app.notifications.center().history().len(), 0);
+}
+
+#[test]
 fn stop_shortcut_notifies_when_instance_startup_is_active() {
     tuicore::init();
     let service = AppService::for_tests();

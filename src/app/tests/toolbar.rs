@@ -19,6 +19,100 @@ fn toolbar_line(app: &mut super::super::App, width: u16) -> String {
 }
 
 #[test]
+fn running_filter_toggle_precedes_stop_all_and_filters_with_capital_u() {
+    tuicore::init();
+    let mut inventory = snapshot();
+    let mut other = inventory.instances[0].clone();
+    other.name = "other".into();
+    inventory.instances.push(other);
+    let mut stopped = inventory.instances[0].clone();
+    stopped.name = "stopped".into();
+    stopped.services[0].status = "down (exit 0)".into();
+    inventory.instances.push(stopped);
+    let mut app = root(AppService::for_tests());
+    app.update_snapshot(inventory.clone());
+
+    for width in [40, 130] {
+        let area = Rect::new(0, 0, width, 30);
+        let mut layout = tuicore::LayoutCtx::new();
+        app.layout(area, &mut layout);
+        let running = layout
+            .focus_targets()
+            .iter()
+            .find(|target| {
+                target
+                    .path
+                    .keys()
+                    .iter()
+                    .any(|key| key.as_str() == "running-only")
+            })
+            .unwrap();
+        let stop = layout
+            .focus_targets()
+            .iter()
+            .find(|target| {
+                target
+                    .path
+                    .keys()
+                    .iter()
+                    .any(|key| key.as_str() == "stop-all")
+            })
+            .unwrap();
+        assert_eq!(running.area.right(), stop.area.x);
+        let line = toolbar_line(&mut app, width);
+        assert!(line.contains("󰑮") && line.contains("|U|"), "{line}");
+        assert!(line.find("󰑮").unwrap() < line.find('').unwrap(), "{line}");
+    }
+
+    let all = rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30)).join("\n");
+    assert!(
+        all.contains("review") && all.contains("other") && all.contains("stopped"),
+        "{all}"
+    );
+    assert!(all.contains(" 3"), "{all}");
+
+    let mut toggle = EventCtx::new(AnimationSettings::default());
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('U'))), &mut toggle);
+    assert!(toggle.messages().is_empty());
+    assert!(app.running_only);
+    let running =
+        rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30)).join("\n");
+    assert!(running.contains("review"), "{running}");
+    assert!(running.contains("other"), "{running}");
+    assert!(!running.contains("stopped"), "{running}");
+    assert!(running.contains(" 2/3"), "{running}");
+
+    inventory
+        .instances
+        .iter_mut()
+        .find(|instance| instance.name == "stopped")
+        .unwrap()
+        .services[0]
+        .status = "up".into();
+    app.update_snapshot(inventory.clone());
+    let running =
+        rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30)).join("\n");
+    assert!(running.contains(" 3"), "{running}");
+    assert!(!running.contains("2/3"), "{running}");
+
+    let mut toggle = EventCtx::new(AnimationSettings::default());
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('U'))), &mut toggle);
+    assert!(toggle.messages().is_empty());
+    assert!(!app.running_only);
+    inventory
+        .instances
+        .iter_mut()
+        .find(|instance| instance.name == "stopped")
+        .unwrap()
+        .services[0]
+        .status = "down (exit 0)".into();
+    app.update_snapshot(inventory);
+    let all = rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30)).join("\n");
+    assert!(all.contains(" 3"), "{all}");
+    assert!(!all.contains("2/3"), "{all}");
+}
+
+#[test]
 fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() {
     tuicore::init();
     let mut app = root(AppService::for_tests());

@@ -461,9 +461,13 @@ fn compact_duration(milliseconds: u64) -> String {
 
 fn template_summary(
     count: usize,
+    total_count: Option<usize>,
     cold_average_milliseconds: Option<&u64>,
     hot_average_milliseconds: Option<&u64>,
 ) -> String {
+    let count = total_count
+        .filter(|total| *total != count)
+        .map_or_else(|| count.to_string(), |total| format!("{count}/{total}"));
     let mut summary = format!(" {count}");
     if let Some(milliseconds) = cold_average_milliseconds {
         summary.push_str(&format!(
@@ -495,6 +499,7 @@ fn ready_services<'a>(
         .flat_map(|instance| &instance.services)
 }
 
+#[cfg(test)]
 pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Vec<Row> {
     from_snapshot_with_operations(snapshot, &[])
 }
@@ -523,6 +528,22 @@ pub(super) fn from_snapshot_with_operations(
     snapshot: &EnvironmentSnapshot,
     operations: &[Operation],
 ) -> Vec<Row> {
+    from_snapshot_with_operations_and_totals(snapshot, operations, None)
+}
+
+pub(super) fn from_filtered_snapshot_with_operations(
+    snapshot: &EnvironmentSnapshot,
+    operations: &[Operation],
+    full_snapshot: &EnvironmentSnapshot,
+) -> Vec<Row> {
+    from_snapshot_with_operations_and_totals(snapshot, operations, Some(full_snapshot))
+}
+
+fn from_snapshot_with_operations_and_totals(
+    snapshot: &EnvironmentSnapshot,
+    operations: &[Operation],
+    full_snapshot: Option<&EnvironmentSnapshot>,
+) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut instances = snapshot.instances.iter().collect::<Vec<_>>();
     instances.sort_by(|left, right| {
@@ -549,6 +570,13 @@ pub(super) fn from_snapshot_with_operations(
                 },
                 template_summary(
                     instance_count,
+                    full_snapshot.map(|snapshot| {
+                        snapshot
+                            .instances
+                            .iter()
+                            .filter(|instance| instance.template_directory == template.directory)
+                            .count()
+                    }),
                     snapshot
                         .cold_startup_averages_milliseconds
                         .get(&template.name),
@@ -609,6 +637,15 @@ pub(super) fn from_snapshot_with_operations(
                     instance.template,
                     template_summary(
                         instance_count,
+                        full_snapshot.map(|snapshot| {
+                            snapshot
+                                .instances
+                                .iter()
+                                .filter(|other| {
+                                    other.template_directory == instance.template_directory
+                                })
+                                .count()
+                        }),
                         snapshot
                             .cold_startup_averages_milliseconds
                             .get(&instance.template),

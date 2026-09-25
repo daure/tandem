@@ -31,7 +31,7 @@ impl AppService {
         let (sender, ready) = tokio::sync::oneshot::channel();
         let operation = self
             .environments
-            .begin("create_instance", name, Some(template))?;
+            .begin_instance(name, template, description.as_deref())?;
         // Keep admission's lock through startup so another process cannot create between
         // the existence check and Compose execution.
         let operation = self.schedule_operation(

@@ -2,7 +2,9 @@ use std::{fs, sync::Arc, time::Duration};
 
 use serde_json::json;
 
-use super::{Environments, compose, config::Config, docker, gateway, lifecycle, templates};
+use super::{
+    Environments, compose, config::Config, docker, gateway, journal, lifecycle, templates,
+};
 use crate::store::environments::{
     Instance, InstanceService, OperationState, StartupKind, validate_instance_name, validate_name,
 };
@@ -89,6 +91,44 @@ fn instructions_are_read_from_the_editable_file_on_every_call() {
         fs::read_to_string(reopened.instructions).unwrap(),
         "# Team guidance\nUse the api template.\n"
     );
+}
+
+#[test]
+fn instance_description_updates_persist_and_override_container_labels() {
+    let (_directory, config) = fixture();
+    let environment = Environments::new(config.clone());
+    let instance = Instance {
+        name: "review".into(),
+        description: "Original description".into(),
+        template: "website".into(),
+        template_directory: config.templates.join("website").display().to_string(),
+        workspace: config.workspaces.join("review").display().to_string(),
+        project: config.project("review"),
+        ..Default::default()
+    };
+    let operation = environment
+        .begin("create_instance", "review", Some("website".into()))
+        .unwrap();
+    environment.complete_instance_for_tests(&operation.id, instance.clone());
+
+    environment
+        .update_instance_description("review", "Updated description".into())
+        .unwrap();
+
+    assert_eq!(
+        environment.snapshot().instances[0].description,
+        "Updated description"
+    );
+    assert_eq!(
+        journal::recorded(&config, "review")
+            .unwrap()
+            .unwrap()
+            .description,
+        "Updated description"
+    );
+    let mut observed = instance;
+    journal::enrich(&config, std::slice::from_mut(&mut observed)).unwrap();
+    assert_eq!(observed.description, "Updated description");
 }
 
 #[test]

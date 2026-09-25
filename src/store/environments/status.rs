@@ -423,6 +423,12 @@ impl InstanceService {
 }
 
 impl Instance {
+    pub fn is_running(&self) -> bool {
+        self.services
+            .iter()
+            .any(|service| !service.one_shot && service.state() == ContainerState::Running)
+    }
+
     fn mutable(&self) -> bool {
         !self.pending
             && !self.runtime.stale

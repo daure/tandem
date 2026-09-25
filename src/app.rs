@@ -16,7 +16,10 @@ use tuicore::{
     TickResult, ToastRack, TuiEvent, TuiNode,
 };
 
-use crate::{service::AppService, store::environments::EnvironmentSnapshot};
+use crate::{
+    service::AppService,
+    store::environments::{EnvironmentSnapshot, Operation},
+};
 
 mod action_menu;
 mod bulk;
@@ -47,6 +50,29 @@ const STATUS_BAR_MENU_ITEMS: [StatusBarMenuItem; 2] = [
     StatusBarMenuItem::Theme,
 ];
 
+fn visible_rows(
+    snapshot: &EnvironmentSnapshot,
+    operations: &[Operation],
+    running_only: bool,
+) -> Vec<Row> {
+    if !running_only {
+        return rows::from_snapshot_with_operations(snapshot, operations);
+    }
+    let mut visible = snapshot.clone();
+    visible
+        .instances
+        .retain(crate::store::environments::Instance::is_running);
+    let names = visible
+        .instances
+        .iter()
+        .map(|instance| instance.name.clone())
+        .collect::<Vec<_>>();
+    visible
+        .activities
+        .retain(|activity| names.contains(&activity.name));
+    rows::from_filtered_snapshot_with_operations(&visible, operations, snapshot)
+}
+
 pub(crate) fn initial_focus() -> tuicore::FocusRequest {
     tuicore::FocusRequest::Target(FocusId::new(TREE_FOCUS))
 }
@@ -67,8 +93,10 @@ pub(crate) enum Msg {
     Refresh,
     StopAll,
     PurgeAll,
+    SetRunningOnly(bool),
     SetBranchInstances(bool),
     CopyName,
+    CopyDescription,
     CopyWorkspace,
     CopyGatewayUrl,
     Submit,
@@ -91,6 +119,7 @@ enum Intent {
         name: String,
         service: Option<String>,
     },
+    UpdateDescription(String),
     Purge(String),
     StopTemplate(String),
     DeleteTemplate(String),
@@ -125,6 +154,7 @@ pub(crate) struct App {
     view: View,
     instances: SharedState,
     toolbar_state: toolbar::SharedState,
+    running_only: bool,
     keys: [KeySpec; 11],
     refresh_schedule: refresh::RefreshSchedule,
     manual_refresh: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
@@ -136,6 +166,7 @@ pub(crate) struct App {
     description: String,
     open_command: String,
     settings_save: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
+    description_save: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
     area: Rect,
     details_open: bool,
 }
@@ -143,7 +174,7 @@ pub(crate) struct App {
 pub(crate) fn root(service: AppService) -> App {
     let keys = service.environment_keys();
     let snapshot = service.environment_snapshot();
-    let instances = instances::state(rows::from_snapshot(&snapshot));
+    let instances = instances::state(visible_rows(&snapshot, &[], false));
     let toolbar_state = Rc::new(RefCell::new(toolbar::State::from_snapshot(&snapshot)));
     let mut content = Tabs::new(vec![Tab::new(
         "Instances",
@@ -162,19 +193,20 @@ pub(crate) fn root(service: AppService) -> App {
     .variant(TabsVariant::OneRow)
     .action_hotkey("yy", |_| Msg::CopyName)
     .action_hotkey("yi", |_| Msg::CopyName)
+    .action_hotkey("yd", |_| Msg::CopyDescription)
     .action_hotkey("yw", |_| Msg::CopyWorkspace)
     .action_hotkey("yu", |_| Msg::CopyGatewayUrl);
-    for sequence in ["yy", "yi", "yw", "yu"] {
+    for sequence in ["yy", "yi", "yd", "yw", "yu"] {
         content.set_action_hotkey_visible(sequence, false);
     }
     let menu = DialogLayer::new(content, ActionMenu::new(keys))
         .active(false)
         .fit_content()
-        .fit_content_max(42, 9);
+        .fit_content_max(42, 10);
     let yank = DialogLayer::new(menu, YankMenu::new())
         .active(false)
         .fit_content()
-        .fit_content_max(42, 3)
+        .fit_content_max(42, 4)
         .child_overlays_use_base_bounds(true);
     let routes = DialogLayer::new(yank, RouteMenu::new())
         .active(false)
@@ -209,6 +241,7 @@ pub(crate) fn root(service: AppService) -> App {
         view,
         instances,
         toolbar_state,
+        running_only: false,
         keys,
         refresh_schedule: refresh::RefreshSchedule::default(),
         manual_refresh: None,
@@ -220,6 +253,7 @@ pub(crate) fn root(service: AppService) -> App {
         description: String::new(),
         open_command: String::new(),
         settings_save: None,
+        description_save: None,
         area: Rect::default(),
         details_open: false,
     }
@@ -231,12 +265,14 @@ impl App {
         let snapshot_changed = snapshot != self.snapshot;
         let rows_changed = instances::replace_rows(
             &self.instances,
-            rows::from_snapshot_with_operations(&snapshot, &operations),
+            visible_rows(&snapshot, &operations, self.running_only),
         );
         if !snapshot_changed {
             return rows_changed;
         }
-        *self.toolbar_state.borrow_mut() = toolbar::State::from_snapshot(&snapshot);
+        let mut toolbar_state = toolbar::State::from_snapshot(&snapshot);
+        toolbar_state.running_only = self.running_only;
+        *self.toolbar_state.borrow_mut() = toolbar_state;
         self.snapshot = snapshot;
         true
     }
@@ -292,6 +328,21 @@ impl App {
         instances::set_highlighted(&self.instances, highlighted);
     }
 
+    fn set_running_only(&mut self, running_only: bool, ctx: &mut EventCtx<Msg>) {
+        if self.running_only == running_only {
+            return;
+        }
+        self.running_only = running_only;
+        self.toolbar_state.borrow_mut().running_only = running_only;
+        let operations = self.service.operations();
+        instances::replace_rows(
+            &self.instances,
+            visible_rows(&self.snapshot, &operations, running_only),
+        );
+        ctx.request_layout();
+        ctx.request_redraw();
+    }
+
     pub(crate) fn handle_message(&mut self, message: Msg, ctx: &mut EventCtx<Msg>) {
         match message {
             Msg::Close => {
@@ -323,6 +374,7 @@ impl App {
             Msg::Refresh => self.action(4, ctx),
             Msg::StopAll => self.confirm_stop_all(ctx),
             Msg::PurgeAll => self.confirm_purge_all(ctx),
+            Msg::SetRunningOnly(running_only) => self.set_running_only(running_only, ctx),
             Msg::SetBranchInstances(enabled) => {
                 if let Err(error) = self.service.set_branch_instances(enabled) {
                     ctx.notify(Notification::error("Cannot save settings", error));
@@ -330,6 +382,9 @@ impl App {
             }
             Msg::CopyName => {
                 self.copy_selected_name(ctx);
+            }
+            Msg::CopyDescription => {
+                self.copy_selected_description(ctx);
             }
             Msg::CopyWorkspace => {
                 self.copy_selected_workspace(ctx);
@@ -340,6 +395,18 @@ impl App {
             Msg::Submit => {
                 if self.target_instance_has_operation() {
                     self.block_operation(ctx);
+                    return;
+                }
+                if let Some(Intent::UpdateDescription(name)) = &self.intent {
+                    self.description_save = Some(
+                        self.service
+                            .update_instance_description(name.clone(), self.description.clone()),
+                    );
+                    self.view.first_mut().set_active_with_context(false, ctx);
+                    ctx.focus(initial_focus());
+                    self.intent = None;
+                    self.details_open = false;
+                    ctx.request_redraw();
                     return;
                 }
                 let result = match &self.intent {
@@ -415,6 +482,9 @@ impl App {
                         self.service
                             .submit_operation("remove_template", name, None, 600, true)
                     }
+                    Some(Intent::UpdateDescription(_)) => {
+                        unreachable!("description updates are handled before operations")
+                    }
                     None => return,
                 };
                 match result {
@@ -436,7 +506,9 @@ impl App {
     }
 
     fn open(&mut self, modal: Modal, ctx: &mut EventCtx<Msg>) {
-        if self.target_instance_has_operation() {
+        if !matches!(self.intent, Some(Intent::CreateInstance(_)))
+            && self.target_instance_has_operation()
+        {
             self.block_operation(ctx);
             return;
         }
@@ -457,6 +529,13 @@ impl App {
                 tuicore::ChildKey::second(),
                 tuicore::ChildKey::body(),
                 tuicore::ChildKey::new("name"),
+            ])));
+        } else if matches!(self.intent, Some(Intent::UpdateDescription(_))) {
+            ctx.focus(tuicore::FocusRequest::Path(tuicore::TreePath::from_keys([
+                tuicore::ChildKey::first(),
+                tuicore::ChildKey::second(),
+                tuicore::ChildKey::body(),
+                tuicore::ChildKey::new("description"),
             ])));
         }
     }
@@ -486,7 +565,8 @@ impl App {
             | Intent::Stop(name)
             | Intent::Purge(name)
             | Intent::ServiceState { name, .. }
-            | Intent::Restart { name, .. } => Some(name),
+            | Intent::Restart { name, .. }
+            | Intent::UpdateDescription(name) => Some(name),
             Intent::NewTemplate
             | Intent::StopTemplate(_)
             | Intent::DeleteTemplate(_)
@@ -534,6 +614,27 @@ impl App {
             _ => return,
         };
         self.open(dialog, ctx);
+    }
+
+    fn open_description_editor(&mut self, ctx: &mut EventCtx<Msg>) -> bool {
+        if self.description_save.is_some() {
+            self.notify(Notification::info(
+                "Description update in progress",
+                "Wait for the current description update to finish.",
+            ));
+            return true;
+        }
+        let Some(row) = self
+            .selected()
+            .filter(|row| row.instance.is_some() && row.service.is_none())
+        else {
+            return false;
+        };
+        let name = row.instance.expect("instance rows have a name");
+        self.description = row.description;
+        self.intent = Some(Intent::UpdateDescription(name));
+        self.open(dialogs::description_entry(&self.description), ctx);
+        true
     }
 
     fn open_settings(&mut self, ctx: &mut EventCtx<Msg>) {
@@ -621,6 +722,10 @@ impl App {
                     self.open_workspace(ctx);
                     return;
                 }
+                action_menu::Action::UpdateDescription => {
+                    self.open_description_editor(ctx);
+                    return;
+                }
                 _ => {}
             }
             if matches!(
@@ -668,7 +773,11 @@ impl App {
             let (Some(name), Some(workspace)) = (row.instance, row.workspace) else {
                 return false;
             };
-            YankTarget::Instance { name, workspace }
+            YankTarget::Instance {
+                name,
+                description: row.description,
+                workspace,
+            }
         } else {
             return false;
         };
@@ -893,6 +1002,18 @@ impl App {
         true
     }
 
+    fn copy_selected_description(&self, ctx: &mut EventCtx<Msg>) -> bool {
+        let Some(value) = self
+            .selected()
+            .filter(|row| row.instance.is_some() && row.service.is_none())
+            .map(|row| row.description)
+        else {
+            return false;
+        };
+        ctx.copy_to_clipboard(value);
+        true
+    }
+
     fn copy_gateway_url(&self, ctx: &mut EventCtx<Msg>) -> bool {
         let Some(value) = self.selected().and_then(|row| row.gateway_url) else {
             return false;
@@ -940,7 +1061,9 @@ impl App {
         if self.view.first().is_active()
             && matches!(
                 self.intent,
-                Some(Intent::CreateInstance(_) | Intent::NewTemplate)
+                Some(
+                    Intent::CreateInstance(_) | Intent::NewTemplate | Intent::UpdateDescription(_)
+                )
             )
             && let TuiEvent::Key(key) = event
             && (KeySpec::key_with_modifiers(tuicore::Key::Enter, tuicore::KeyModifiers::CONTROL)
@@ -957,6 +1080,20 @@ impl App {
         }
         if instances::is_searching(&self.instances) {
             return false;
+        }
+        if let TuiEvent::Key(key) = event
+            && KeySpec::shifted('u').matches(*key)
+        {
+            self.set_running_only(!self.running_only, ctx);
+            ctx.stop_propagation();
+            return true;
+        }
+        if let TuiEvent::Key(key) = event
+            && KeySpec::plain('d').matches(*key)
+            && self.open_description_editor(ctx)
+        {
+            ctx.stop_propagation();
+            return true;
         }
         if let TuiEvent::Key(key) = event
             && open_route_key().matches(*key)
@@ -995,6 +1132,27 @@ impl App {
         self.drain_yank_menu(ctx);
         self.drain_route_menu(ctx);
         ctx.request_redraw();
+    }
+
+    fn poll_description_save(&mut self) -> bool {
+        let result = match self.description_save.as_mut() {
+            Some(reply) => match reply.try_recv() {
+                Ok(result) => result,
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    Err("description worker stopped".into())
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => return false,
+            },
+            None => return false,
+        };
+        self.description_save = None;
+        match result {
+            Ok(()) => self.sync_environment(),
+            Err(error) => {
+                self.notify(Notification::error("Cannot update description", error));
+                true
+            }
+        }
     }
 }
 
@@ -1082,6 +1240,7 @@ impl TuiNode<Msg> for App {
             self.service.poll_environments();
         }
         let mut changed = self.sync_environment();
+        changed |= self.poll_description_save();
         if let Some(reply) = &mut self.settings_save {
             let message = match reply.try_recv() {
                 Ok(Ok(_)) => None,
