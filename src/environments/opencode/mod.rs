@@ -12,11 +12,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::store::opencode::{Activity, Client, Pane, Session, Snapshot};
+use crate::store::opencode::{Activity, Client, Pane, Session, Snapshot, conversation::LatestTurn};
 use serde::Deserialize;
 use transport::{get, local_server, zellij};
 
 const QUESTION_REFRESH_LIMIT: usize = 16;
+const SESSION_DIRECTORY_WINDOW: usize = 21;
 
 #[derive(Clone)]
 pub(crate) struct Observer {
@@ -34,6 +35,8 @@ struct Presence {
     directory: String,
     server: String,
     activity: Activity,
+    context_tokens: Option<u64>,
+    context_limit: Option<u64>,
     zellij_session: String,
     pane_id: Option<u32>,
 }
@@ -157,7 +160,6 @@ impl Observer {
         let mut sessions: BTreeMap<_, _> = previous
             .sessions
             .into_iter()
-            .filter(|session| belongs(&session.directory, roots))
             .map(|mut session| {
                 session.panes.clear();
                 session.stale = true;
@@ -165,160 +167,183 @@ impl Observer {
                 (session.id.clone(), session)
             })
             .collect();
+        let known_directories = servers
+            .values()
+            .flat_map(|directories| directories.iter().cloned())
+            .collect::<Vec<_>>();
         let mut errors = BTreeSet::new();
-        let mut failed_servers = BTreeSet::new();
+        let mut failed_status_directories = BTreeMap::<String, BTreeSet<String>>::new();
         let mut observed_sessions = BTreeSet::new();
         let mut deleted = BTreeSet::new();
         let mut question_refresh = BTreeSet::new();
         for (server, directories) in servers {
-            if !directories
-                .iter()
-                .any(|directory| belongs(directory, roots))
-            {
-                continue;
-            }
             let mut statuses = BTreeMap::new();
-            let mut status_error = None;
-            for directory in directories
-                .iter()
-                .filter(|directory| belongs(directory, roots))
-            {
+            let mut status_tasks = tokio::task::JoinSet::new();
+            for directory in &directories {
                 let mut path = reqwest::Url::parse("http://localhost/session/status")
                     .map_err(|error| error.to_string())?;
                 path.query_pairs_mut().append_pair("directory", directory);
                 let target = format!("{}?{}", path.path(), path.query().unwrap_or_default());
-                match get::<BTreeMap<String, RemoteStatus>>(&client, &server, &target).await {
+                let client = client.clone();
+                let server = server.clone();
+                let directory = directory.clone();
+                status_tasks.spawn(async move {
+                    let result =
+                        get::<BTreeMap<String, RemoteStatus>>(&client, &server, &target).await;
+                    (directory, result)
+                });
+            }
+            let failed_status = failed_status_directories.entry(server.clone()).or_default();
+            while let Some(result) = status_tasks.join_next().await {
+                let (directory, result) = result.map_err(|error| error.to_string())?;
+                match result {
                     Ok(found) => statuses.extend(found),
                     Err(error) => {
-                        status_error = Some(error);
-                        break;
+                        // Directory initialization can fail independently on a shared server.
+                        failed_status.insert(directory.clone());
+                        // Port receipts outlive servers; stopped daemons need no notification.
+                        if sessions.values().any(|session| session.server == server) {
+                            errors.insert(format!(
+                                "{directory}: OpenCode observation unavailable ({error})"
+                            ));
+                        }
                     }
                 }
             }
-            if status_error.is_some() {
-                // Port receipts outlive servers. A stopped daemon is normal, not a notification.
-                if sessions.values().any(|session| session.server == server) {
-                    errors.insert(format!("{server}: OpenCode observation unavailable"));
-                }
-                failed_servers.insert(server);
+            if failed_status.len() == directories.len() {
                 continue;
             }
-            match get::<Vec<RemoteSession>>(
-                &client,
-                &server,
-                "/experimental/session?roots=true&limit=1000",
-            )
-            .await
-            {
-                Ok(mut remote) => {
-                    if remote.len() < 1000 {
-                        let present: BTreeSet<_> =
-                            remote.iter().map(|session| session.id.as_str()).collect();
-                        sessions.retain(|id, session| {
-                            session.server != server
-                                || !session.stale
-                                || present.contains(id.as_str())
-                        });
+            let mut history_tasks = tokio::task::JoinSet::new();
+            for directory in &directories {
+                let mut path = reqwest::Url::parse("http://localhost/experimental/session")
+                    .map_err(|error| error.to_string())?;
+                path.query_pairs_mut()
+                    .append_pair("roots", "true")
+                    .append_pair("limit", &SESSION_DIRECTORY_WINDOW.to_string())
+                    .append_pair("directory", directory);
+                let target = format!("{}?{}", path.path(), path.query().unwrap_or_default());
+                let client = client.clone();
+                let server = server.clone();
+                let directory = directory.clone();
+                history_tasks.spawn(async move {
+                    let result = get::<Vec<RemoteSession>>(&client, &server, &target).await;
+                    (directory, result)
+                });
+            }
+            let mut remote = BTreeMap::new();
+            let mut failed_directories = BTreeSet::new();
+            let mut history_task_failed = false;
+            while let Some(result) = history_tasks.join_next().await {
+                match result {
+                    Ok((_directory, Ok(found))) => {
+                        for session in found {
+                            remote.insert(session.id.clone(), session);
+                        }
                     }
-                    if remote.len() == 1000 {
-                        errors.insert(
-                            "OpenCode history limited to 1000 recent conversations per server"
-                                .into(),
-                        );
+                    Ok((directory, Err(error))) => {
+                        failed_directories.insert(directory);
+                        errors.insert(error);
                     }
-                    // Page absence is ambiguous; direct 404s establish deletion even with old receipts.
-                    let candidates: BTreeSet<_> = statuses
-                        .keys()
-                        .cloned()
-                        .chain(
-                            sessions
-                                .values()
-                                .filter(|session| session.server == server)
-                                .map(|session| session.id.clone()),
-                        )
-                        .chain(
-                            presences
-                                .iter()
-                                .filter(|presence| {
-                                    local_server(&presence.server).as_ref() == Some(&server)
-                                })
-                                .map(|presence| presence.id.clone()),
-                        )
-                        .filter(|id| valid_id(id))
-                        .collect();
-                    for id in &candidates {
-                        if !remote.iter().any(|session| session.id == *id) {
-                            match transport::get_optional::<RemoteSession>(
-                                &client,
-                                &server,
-                                &format!("/session/{id}"),
-                            )
-                            .await
-                            {
-                                Ok(Some(session)) => remote.push(session),
-                                Ok(None) => {
-                                    if !observed_sessions.contains(id) {
-                                        sessions.remove(id);
-                                    }
-                                    deleted.insert(id.clone());
-                                }
-                                Err(error) => {
-                                    errors.insert(error);
-                                }
+                    Err(error) => {
+                        history_task_failed = true;
+                        errors.insert(error.to_string());
+                    }
+                }
+            }
+            let present = remote.keys().cloned().collect::<BTreeSet<_>>();
+            sessions.retain(|id, session| {
+                session.server != server
+                    || history_task_failed
+                    || failed_directories.contains(&session.directory)
+                    || present.contains(id)
+            });
+            // Page absence is ambiguous; direct 404s establish deletion even with old receipts.
+            let candidates: BTreeSet<_> = statuses
+                .keys()
+                .cloned()
+                .chain(
+                    presences
+                        .iter()
+                        .filter(|presence| local_server(&presence.server).as_ref() == Some(&server))
+                        .map(|presence| presence.id.clone()),
+                )
+                .filter(|id| valid_id(id))
+                .collect();
+            for id in &candidates {
+                if !remote.contains_key(id) {
+                    match transport::get_optional::<RemoteSession>(
+                        &client,
+                        &server,
+                        &format!("/session/{id}"),
+                    )
+                    .await
+                    {
+                        Ok(Some(session)) => {
+                            remote.insert(session.id.clone(), session);
+                        }
+                        Ok(None) => {
+                            if !observed_sessions.contains(id) {
+                                sessions.remove(id);
                             }
+                            deleted.insert(id.clone());
                         }
-                    }
-                    for item in remote {
-                        if item.parent_id.is_some()
-                            || !valid_id(&item.id)
-                            || !belongs(&item.directory, roots)
-                            || !directories.iter().any(|directory| {
-                                Path::new(&item.directory).starts_with(directory)
-                                    || Path::new(directory).starts_with(&item.directory)
-                            })
-                        {
-                            continue;
-                        }
-                        let activity = match statuses.get(&item.id).map(|s| s.kind.as_str()) {
-                            Some("busy" | "retry") => Activity::Busy,
-                            None | Some("idle") => Activity::Idle,
-                            _ => Activity::Unknown,
-                        };
-                        observed_sessions.insert(item.id.clone());
-                        let mut candidate = Session {
-                            id: item.id.clone(),
-                            title: clean(&item.title),
-                            directory: item.directory,
-                            server: server.clone(),
-                            activity,
-                            updated: item.time.updated,
-                            ..Default::default()
-                        };
-                        let id = item.id;
-                        update_activity_timing(&mut candidate, sessions.get(&id), observed_at);
-                        let current = sessions
-                            .entry(id.clone())
-                            .or_insert_with(|| candidate.clone());
-                        let refresh_question =
-                            !current.question_observed || candidate.updated > current.updated;
-                        if current.stale
-                            || candidate.activity == Activity::Busy
-                            || candidate.activity != current.activity
-                            || candidate.updated > current.updated
-                        {
-                            let last_question = current.last_question.take();
-                            let question_observed = current.question_observed;
-                            *current = candidate;
-                            current.last_question = last_question;
-                            current.question_observed = question_observed;
-                        }
-                        if refresh_question {
-                            question_refresh.insert(id);
+                        Err(error) => {
+                            errors.insert(error);
                         }
                     }
                 }
-                Err(error) => {
-                    errors.insert(error);
+            }
+            for (_, item) in remote {
+                if item.parent_id.is_some()
+                    || !valid_id(&item.id)
+                    || !directories.iter().any(|directory| {
+                        Path::new(&item.directory).starts_with(directory)
+                            || Path::new(directory).starts_with(&item.directory)
+                    })
+                {
+                    continue;
+                }
+                let status_failed = failed_status.contains(&item.directory);
+                let activity = if status_failed {
+                    Activity::Unknown
+                } else {
+                    match statuses.get(&item.id).map(|s| s.kind.as_str()) {
+                        Some("busy" | "retry") => Activity::Busy,
+                        None | Some("idle") => Activity::Idle,
+                        _ => Activity::Unknown,
+                    }
+                };
+                observed_sessions.insert(item.id.clone());
+                let mut candidate = Session {
+                    id: item.id.clone(),
+                    title: clean(&item.title),
+                    directory: item.directory,
+                    server: server.clone(),
+                    activity,
+                    stale: status_failed,
+                    updated: item.time.updated,
+                    ..Default::default()
+                };
+                let id = item.id;
+                update_activity_timing(&mut candidate, sessions.get(&id), observed_at);
+                let current = sessions
+                    .entry(id.clone())
+                    .or_insert_with(|| candidate.clone());
+                let refresh_question =
+                    !current.question_observed || candidate.updated > current.updated;
+                if current.stale
+                    || candidate.activity == Activity::Busy
+                    || candidate.activity != current.activity
+                    || candidate.updated > current.updated
+                {
+                    let last_question = current.last_question.take();
+                    let question_observed = current.question_observed;
+                    *current = candidate;
+                    current.last_question = last_question;
+                    current.question_observed = question_observed;
+                }
+                if refresh_question {
+                    question_refresh.insert(id);
                 }
             }
         }
@@ -352,9 +377,6 @@ impl Observer {
         let mut tracked = BTreeSet::new();
         let mut clients = BTreeMap::new();
         for presence in presences {
-            if !belongs(&presence.directory, roots) {
-                continue;
-            }
             if presence.id.is_empty()
                 || deleted.contains(&presence.id) && !observed_sessions.contains(&presence.id)
             {
@@ -385,6 +407,9 @@ impl Observer {
                 }
                 continue;
             }
+            let status_failed = local_server(&presence.server)
+                .and_then(|server| failed_status_directories.get(&server))
+                .is_some_and(|directories| directories.contains(&presence.directory));
             let session = sessions
                 .entry(presence.id.clone())
                 .or_insert_with(|| Session {
@@ -396,12 +421,18 @@ impl Observer {
                     ..Default::default()
                 });
             session.title = clean(&presence.title);
+            session.context_tokens = presence.context_tokens;
+            session.context_limit = presence.context_limit;
             session.stale = (!presence.zellij_session.is_empty()
                 && !panes.contains_key(&presence.zellij_session))
-                || failed_servers.contains(&presence.server);
+                || status_failed;
             if !observed_sessions.contains(&session.id) {
                 let previous = session.clone();
-                session.activity = presence.activity;
+                session.activity = if status_failed {
+                    Activity::Unknown
+                } else {
+                    presence.activity
+                };
                 update_activity_timing(session, Some(&previous), observed_at);
             }
             if let Some(server) = local_server(&presence.server)
@@ -433,7 +464,7 @@ impl Observer {
                 if pane.pane_command.as_ref().is_some_and(|command| {
                     command.contains("opencode") || command.contains("oc-pane")
                 }) && let Some(directory) = &pane.pane_cwd
-                    && belongs(directory, roots)
+                    && belongs(directory, &known_directories)
                 {
                     errors.insert("OpenCode panes need the Tandem TUI companion; run tandem opencode-setup and reopen those clients".into());
                     for session in sessions
@@ -448,22 +479,36 @@ impl Observer {
         let mut questions: Vec<_> = sessions
             .values()
             .filter(|session| question_refresh.contains(&session.id) || !session.question_observed)
-            .map(|session| (session.id.clone(), session.live(), session.updated))
+            .map(|session| {
+                (
+                    session.id.clone(),
+                    belongs(&session.directory, roots),
+                    session.live(),
+                    session.updated,
+                )
+            })
             .collect();
-        questions.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
+        questions.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| b.2.cmp(&a.2))
+                .then_with(|| b.3.cmp(&a.3))
+        });
         let mut question_tasks = tokio::task::JoinSet::new();
-        for (id, _, _) in questions.into_iter().take(QUESTION_REFRESH_LIMIT) {
+        for (id, _, _, _) in questions.into_iter().take(QUESTION_REFRESH_LIMIT) {
             let session = sessions.get(&id).expect("question session exists").clone();
             let client = client.clone();
             question_tasks.spawn(async move {
-                let question = conversation::latest_question(&client, &session).await;
-                (id, question)
+                let turn = conversation::latest_turn(&client, &session).await;
+                (id, turn)
             });
         }
-        while let Some(Ok((id, Ok(question)))) = question_tasks.join_next().await {
+        while let Some(Ok((id, Ok(turn)))) = question_tasks.join_next().await {
             if let Some(session) = sessions.get_mut(&id) {
-                session.last_question = question;
                 session.question_observed = true;
+                if let Some(turn) = turn {
+                    session.last_question = turn.question.clone();
+                    apply_turn_timing(session, &turn, observed_at);
+                }
             }
         }
         Ok(Snapshot {
@@ -536,6 +581,27 @@ fn update_activity_timing(candidate: &mut Session, previous: Option<&Session>, o
             candidate.activity_elapsed_milliseconds =
                 previous.and_then(|session| session.activity_elapsed_milliseconds);
         }
+    }
+}
+
+fn apply_turn_timing(session: &mut Session, turn: &LatestTurn, observed_at: u64) {
+    let started = turn.started_at;
+    if started > observed_at || observed_at.saturating_sub(started) > 86_400_000 {
+        return;
+    }
+    match session.activity {
+        Activity::Busy => {
+            session.activity_started_at_milliseconds = Some(started);
+            session.activity_elapsed_milliseconds = Some(observed_at.saturating_sub(started));
+        }
+        Activity::Idle => {
+            let completed = turn.completed_at.unwrap_or(session.updated);
+            if completed >= started && completed <= observed_at {
+                session.activity_started_at_milliseconds = None;
+                session.activity_elapsed_milliseconds = Some(completed - started);
+            }
+        }
+        Activity::Unknown => {}
     }
 }
 

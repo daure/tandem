@@ -72,7 +72,6 @@ fn restart_key_and_menu_confirm_the_selected_instance_or_service() {
             );
             let mut ctx = EventCtx::new(AnimationSettings::default());
             let route = tuicore::EventRoute::new(tuicore::TreePath::from_keys([
-                tuicore::ChildKey::first(),
                 tuicore::ChildKey::second(),
             ]));
             app.dispatch_event(
@@ -97,7 +96,7 @@ fn template_selection_ignores_restart_and_uppercase_r_refreshes() {
         &mut EventCtx::new(AnimationSettings::default()),
     );
     assert!(app.intent.is_none());
-    assert!(!app.view.first().is_active());
+    assert!(!app.view.is_active());
     assert!(app.manual_refresh.is_none());
     instances::set_highlighted(&app.instances, Some("instance:review".into()));
     app.event(

@@ -27,14 +27,18 @@ fn full_transcript_keeps_all_turns_with_the_latest_reply_and_question_first() {
 }
 
 #[test]
-fn latest_question_uses_the_newest_user_text_as_one_safe_line() {
+fn latest_turn_keeps_the_newest_question_and_its_completion_timing() {
     let messages = json!([
         {"info":{"id":"msg_1","role":"user","time":{"created":1}},"parts":[{"type":"text","text":"First question"}]},
         {"info":{"id":"msg_2","role":"user","time":{"created":3}},"parts":[{"type":"text","text":"Latest\nquestion"},{"type":"file","filename":"image.png"}]},
-        {"info":{"id":"msg_3","role":"assistant","time":{"created":4}},"parts":[{"type":"text","text":"Latest answer"}]}
+        {"info":{"id":"msg_3","role":"assistant","parentID":"msg_2","time":{"created":4,"completed":9}},"parts":[{"type":"text","text":"Latest answer"}]}
     ]);
     assert_eq!(
-        latest_question(serde_json::from_value(messages).unwrap()).as_deref(),
-        Some("Latest question")
+        latest_turn(serde_json::from_value(messages).unwrap()),
+        Some(LatestTurn {
+            question: Some("Latest question".into()),
+            started_at: 3,
+            completed_at: Some(9),
+        })
     );
 }

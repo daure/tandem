@@ -16,7 +16,7 @@ use tuicore::{
 use super::{Msg, open_panel_key, open_route_key};
 
 const MENU_FIELD_WIDTH: u16 = 42;
-const MENU_CONTENT_WIDTH: u16 = MENU_FIELD_WIDTH - 2;
+const MENU_CONTENT_WIDTH: u16 = MENU_FIELD_WIDTH;
 const MENU_HEIGHT: u16 = 10;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -31,6 +31,7 @@ pub(super) enum Action {
     OpenCommand,
     OpenPanel,
     GotoPanel,
+    CloseSession,
     Details,
     NewInstance,
     Start,
@@ -56,7 +57,7 @@ impl Action {
             Self::Yank => unreachable!("yank opens its own menu"),
             Self::UpdateDescription => unreachable!("description editing opens its own dialog"),
             Self::OpenBrowser | Self::OpenCommand => 10,
-            Self::OpenPanel | Self::GotoPanel => {
+            Self::OpenPanel | Self::GotoPanel | Self::CloseSession => {
                 unreachable!("OpenCode panel actions have a fixed hotkey")
             }
             Self::RestartInstance | Self::RestartService => 7,
@@ -84,6 +85,7 @@ impl Action {
             Self::OpenCommand => "Run open command",
             Self::OpenPanel => "Open panel",
             Self::GotoPanel => "Goto panel",
+            Self::CloseSession => "Close session",
             Self::Details => "View details",
             Self::NewInstance => "New instance",
             Self::Start => "Start instance",
@@ -118,7 +120,9 @@ pub(super) struct Target {
     pub template_available: bool,
     pub repository: bool,
     pub cleanup: bool,
-    pub opencode_attached: Option<bool>,
+    pub opencode_session: Option<(bool, bool)>,
+    pub close_opencode: bool,
+    pub external_opencode: bool,
 }
 
 impl ActionMenu {
@@ -160,12 +164,18 @@ impl ActionMenu {
     }
 
     pub(super) fn open(&mut self, target: Target, ctx: &mut EventCtx<Msg>) {
-        self.actions = if let Some(attached) = target.opencode_attached {
-            vec![if attached {
-                Action::GotoPanel
+        self.actions = if let Some((attached, owned)) = target.opencode_session {
+            if attached {
+                vec![Action::GotoPanel, Action::CloseSession]
+            } else if owned {
+                vec![Action::OpenPanel]
             } else {
-                Action::OpenPanel
-            }]
+                vec![Action::Details]
+            }
+        } else if target.close_opencode {
+            vec![Action::GotoPanel, Action::CloseSession]
+        } else if target.external_opencode {
+            vec![Action::Details]
         } else if target.cleanup {
             vec![
                 Action::CopyInstanceName,
@@ -265,6 +275,7 @@ fn action_text(action: Action, keys: &[KeySpec; 11], enabled: bool) -> Text<'sta
         Action::UpdateDescription => "d".into(),
         Action::OpenBrowser => open_route_key().label(),
         Action::OpenPanel | Action::GotoPanel => open_panel_key().label(),
+        Action::CloseSession => "c".into(),
         _ => keys
             .get(action.index())
             .copied()
@@ -365,5 +376,97 @@ impl TuiNode<Msg> for ActionMenu {
 
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.dropdown.destroy(ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect, style::Modifier};
+    use tuicore::{AnimationSettings, EventCtx, LayoutCtx, RenderCtx};
+
+    use super::*;
+    use crate::{app::rows::Row, service::AppService};
+
+    #[test]
+    fn action_rows_fill_the_menu_width() {
+        let service = AppService::for_tests();
+        let text = action_text(Action::Details, &service.environment_keys(), true);
+
+        assert_eq!(line_width(&text.lines[0]), usize::from(MENU_FIELD_WIDTH));
+    }
+
+    #[test]
+    fn external_sessions_expose_navigation_and_close_without_attach() {
+        let service = AppService::for_tests();
+        let mut menu = ActionMenu::new(service.environment_keys());
+        let mut ctx = EventCtx::new(AnimationSettings::default());
+        let target = |opencode_session: (bool, bool)| Target {
+            template: false,
+            instance: false,
+            service: false,
+            capabilities: (false, false, false),
+            gateway: false,
+            template_available: false,
+            repository: false,
+            cleanup: false,
+            opencode_session: Some(opencode_session),
+            close_opencode: opencode_session.0,
+            external_opencode: true,
+        };
+
+        menu.open(target((true, false)), &mut ctx);
+        assert!(menu.actions == [Action::GotoPanel, Action::CloseSession]);
+
+        menu.open(target((false, false)), &mut ctx);
+        assert!(menu.actions == [Action::Details]);
+
+        let mut client = target((false, false));
+        client.opencode_session = None;
+        client.close_opencode = true;
+        menu.open(client, &mut ctx);
+        assert!(menu.actions == [Action::GotoPanel, Action::CloseSession]);
+    }
+
+    #[test]
+    fn action_menu_dims_the_full_content_bounds() {
+        tuicore::init();
+        let mut app = crate::app::root(AppService::for_tests());
+        app.set_rows_for_tests(vec![Row {
+            id: "template:website".into(),
+            label: "website".into(),
+            template: "website".into(),
+            template_available: true,
+            ..Default::default()
+        }]);
+        let area = Rect::new(0, 0, 80, 24);
+        let animation = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
+        let mut events = EventCtx::new(animation);
+        let mut layout = LayoutCtx::new();
+        layout.with_overlay_bounds(area, |ctx| app.layout(area, ctx));
+
+        assert!(app.open_action_menu(&mut events));
+        let mut layout = LayoutCtx::new();
+        layout.with_overlay_bounds(area, |ctx| app.layout(area, ctx));
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| {
+                let mut render = RenderCtx::new();
+                app.render(frame, area, &mut render);
+                render.flush(frame);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for position in [
+            (area.left(), area.top()),
+            (area.right() - 1, area.top()),
+            (area.left(), area.bottom() - 2),
+            (area.right() - 1, area.bottom() - 2),
+        ] {
+            assert!(buffer[position].modifier.contains(Modifier::DIM));
+        }
     }
 }

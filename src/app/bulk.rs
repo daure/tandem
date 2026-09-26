@@ -32,14 +32,13 @@ impl App {
         let batch = match self.service.submit_instance_batch(action, &targets, true) {
             Ok(batch) => batch,
             Err(error) => {
-                self.view.first_mut().layer_mut().set_bottom_left(error);
+                self.view.layer_mut().set_bottom_left(error);
                 ctx.request_redraw();
                 return;
             }
         };
         if batch.operations.is_empty() && !batch.errors.is_empty() {
             self.view
-                .first_mut()
                 .layer_mut()
                 .set_bottom_left(batch.errors.join("; "));
             ctx.request_redraw();

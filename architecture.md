@@ -59,12 +59,14 @@ Long-running mutations publish progress through operation records. Completion is
 persisted `integrations.opencode` setting. `environments/opencode` reads client-presence and
 station-daemon receipts, queries loopback OpenCode HTTP endpoints, and invokes bounded Zellij
 commands. `store/opencode` owns session state, overlapping counts, and workspace matching;
-the TUI projects these snapshots into instance summaries and conversation/pane children.
+the TUI projects these snapshots into instance summaries, an outside-Tandem workspace group,
+and conversation/pane children.
 
 The bundled OpenCode TUI companion runs in each client and publishes its current route's
 conversation ID with PID, heartbeat, server, and Zellij identity. Server processes are shared
 across directories and do not own client attachment identity. Fresh receipts and live panes
-establish attachment; server session status establishes activity. Titles are presentation data.
+establish attachment and authorize navigation or closure of that exact pane; attaching a detached
+conversation requires an owning Tandem instance. Server session status establishes activity. Titles are presentation data.
 Unknown observations stay explicit, and disabling the integration discards its cache and cancels
 its work without changing externally owned servers or panes. Companion installation is an
 explicit CLI operation; user-owned OpenCode configuration is preserved.

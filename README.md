@@ -208,8 +208,9 @@ with the deletion confirmation. If containers are absent, recovery requires a ma
 and template ownership receipt; it checks Docker project membership before removing remaining data.
 Recovery with missing execution-kind metadata requires Docker access. Unverifiable ownership leaves data intact.
 
-Workspace-only instances (blank, repository-only, or guidance-only) show **Workspace ready** after preparation and guidance generation, retain
-their workspace path, and show a single muted **(no services configured)** child when expanded. They hide
+Workspace-only instances (blank, repository-only, or guidance-only) use a folder icon after
+preparation and guidance generation, retain their workspace path, and show a single subtle
+**(no services configured)** child when expanded. They hide
 CPU/memory metrics and disable container Start/Stop/Restart actions; Open, Details and Delete remain
 available. Failed preparation retains completed checkouts and reports its error; retry New instance
 with the same template/name after correcting the cause. Docker failures do not make these workspaces stale.
@@ -429,9 +430,8 @@ picker. Tandem joins those reports to live Zellij panes and local OpenCode serve
 | detached · busy | A conversation is working without an observed pane | Open panel |
 | saved | An idle conversation has no observed pane | Open panel |
 
-Instance rows show `OpenCode: 3 live · 2 attached · 2 busy`. Counts describe distinct conversations:
-attached and busy overlap, while live is their union. Multiple panes displaying one conversation
-appear beneath its child row and count once. **Enter** on a conversation or pane child opens a
+Multiple panes displaying one conversation appear beneath its child row in the instance tree.
+**Enter** on a conversation or pane child opens a
 bottom-docked dialog with **Conversation**, **Details**, and **Actions** tabs. Conversation loads
 the complete user/agent message history on demand, with newest messages first so the latest
 answer and question are immediately available. Text, reasoning, attachment names, and tool-status
@@ -439,14 +439,32 @@ summaries are displayed in a wrapped, scrollable, searchable Markdown viewer. Re
 to refresh its read-only snapshot. Responses are bounded to 8 MiB; oversized histories produce an
 explicit error rather than a silently truncated transcript. Closing the dialog cancels a pending read.
 
-Use the **Actions** tab to jump to a specific pane. The **`.`** menu has one action: **Goto panel**
-for an attached conversation or **Open panel** for a detached conversation. Both use `Ctrl+;`.
-Navigation works across tabs and Zellij sessions.
+Sessions and clients whose directories do not belong to a Tandem instance appear under **Other
+OpenCode workspaces** at the top of the instance tree, grouped by their exact directory. Tandem can
+display their details and conversations, jump to an attached pane, and close an observed pane.
+Attaching or resuming a conversation requires Tandem ownership. Each directory shows its 20 most
+recent applicable conversations; a muted final row directs users to OpenCode when more are available.
+
+Use the **Actions** tab to jump to a specific pane. The **`.`** menu offers **Goto panel** for an
+attached conversation or **Open panel** for a detached conversation. Both use `Ctrl+;`. Attached
+conversations also offer **Close session** (`c`), which closes the selected Zellij pane. Navigation
+works across tabs and Zellij sessions. On an instance row, `c` opens a confirmation to close every
+attached OpenCode Zellij pane owned by that instance.
 Stacked targets become active and expanded. The **󰋚 history toggle** beside **󰑮** in the toolbar
 shows or hides saved conversations across all instances; history is hidden by default. The toggle
 supports mouse clicks and keyboard focus/activation and appears when the integration is enabled.
 Workspace matching includes repository
 subdirectories and selects the closest owning workspace.
+
+The **󰚩 Agents toggle** (`Shift+A`) groups conversations beneath instance rows, followed by
+outside-Tandem directory groups. Instance rows show the name, health/status, and a muted template
+name, with the description on the second line. Conversation children show their title and activity
+timer, then the latest question with its activity indicator. Search includes template and instance names.
+History (`Shift+O`) includes saved and detached conversations, including groups with only history;
+with history off, the view shows attached conversations. Running-only (`Shift+U`) filters instance
+groups while retaining workspace-only instances and outside-Tandem groups. Both filter values carry
+across views. Clients without a conversation appear only in outside-Tandem directory groups.
+The toggles support mouse and keyboard activation; Agents and history appear when the integration is enabled.
 
 Open panel creates a stacked pane in an observed tab for that instance, or creates a tab when
 there is no observed destination. It attaches to the conversation's running local server without
@@ -463,11 +481,12 @@ companion continues reporting while Tandem's integration is disabled.
 HTTP access is loopback-only, with redirects and proxies disabled. Authenticated servers use
 `OPENCODE_SERVER_PASSWORD` and optionally `OPENCODE_SERVER_USERNAME` from Tandem's environment.
 New OpenCode panes inherit Zellij's environment, which must also provide the server credentials.
-History includes up to 1,000 recent root conversations per reachable server; busy conversations
-are fetched separately when needed. Subagent conversations are excluded from the server inventory.
-Unavailable observations and clients without the companion show an incomplete-observation label
-and details instead of trustworthy counts. Confirmed deleted conversations are removed on refresh,
-including when the history page is full or a client still reports the deleted conversation.
+History requests the 21 most recent root conversations for each known directory so Tandem can
+detect when its 20-row display window is full; busy conversations are fetched separately when
+needed. Subagent conversations are excluded from the server inventory. Unavailable observations
+and clients without the companion show an incomplete-observation label and details instead of
+trustworthy counts. Confirmed deleted conversations are removed on refresh, including when a
+client still reports the deleted conversation.
 Refresh failures retain cached rows with stale markers
 and do not generate recurring notifications. Cold standalone clients can report their displayed
 conversation through the companion; detached work and history require a discoverable local server.

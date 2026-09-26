@@ -232,7 +232,7 @@ fn tree_secondary_lines_use_semantic_colors_and_align_with_the_row_icon() {
                 .unwrap(),
         ];
         for (row, (detail, color)) in visible_rows.into_iter().zip([
-            (" 1 · 󰜗 1m24s · 󰈸 12s", tuicore::theme().muted_fg()),
+            (" 1/1 · 󰜗 1m24s · 󰈸 12s", tuicore::theme().muted_fg()),
             ("(no description)", tuicore::theme().subtle_fg()),
             (service_detail, tuicore::theme().muted_fg()),
         ]) {
@@ -259,20 +259,33 @@ fn tree_secondary_lines_use_semantic_colors_and_align_with_the_row_icon() {
 }
 
 #[test]
-fn template_secondary_counts_cover_empty_plural_and_missing_templates() {
+fn template_rows_show_running_counts_and_color_the_icon_when_any_instance_is_up() {
+    tuicore::init();
     let mut snapshot = snapshot();
     let mut second = snapshot.instances[0].clone();
     second.name = "second".into();
     snapshot.instances.push(second);
-    assert_eq!(rows::from_snapshot(&snapshot)[0].label, "website\n 2");
+    let template = rows::from_snapshot(&snapshot)[0].clone();
+    assert_eq!(template.label, "website\n 2/2");
+    assert_eq!(template.tone, rows::Tone::Success);
+    assert_eq!(
+        template.text("⠋", None).lines[0].spans[0].style.fg,
+        Some(tuicore::theme().success_fg())
+    );
     let templates = std::mem::take(&mut snapshot.templates);
     assert_eq!(
         rows::from_snapshot(&snapshot)[0].label,
-        "website [missing]\n 2"
+        "website [missing]\n 2/2"
     );
     snapshot.templates = templates;
+    for instance in &mut snapshot.instances {
+        instance.services[0].status = "down (exit 0)".into();
+    }
+    let template = rows::from_snapshot(&snapshot)[0].clone();
+    assert_eq!(template.label, "website\n 0/2");
+    assert_eq!(template.tone, rows::Tone::Normal);
     snapshot.instances.clear();
-    assert_eq!(rows::from_snapshot(&snapshot)[0].label, "website\n 0");
+    assert_eq!(rows::from_snapshot(&snapshot)[0].label, "website\n 0/0");
 }
 
 #[test]
@@ -349,7 +362,7 @@ fn template_startup_averages_show_cold_and_hot_compact_durations() {
     for (milliseconds, duration) in [
         (0, "0s"),
         (1, "1s"),
-        (59_001, "1m00s"),
+        (59_001, "1m"),
         (84_000, "1m24s"),
         (125_000, "2m05s"),
     ] {
@@ -361,12 +374,12 @@ fn template_startup_averages_show_cold_and_hot_compact_durations() {
             .insert("website".into(), 12_000);
         assert_eq!(
             rows::from_snapshot(&snapshot)[0].label,
-            format!("website\n 4 · 󰜗 {duration} · 󰈸 12s")
+            format!("website\n 4/4 · 󰜗 {duration} · 󰈸 12s")
         );
     }
     snapshot.templates.clear();
     assert_eq!(
         rows::from_snapshot(&snapshot)[0].label,
-        "website [missing]\n 4 · 󰜗 2m05s · 󰈸 12s"
+        "website [missing]\n 4/4 · 󰜗 2m05s · 󰈸 12s"
     );
 }

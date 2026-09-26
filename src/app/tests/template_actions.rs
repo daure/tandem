@@ -111,7 +111,7 @@ fn new_instance_uses_a_mode_specific_placeholder() {
         assert!(
             matches!(&app.intent, Some(crate::app::Intent::CreateInstance(template)) if template == "website")
         );
-        assert!(app.view.first().is_active());
+        assert!(app.view.is_active());
         assert!(
             render_app(&mut app)
                 .iter()
@@ -272,10 +272,8 @@ fn row_purge_and_bulk_purge_keys_open_distinct_confirmations() {
             ),
         }
         assert!(render_app(&mut app).iter().any(|line| line.contains(title)));
-        let route = tuicore::EventRoute::new(tuicore::TreePath::from_keys([
-            tuicore::ChildKey::first(),
-            tuicore::ChildKey::second(),
-        ]));
+        let route =
+            tuicore::EventRoute::new(tuicore::TreePath::from_keys([tuicore::ChildKey::second()]));
         let mut confirm = EventCtx::new(AnimationSettings::default());
         app.dispatch_event(
             &route,

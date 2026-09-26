@@ -25,13 +25,13 @@ fn cancel() -> DialogAction<Msg> {
 }
 
 pub(super) fn details(row: &Row) -> Modal {
-    let title = if row.parent.is_none() {
+    let title = if row.is_template() {
         "Metadata"
     } else {
         "Details"
     };
     let mut tabs = vec![Tab::new(title, Properties::new(row.details.clone()))];
-    if row.parent.is_none() {
+    if row.is_template() {
         if !row.compose_file.is_empty() {
             tabs.push(Tab::new(
                 "Compose",
@@ -249,6 +249,15 @@ pub(super) fn confirm_start(name: &str) -> Modal {
         "Start",
         KeySpec::plain('s'),
         format!("Start {name}?"),
+    )
+}
+
+pub(super) fn confirm_close_opencode_sessions(name: &str) -> Modal {
+    confirmation(
+        "Close all OpenCode sessions",
+        "Ok",
+        KeySpec::plain('o'),
+        format!("Close every OpenCode Zellij pane for {name}?"),
     )
 }
 

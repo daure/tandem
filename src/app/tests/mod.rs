@@ -4,12 +4,13 @@ use tuicore::{
     LayoutEngine, RenderCtx, TuiEvent, TuiNode,
 };
 
-use super::{Msg, root, rows};
+use super::{App, Msg, rows};
 use crate::{
     service::AppService,
     store::environments::{EnvironmentSnapshot, Instance, InstanceService, Manifest, Template},
 };
 
+mod attached_sessions;
 mod bulk;
 mod guidance;
 mod input_routing;
@@ -24,6 +25,19 @@ mod service_state;
 mod template_actions;
 mod toolbar;
 mod workspaces;
+
+fn root(service: AppService) -> App {
+    let mut app = super::root(service);
+    app.handle_message(
+        Msg::SetAttachedSessionsOnly(false),
+        &mut EventCtx::new(AnimationSettings::default()),
+    );
+    super::instances::replace_rows(
+        &app.instances,
+        super::visible_rows(&app.snapshot, &[], false),
+    );
+    app
+}
 
 fn snapshot() -> EnvironmentSnapshot {
     EnvironmentSnapshot {
@@ -110,7 +124,7 @@ fn tree_rows_show_routed_services_without_gateway_children() {
     });
     let rows = rows::from_snapshot(&snapshot);
     assert_eq!(rows.len(), 5);
-    assert_eq!(rows[0].label, "website\n 1");
+    assert_eq!(rows[0].label, "website\n 1/1");
     assert_eq!(rows[0].icon, "󰠲");
     assert_eq!(rows[1].parent, Some(rows[0].id.clone()));
     assert_eq!(rows[1].label, "review · Running");
@@ -268,7 +282,7 @@ fn unassigned_keys_leave_selected_instance_actions_idle() {
             &TuiEvent::Key(key),
             &mut EventCtx::new(AnimationSettings::default()),
         );
-        assert!(!app.view.first().is_active());
+        assert!(!app.view.is_active());
         assert!(app.service.opened_system_targets().is_empty());
         assert!(app.service.operations().is_empty());
     }
@@ -333,6 +347,55 @@ fn routed_service_action_menu_opens_the_gateway_in_the_browser() {
     assert_eq!(
         app.service.opened_system_targets(),
         ["http://localhost:9876/review/web/"]
+    );
+}
+
+#[test]
+fn action_menu_dims_the_status_bar_background() {
+    tuicore::init();
+    let mut app = root(AppService::for_tests());
+    app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
+    let area = Rect::new(0, 0, 130, 40);
+    let status_cell = (area.right() - 1, area.bottom() - 1);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    let mut layout = tuicore::LayoutCtx::new();
+    layout.with_overlay_bounds(area, |ctx| app.layout(area, ctx));
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            app.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    let status_background = terminal.backend().buffer()[status_cell].bg;
+
+    app.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Char('.'))),
+        &mut EventCtx::new(AnimationSettings::default()),
+    );
+    app.view.tick(
+        std::time::Duration::from_secs(1),
+        AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+    let mut layout = tuicore::LayoutCtx::new();
+    layout.with_overlay_bounds(area, |ctx| app.layout(area, ctx));
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            app.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    let dimmed_status = &terminal.backend().buffer()[status_cell];
+
+    assert_ne!(dimmed_status.bg, status_background);
+    assert!(
+        dimmed_status
+            .modifier
+            .contains(ratatui::style::Modifier::DIM)
     );
 }
 
@@ -638,7 +701,7 @@ fn data_view_starts_expanded_through_instances() {
 }
 
 #[test]
-fn global_h_clears_search_focuses_the_first_template_and_expands_instances() {
+fn global_h_clears_search_focuses_the_first_item_and_expands_all_rows() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
@@ -682,7 +745,7 @@ fn global_h_clears_search_focuses_the_first_template_and_expands_instances() {
     assert!(rendered_lines(&terminal, area).join("").contains("review"));
     assert!(rendered_lines(&terminal, area).join("").contains("Service"));
     assert!(
-        !rendered_lines(&terminal, area)
+        rendered_lines(&terminal, area)
             .join("")
             .contains("http://localhost:9876/review/web/")
     );
@@ -749,7 +812,7 @@ fn details_hotkey_opens_the_selected_template_in_bottom_tabs() {
         }),
         &mut events,
     );
-    assert!(app.view.first().is_active());
+    assert!(app.view.is_active());
     app.layout(area, &mut tuicore::LayoutCtx::new());
     let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
     terminal
@@ -765,10 +828,8 @@ fn details_hotkey_opens_the_selected_template_in_bottom_tabs() {
     assert!(text.contains("Manifest"));
     assert!(text.contains("website"));
     assert!(text.contains("/tmp/templates/website"));
-    let route = tuicore::EventRoute::new(tuicore::TreePath::from_keys([
-        tuicore::ChildKey::first(),
-        tuicore::ChildKey::second(),
-    ]));
+    let route =
+        tuicore::EventRoute::new(tuicore::TreePath::from_keys([tuicore::ChildKey::second()]));
     app.dispatch_event(
         &route,
         &TuiEvent::Key(KeyEvent::from(Key::Char(']'))),
@@ -808,7 +869,7 @@ fn details_hotkey_opens_the_selected_template_in_bottom_tabs() {
     app.dispatch_event(&route, &TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut close);
     assert!(matches!(close.messages(), [Msg::Close]));
     app.handle_message(Msg::Close, &mut events);
-    assert!(!app.view.first().is_active());
+    assert!(!app.view.is_active());
 }
 
 #[test]
@@ -872,7 +933,7 @@ fn new_instance_dialog_validates_input_without_losing_the_dialog() {
         }),
         &mut events,
     );
-    assert!(app.view.first().is_active());
+    assert!(app.view.is_active());
     assert!(app.service.operations().is_empty());
 }
 
@@ -933,7 +994,7 @@ fn description_hotkey_opens_an_unpadded_text_editor_in_insert_mode() {
 
     app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('d'))), &mut events);
 
-    assert!(app.view.first().is_active());
+    assert!(app.view.is_active());
     let mut layout = LayoutEngine::new();
     layout.layout(&mut app, area);
     let input = layout
@@ -981,7 +1042,7 @@ fn description_hotkey_opens_an_unpadded_text_editor_in_insert_mode() {
         }),
         &mut submit,
     );
-    assert!(!app.view.first().is_active());
+    assert!(!app.view.is_active());
     assert!(app.description_save.is_some());
 }
 
@@ -1024,9 +1085,17 @@ fn details_hotkey_uses_full_width_on_mobile_and_seventy_five_percent_on_desktop(
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     app.action(0, &mut EventCtx::new(AnimationSettings::default()));
+    app.view.tick(
+        std::time::Duration::from_secs(1),
+        AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        },
+    );
     for width in [130, 56, 130] {
         let area = Rect::new(0, 0, width, 40);
-        app.layout(area, &mut tuicore::LayoutCtx::new());
+        let mut layout = tuicore::LayoutCtx::new();
+        layout.with_overlay_bounds(area, |ctx| app.layout(area, ctx));
         let mut terminal = Terminal::new(TestBackend::new(width, area.height)).unwrap();
         terminal
             .draw(|frame| {
@@ -1045,10 +1114,17 @@ fn details_hotkey_uses_full_width_on_mobile_and_seventy_five_percent_on_desktop(
         let right = left + panel_width - 1;
         let buffer = terminal.backend().buffer();
         if width >= 100 {
-            for y in header as u16 + 1..area.height - 1 {
+            for y in header as u16 + 1..area.height {
                 assert_eq!(buffer.cell((right, y)).unwrap().symbol(), "│");
                 assert_eq!(buffer.cell((left, y)).unwrap().symbol(), "│");
             }
+            assert!(
+                buffer
+                    .cell((0, area.bottom() - 1))
+                    .unwrap()
+                    .modifier
+                    .contains(ratatui::style::Modifier::DIM)
+            );
         } else {
             assert!(lines.iter().any(|line| line.starts_with("Template ")));
             let compose_row = lines
@@ -1064,6 +1140,52 @@ fn details_hotkey_uses_full_width_on_mobile_and_seventy_five_percent_on_desktop(
 }
 
 #[test]
+fn bottom_dialog_dims_the_status_bar_background() {
+    tuicore::init();
+    let mut app = root(AppService::for_tests());
+    app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
+    let area = Rect::new(0, 0, 130, 40);
+    let status_cell = (area.right() - 1, area.bottom() - 1);
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    let mut layout = tuicore::LayoutCtx::new();
+    layout.with_overlay_bounds(area, |ctx| app.layout(area, ctx));
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            app.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    let status_background = terminal.backend().buffer()[status_cell].bg;
+
+    app.action(0, &mut EventCtx::new(AnimationSettings::default()));
+    app.view.tick(
+        std::time::Duration::from_secs(1),
+        AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+    let mut layout = tuicore::LayoutCtx::new();
+    layout.with_overlay_bounds(area, |ctx| app.layout(area, ctx));
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            app.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    let dimmed_status = &terminal.backend().buffer()[status_cell];
+
+    assert_ne!(dimmed_status.bg, status_background);
+    assert!(
+        dimmed_status
+            .modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
+}
+
+#[test]
 fn details_hotkey_opens_the_selected_instance_in_a_bottom_dialog() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
@@ -1075,7 +1197,7 @@ fn details_hotkey_opens_the_selected_instance_in_a_bottom_dialog() {
         &mut EventCtx::new(AnimationSettings::default()),
     );
 
-    assert!(app.view.first().is_active());
+    assert!(app.view.is_active());
     assert!(app.service.opened_system_targets().is_empty());
 }
 
@@ -1091,7 +1213,7 @@ fn details_hotkey_opens_the_selected_routed_service() {
         &mut EventCtx::new(AnimationSettings::default()),
     );
 
-    assert!(app.view.first().is_active());
+    assert!(app.view.is_active());
     assert!(app.service.opened_system_targets().is_empty());
 }
 
@@ -1131,7 +1253,7 @@ fn template_action_menu_keeps_typed_hotkeys_in_its_search() {
     }
 
     app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('v'))), &mut events);
-    assert!(!app.view.first().is_active());
+    assert!(!app.view.is_active());
     assert!(app.menu_layer().is_active());
     assert!(app.menu_layer().layer().is_open());
 }
@@ -1145,12 +1267,12 @@ fn template_stop_and_purge_hotkeys_open_bulk_confirmations() {
 
     app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('s'))), &mut events);
     assert!(matches!(app.intent, Some(super::Intent::StopTemplate(_))));
-    assert!(app.view.first().is_active());
+    assert!(app.view.is_active());
 
     app.handle_message(Msg::Close, &mut events);
     app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('p'))), &mut events);
     assert!(matches!(app.intent, Some(super::Intent::DeleteTemplate(_))));
-    assert!(app.view.first().is_active());
+    assert!(app.view.is_active());
 }
 
 #[test]
@@ -1237,7 +1359,7 @@ fn stopped_instance_menu_mutes_stop_without_changing_its_hotkey() {
     );
 
     app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('s'))), &mut events);
-    assert!(!app.view.first().is_active());
+    assert!(!app.view.is_active());
     assert!(app.menu_layer().is_active());
 }
 
@@ -1273,5 +1395,5 @@ fn active_data_view_search_keeps_action_hotkeys_as_search_text() {
 
     assert!(super::instances::is_searching(&app.instances));
     assert!(app.intent.is_none());
-    assert!(!app.view.first().is_active());
+    assert!(!app.view.is_active());
 }

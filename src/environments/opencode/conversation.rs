@@ -1,6 +1,6 @@
 use crate::store::opencode::{
     Session,
-    conversation::{Message, latest_question as select_latest_question, transcript},
+    conversation::{LatestTurn, Message, latest_turn as select_latest_turn, transcript},
 };
 
 const QUESTION_MESSAGE_LIMIT: usize = 100;
@@ -26,10 +26,10 @@ pub(crate) async fn load(session: &Session) -> Result<String, String> {
     Ok(transcript(messages))
 }
 
-pub(super) async fn latest_question(
+pub(super) async fn latest_turn(
     client: &reqwest::Client,
     session: &Session,
-) -> Result<Option<String>, String> {
+) -> Result<Option<LatestTurn>, String> {
     if !super::valid_id(&session.id) {
         return Err("Invalid OpenCode conversation ID".into());
     }
@@ -54,8 +54,8 @@ pub(super) async fn latest_question(
                 .unwrap_or_default();
         let next = messages.first().map(|message| message.info.id.clone());
         let full = messages.len() == QUESTION_MESSAGE_LIMIT;
-        if let Some(question) = select_latest_question(messages) {
-            return Ok(Some(question));
+        if let Some(turn) = select_latest_turn(messages) {
+            return Ok(Some(turn));
         }
         if !full || next.is_none() || next == before {
             return Ok(None);

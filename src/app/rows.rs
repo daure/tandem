@@ -13,7 +13,7 @@ use super::{details, properties::Property};
 
 mod setup;
 
-const TEMPLATE_ICON: &str = "󰠲";
+pub(super) const TEMPLATE_ICON: &str = "󰠲";
 const GATEWAY_ICON: &str = "";
 const PORT_ICON: &str = "󰈀";
 const COLD_START_ICON: &str = "󰜗";
@@ -24,6 +24,7 @@ pub(super) enum Tone {
     #[default]
     Normal,
     Muted,
+    Subtle,
     Success,
     Info,
     Error,
@@ -36,6 +37,7 @@ impl Tone {
         match self {
             Self::Normal => theme.text_fg(),
             Self::Muted => theme.muted_fg(),
+            Self::Subtle => theme.subtle_fg(),
             Self::Success => theme.success_fg(),
             Self::Info => theme.info_fg(),
             Self::Error => theme.error_fg(),
@@ -75,7 +77,7 @@ fn status_icon(status: Status) -> &'static str {
 }
 
 struct InstanceSummary {
-    label: String,
+    label: Option<String>,
     tone: Tone,
     loading: bool,
     icon: &'static str,
@@ -97,11 +99,20 @@ fn instance_summary(instance: &Instance, startup: Option<&StartupTiming>) -> Ins
         summary.severity = Severity::Info;
         summary.busy = true;
     }
+    let workspace_ready = summary.status == Status::WorkspaceReady;
     InstanceSummary {
-        label: summary.label,
-        tone: summary.severity.into(),
+        label: (!workspace_ready).then_some(summary.label),
+        tone: if workspace_ready {
+            Tone::Normal
+        } else {
+            summary.severity.into()
+        },
         loading: summary.busy,
-        icon: status_icon(summary.status),
+        icon: if workspace_ready {
+            ""
+        } else {
+            status_icon(summary.status)
+        },
         detail: summary.detail,
         detail_tone: summary.detail_severity.into(),
     }
@@ -150,6 +161,7 @@ pub(super) struct Row {
     pub loading: bool,
     pub secondary_icon: &'static str,
     pub secondary_tone: Tone,
+    pub secondary_text_tone: Option<Tone>,
     pub secondary_loading: bool,
     pub activity_timer: Option<(u64, u64)>,
     pub usage: Option<ResourceUsage>,
@@ -182,6 +194,10 @@ pub(super) struct Row {
 }
 
 impl Row {
+    pub(super) fn is_template(&self) -> bool {
+        self.parent.is_none() && self.opencode.is_none()
+    }
+
     pub(super) fn height(&self) -> u16 {
         if self.instance.is_some() {
             2
@@ -194,9 +210,11 @@ impl Row {
 
     pub(super) fn search_text(&self) -> String {
         format!(
-            "{} {}",
+            "{} {} {} {}",
             self.label,
-            self.status_detail.as_deref().unwrap_or_default()
+            self.template_capabilities,
+            self.status_detail.as_deref().unwrap_or_default(),
+            self.description,
         )
     }
 
@@ -227,10 +245,21 @@ impl Row {
             first_line.push(Span::raw(first.to_owned()));
         }
         if !self.template_capabilities.is_empty() {
-            first_line.push(Span::styled(
-                format!(" {}", self.template_capabilities),
-                Style::default().fg(tuicore::theme().muted_fg()),
-            ));
+            if let Some(capabilities) = self.template_capabilities.strip_prefix("· ") {
+                first_line.push(Span::styled(
+                    " · ",
+                    Style::default().fg(Tone::Normal.color()),
+                ));
+                first_line.push(Span::styled(
+                    capabilities.to_owned(),
+                    Style::default().fg(tuicore::theme().muted_fg()),
+                ));
+            } else {
+                first_line.push(Span::styled(
+                    format!(" {}", self.template_capabilities),
+                    Style::default().fg(tuicore::theme().muted_fg()),
+                ));
+            }
         }
         if let Some(detail) = &self.status_detail {
             first_line.push(Span::styled(
@@ -279,7 +308,11 @@ impl Row {
                     );
                     Line::from(vec![
                         Span::styled(icon, Style::default().fg(self.secondary_tone.color())),
-                        Span::styled(line, Style::default().fg(tuicore::theme().muted_fg())),
+                        Span::styled(
+                            line,
+                            Style::default()
+                                .fg(self.secondary_text_tone.unwrap_or(Tone::Muted).color()),
+                        ),
                     ])
                 } else {
                     Line::from(Span::styled(
@@ -338,7 +371,7 @@ impl Row {
             .or_else(|| self.service_name.clone())
             .or_else(|| self.instance.clone())
             .or_else(|| self.cleanup_target.clone())
-            .or_else(|| self.parent.is_none().then(|| self.template.clone()))
+            .or_else(|| self.is_template().then(|| self.template.clone()))
     }
 }
 
@@ -497,21 +530,20 @@ pub(super) fn compact_duration(milliseconds: u64) -> String {
     let seconds = milliseconds.div_ceil(1_000);
     if seconds < 60 {
         format!("{seconds}s")
+    } else if seconds.is_multiple_of(60) {
+        format!("{}m", seconds / 60)
     } else {
         format!("{}m{:02}s", seconds / 60, seconds % 60)
     }
 }
 
 fn template_summary(
-    count: usize,
-    total_count: Option<usize>,
+    running_count: usize,
+    total_count: usize,
     cold_average_milliseconds: Option<&u64>,
     hot_average_milliseconds: Option<&u64>,
 ) -> String {
-    let count = total_count
-        .filter(|total| *total != count)
-        .map_or_else(|| count.to_string(), |total| format!("{count}/{total}"));
-    let mut summary = format!(" {count}");
+    let mut summary = format!(" {running_count}/{total_count}");
     if let Some(milliseconds) = cold_average_milliseconds {
         summary.push_str(&format!(
             " · {COLD_START_ICON} {}",
@@ -525,6 +557,16 @@ fn template_summary(
         ));
     }
     summary
+}
+
+fn template_instance_counts(snapshot: &EnvironmentSnapshot, directory: &str) -> (usize, usize) {
+    snapshot
+        .instances
+        .iter()
+        .filter(|instance| instance.template_directory == directory)
+        .fold((0, 0), |(running, total), instance| {
+            (running + usize::from(instance.is_running()), total + 1)
+        })
 }
 
 fn template_capabilities(template: &Template) -> String {
@@ -610,6 +652,7 @@ fn from_snapshot_with_operations_and_totals(
     full_snapshot: Option<&EnvironmentSnapshot>,
 ) -> Vec<Row> {
     let mut rows = Vec::new();
+    let totals_snapshot = full_snapshot.unwrap_or(snapshot);
     let mut instances = snapshot.instances.iter().collect::<Vec<_>>();
     instances.sort_by(|left, right| {
         left.template_directory
@@ -617,11 +660,13 @@ fn from_snapshot_with_operations_and_totals(
             .then_with(|| left.name.cmp(&right.name))
     });
     for template in &snapshot.templates {
-        let instance_count = snapshot
+        let visible_instance_count = snapshot
             .instances
             .iter()
             .filter(|instance| instance.template_directory == template.directory)
             .count();
+        let (running_count, total_count) =
+            template_instance_counts(totals_snapshot, &template.directory);
         rows.push(Row {
             id: format!("template:{}", template.directory),
             template_capabilities: template_capabilities(template),
@@ -635,14 +680,8 @@ fn from_snapshot_with_operations_and_totals(
                     ""
                 },
                 template_summary(
-                    instance_count,
-                    full_snapshot.map(|snapshot| {
-                        snapshot
-                            .instances
-                            .iter()
-                            .filter(|instance| instance.template_directory == template.directory)
-                            .count()
-                    }),
+                    running_count,
+                    total_count,
                     snapshot
                         .cold_startup_averages_milliseconds
                         .get(&template.name),
@@ -653,7 +692,9 @@ fn from_snapshot_with_operations_and_totals(
             ),
             status: None,
             icon: TEMPLATE_ICON,
-            tone: if template.error.is_some() {
+            tone: if running_count > 0 {
+                Tone::Success
+            } else if template.error.is_some() {
                 Tone::Error
             } else {
                 Tone::Normal
@@ -677,7 +718,7 @@ fn from_snapshot_with_operations_and_totals(
             workspace: None,
             alternate_background: false,
             gateway_url: None,
-            details: details::template(template, instance_count),
+            details: details::template(template, visible_instance_count),
             metrics: UsageSummary::instances(
                 snapshot
                     .instances
@@ -690,11 +731,8 @@ fn from_snapshot_with_operations_and_totals(
     for instance in instances {
         let parent = format!("template:{}", instance.template_directory);
         if !rows.iter().any(|row| row.id == parent) {
-            let instance_count = snapshot
-                .instances
-                .iter()
-                .filter(|other| other.template_directory == instance.template_directory)
-                .count();
+            let (running_count, total_count) =
+                template_instance_counts(totals_snapshot, &instance.template_directory);
             rows.push(Row {
                 id: parent.clone(),
                 parent: None,
@@ -702,16 +740,8 @@ fn from_snapshot_with_operations_and_totals(
                     "{} [missing]\n{}",
                     instance.template,
                     template_summary(
-                        instance_count,
-                        full_snapshot.map(|snapshot| {
-                            snapshot
-                                .instances
-                                .iter()
-                                .filter(|other| {
-                                    other.template_directory == instance.template_directory
-                                })
-                                .count()
-                        }),
+                        running_count,
+                        total_count,
                         snapshot
                             .cold_startup_averages_milliseconds
                             .get(&instance.template),
@@ -722,7 +752,11 @@ fn from_snapshot_with_operations_and_totals(
                 ),
                 status: None,
                 icon: TEMPLATE_ICON,
-                tone: Tone::Warning,
+                tone: if running_count > 0 {
+                    Tone::Success
+                } else {
+                    Tone::Warning
+                },
                 loading: false,
                 usage: ResourceUsage::total(ready_services(snapshot, &instance.template_directory)),
                 memory_limit_bytes: InstanceService::total_memory_limit(ready_services(
@@ -768,18 +802,24 @@ fn from_snapshot_with_operations_and_totals(
         let summary = instance_summary(instance, snapshot.startup.get(&instance.name));
         let operation_progress =
             operation_progress(operations, "create_instance", &instance.name).map(str::to_owned);
+        let status = summary.label;
+        let label = status.as_ref().map_or_else(
+            || instance.name.clone(),
+            |status| format!("{} · {status}", instance.name),
+        );
         rows.push(Row {
             id: instance_id.clone(),
             opencode: None,
             template_capabilities: String::new(),
             parent: Some(parent),
-            label: format!("{} · {}", instance.name, summary.label),
-            status: Some(summary.label),
+            label,
+            status,
             icon: summary.icon,
             tone: summary.tone,
             loading: summary.loading,
             secondary_icon: "",
             secondary_tone: Tone::default(),
+            secondary_text_tone: None,
             secondary_loading: false,
             activity_timer: None,
             usage: ResourceUsage::total(instance.services.iter()),
@@ -816,13 +856,14 @@ fn from_snapshot_with_operations_and_totals(
         });
         let setup_id = format!("setup:{}", instance.name);
         let instance_row = rows.last().expect("instance row").clone();
-        setup::append(&mut rows, instance);
+        let starting = snapshot.startup.contains_key(&instance.name);
+        setup::append(&mut rows, instance, starting);
         let service_count = instance
             .services
             .iter()
             .filter(|service| !service.one_shot)
             .count();
-        let services = setup::services(&instance_row, instance, service_count);
+        let services = setup::services(&instance_row, instance, service_count, starting);
         let services_id = services.id.clone();
         rows.push(services);
         for service in &instance.services {
@@ -851,6 +892,14 @@ fn from_snapshot_with_operations_and_totals(
                 service.name.clone()
             };
             let label = format!("{label} · {}", service_summary.label);
+            let tone = if service.one_shot
+                && service_summary.status == Status::Completed
+                && !instance.is_running()
+            {
+                Tone::Muted
+            } else {
+                service_summary.severity.into()
+            };
             rows.push(Row {
                 id: service_id.clone(),
                 opencode: None,
@@ -866,10 +915,11 @@ fn from_snapshot_with_operations_and_totals(
                     .map_or_else(|| label.clone(), |detail| format!("{label}\n{detail}")),
                 status: Some(service_summary.label),
                 icon: status_icon(service_summary.status),
-                tone: service_summary.severity.into(),
+                tone,
                 loading: service_summary.busy,
                 secondary_icon: "",
                 secondary_tone: Tone::default(),
+                secondary_text_tone: None,
                 secondary_loading: false,
                 activity_timer: None,
                 usage: service.usage,

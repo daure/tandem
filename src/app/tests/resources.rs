@@ -347,7 +347,8 @@ fn service_group_icon_summarizes_runtime_service_health() {
         (["healthy", "up"], Tone::Success),
         (["down (exit 0)", "down (exit 0)"], Tone::Muted),
         (["healthy", "down (exit 0)"], Tone::Warning),
-        (["healthy", "boot"], Tone::Warning),
+        (["healthy", "boot"], Tone::Info),
+        (["boot", "created"], Tone::Info),
         (["healthy", "unhealthy"], Tone::Error),
     ] {
         let mut snapshot = snapshot();
@@ -548,7 +549,7 @@ fn template_capabilities_follow_each_name_while_resources_stay_right_aligned() {
             "{guidance}"
         );
         assert!(template.ends_with(" 0.2 GiB 2% "), "{template}");
-        assert!(lines[template_y + 1].contains(" 1"));
+        assert!(lines[template_y + 1].contains(" 1/1"));
         assert_eq!(
             terminal
                 .backend()

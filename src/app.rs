@@ -62,7 +62,7 @@ fn visible_rows(
     let mut visible = snapshot.clone();
     visible
         .instances
-        .retain(crate::store::environments::Instance::is_running);
+        .retain(|instance| instance.is_running() || instance.workspace_only);
     let names = visible
         .instances
         .iter()
@@ -103,6 +103,7 @@ pub(crate) enum Msg {
     SetOpencodeIntegration(bool),
     OpenOpencode(String, Option<crate::store::opencode::Pane>),
     SetOpencodeHistory(bool),
+    SetAttachedSessionsOnly(bool),
     CopyName,
     CopyDescription,
     CopyWorkspace,
@@ -127,6 +128,7 @@ enum Intent {
         name: String,
         service: Option<String>,
     },
+    CloseOpencodeSessions(String),
     UpdateDescription(String),
     Purge(String),
     StopTemplate(String),
@@ -150,11 +152,11 @@ impl ModalNode for DialogHost<Flex<Msg>, Msg> {
 impl ModalNode for Tabs<Msg> {}
 
 type Modal = Box<dyn ModalNode>;
-type MenuLayer = DialogLayer<Content, ActionMenu>;
+type MainContent = Split<Content, StatusBar<Msg>>;
+type MenuLayer = DialogLayer<MainContent, ActionMenu>;
 type YankLayer = DialogLayer<MenuLayer, YankMenu>;
 type RouteLayer = DialogLayer<YankLayer, RouteMenu>;
-type MainView = DialogLayer<RouteLayer, Modal>;
-type View = Split<MainView, StatusBar<Msg>>;
+type View = DialogLayer<RouteLayer, Modal>;
 
 pub(crate) struct App {
     service: AppService,
@@ -178,16 +180,34 @@ pub(crate) struct App {
     area: Rect,
     details_open: bool,
     opencode_snapshot: crate::store::opencode::Snapshot,
+    closing_opencode_panes: Vec<opencode::ClosingPane>,
     opencode_history: bool,
-    opencode_action: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
+    attached_sessions_only: bool,
+    opencode_action: Option<opencode::PendingAction>,
 }
 
 pub(crate) fn root(service: AppService) -> App {
     let keys = service.environment_keys();
     let snapshot = service.environment_snapshot();
-    let instances = instances::state(visible_rows(&snapshot, &[], false));
+    let opencode_enabled = service.opencode_enabled();
+    let opencode_snapshot = service.opencode_snapshot();
+    let mut rows = visible_rows(&snapshot, &[], false);
+    if opencode_enabled {
+        let owners = snapshot
+            .instances
+            .iter()
+            .map(|instance| (instance.name.clone(), instance.workspace.clone()))
+            .collect::<Vec<_>>();
+        rows = opencode::attached_rows_for_owners(rows, &opencode_snapshot, &owners, false);
+    }
+    let instances = instances::state(rows);
+    instances::set_attached_sessions_only(&instances, opencode_enabled);
     let toolbar_state = Rc::new(RefCell::new(toolbar::State::from_snapshot(&snapshot)));
-    toolbar_state.borrow_mut().opencode_enabled = service.opencode_enabled();
+    {
+        let mut toolbar_state = toolbar_state.borrow_mut();
+        toolbar_state.opencode_enabled = opencode_enabled;
+        toolbar_state.attached_sessions_only = opencode_enabled;
+    }
     let mut content = Tabs::new(vec![Tab::new(
         "Instances",
         Flex::column()
@@ -211,10 +231,22 @@ pub(crate) fn root(service: AppService) -> App {
     for sequence in ["yy", "yi", "yd", "yw", "yu"] {
         content.set_action_hotkey_visible(sequence, false);
     }
-    let menu = DialogLayer::new(content, ActionMenu::new(keys))
+    let main = Split::vertical(
+        content,
+        StatusBar::new()
+            .ai_enabled(false)
+            .menu_items(STATUS_BAR_MENU_ITEMS)
+            .on_custom_menu_item(|id| match id {
+                SETTINGS_MENU_ID => Msg::OpenSettings,
+                _ => Msg::Close,
+            }),
+    )
+    .constraints(Constraint::Fill(1), Constraint::Length(1));
+    let menu = DialogLayer::new(main, ActionMenu::new(keys))
         .active(false)
         .fit_content()
-        .fit_content_max(42, 10);
+        .fit_content_max(42, 10)
+        .child_overlays_use_base_bounds(true);
     let yank = DialogLayer::new(menu, YankMenu::new())
         .active(false)
         .fit_content()
@@ -230,22 +262,11 @@ pub(crate) fn root(service: AppService) -> App {
             .on_close(|_| Msg::Close)
             .host(Flex::column()),
     );
-    let main = DialogLayer::new(routes, modal)
+    let view = DialogLayer::new(routes, modal)
         .active(false)
         .fit_content()
         .fit_content_max(110, 34)
         .backdrop(DialogBackdrop::dim().amount(0.55));
-    let view = Split::vertical(
-        main,
-        StatusBar::new()
-            .ai_enabled(false)
-            .menu_items(STATUS_BAR_MENU_ITEMS)
-            .on_custom_menu_item(|id| match id {
-                SETTINGS_MENU_ID => Msg::OpenSettings,
-                _ => Msg::Close,
-            }),
-    )
-    .constraints(Constraint::Fill(1), Constraint::Length(1));
     service.refresh_environments();
     App {
         service,
@@ -268,8 +289,10 @@ pub(crate) fn root(service: AppService) -> App {
         description_save: None,
         area: Rect::default(),
         details_open: false,
-        opencode_snapshot: crate::store::opencode::Snapshot::default(),
+        opencode_snapshot,
+        closing_opencode_panes: Vec::new(),
         opencode_history: false,
+        attached_sessions_only: opencode_enabled,
         opencode_action: None,
     }
 }
@@ -283,9 +306,14 @@ impl App {
         let initial_load_completed = self.snapshot.loading;
         let operations = self.service.operations();
         let snapshot_changed = snapshot != self.snapshot;
-        self.opencode_snapshot = self.service.opencode_snapshot();
-        let mut rows = visible_rows(&snapshot, &operations, self.running_only);
-        opencode::append_rows(&mut rows, &self.opencode_snapshot, self.opencode_history);
+        let mut opencode_snapshot = self.service.opencode_snapshot();
+        opencode::hide_closing_panes(&mut opencode_snapshot, &mut self.closing_opencode_panes);
+        self.opencode_snapshot = opencode_snapshot;
+        if !self.service.opencode_enabled() {
+            self.attached_sessions_only = false;
+        }
+        instances::set_attached_sessions_only(&self.instances, self.attached_sessions_only);
+        let rows = self.project_rows(&snapshot, &operations);
         let rows_changed = if initial_load_completed {
             instances::replace_rows_and_select_first(&self.instances, rows);
             true
@@ -293,6 +321,7 @@ impl App {
             instances::replace_rows(&self.instances, rows)
         };
         self.toolbar_state.borrow_mut().opencode_enabled = self.service.opencode_enabled();
+        self.toolbar_state.borrow_mut().attached_sessions_only = self.attached_sessions_only;
         if !snapshot_changed {
             return rows_changed;
         }
@@ -300,6 +329,7 @@ impl App {
         toolbar_state.running_only = self.running_only;
         toolbar_state.opencode_enabled = self.service.opencode_enabled();
         toolbar_state.show_saved = self.opencode_history;
+        toolbar_state.attached_sessions_only = self.attached_sessions_only;
         *self.toolbar_state.borrow_mut() = toolbar_state;
         self.snapshot = snapshot;
         true
@@ -310,27 +340,27 @@ impl App {
     }
 
     fn menu_layer(&self) -> &MenuLayer {
-        self.view.first().base().base().base()
+        self.view.base().base().base()
     }
 
     fn menu_layer_mut(&mut self) -> &mut MenuLayer {
-        self.view.first_mut().base_mut().base_mut().base_mut()
+        self.view.base_mut().base_mut().base_mut()
     }
 
     fn yank_layer(&self) -> &YankLayer {
-        self.view.first().base().base()
+        self.view.base().base()
     }
 
     fn yank_layer_mut(&mut self) -> &mut YankLayer {
-        self.view.first_mut().base_mut().base_mut()
+        self.view.base_mut().base_mut()
     }
 
     fn route_layer(&self) -> &RouteLayer {
-        self.view.first().base()
+        self.view.base()
     }
 
     fn route_layer_mut(&mut self) -> &mut RouteLayer {
-        self.view.first_mut().base_mut()
+        self.view.base_mut()
     }
 
     fn transient_menu_active(&self) -> bool {
@@ -356,6 +386,16 @@ impl App {
         instances::set_highlighted(&self.instances, highlighted);
     }
 
+    #[cfg(test)]
+    fn status_bar_mut(&mut self) -> &mut StatusBar<Msg> {
+        self.view
+            .base_mut()
+            .base_mut()
+            .base_mut()
+            .base_mut()
+            .second_mut()
+    }
+
     fn set_running_only(&mut self, running_only: bool, ctx: &mut EventCtx<Msg>) {
         if self.running_only == running_only {
             return;
@@ -363,9 +403,9 @@ impl App {
         self.running_only = running_only;
         self.toolbar_state.borrow_mut().running_only = running_only;
         let operations = self.service.operations();
-        let mut rows = visible_rows(&self.snapshot, &operations, running_only);
-        opencode::append_rows(&mut rows, &self.opencode_snapshot, self.opencode_history);
+        let rows = self.project_rows(&self.snapshot, &operations);
         instances::replace_rows(&self.instances, rows);
+        instances::request_center_highlighted(&self.instances);
         ctx.request_layout();
         ctx.request_redraw();
     }
@@ -384,13 +424,23 @@ impl App {
                     self.opencode_history = show_saved;
                     self.toolbar_state.borrow_mut().show_saved = show_saved;
                     self.update_snapshot(self.snapshot.clone());
+                    instances::request_center_highlighted(&self.instances);
                     ctx.request_layout();
+                }
+            }
+            Msg::SetAttachedSessionsOnly(enabled) => {
+                if self.service.opencode_enabled() {
+                    self.attached_sessions_only = enabled;
+                    self.update_snapshot(self.snapshot.clone());
+                    instances::request_center_highlighted(&self.instances);
+                    ctx.request_layout();
+                    ctx.request_redraw();
                 }
             }
             Msg::Close => {
                 self.service.cancel_opencode_conversation();
                 self.settings_save = None;
-                self.view.first_mut().set_active_with_context(false, ctx);
+                self.view.set_active_with_context(false, ctx);
                 ctx.focus(initial_focus());
                 self.intent = None;
                 self.details_open = false;
@@ -440,12 +490,16 @@ impl App {
                     self.block_operation(ctx);
                     return;
                 }
+                if let Some(Intent::CloseOpencodeSessions(name)) = &self.intent {
+                    self.submit_close_instance_opencode(name.clone(), ctx);
+                    return;
+                }
                 if let Some(Intent::UpdateDescription(name)) = &self.intent {
                     self.description_save = Some(
                         self.service
                             .update_instance_description(name.clone(), self.description.clone()),
                     );
-                    self.view.first_mut().set_active_with_context(false, ctx);
+                    self.view.set_active_with_context(false, ctx);
                     ctx.focus(initial_focus());
                     self.intent = None;
                     self.details_open = false;
@@ -525,6 +579,9 @@ impl App {
                         self.service
                             .submit_operation("remove_template", name, None, 600, true)
                     }
+                    Some(Intent::CloseOpencodeSessions(_)) => {
+                        unreachable!("OpenCode sessions are handled before operations")
+                    }
                     Some(Intent::UpdateDescription(_)) => {
                         unreachable!("description updates are handled before operations")
                     }
@@ -534,13 +591,13 @@ impl App {
                     Ok(operation) => {
                         self.operation_accepted(operation);
                         ctx.request_layout();
-                        self.view.first_mut().set_active_with_context(false, ctx);
+                        self.view.set_active_with_context(false, ctx);
                         ctx.focus(initial_focus());
                         self.intent = None;
                         self.details_open = false;
                     }
                     Err(error) => {
-                        self.view.first_mut().layer_mut().set_bottom_left(error);
+                        self.view.layer_mut().set_bottom_left(error);
                     }
                 }
             }
@@ -556,26 +613,22 @@ impl App {
             return;
         }
         self.details_open = false;
-        self.view.first_mut().replace_layer(modal, ctx);
-        self.view.first_mut().set_fit_content(true);
-        self.view.first_mut().set_fit_content_max(110, 34);
-        self.view
-            .first_mut()
-            .set_placement(DialogLayerPlacement::Center);
-        self.view.first_mut().set_active_with_context(true, ctx);
+        self.view.replace_layer(modal, ctx);
+        self.view.set_fit_content(true);
+        self.view.set_fit_content_max(110, 34);
+        self.view.set_placement(DialogLayerPlacement::Center);
+        self.view.set_active_with_context(true, ctx);
         if matches!(
             self.intent,
             Some(Intent::CreateInstance(_) | Intent::NewTemplate)
         ) {
             ctx.focus(tuicore::FocusRequest::Path(tuicore::TreePath::from_keys([
-                tuicore::ChildKey::first(),
                 tuicore::ChildKey::second(),
                 tuicore::ChildKey::body(),
                 tuicore::ChildKey::new("name"),
             ])));
         } else if matches!(self.intent, Some(Intent::UpdateDescription(_))) {
             ctx.focus(tuicore::FocusRequest::Path(tuicore::TreePath::from_keys([
-                tuicore::ChildKey::first(),
                 tuicore::ChildKey::second(),
                 tuicore::ChildKey::body(),
                 tuicore::ChildKey::new("description"),
@@ -610,6 +663,7 @@ impl App {
             | Intent::ServiceState { name, .. }
             | Intent::Restart { name, .. } => Some(name),
             Intent::UpdateDescription(_)
+            | Intent::CloseOpencodeSessions(_)
             | Intent::NewTemplate
             | Intent::StopTemplate(_)
             | Intent::DeleteTemplate(_)
@@ -621,7 +675,7 @@ impl App {
 
     fn block_operation(&mut self, ctx: &mut EventCtx<Msg>) {
         self.intent = None;
-        self.view.first_mut().set_active_with_context(false, ctx);
+        self.view.set_active_with_context(false, ctx);
         ctx.focus(initial_focus());
         self.notify(Notification::warning(
             "Operation in progress",
@@ -696,17 +750,15 @@ impl App {
     }
 
     fn open_details(&mut self, row: &Row, ctx: &mut EventCtx<Msg>) {
-        self.view
-            .first_mut()
-            .replace_layer(dialogs::details(row), ctx);
+        self.view.replace_layer(dialogs::details(row), ctx);
         self.details_open = true;
         self.resize_details_dialog();
-        self.view.first_mut().set_active_with_context(true, ctx);
+        self.view.set_active_with_context(true, ctx);
     }
 
     fn resize_details_dialog(&mut self) {
         let dock = DockSpec::bottom(80).cross_percent(details_width_percent(self.area.width));
-        let layer = self.view.first_mut();
+        let layer = &mut self.view;
         layer.set_dock(dock);
         layer.layer_mut().set_dock_edge_borders(dock.edge_borders());
     }
@@ -721,7 +773,7 @@ impl App {
         let menu = self.menu_layer_mut();
         menu.layer_mut().open(
             action_menu::Target {
-                template: row.parent.is_none(),
+                template: row.is_template(),
                 instance: row.instance.is_some(),
                 service: row.service_name.is_some(),
                 capabilities: (row.can_start, row.can_stop, row.can_restart),
@@ -729,7 +781,18 @@ impl App {
                 template_available: row.template_available,
                 repository: row.checkout_path.is_some(),
                 cleanup: row.cleanup_target.is_some(),
-                opencode_attached: row.opencode.as_ref().map(opencode::Target::attached),
+                opencode_session: row
+                    .opencode
+                    .as_ref()
+                    .and_then(opencode::Target::session_action),
+                close_opencode: row
+                    .opencode
+                    .as_ref()
+                    .is_some_and(opencode::Target::closeable),
+                external_opencode: row
+                    .opencode
+                    .as_ref()
+                    .is_some_and(opencode::Target::external_observation),
             },
             ctx,
         );
@@ -770,6 +833,12 @@ impl App {
                 action_menu::Action::OpenPanel | action_menu::Action::GotoPanel => {
                     if let Some(row) = self.selected() {
                         self.activate_opencode(&row, ctx);
+                    }
+                    return;
+                }
+                action_menu::Action::CloseSession => {
+                    if let Some(row) = self.selected() {
+                        self.close_opencode(&row, ctx);
                     }
                     return;
                 }
@@ -916,7 +985,9 @@ impl App {
     }
 
     fn action(&mut self, index: usize, ctx: &mut EventCtx<Msg>) {
-        let row = self.selected();
+        let row = self
+            .selected()
+            .filter(|row| index == 0 || row.opencode.is_none());
         self.name.clear();
         self.description.clear();
         match index {
@@ -947,7 +1018,7 @@ impl App {
                     self.block_operation(ctx);
                     return;
                 }
-                if let Some(row) = row.as_ref().filter(|row| row.parent.is_none()) {
+                if let Some(row) = row.as_ref().filter(|row| row.is_template()) {
                     let template = row.template.clone();
                     self.intent = Some(Intent::StopTemplate(template.clone()));
                     self.open(dialogs::confirm_stop_template(&template), ctx);
@@ -992,7 +1063,7 @@ impl App {
             5 => {
                 if let Some(row) = row
                     .as_ref()
-                    .filter(|row| row.parent.is_none() && row.template_available)
+                    .filter(|row| row.is_template() && row.template_available)
                 {
                     self.intent = Some(Intent::RemoveTemplate(row.template.clone()));
                     self.open(
@@ -1021,7 +1092,7 @@ impl App {
                 self.open_workspace(ctx);
             }
             6 => {
-                if let Some(row) = row.as_ref().filter(|row| row.parent.is_none()) {
+                if let Some(row) = row.as_ref().filter(|row| row.is_template()) {
                     self.intent = Some(Intent::DeleteTemplate(row.template.clone()));
                     self.open(dialogs::confirm_delete_template(&row.template), ctx);
                 } else if let Some(name) = row.and_then(|row| row.cleanup_target.or(row.instance)) {
@@ -1102,6 +1173,23 @@ impl App {
         true
     }
 
+    fn confirm_close_instance_opencode(&mut self, row: &Row, ctx: &mut EventCtx<Msg>) -> bool {
+        if row.opencode.is_some() {
+            return false;
+        }
+        let Some(name) = row.instance.clone().or_else(|| {
+            row.id
+                .strip_prefix("sessions:")
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+        }) else {
+            return false;
+        };
+        self.intent = Some(Intent::CloseOpencodeSessions(name.clone()));
+        self.open(dialogs::confirm_close_opencode_sessions(&name), ctx);
+        true
+    }
+
     fn returns_to_data_view(event: &TuiEvent) -> bool {
         let TuiEvent::Key(key) = event else {
             return false;
@@ -1111,8 +1199,32 @@ impl App {
                 .matches(*key)
     }
 
+    fn show_agent_overview(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) {
+        if !matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "shift+h")
+        {
+            return;
+        }
+        self.running_only = false;
+        self.opencode_history = false;
+        self.attached_sessions_only = true;
+        {
+            let mut toolbar = self.toolbar_state.borrow_mut();
+            toolbar.running_only = false;
+            toolbar.show_saved = false;
+            toolbar.attached_sessions_only = true;
+        }
+        instances::set_attached_sessions_only(&self.instances, true);
+        let operations = self.service.operations();
+        instances::replace_rows(
+            &self.instances,
+            self.project_rows(&self.snapshot, &operations),
+        );
+        ctx.request_layout();
+        ctx.request_redraw();
+    }
+
     fn handle_key(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
-        if self.view.first().is_active()
+        if self.view.is_active()
             && matches!(
                 self.intent,
                 Some(
@@ -1129,11 +1241,22 @@ impl App {
             ctx.stop_propagation();
             return true;
         }
-        if self.transient_menu_active() || self.view.first().is_active() {
+        if self.transient_menu_active() || self.view.is_active() {
             return false;
         }
         if instances::is_searching(&self.instances) {
             return false;
+        }
+        if let TuiEvent::Key(key) = event
+            && KeySpec::shifted('a').matches(*key)
+            && self.service.opencode_enabled()
+        {
+            self.handle_message(
+                Msg::SetAttachedSessionsOnly(!self.attached_sessions_only),
+                ctx,
+            );
+            ctx.stop_propagation();
+            return true;
         }
         if let TuiEvent::Key(key) = event
             && KeySpec::shifted('u').matches(*key)
@@ -1147,6 +1270,14 @@ impl App {
             && self.service.opencode_enabled()
         {
             self.handle_message(Msg::SetOpencodeHistory(!self.opencode_history), ctx);
+            ctx.stop_propagation();
+            return true;
+        }
+        if let TuiEvent::Key(key) = event
+            && KeySpec::plain('c').matches(*key)
+            && let Some(row) = self.selected()
+            && (self.confirm_close_instance_opencode(&row, ctx) || self.close_opencode(&row, ctx))
+        {
             ctx.stop_propagation();
             return true;
         }
@@ -1245,6 +1376,7 @@ impl TuiNode<Msg> for App {
         if self.refresh_schedule.event(event, Instant::now()) {
             self.service.poll_environments();
         }
+        self.show_agent_overview(event, ctx);
         if self.handle_key(event, ctx) {
             return EventOutcome::Handled;
         }
@@ -1265,11 +1397,16 @@ impl TuiNode<Msg> for App {
         if self.refresh_schedule.event(event, Instant::now()) {
             self.service.poll_environments();
         }
+        self.show_agent_overview(event, ctx);
         // Toolbar and status-bar controls own their input, including instance action keys.
-        let toolbar_route = route
-            .path
-            .without_first_if(&tuicore::ChildKey::second())
-            .is_some()
+        let status_bar_route = route.path.keys().starts_with(&[
+            tuicore::ChildKey::first(),
+            tuicore::ChildKey::first(),
+            tuicore::ChildKey::first(),
+            tuicore::ChildKey::first(),
+            tuicore::ChildKey::second(),
+        ]);
+        let toolbar_route = status_bar_route
             || route
                 .path
                 .keys()
@@ -1325,7 +1462,6 @@ impl TuiNode<Msg> for App {
                 self.settings_save = None;
                 if let Err(error) = result {
                     self.view
-                        .first_mut()
                         .layer_mut()
                         .set_bottom_left(format!("Cannot save settings: {error}"));
                 }

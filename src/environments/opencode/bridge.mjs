@@ -24,6 +24,14 @@ export default {
       }
       const session = sessionID ? api.state.session.get(sessionID) : undefined
       if (sessionID && !session) return
+      const messages = sessionID ? api.state.session.messages(sessionID) : []
+      const last = messages.findLast((message) => message.role === "assistant" && message.tokens.output > 0)
+      const contextTokens = last
+        ? last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
+        : undefined
+      const contextLimit = last
+        ? api.state.provider.find((provider) => provider.id === last.providerID)?.models[last.modelID]?.limit.context
+        : undefined
       const attach = process.argv.indexOf("attach")
       const server = attach >= 0 ? process.argv[attach + 1] : ""
       const status = sessionID ? api.state.session.status(sessionID) : undefined
@@ -35,6 +43,8 @@ export default {
         directory: session?.directory ?? api.state.path.directory,
         server: server ?? "",
         activity: status?.type === "busy" || status?.type === "retry" ? "busy" : "idle",
+        context_tokens: contextTokens,
+        context_limit: contextLimit,
         zellij_session: process.env.ZELLIJ_SESSION_NAME ?? "",
         pane_id: /^\d+$/.test(process.env.ZELLIJ_PANE_ID ?? "") ? Number(process.env.ZELLIJ_PANE_ID) : null,
       }

@@ -23,12 +23,27 @@ impl Observer {
         pane: &Pane,
         current: &str,
     ) -> Result<(), String> {
+        self.jump_matching_pane(Some(session_id), pane, current)
+            .await
+    }
+
+    pub(crate) async fn jump_pane(&self, pane: &Pane, current: &str) -> Result<(), String> {
+        self.jump_matching_pane(None, pane, current).await
+    }
+
+    async fn jump_matching_pane(
+        &self,
+        session_id: Option<&str>,
+        pane: &Pane,
+        current: &str,
+    ) -> Result<(), String> {
         let observer = self.clone();
-        let id = session_id.to_owned();
+        let expected_id = session_id.map(str::to_owned);
+        let id = expected_id.clone();
         let target = pane.clone();
         let still_attached = tokio::task::spawn_blocking(move || {
             observer.inventory().0.iter().any(|presence| {
-                presence.id == id
+                id.as_ref().is_none_or(|id| presence.id == *id)
                     && presence.zellij_session == target.session
                     && presence.pane_id == Some(target.id)
             })
@@ -36,7 +51,11 @@ impl Observer {
         .await
         .map_err(|error| error.to_string())?;
         if !still_attached {
-            return Err("The pane changed conversation or closed; refresh and try again".into());
+            return Err(if expected_id.is_some() {
+                "The pane changed conversation or closed; refresh and try again".into()
+            } else {
+                "The OpenCode pane closed or changed; refresh and try again".into()
+            });
         }
         let panes = self.list_panes(&pane.session).await?;
         let actual = panes
@@ -87,9 +106,58 @@ impl Observer {
         Ok(())
     }
 
+    pub(crate) async fn close(&self, session_id: &str, pane: &Pane) -> Result<(), String> {
+        self.close_matching_pane(Some(session_id), pane).await
+    }
+
+    pub(crate) async fn close_pane(&self, pane: &Pane) -> Result<(), String> {
+        self.close_matching_pane(None, pane).await
+    }
+
+    async fn close_matching_pane(
+        &self,
+        session_id: Option<&str>,
+        pane: &Pane,
+    ) -> Result<(), String> {
+        let observer = self.clone();
+        let id = session_id.map(str::to_owned);
+        let target = pane.clone();
+        let still_attached = tokio::task::spawn_blocking(move || {
+            observer.inventory().0.iter().any(|presence| {
+                id.as_ref().is_none_or(|id| presence.id == *id)
+                    && presence.zellij_session == target.session
+                    && presence.pane_id == Some(target.id)
+            })
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        if !still_attached {
+            return Err("The OpenCode pane closed or changed; refresh and try again".into());
+        }
+        let panes = self.list_panes(&pane.session).await?;
+        panes
+            .iter()
+            .find(|actual| actual.id == pane.id && !actual.is_plugin && !actual.exited)
+            .ok_or("OpenCode pane has closed; refresh and try again")?;
+        zellij(
+            &self.zellij,
+            &[
+                "--session".into(),
+                pane.session.clone(),
+                "action".into(),
+                "close-pane".into(),
+                "--pane-id".into(),
+                format!("terminal_{}", pane.id),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
     pub(crate) async fn attach(
         &self,
         session: &Session,
+        instance_name: &str,
         current: &str,
         destination: Option<&Pane>,
     ) -> Result<(), String> {
@@ -118,11 +186,7 @@ impl Observer {
                 pane.tab_id.to_string(),
             ]);
         } else {
-            args.extend([
-                "new-tab".into(),
-                "--name".into(),
-                format!("OpenCode: {}", session.title),
-            ]);
+            args.extend(["new-tab".into(), "--name".into(), instance_name.into()]);
         }
         args.extend([
             "--cwd".into(),

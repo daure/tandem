@@ -77,7 +77,6 @@ fn service_start_stop_uses_selected_state_and_configured_key_with_confirmation()
                     "{text}"
                 );
                 let route = tuicore::EventRoute::new(tuicore::TreePath::from_keys([
-                    tuicore::ChildKey::first(),
                     tuicore::ChildKey::second(),
                 ]));
                 app.dispatch_event(

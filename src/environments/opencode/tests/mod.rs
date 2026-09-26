@@ -16,8 +16,10 @@ struct Server {
     stop: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
     deleted: Arc<std::sync::Mutex<BTreeSet<String>>>,
+    requests: Arc<std::sync::Mutex<Vec<String>>>,
     full_history: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
+    failed_status_directories: Arc<std::sync::Mutex<BTreeSet<String>>>,
 }
 
 impl Server {
@@ -29,10 +31,14 @@ impl Server {
         let stopping = stop.clone();
         let deleted = Arc::new(std::sync::Mutex::new(BTreeSet::<String>::new()));
         let removed = deleted.clone();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded_requests = requests.clone();
         let full_history = Arc::new(AtomicBool::new(false));
         let full = full_history.clone();
         let busy = Arc::new(AtomicBool::new(true));
         let active = busy.clone();
+        let failed_status_directories = Arc::new(std::sync::Mutex::new(BTreeSet::new()));
+        let failed = failed_status_directories.clone();
         let thread = thread::spawn(move || {
             while !stopping.load(Ordering::Relaxed) {
                 let Ok((mut stream, _)) = listener.accept() else {
@@ -46,9 +52,20 @@ impl Server {
                 BufReader::new(stream.try_clone().unwrap())
                     .read_line(&mut request)
                     .unwrap();
+                recorded_requests.lock().unwrap().push(request.clone());
                 let mut status = "200 OK";
                 let body = if request.contains("/session/status?directory=") {
-                    if active.load(Ordering::Relaxed) {
+                    let target = request.split_whitespace().nth(1).unwrap();
+                    let url = reqwest::Url::parse(&format!("http://localhost{target}")).unwrap();
+                    let directory = url
+                        .query_pairs()
+                        .find(|(key, _)| key == "directory")
+                        .unwrap()
+                        .1;
+                    if failed.lock().unwrap().contains(directory.as_ref()) {
+                        status = "503 Service Unavailable";
+                        json!({"error":"Directory unavailable"})
+                    } else if active.load(Ordering::Relaxed) {
                         json!({"ses_busy":{"type":"busy"}, "ses_background":{"type":"retry"}})
                     } else {
                         json!({})
@@ -103,8 +120,10 @@ impl Server {
             stop,
             thread: Some(thread),
             deleted,
+            requests,
             full_history,
             busy,
+            failed_status_directories,
         }
     }
 }
@@ -152,11 +171,65 @@ esac
 }
 
 fn presence(observer: &Observer, file: &str, id: &str, pane: u32, server: &str) {
+    presence_in(observer, file, id, pane, server, "/work/review/repo");
+}
+
+fn presence_in(
+    observer: &Observer,
+    file: &str,
+    id: &str,
+    pane: u32,
+    server: &str,
+    directory: &str,
+) {
     fs::write(observer.presence.join(file), json!({
         "pid":std::process::id(), "observed_at":SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
-        "id":id, "title":"Same title", "directory":"/work/review/repo", "server":server,
-        "activity":"idle", "zellij_session":"main", "pane_id":pane
+        "id":id, "title":"Same title", "directory":directory, "server":server,
+        "activity":"idle", "context_tokens":83_600, "context_limit":272_000,
+        "zellij_session":"main", "pane_id":pane
     }).to_string()).unwrap();
+}
+
+#[test]
+fn companion_receipts_expose_sessions_outside_tandem_roots() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::start();
+    let observer = observer(root.path());
+    presence_in(
+        &observer,
+        "outside.json",
+        "ses_elsewhere",
+        7,
+        &server.url,
+        "/work/review-other",
+    );
+
+    let snapshot = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(observer.observe(&["/work/review".into()], Snapshot::default()))
+        .unwrap();
+
+    let session = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == "ses_elsewhere")
+        .unwrap();
+    assert_eq!(session.directory, "/work/review-other");
+    assert!(session.attached());
+    let history_requests = server
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| request.contains("/experimental/session"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(history_requests.len(), 1);
+    assert!(history_requests.iter().any(|request| {
+        request.contains("roots=true")
+            && request.contains("limit=21")
+            && request.contains("directory=%2Fwork%2Freview-other")
+    }));
 }
 
 #[test]
@@ -188,6 +261,8 @@ fn shared_server_observations_join_exact_ids_and_track_conversation_switches() {
         .find(|session| session.id == "ses_busy")
         .unwrap();
     assert_eq!(busy.panes.len(), 2);
+    assert_eq!(busy.context_tokens, Some(83_600));
+    assert_eq!(busy.context_limit, Some(272_000));
     assert_eq!(busy.last_question.as_deref(), Some("Latest question"));
     assert!(busy.question_observed);
     runtime
@@ -248,6 +323,58 @@ fn shared_server_observations_join_exact_ids_and_track_conversation_switches() {
 }
 
 #[test]
+fn orphan_client_navigation_targets_its_exact_observed_pane() {
+    let root = tempfile::tempdir().unwrap();
+    let observer = observer(root.path());
+    presence(&observer, "orphan.json", "", 7, "http://127.0.0.1:1234");
+    let pane = Pane {
+        session: "main".into(),
+        id: 7,
+        tab_id: 4,
+        tab_name: "Review".into(),
+    };
+
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(observer.jump_pane(&pane, "main"))
+        .unwrap();
+
+    let calls = fs::read_to_string(root.path().join("calls")).unwrap();
+    assert!(calls.contains("go-to-tab-by-id 4"));
+    assert!(calls.contains("focus-pane-id terminal_7"));
+}
+
+#[test]
+fn close_session_closes_the_exact_attached_zellij_pane() {
+    let root = tempfile::tempdir().unwrap();
+    let observer = observer(root.path());
+    presence(
+        &observer,
+        "one.json",
+        "ses_review",
+        7,
+        "http://127.0.0.1:1234",
+    );
+    let pane = Pane {
+        session: "main".into(),
+        id: 7,
+        tab_id: 4,
+        tab_name: "Review".into(),
+    };
+
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(observer.close("ses_review", &pane))
+        .unwrap();
+
+    let calls = fs::read_to_string(root.path().join("calls")).unwrap();
+    assert!(
+        calls.contains("--session main action close-pane --pane-id terminal_7"),
+        "{calls}"
+    );
+}
+
+#[test]
 fn activity_timing_counts_up_and_freezes_when_the_session_becomes_idle() {
     let mut busy = Session {
         activity: Activity::Busy,
@@ -274,6 +401,32 @@ fn activity_timing_counts_up_and_freezes_when_the_session_becomes_idle() {
     let previous = idle.clone();
     update_activity_timing(&mut idle, Some(&previous), 180_000);
     assert_eq!(idle.activity_elapsed_milliseconds, Some(119_000));
+}
+
+#[test]
+fn latest_turn_reconstructs_activity_timing_without_a_previous_snapshot() {
+    let turn = crate::store::opencode::conversation::LatestTurn {
+        question: Some("Run the checks".into()),
+        started_at: 70_000,
+        completed_at: None,
+    };
+    let mut busy = Session {
+        activity: Activity::Busy,
+        updated: 90_000,
+        ..Default::default()
+    };
+    apply_turn_timing(&mut busy, &turn, 100_000);
+    assert_eq!(busy.activity_started_at_milliseconds, Some(70_000));
+    assert_eq!(busy.activity_elapsed_milliseconds, Some(30_000));
+
+    let mut idle = Session {
+        activity: Activity::Idle,
+        updated: 94_000,
+        ..Default::default()
+    };
+    apply_turn_timing(&mut idle, &turn, 100_000);
+    assert_eq!(idle.activity_started_at_milliseconds, None);
+    assert_eq!(idle.activity_elapsed_milliseconds, Some(24_000));
 }
 
 #[test]
@@ -357,6 +510,113 @@ fn observation_failures_preserve_sessions_as_unknown_and_expired_receipts_do_not
 }
 
 #[test]
+fn opening_a_client_in_an_unavailable_directory_keeps_other_sessions_fresh() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::start();
+    let observer = observer(root.path());
+    presence(&observer, "one.json", "ses_busy", 7, &server.url);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let roots = ["/work/review".into()];
+    let snapshot = runtime
+        .block_on(observer.observe(&roots, Snapshot::default()))
+        .unwrap();
+    assert!(snapshot.sessions.iter().all(|session| !session.stale));
+
+    presence_in(&observer, "new.json", "", 8, &server.url, "/work/a-new");
+    server
+        .failed_status_directories
+        .lock()
+        .unwrap()
+        .insert("/work/a-new".into());
+    let snapshot = runtime
+        .block_on(observer.observe(&roots, snapshot))
+        .unwrap();
+
+    assert_eq!(snapshot.sessions.len(), 4);
+    assert!(snapshot.sessions.iter().all(|session| !session.stale));
+    assert_eq!(
+        snapshot
+            .sessions
+            .iter()
+            .find(|s| s.id == "ses_busy")
+            .unwrap()
+            .activity,
+        Activity::Busy
+    );
+    assert_eq!(snapshot.clients.len(), 1);
+    assert_eq!(snapshot.clients[0].directory, "/work/a-new");
+    assert!(!snapshot.clients[0].stale);
+}
+
+#[test]
+fn directory_status_failures_are_scoped_and_recover_on_the_next_observation() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::start();
+    let observer = observer(root.path());
+    presence(&observer, "one.json", "ses_busy", 7, &server.url);
+    presence_in(
+        &observer,
+        "outside.json",
+        "ses_elsewhere",
+        8,
+        &server.url,
+        "/work/review-other",
+    );
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let roots = ["/work/review".into()];
+    let snapshot = runtime
+        .block_on(observer.observe(&roots, Snapshot::default()))
+        .unwrap();
+
+    server
+        .failed_status_directories
+        .lock()
+        .unwrap()
+        .insert("/work/review-other".into());
+    let snapshot = runtime
+        .block_on(observer.observe(&roots, snapshot))
+        .unwrap();
+    let healthy = snapshot
+        .sessions
+        .iter()
+        .find(|s| s.id == "ses_busy")
+        .unwrap();
+    assert!(!healthy.stale);
+    assert_eq!(healthy.activity, Activity::Busy);
+    let affected = snapshot
+        .sessions
+        .iter()
+        .find(|s| s.id == "ses_elsewhere")
+        .unwrap();
+    assert!(affected.stale);
+    assert_eq!(affected.activity, Activity::Unknown);
+    assert!(affected.attached());
+    assert!(
+        snapshot
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("/work/review-other")
+    );
+
+    server.failed_status_directories.lock().unwrap().clear();
+    let snapshot = runtime
+        .block_on(observer.observe(&roots, snapshot))
+        .unwrap();
+    assert_eq!(snapshot.error, None);
+    assert!(snapshot.sessions.iter().all(|session| !session.stale));
+    assert_eq!(
+        snapshot
+            .sessions
+            .iter()
+            .find(|s| s.id == "ses_elsewhere")
+            .unwrap()
+            .activity,
+        Activity::Idle
+    );
+}
+
+#[test]
 fn server_targets_reject_remote_hosts_credentials_paths_and_redirect_targets() {
     for value in [
         "https://127.0.0.1:4000",
@@ -409,7 +669,7 @@ fn daemon_directory_receipts_discover_detached_work_without_a_client() {
 }
 
 #[test]
-fn attach_uses_the_instance_tab_or_creates_a_tab_with_literal_arguments() {
+fn attach_uses_the_instance_tab_or_creates_an_instance_named_tab_with_literal_arguments() {
     let root = tempfile::tempdir().unwrap();
     let server = Server::start();
     let observer = observer(root.path());
@@ -417,7 +677,7 @@ fn attach_uses_the_instance_tab_or_creates_a_tab_with_literal_arguments() {
         id: "ses_saved".into(),
         server: server.url.clone(),
         directory: "/work/space ' ; $(touch injected)".into(),
-        title: "Review".into(),
+        title: "Old conversation".into(),
         ..Default::default()
     };
     let pane = Pane {
@@ -428,16 +688,16 @@ fn attach_uses_the_instance_tab_or_creates_a_tab_with_literal_arguments() {
     };
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime
-        .block_on(observer.attach(&session, "main", Some(&pane)))
+        .block_on(observer.attach(&session, "review", "main", Some(&pane)))
         .unwrap();
     runtime
-        .block_on(observer.attach(&session, "main", None))
+        .block_on(observer.attach(&session, "review", "main", None))
         .unwrap();
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
     assert!(
         calls.contains("new-pane --stacked --tab-id 4 --cwd /work/space ' ; $(touch injected)")
     );
-    assert!(calls.contains("new-tab --name OpenCode: Review"));
+    assert!(calls.contains("new-tab --name review"));
     assert!(calls.contains("--session ses_saved"));
     assert!(!root.path().join("injected").exists());
 }
@@ -490,6 +750,7 @@ fn deleted_conversations_disappear_from_full_history_even_with_a_lingering_clien
     let snapshot = runtime
         .block_on(observer.observe(&roots, snapshot))
         .unwrap();
+    assert_eq!(snapshot.error, None);
     assert_eq!(
         snapshot
             .sessions

@@ -1,4 +1,5 @@
 use super::AppService;
+use crate::store::opencode::{Client, Pane, Session, Snapshot};
 
 #[test]
 fn integration_defaults_on_persists_and_rejects_actions_when_disabled() {
@@ -20,6 +21,26 @@ fn integration_defaults_on_persists_and_rejects_actions_when_disabled() {
     assert!(
         service
             .open_opencode("ses_one", None)
+            .unwrap_err()
+            .contains("disabled")
+    );
+    assert!(
+        service
+            .close_opencode(
+                "ses_one",
+                crate::store::opencode::Pane {
+                    session: "main".into(),
+                    id: 7,
+                    tab_id: 4,
+                    tab_name: "review".into(),
+                },
+            )
+            .unwrap_err()
+            .contains("disabled")
+    );
+    assert!(
+        service
+            .close_instance_opencode("review")
             .unwrap_err()
             .contains("disabled")
     );
@@ -48,4 +69,66 @@ fn rejected_integration_setting_preserves_the_last_persisted_value() {
         .unwrap_err();
     assert!(error.contains("read only settings"));
     assert!(service.opencode_enabled());
+}
+
+#[test]
+fn external_sessions_allow_reading_navigation_and_closing_observed_panes() {
+    let service = AppService::for_tests();
+    let pane = Pane {
+        session: "main".into(),
+        id: 7,
+        tab_id: 4,
+        tab_name: "ledger".into(),
+    };
+    let client_pane = Pane {
+        id: 8,
+        ..pane.clone()
+    };
+    service.set_opencode_snapshot_for_tests(Snapshot {
+        sessions: vec![
+            Session {
+                id: "ses_external_attached".into(),
+                directory: "/work/ledger".into(),
+                panes: vec![pane.clone()],
+                ..Default::default()
+            },
+            Session {
+                id: "ses_external_detached".into(),
+                directory: "/work/ledger".into(),
+                ..Default::default()
+            },
+        ],
+        clients: vec![Client {
+            title: "OpenCode".into(),
+            directory: "/work/ledger".into(),
+            server: "http://127.0.0.1:4199".into(),
+            pane: client_pane.clone(),
+            stale: false,
+        }],
+        ..Default::default()
+    });
+
+    assert!(
+        service
+            .opencode_conversation("ses_external_attached")
+            .is_ok()
+    );
+    service.cancel_opencode_conversation();
+    let navigation = service
+        .open_opencode("ses_external_attached", Some(pane.clone()))
+        .unwrap();
+    let _ = service.runtime.block_on(navigation).unwrap();
+    assert!(
+        service
+            .open_opencode("ses_external_detached", None)
+            .unwrap_err()
+            .contains("not owned")
+    );
+    let closing = service
+        .close_opencode("ses_external_attached", pane)
+        .unwrap();
+    let _ = service.runtime.block_on(closing).unwrap();
+    let navigation = service.open_opencode_client(client_pane.clone()).unwrap();
+    let _ = service.runtime.block_on(navigation).unwrap();
+    assert!(service.close_opencode_client(client_pane).is_ok());
 }

@@ -65,7 +65,7 @@ fn instance_operations_only_block_their_target_instance() {
     app.intent = Some(crate::app::Intent::Stop("other".into()));
     app.handle_message(Msg::Submit, &mut ctx);
     assert_eq!(app.service.operations().len(), 2);
-    assert!(!app.view.first().is_active());
+    assert!(!app.view.is_active());
 
     app.intent = Some(crate::app::Intent::Stop("review".into()));
     app.handle_message(Msg::Submit, &mut ctx);
@@ -109,14 +109,14 @@ fn instance_descriptions_can_be_edited_and_saved_during_lifecycle_operations() {
 
         app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('d'))), &mut ctx);
 
-        assert!(app.view.first().is_active(), "{action}");
+        assert!(app.view.is_active(), "{action}");
         app.handle_message(
             Msg::DescriptionChanged("Updated while busy".into()),
             &mut ctx,
         );
         app.handle_message(Msg::Submit, &mut ctx);
 
-        assert!(!app.view.first().is_active());
+        assert!(!app.view.is_active());
         app.description_save
             .take()
             .unwrap()
@@ -162,7 +162,7 @@ fn instances_from_one_template_can_start_concurrently() {
         app.intent,
         Some(crate::app::Intent::Resume { ref name, .. }) if name == "other"
     ));
-    assert!(app.view.first().is_active());
+    assert!(app.view.is_active());
     app.handle_message(Msg::Submit, &mut ctx);
     let operations = app.service.operations();
     assert_eq!(operations.len(), 2);
@@ -213,7 +213,7 @@ fn new_instance_form_ignores_an_active_operation_for_the_draft_name() {
 
     app.open_name_entry(&mut ctx);
 
-    assert!(app.view.first().is_active());
+    assert!(app.view.is_active());
     assert!(matches!(
         app.intent,
         Some(crate::app::Intent::CreateInstance(ref template)) if template == "website"
@@ -434,7 +434,7 @@ fn duplicate_new_instance_focuses_existing_and_notifies_without_another_operatio
         app.handle_message(Msg::Submit, &mut ctx);
         app.layout(Rect::new(0, 0, 130, 40), &mut tuicore::LayoutCtx::new());
         assert_eq!(app.selected().unwrap().id, "instance:review");
-        assert!(!app.view.first().is_active());
+        assert!(!app.view.is_active());
         assert!(app.intent.is_none());
         let operations = app.service.operations();
         assert_eq!(operations.len(), 1);
@@ -482,7 +482,7 @@ fn failed_instance_cleanup_rows_offer_confirmed_deletion_but_active_and_template
             enabled,
             "{action}, finished={finished}"
         );
-        assert_eq!(app.view.first().is_active(), enabled);
+        assert_eq!(app.view.is_active(), enabled);
         assert!(app.service.operations().is_empty());
         if enabled {
             app.handle_message(Msg::Close, &mut EventCtx::new(AnimationSettings::default()));

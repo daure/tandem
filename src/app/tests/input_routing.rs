@@ -80,8 +80,7 @@ fn status_bar_search_keeps_app_shortcuts_as_text() {
         ..AnimationSettings::default()
     };
     LayoutEngine::new().layout(&mut app, area);
-    app.view
-        .second_mut()
+    app.status_bar_mut()
         .toggle_menu(&mut EventCtx::new(settings));
     let route = popup_route(&mut app, area);
     let mut dispatcher = TreeDispatcher::new();
@@ -94,7 +93,7 @@ fn status_bar_search_keeps_app_shortcuts_as_text() {
             &TuiEvent::Key(KeyEvent::from(Key::Char(character))),
             settings,
         );
-        assert!(!app.view.first().is_active(), "typed {character}");
+        assert!(!app.view.is_active(), "typed {character}");
         assert!(!app.menu_layer().is_active(), "typed {character}");
         assert!(app.intent.is_none());
     }
@@ -123,8 +122,7 @@ fn status_bar_menu_opens_branch_instance_settings() {
         ..AnimationSettings::default()
     };
     LayoutEngine::new().layout(&mut app, area);
-    app.view
-        .second_mut()
+    app.status_bar_mut()
         .toggle_menu(&mut EventCtx::new(settings));
     let route = popup_route(&mut app, area);
     let mut ctx = EventCtx::new(settings);
@@ -321,7 +319,7 @@ fn saved_open_command_runs_from_the_instance_shortcut_and_menu() {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         std::fs::remove_file(workspace.path().join("opened")).unwrap();
-        assert!(!app.view.first().is_active());
+        assert!(!app.view.is_active());
     }
     assert!(app.service.opened_system_targets().is_empty());
 }

@@ -23,6 +23,12 @@ struct State {
     generation: u64,
 }
 
+#[derive(Debug)]
+pub(crate) struct CloseOpencodeOutcome {
+    pub reply: tokio::sync::oneshot::Receiver<Result<(), String>>,
+    pub panes: Vec<Pane>,
+}
+
 impl Integration {
     pub(super) fn new() -> Self {
         Self {
@@ -89,17 +95,6 @@ impl super::AppService {
             .into_iter()
             .find(|session| session.id == id)
             .ok_or("OpenCode conversation is unavailable; refresh and try again")?;
-        let instances = self.environments.snapshot().instances;
-        if crate::store::opencode::workspace_owner(
-            &session.directory,
-            instances
-                .iter()
-                .map(|instance| (instance.name.as_str(), instance.workspace.as_str())),
-        )
-        .is_none()
-        {
-            return Err("OpenCode workspace is not owned by an instance".into());
-        }
         let settings = Arc::clone(&self.settings);
         let (mut sender, receiver) = tokio::sync::oneshot::channel();
         let mut state = self
@@ -159,10 +154,6 @@ impl super::AppService {
             .into_iter()
             .map(|instance| instance.workspace)
             .collect();
-        if roots.is_empty() {
-            state.snapshot = Snapshot::default();
-            return;
-        }
         state.next = Instant::now() + Duration::from_secs(2);
         let generation = state.generation;
         let previous = state.snapshot.clone();
@@ -231,15 +222,19 @@ impl super::AppService {
                     .map(|instance| (instance.name.as_str(), instance.workspace.as_str())),
             )
         };
-        let instance =
-            owner(&session.directory).ok_or("OpenCode workspace is not owned by an instance")?;
-        let destination = snapshot
-            .sessions
-            .iter()
-            .filter(|other| owner(&other.directory) == Some(instance))
-            .flat_map(|other| other.panes.iter())
-            .min_by_key(|pane| pane.session != current)
-            .cloned();
+        let instance = owner(&session.directory).map(str::to_owned);
+        if pane.is_none() && instance.is_none() {
+            return Err("OpenCode workspace is not owned by an instance".into());
+        }
+        let destination = instance.as_deref().and_then(|instance| {
+            snapshot
+                .sessions
+                .iter()
+                .filter(|other| owner(&other.directory) == Some(instance))
+                .flat_map(|other| other.panes.iter())
+                .min_by_key(|pane| pane.session != current)
+                .cloned()
+        });
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let mut state = self
             .opencode
@@ -260,12 +255,213 @@ impl super::AppService {
                 observer.jump(&session.id, &pane, &current).await
             } else {
                 observer
-                    .attach(&session, &current, destination.as_ref())
+                    .attach(
+                        &session,
+                        instance
+                            .as_deref()
+                            .expect("attach requires an owning instance"),
+                        &current,
+                        destination.as_ref(),
+                    )
                     .await
             };
             let _ = sender.send(result);
         }));
         Ok(receiver)
+    }
+
+    pub(crate) fn open_opencode_client(
+        &self,
+        pane: Pane,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), String>>, String> {
+        if !self.opencode_enabled() {
+            return Err("OpenCode integration is disabled".into());
+        }
+        if !self
+            .opencode_snapshot()
+            .clients
+            .iter()
+            .any(|client| client.pane == pane)
+        {
+            return Err("OpenCode pane is unavailable".into());
+        }
+        let settings = Arc::clone(&self.settings);
+        let current = self.opencode.current_zellij.clone();
+        let observer = self.opencode.observer.clone();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let mut state = self
+            .opencode
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if state
+            .navigation
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+        {
+            return Err("OpenCode navigation is already in progress".into());
+        }
+        state.navigation = Some(self.runtime.spawn(async move {
+            let result = if settings.opencode_enabled() {
+                observer.jump_pane(&pane, &current).await
+            } else {
+                Err("OpenCode integration is disabled".into())
+            };
+            let _ = sender.send(result);
+        }));
+        Ok(receiver)
+    }
+
+    pub(crate) fn close_opencode(
+        &self,
+        id: &str,
+        pane: Pane,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), String>>, String> {
+        if !self.opencode_enabled() {
+            return Err("OpenCode integration is disabled".into());
+        }
+        let session = self
+            .opencode_snapshot()
+            .sessions
+            .into_iter()
+            .find(|session| session.id == id)
+            .ok_or("OpenCode conversation is unavailable; refresh and try again")?;
+        if !session.panes.contains(&pane) {
+            return Err("OpenCode pane is unavailable".into());
+        }
+        self.close_observed_opencode_pane(Some(session.id), pane)
+    }
+
+    pub(crate) fn close_opencode_client(
+        &self,
+        pane: Pane,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), String>>, String> {
+        if !self.opencode_enabled() {
+            return Err("OpenCode integration is disabled".into());
+        }
+        if !self
+            .opencode_snapshot()
+            .clients
+            .iter()
+            .any(|client| client.pane == pane)
+        {
+            return Err("OpenCode pane is unavailable".into());
+        }
+        self.close_observed_opencode_pane(None, pane)
+    }
+
+    fn close_observed_opencode_pane(
+        &self,
+        session_id: Option<String>,
+        pane: Pane,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), String>>, String> {
+        let settings = Arc::clone(&self.settings);
+        let observer = self.opencode.observer.clone();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let mut state = self
+            .opencode
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if state
+            .navigation
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+        {
+            return Err("OpenCode action is already in progress".into());
+        }
+        state.navigation = Some(self.runtime.spawn(async move {
+            let result = if settings.opencode_enabled() {
+                if let Some(session_id) = session_id {
+                    observer.close(&session_id, &pane).await
+                } else {
+                    observer.close_pane(&pane).await
+                }
+            } else {
+                Err("OpenCode integration is disabled".into())
+            };
+            let _ = sender.send(result);
+        }));
+        Ok(receiver)
+    }
+
+    pub(crate) fn close_instance_opencode(
+        &self,
+        name: &str,
+    ) -> Result<CloseOpencodeOutcome, String> {
+        if !self.opencode_enabled() {
+            return Err("OpenCode integration is disabled".into());
+        }
+        let instances = self.environments.snapshot().instances;
+        if !instances.iter().any(|instance| instance.name == name) {
+            return Err("Instance is unavailable; refresh and try again".into());
+        }
+        let owner = |directory: &str| {
+            crate::store::opencode::workspace_owner(
+                directory,
+                instances
+                    .iter()
+                    .map(|instance| (instance.name.as_str(), instance.workspace.as_str())),
+            )
+        };
+        let snapshot = self.opencode_snapshot();
+        let panes = snapshot
+            .sessions
+            .iter()
+            .filter(|session| owner(&session.directory) == Some(name))
+            .flat_map(|session| session.panes.iter().cloned())
+            .chain(
+                snapshot
+                    .clients
+                    .iter()
+                    .filter(|client| owner(&client.directory) == Some(name))
+                    .map(|client| client.pane.clone()),
+            )
+            .collect::<Vec<_>>();
+        let panes = panes.into_iter().fold(Vec::new(), |mut unique, pane| {
+            if !unique.contains(&pane) {
+                unique.push(pane);
+            }
+            unique
+        });
+        let targets = panes.clone();
+        let settings = Arc::clone(&self.settings);
+        let observer = self.opencode.observer.clone();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let mut state = self
+            .opencode
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if state
+            .navigation
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+        {
+            return Err("OpenCode action is already in progress".into());
+        }
+        state.navigation = Some(self.runtime.spawn(async move {
+            let result = if settings.opencode_enabled() {
+                let mut errors = Vec::new();
+                for pane in panes {
+                    if let Err(error) = observer.close_pane(&pane).await {
+                        errors.push(format!("{} / pane {}: {error}", pane.session, pane.id));
+                    }
+                }
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errors.join("\n"))
+                }
+            } else {
+                Err("OpenCode integration is disabled".into())
+            };
+            let _ = sender.send(result);
+        }));
+        Ok(CloseOpencodeOutcome {
+            reply: receiver,
+            panes: targets,
+        })
     }
 
     pub(crate) fn setup_opencode(&self) -> Result<String, String> {

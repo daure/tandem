@@ -30,6 +30,8 @@ pub(crate) struct Session {
     pub activity: Activity,
     pub activity_started_at_milliseconds: Option<u64>,
     pub activity_elapsed_milliseconds: Option<u64>,
+    pub context_tokens: Option<u64>,
+    pub context_limit: Option<u64>,
     pub panes: Vec<Pane>,
     pub updated: u64,
     pub last_question: Option<String>,

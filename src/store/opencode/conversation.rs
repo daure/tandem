@@ -11,12 +11,22 @@ pub(crate) struct Info {
     pub id: String,
     pub role: String,
     pub agent: Option<String>,
+    #[serde(rename = "parentID")]
+    pub parent_id: Option<String>,
     pub time: MessageTime,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct MessageTime {
     pub created: u64,
+    pub completed: Option<u64>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LatestTurn {
+    pub question: Option<String>,
+    pub started_at: u64,
+    pub completed_at: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -95,9 +105,9 @@ pub(crate) fn transcript(mut messages: Vec<Message>) -> String {
     )
 }
 
-pub(crate) fn latest_question(messages: Vec<Message>) -> Option<String> {
+pub(crate) fn latest_turn(messages: Vec<Message>) -> Option<LatestTurn> {
     let message = messages
-        .into_iter()
+        .iter()
         .filter(|message| message.info.role == "user")
         .max_by(|a, b| {
             a.info
@@ -106,9 +116,27 @@ pub(crate) fn latest_question(messages: Vec<Message>) -> Option<String> {
                 .cmp(&b.info.time.created)
                 .then_with(|| a.info.id.cmp(&b.info.id))
         })?;
+    let completed_at = messages
+        .iter()
+        .filter(|candidate| {
+            candidate.info.role == "assistant"
+                && candidate.info.parent_id.as_deref() == Some(message.info.id.as_str())
+        })
+        .filter_map(|candidate| candidate.info.time.completed)
+        .max()
+        .or_else(|| {
+            messages
+                .iter()
+                .filter(|candidate| {
+                    candidate.info.role == "assistant"
+                        && candidate.info.time.created >= message.info.time.created
+                })
+                .filter_map(|candidate| candidate.info.time.completed)
+                .max()
+        });
     let question: String = message
         .parts
-        .into_iter()
+        .iter()
         .filter(|part| part.kind == "text")
         .flat_map(|part| {
             safe_text(&part.text)
@@ -121,7 +149,11 @@ pub(crate) fn latest_question(messages: Vec<Message>) -> Option<String> {
         .chars()
         .take(4096)
         .collect();
-    (!question.is_empty()).then_some(question)
+    Some(LatestTurn {
+        question: (!question.is_empty()).then_some(question),
+        started_at: message.info.time.created,
+        completed_at,
+    })
 }
 
 fn safe_text(value: &str) -> String {

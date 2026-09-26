@@ -50,8 +50,16 @@ fn bulk_buttons_are_responsive_and_follow_instance_availability() {
             let (layout, lines) = render(&mut app, width);
             assert!(lines[1].contains(if width < 100 { "" } else { " Stop all" }));
             assert!(lines[1].contains(if width < 100 { "" } else { " Purge all" }));
-            assert!(lines[1].contains("|S|"), "{}", lines[1]);
-            assert!(lines[1].contains("|P|"), "{}", lines[1]);
+            assert!(
+                lines[1].contains(if width < 50 { " S" } else { "|S|" }),
+                "{}",
+                lines[1]
+            );
+            assert!(
+                lines[1].contains(if width < 50 { " P" } else { "|P|" }),
+                "{}",
+                lines[1]
+            );
             for (key, enabled) in [("stop-all", stop_enabled), ("purge-all", purge_enabled)] {
                 let target = layout
                     .focus_targets()
@@ -86,7 +94,7 @@ fn bulk_buttons_are_responsive_and_follow_instance_availability() {
     for message in [Msg::StopAll, Msg::PurgeAll] {
         app.handle_message(message, &mut EventCtx::new(AnimationSettings::default()));
         assert!(app.intent.is_none());
-        assert!(!app.view.first().is_active());
+        assert!(!app.view.is_active());
     }
     assert!(app.service.operations().is_empty());
 }
@@ -179,7 +187,14 @@ fn toolbar_bulk_hotkeys_use_configured_letters_for_labels_and_activation() {
             .draw(|frame| toolbar.render(frame, area, &mut RenderCtx::new()))
             .unwrap();
         let line = &rendered_lines(&terminal, area)[0];
-        assert!(line.contains("|K|") && line.contains("|L|"), "{line}");
+        assert!(
+            line.contains(if width < 50 { " K" } else { "|K|" }),
+            "{line}"
+        );
+        assert!(
+            line.contains(if width < 50 { " L" } else { "|L|" }),
+            "{line}"
+        );
         for (key, stop) in [('K', true), ('L', false)] {
             let mut ctx = EventCtx::new(AnimationSettings::default());
             toolbar.event(&TuiEvent::Key(KeyEvent::from(Key::Char(key))), &mut ctx);
@@ -229,7 +244,7 @@ fn bulk_actions_confirm_captured_targets_across_all_templates_before_submission(
                 },
                 &mut ctx,
             );
-            assert!(app.view.first().is_active());
+            assert!(app.view.is_active());
             assert!(app.service.operations().is_empty());
             let (_, lines) = render(&mut app, width);
             let text = lines
@@ -277,7 +292,7 @@ fn bulk_actions_confirm_captured_targets_across_all_templates_before_submission(
                 .collect::<Vec<_>>();
             names.sort();
             assert_eq!(names, expected);
-            assert!(!app.view.first().is_active());
+            assert!(!app.view.is_active());
         }
     }
 }
@@ -291,7 +306,7 @@ fn active_operations_do_not_block_bulk_confirmation_or_other_instances() {
         let mut ctx = EventCtx::new(AnimationSettings::default());
         app.service.queue_instance_for_tests("review", "website");
         app.handle_message(message, &mut ctx);
-        assert!(app.view.first().is_active());
+        assert!(app.view.is_active());
         assert!(matches!(
             app.intent,
             Some(super::super::Intent::StopAll(_)) | Some(super::super::Intent::PurgeAll(_))
@@ -305,7 +320,7 @@ fn active_operations_do_not_block_bulk_confirmation_or_other_instances() {
     app.service.queue_instance_for_tests("review", "website");
     app.intent = Some(super::super::Intent::Stop("other".into()));
     app.handle_message(Msg::Submit, &mut ctx);
-    assert!(!app.view.first().is_active());
+    assert!(!app.view.is_active());
     assert!(app.intent.is_none());
     assert_eq!(app.service.operations().len(), 2);
 }

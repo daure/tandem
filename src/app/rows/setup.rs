@@ -1,6 +1,6 @@
 use super::{Instance, Property, Row, Severity, Status, Tone, UsageSummary};
 
-pub(super) fn append(rows: &mut Vec<Row>, instance: &Instance) {
+pub(super) fn append(rows: &mut Vec<Row>, instance: &Instance, starting: bool) {
     let parent = rows.last().expect("instance row").clone();
     let total = instance.repositories.len()
         + instance
@@ -16,14 +16,23 @@ pub(super) fn append(rows: &mut Vec<Row>, instance: &Instance) {
                 service.one_shot && service.status_summary().status == Status::Completed
             })
             .count();
+    let completed_tone = if instance.is_running() {
+        Tone::Success
+    } else {
+        Tone::Muted
+    };
     if total > 0 {
         let mut group = child(&parent, format!("setup:{}", instance.name));
-        if completed == total {
-            group.label = format!("Setup · {completed} completed");
-            group.icon = "";
-            group.tone = Tone::Success;
+        group.label = "Setup".into();
+        group.status_detail = Some(if completed == total {
+            format!("{completed} completed")
         } else {
-            group.label = format!("Setup · {completed}/{total} completed");
+            format!("{completed}/{total} completed")
+        });
+        group.detail_tone = Tone::Muted;
+        if completed == total {
+            group.icon = "";
+            group.tone = if starting { Tone::Info } else { completed_tone };
         }
         let mut repositories = instance.repositories.iter().collect::<Vec<_>>();
         repositories.sort_by(|a, b| a.target.cmp(&b.target));
@@ -41,19 +50,19 @@ pub(super) fn append(rows: &mut Vec<Row>, instance: &Instance) {
             row.label = format!("{} · {status}", repository.target);
             row.status = Some(status.into());
             row.icon = "";
-            row.tone = Tone::Success;
+            row.tone = completed_tone;
             row.checkout_path = Some(repository.path.clone());
             row.details = vec![
                 Property::new("Repository", &repository.target),
                 Property::new("Checkout directory", &repository.path),
-                Property::new("Provisioning", status).tone(Tone::Success),
+                Property::new("Provisioning", status).tone(completed_tone),
             ];
             rows.push(row);
         }
     }
 }
 
-pub(super) fn services(parent: &Row, instance: &Instance, count: usize) -> Row {
+pub(super) fn services(parent: &Row, instance: &Instance, count: usize, starting: bool) -> Row {
     let mut group = child(parent, format!("services:{}", instance.name));
     group.label = if count == 1 { "Service" } else { "Services" }.into();
     group.icon = "󰒋";
@@ -72,13 +81,19 @@ pub(super) fn services(parent: &Row, instance: &Instance, count: usize) -> Row {
     } else {
         format!("{running}/{count} running")
     });
-    group.detail_tone = Tone::Muted;
+    group.detail_tone = if count == 0 {
+        Tone::Subtle
+    } else {
+        Tone::Muted
+    };
     group.tone = if summaries.is_empty() {
         Tone::Muted
     } else if summaries.iter().any(|summary| {
         summary.severity == Severity::Error || summary.detail_severity == Severity::Error
     }) {
         Tone::Error
+    } else if starting {
+        Tone::Info
     } else if services.iter().all(|service| service.ready()) {
         Tone::Success
     } else if summaries.iter().all(|summary| {
@@ -88,6 +103,8 @@ pub(super) fn services(parent: &Row, instance: &Instance, count: usize) -> Row {
         )
     }) {
         Tone::Muted
+    } else if summaries.iter().any(|summary| summary.busy) {
+        Tone::Info
     } else {
         Tone::Warning
     };

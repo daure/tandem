@@ -28,8 +28,11 @@ pub(super) struct State {
     highlighted: Option<String>,
     searching: bool,
     rows_changed: bool,
+    center_highlighted: bool,
     select_first: bool,
     select_created: Option<(bool, String)>,
+    attached_sessions_only: bool,
+    mode_changed: bool,
 }
 
 pub(super) type SharedState = Rc<RefCell<State>>;
@@ -53,6 +56,19 @@ pub(super) fn selected(state: &SharedState) -> Option<Row> {
 
 pub(super) fn is_searching(state: &SharedState) -> bool {
     state.borrow().searching
+}
+
+pub(super) fn request_center_highlighted(state: &SharedState) {
+    state.borrow_mut().center_highlighted = true;
+}
+
+pub(super) fn set_attached_sessions_only(state: &SharedState, enabled: bool) {
+    let mut state = state.borrow_mut();
+    if state.attached_sessions_only != enabled {
+        state.attached_sessions_only = enabled;
+        state.mode_changed = true;
+        state.rows_changed = true;
+    }
 }
 
 pub(super) fn replace_rows(state: &SharedState, rows: Vec<Row>) -> bool {
@@ -120,8 +136,15 @@ struct SessionTimer {
 
 impl Instances {
     pub(super) fn new(state: SharedState) -> Self {
-        let rows = state.borrow().rows.clone();
-        let expanded = Self::overview_expanded_ids(&rows);
+        let (rows, agent_view) = {
+            let state = state.borrow();
+            (state.rows.clone(), state.attached_sessions_only)
+        };
+        let expanded = if agent_view {
+            Self::fully_expanded_ids(&rows, true)
+        } else {
+            Self::overview_expanded_ids(&rows)
+        };
         let spinner = Rc::new(RefCell::new(Spinner::new()));
         let cell_spinner = Rc::clone(&spinner);
         let cpu_spinner = Rc::clone(&spinner);
@@ -186,14 +209,29 @@ impl Instances {
     }
 
     fn sync_rows(&mut self) -> bool {
-        let (mut rows, select_first) = {
+        let (mut rows, select_first, agent_view, mode_changed) = {
             let mut state = self.state.borrow_mut();
             if !state.rows_changed {
                 return false;
             }
             state.rows_changed = false;
+            let mode_changed = std::mem::take(&mut state.mode_changed);
+            if mode_changed {
+                self.tree.set_empty_state(tuicore::SeasonalEmptyState::new(
+                    if state.attached_sessions_only {
+                        "No attached OpenCode sessions"
+                    } else {
+                        "No results found."
+                    },
+                ));
+            }
             let select_first = std::mem::take(&mut state.select_first);
-            (state.rows.clone(), select_first)
+            (
+                state.rows.clone(),
+                select_first,
+                state.attached_sessions_only,
+                mode_changed,
+            )
         };
         let select_created =
             self.state
@@ -221,6 +259,7 @@ impl Instances {
             .iter()
             .filter(|row| {
                 row.parent.is_none()
+                    && (agent_view || !Self::external_workspace(row))
                     && !self
                         .tree
                         .rows()
@@ -262,14 +301,47 @@ impl Instances {
                         .cloned()
                 })
         });
+        let retained_highlight = self
+            .tree
+            .highlighted_id()
+            .filter(|_| self.state.borrow().center_highlighted)
+            .filter(|highlighted| {
+                !(mode_changed
+                    && !agent_view
+                    && rows
+                        .iter()
+                        .find(|row| &row.id == highlighted)
+                        .and_then(|row| row.parent.as_deref())
+                        .is_some_and(|parent| parent.starts_with("opencode-workspace:")))
+            });
         self.tree.set_rows(rows);
         self.tick_session_timers(Duration::ZERO);
         self.stripe_query = query;
+        if mode_changed && !agent_view {
+            self.tree.collapse_all();
+            for id in Self::overview_expanded_ids(self.tree.rows()) {
+                self.tree.expand(&id);
+            }
+        }
         for id in templates_with_new_children {
             self.tree.expand(&id);
         }
         for id in new_instances {
             self.tree.expand(&id);
+        }
+        if let Some(id) = retained_highlight {
+            let mut current = id.clone();
+            while let Some(parent) = self
+                .tree
+                .rows()
+                .iter()
+                .find(|row| row.id == current)
+                .and_then(|row| row.parent.clone())
+            {
+                self.tree.expand(&parent);
+                current = parent;
+            }
+            self.tree.highlight_id(&id);
         }
         if let Some(id) = deleted_instance_replacement {
             self.tree.highlight_id(&id);
@@ -328,7 +400,16 @@ impl Instances {
             if display_tick {
                 timer.displayed_seconds = timer.elapsed.as_secs();
             }
-            let detail = rows::compact_duration(timer.displayed_seconds.saturating_mul(1_000));
+            let timer_detail =
+                rows::compact_duration(timer.displayed_seconds.saturating_mul(1_000));
+            let detail = row
+                .status_detail
+                .as_deref()
+                .and_then(|detail| detail.split_once(" · "))
+                .map_or_else(
+                    || timer_detail.clone(),
+                    |(_, suffix)| format!("{timer_detail} · {suffix}"),
+                );
             if row.status_detail.as_deref() != Some(&detail) {
                 updates.push((row.id.clone(), detail));
             }
@@ -366,7 +447,26 @@ impl Instances {
 
     fn overview_expanded_ids(rows: &[Row]) -> Vec<String> {
         rows.iter()
-            .filter(|row| row.parent.is_none() || row.instance.is_some())
+            .filter(|row| {
+                (row.parent.is_none() && !Self::external_workspace(row)) || row.instance.is_some()
+            })
+            .map(|row| row.id.clone())
+            .collect()
+    }
+
+    fn external_workspace(row: &Row) -> bool {
+        row.id.starts_with("opencode-workspace:")
+    }
+
+    fn fully_expanded_ids(rows: &[Row], include_external: bool) -> Vec<String> {
+        let parent_ids = rows
+            .iter()
+            .filter_map(|row| row.parent.clone())
+            .collect::<HashSet<_>>();
+        rows.iter()
+            .filter(|row| {
+                parent_ids.contains(&row.id) && (include_external || !Self::external_workspace(row))
+            })
             .map(|row| row.id.clone())
             .collect()
     }
@@ -376,7 +476,7 @@ impl Instances {
             .tree
             .rows()
             .iter()
-            .find(|row| row.parent.is_none())
+            .find(|row| row.is_template())
             .map(|row| row.id.clone());
         if let Some(id) = first {
             self.tree.highlight_id(&id);
@@ -386,10 +486,14 @@ impl Instances {
     fn focus_expanded_overview(&mut self, ctx: &mut EventCtx<Msg>) {
         self.tree.clear_search();
         self.tree.collapse_all();
-        for id in Self::overview_expanded_ids(self.tree.rows()) {
+        let expanded_ids =
+            Self::fully_expanded_ids(self.tree.rows(), self.state.borrow().attached_sessions_only);
+        for id in expanded_ids {
             self.tree.expand(&id);
         }
-        self.highlight_first_template();
+        if let Some(id) = self.tree.rows().first().map(|row| row.id.clone()) {
+            self.tree.highlight_id(&id);
+        }
         self.tree.reveal_highlighted();
         self.after_event();
         ctx.focus(super::initial_focus());
@@ -414,15 +518,19 @@ impl Instances {
             .iter()
             .filter_map(|row| row.parent.clone())
             .collect::<HashSet<_>>();
-        let expandable_ids = self
-            .tree
-            .rows()
-            .iter()
-            .filter(|row| {
-                parent_ids.contains(&row.id) && (row.parent.is_none() || row.instance.is_some())
-            })
-            .map(|row| row.id.clone())
+        let mut expandable_ids = Self::overview_expanded_ids(self.tree.rows())
+            .into_iter()
+            .filter(|id| parent_ids.contains(id))
             .collect::<Vec<_>>();
+        if self.state.borrow().attached_sessions_only {
+            expandable_ids.extend(
+                self.tree
+                    .rows()
+                    .iter()
+                    .filter(|row| parent_ids.contains(&row.id) && Self::external_workspace(row))
+                    .map(|row| row.id.clone()),
+            );
+        }
         let mut all_expanded = true;
         for id in &expandable_ids {
             all_expanded &= !self.tree.expand(id).changed;
@@ -459,7 +567,11 @@ impl TuiNode<Msg> for Instances {
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.sync_rows();
-        <DataView<Row, String> as TuiNode<Msg>>::layout(&mut self.tree, area, ctx)
+        let result = <DataView<Row, String> as TuiNode<Msg>>::layout(&mut self.tree, area, ctx);
+        if std::mem::take(&mut self.state.borrow_mut().center_highlighted) {
+            self.tree.reveal_highlighted_centered();
+        }
+        result
     }
 
     fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut tuicore::RenderCtx<'a>) {
