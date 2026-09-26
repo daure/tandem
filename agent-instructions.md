@@ -4,9 +4,12 @@ A template is a shared development recipe; an instance has its own name and work
 
 ## Templates
 
+- All templates live under `templates_root`. Keep this directory
+  under Git version control; exclude secrets and machine-local files. Obtain approval before
+  initializing a repository, committing, or pushing.
 - Edit template files in the returned directory; keep reusable scripts there.
   Template edits are shared across instances; keep application edits in instance workspaces.
-- Use `manifest_schema` from the `get_instructions` response to construct `tandem.json`.
+- Use `manifest_schema` to construct `tandem.json`.
   Save complete manifests through
   `update_template_manifest` with approval to change shared configuration. Validation preserves the file
   on failure; Compose compatibility and repository access are checked at startup.
