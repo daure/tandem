@@ -26,6 +26,7 @@ mod bulk;
 mod details;
 mod dialogs;
 mod instances;
+mod opencode;
 mod operations;
 mod properties;
 mod refresh;
@@ -81,6 +82,10 @@ pub(super) fn open_route_key() -> KeySpec {
     KeySpec::key_with_modifiers(tuicore::Key::Enter, tuicore::KeyModifiers::CONTROL)
 }
 
+pub(super) fn open_panel_key() -> KeySpec {
+    KeySpec::key_with_modifiers(tuicore::Key::Char(';'), tuicore::KeyModifiers::CONTROL)
+}
+
 #[derive(Debug)]
 pub(crate) enum Msg {
     Close,
@@ -95,6 +100,9 @@ pub(crate) enum Msg {
     PurgeAll,
     SetRunningOnly(bool),
     SetBranchInstances(bool),
+    SetOpencodeIntegration(bool),
+    OpenOpencode(String, Option<crate::store::opencode::Pane>),
+    SetOpencodeHistory(bool),
     CopyName,
     CopyDescription,
     CopyWorkspace,
@@ -169,6 +177,9 @@ pub(crate) struct App {
     description_save: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
     area: Rect,
     details_open: bool,
+    opencode_snapshot: crate::store::opencode::Snapshot,
+    opencode_history: bool,
+    opencode_action: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
 }
 
 pub(crate) fn root(service: AppService) -> App {
@@ -176,6 +187,7 @@ pub(crate) fn root(service: AppService) -> App {
     let snapshot = service.environment_snapshot();
     let instances = instances::state(visible_rows(&snapshot, &[], false));
     let toolbar_state = Rc::new(RefCell::new(toolbar::State::from_snapshot(&snapshot)));
+    toolbar_state.borrow_mut().opencode_enabled = service.opencode_enabled();
     let mut content = Tabs::new(vec![Tab::new(
         "Instances",
         Flex::column()
@@ -256,22 +268,38 @@ pub(crate) fn root(service: AppService) -> App {
         description_save: None,
         area: Rect::default(),
         details_open: false,
+        opencode_snapshot: crate::store::opencode::Snapshot::default(),
+        opencode_history: false,
+        opencode_action: None,
     }
 }
 
 impl App {
     fn update_snapshot(&mut self, snapshot: EnvironmentSnapshot) -> bool {
+        if snapshot.loading {
+            self.snapshot = snapshot;
+            return false;
+        }
+        let initial_load_completed = self.snapshot.loading;
         let operations = self.service.operations();
         let snapshot_changed = snapshot != self.snapshot;
-        let rows_changed = instances::replace_rows(
-            &self.instances,
-            visible_rows(&snapshot, &operations, self.running_only),
-        );
+        self.opencode_snapshot = self.service.opencode_snapshot();
+        let mut rows = visible_rows(&snapshot, &operations, self.running_only);
+        opencode::append_rows(&mut rows, &self.opencode_snapshot, self.opencode_history);
+        let rows_changed = if initial_load_completed {
+            instances::replace_rows_and_select_first(&self.instances, rows);
+            true
+        } else {
+            instances::replace_rows(&self.instances, rows)
+        };
+        self.toolbar_state.borrow_mut().opencode_enabled = self.service.opencode_enabled();
         if !snapshot_changed {
             return rows_changed;
         }
         let mut toolbar_state = toolbar::State::from_snapshot(&snapshot);
         toolbar_state.running_only = self.running_only;
+        toolbar_state.opencode_enabled = self.service.opencode_enabled();
+        toolbar_state.show_saved = self.opencode_history;
         *self.toolbar_state.borrow_mut() = toolbar_state;
         self.snapshot = snapshot;
         true
@@ -335,17 +363,32 @@ impl App {
         self.running_only = running_only;
         self.toolbar_state.borrow_mut().running_only = running_only;
         let operations = self.service.operations();
-        instances::replace_rows(
-            &self.instances,
-            visible_rows(&self.snapshot, &operations, running_only),
-        );
+        let mut rows = visible_rows(&self.snapshot, &operations, running_only);
+        opencode::append_rows(&mut rows, &self.opencode_snapshot, self.opencode_history);
+        instances::replace_rows(&self.instances, rows);
         ctx.request_layout();
         ctx.request_redraw();
     }
 
     pub(crate) fn handle_message(&mut self, message: Msg, ctx: &mut EventCtx<Msg>) {
         match message {
+            Msg::SetOpencodeIntegration(enabled) => {
+                match self.service.set_opencode_enabled(enabled) {
+                    Ok(reply) => self.settings_save = Some(reply),
+                    Err(error) => ctx.notify(Notification::error("Cannot save settings", error)),
+                }
+            }
+            Msg::OpenOpencode(id, pane) => self.submit_opencode(&id, pane, ctx),
+            Msg::SetOpencodeHistory(show_saved) => {
+                if self.service.opencode_enabled() {
+                    self.opencode_history = show_saved;
+                    self.toolbar_state.borrow_mut().show_saved = show_saved;
+                    self.update_snapshot(self.snapshot.clone());
+                    ctx.request_layout();
+                }
+            }
             Msg::Close => {
+                self.service.cancel_opencode_conversation();
                 self.settings_save = None;
                 self.view.first_mut().set_active_with_context(false, ctx);
                 ctx.focus(initial_focus());
@@ -644,6 +687,7 @@ impl App {
         self.open(
             dialogs::settings(
                 self.service.branch_instances(),
+                self.service.opencode_enabled(),
                 &self.open_command,
                 &self.service.close_command(),
             ),
@@ -685,6 +729,7 @@ impl App {
                 template_available: row.template_available,
                 repository: row.checkout_path.is_some(),
                 cleanup: row.cleanup_target.is_some(),
+                opencode_attached: row.opencode.as_ref().map(opencode::Target::attached),
             },
             ctx,
         );
@@ -720,6 +765,12 @@ impl App {
                 }
                 action_menu::Action::OpenCommand => {
                     self.open_workspace(ctx);
+                    return;
+                }
+                action_menu::Action::OpenPanel | action_menu::Action::GotoPanel => {
+                    if let Some(row) = self.selected() {
+                        self.activate_opencode(&row, ctx);
+                    }
                     return;
                 }
                 action_menu::Action::UpdateDescription => {
@@ -871,6 +922,9 @@ impl App {
         match index {
             0 => {
                 if let Some(row) = row.filter(|row| !row.informational) {
+                    if self.open_opencode_dialog(&row, ctx) {
+                        return;
+                    }
                     self.intent = None;
                     self.open_details(&row, ctx);
                 }
@@ -1089,6 +1143,14 @@ impl App {
             return true;
         }
         if let TuiEvent::Key(key) = event
+            && KeySpec::shifted('o').matches(*key)
+            && self.service.opencode_enabled()
+        {
+            self.handle_message(Msg::SetOpencodeHistory(!self.opencode_history), ctx);
+            ctx.stop_propagation();
+            return true;
+        }
+        if let TuiEvent::Key(key) = event
             && KeySpec::plain('d').matches(*key)
             && self.open_description_editor(ctx)
         {
@@ -1098,6 +1160,14 @@ impl App {
         if let TuiEvent::Key(key) = event
             && open_route_key().matches(*key)
             && self.open_selected_route(ctx)
+        {
+            ctx.stop_propagation();
+            return true;
+        }
+        if let TuiEvent::Key(key) = event
+            && open_panel_key().matches(*key)
+            && let Some(row) = self.selected()
+            && self.activate_opencode(&row, ctx)
         {
             ctx.stop_propagation();
             return true;
@@ -1236,23 +1306,29 @@ impl TuiNode<Msg> for App {
         outcome
     }
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        self.service.poll_opencode();
+        self.poll_opencode_action();
         if self.refresh_schedule.tick(Instant::now()) {
             self.service.poll_environments();
         }
         let mut changed = self.sync_environment();
         changed |= self.poll_description_save();
         if let Some(reply) = &mut self.settings_save {
-            let message = match reply.try_recv() {
-                Ok(Ok(_)) => None,
-                Ok(Err(error)) => Some(format!("Cannot save workspace command: {error}")),
+            let result = match reply.try_recv() {
+                Ok(result) => Some(result),
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    Some("Settings worker stopped".to_owned())
+                    Some(Err("Settings worker stopped".to_owned()))
                 }
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
             };
-            if let Some(message) = message {
+            if let Some(result) = result {
                 self.settings_save = None;
-                self.view.first_mut().layer_mut().set_bottom_left(message);
+                if let Err(error) = result {
+                    self.view
+                        .first_mut()
+                        .layer_mut()
+                        .set_bottom_left(format!("Cannot save settings: {error}"));
+                }
                 changed = true;
             }
         }

@@ -65,22 +65,14 @@ fn starting_instances_show_a_bounded_countdown_then_an_overrun() {
 }
 
 #[test]
-fn startup_detail_separator_uses_the_normal_text_color() {
+fn service_group_detail_separator_uses_the_normal_text_color() {
     tuicore::init();
-    let mut snapshot = snapshot();
-    snapshot.startup.insert(
-        "review".into(),
-        StartupTiming {
-            elapsed_milliseconds: 6_001,
-            estimate_milliseconds: Some(18_000),
-            kind: StartupKind::Hot,
-        },
-    );
-
-    let text = rows::from_snapshot(&snapshot)[1].text("⠋", None);
-    assert_eq!(text.lines[0].spans[3].content, " · ");
+    let rows = rows::from_snapshot(&snapshot());
+    let services = rows.iter().find(|row| row.id == "services:review").unwrap();
+    let text = services.text("⠋", None);
+    assert_eq!(text.lines[0].spans[2].content, " · ");
     assert_eq!(
-        text.lines[0].spans[3].style.fg,
+        text.lines[0].spans[2].style.fg,
         Some(tuicore::theme().text_fg())
     );
 }
@@ -232,7 +224,14 @@ fn tree_secondary_lines_use_semantic_colors_and_align_with_the_row_icon() {
         } else {
             "nginx:latest"
         };
-        for (row, (detail, color)) in rows.iter().zip([
+        let visible_rows = [
+            rows.iter().find(|row| row.parent.is_none()).unwrap(),
+            rows.iter().find(|row| row.id == "instance:review").unwrap(),
+            rows.iter()
+                .find(|row| row.id == "service:review:web")
+                .unwrap(),
+        ];
+        for (row, (detail, color)) in visible_rows.into_iter().zip([
             (" 1 · 󰜗 1m24s · 󰈸 12s", tuicore::theme().muted_fg()),
             ("(no description)", tuicore::theme().subtle_fg()),
             (service_detail, tuicore::theme().muted_fg()),
@@ -274,6 +273,69 @@ fn template_secondary_counts_cover_empty_plural_and_missing_templates() {
     snapshot.templates = templates;
     snapshot.instances.clear();
     assert_eq!(rows::from_snapshot(&snapshot)[0].label, "website\n 0");
+}
+
+#[test]
+fn template_capabilities_follow_compose_repositories_routes_guidance_order() {
+    for (compose, repositories, routes, guidance, expected) in [
+        (false, 0, false, false, ""),
+        (false, 0, false, true, "󱓷"),
+        (false, 1, false, false, "󰳏"),
+        (false, 1, false, true, "󰳏 󱓷"),
+        (false, 2, false, false, "󰳐"),
+        (true, 0, false, false, "󰡨"),
+        (true, 0, false, true, "󰡨 󱓷"),
+        (true, 1, false, false, "󰡨 󰳏"),
+        (true, 1, false, true, "󰡨 󰳏 󱓷"),
+        (true, 0, true, false, "󰡨 󰈀"),
+        (true, 1, true, true, "󰡨 󰳏 󰈀 󱓷"),
+        (true, 2, true, true, "󰡨 󰳐 󰈀 󱓷"),
+    ] {
+        let mut snapshot = snapshot();
+        let template = &mut snapshot.templates[0];
+        if !compose {
+            template.compose_file.clear();
+            template.compose_source.clear();
+        }
+        template.manifest.repositories = (0..repositories)
+            .map(|index| crate::store::environments::Repository {
+                source: format!("/source/repo-{index}"),
+                target: format!("repo-{index}"),
+            })
+            .collect();
+        if routes {
+            template.manifest.routes.insert(
+                "web".into(),
+                crate::store::environments::Route {
+                    port: 8080,
+                    strip_prefix: true,
+                    readiness_path: String::new(),
+                    readiness_contains: "ready".into(),
+                },
+            );
+        }
+        template.guidance_source = guidance.then(String::new);
+        let tree = rows::from_snapshot(&snapshot);
+        assert_eq!(tree[0].template_capabilities, expected);
+        assert!(
+            tree.iter()
+                .skip(1)
+                .all(|row| row.template_capabilities.is_empty())
+        );
+
+        snapshot.templates[0].error = Some("invalid manifest".into());
+        assert!(
+            rows::from_snapshot(&snapshot)[0]
+                .template_capabilities
+                .is_empty()
+        );
+        snapshot.templates.clear();
+        assert!(
+            rows::from_snapshot(&snapshot)[0]
+                .template_capabilities
+                .is_empty()
+        );
+    }
 }
 
 #[test]

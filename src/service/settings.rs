@@ -17,6 +17,7 @@ use crate::store::environments::StartupKind;
 
 const BRANCH_INSTANCES_SETTING: &str = "instances.branch";
 const OPEN_COMMAND_SETTING: &str = "instances.open_command";
+const OPENCODE_SETTING: &str = "integrations.opencode";
 type CommandReply = oneshot::Sender<Result<String, String>>;
 type StartupHistory = BTreeMap<(String, StartupKind), Vec<u64>>;
 
@@ -37,6 +38,7 @@ impl WorkspaceCommand {
 
 pub(super) struct Settings {
     branch_instances: AtomicBool,
+    opencode: Arc<AtomicBool>,
     workspace_commands: Arc<[RwLock<String>; 2]>,
     startup_history: Arc<RwLock<StartupHistory>>,
     commands: mpsc::Sender<SettingsRequest>,
@@ -44,6 +46,7 @@ pub(super) struct Settings {
 
 enum SettingsRequest {
     SetBranchInstances(bool),
+    Opencode(Option<bool>, CommandReply),
     SetCommand(WorkspaceCommand, String, CommandReply),
     ReadCommand(WorkspaceCommand, CommandReply),
     RecordStartup {
@@ -75,6 +78,8 @@ impl Settings {
             RwLock::new(read_command(&connection, WorkspaceCommand::Open)?),
             RwLock::new(read_command(&connection, WorkspaceCommand::Close)?),
         ]);
+        let opencode = Arc::new(AtomicBool::new(read_opencode(&connection)?));
+        let cached_opencode = Arc::clone(&opencode);
         let startup_history = Arc::new(RwLock::new(read_startup_history(&connection)?));
         let cached_commands = Arc::clone(&workspace_commands);
         let cached_startup_history = Arc::clone(&startup_history);
@@ -87,11 +92,13 @@ impl Settings {
                     receiver,
                     cached_commands,
                     cached_startup_history,
+                    cached_opencode,
                 )
             })
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         Ok(Self {
             branch_instances: AtomicBool::new(branch_instances),
+            opencode,
             workspace_commands,
             startup_history,
             commands,
@@ -153,7 +160,25 @@ impl Settings {
     pub(super) fn refresh_commands(&self) -> Result<(), String> {
         self.read_command_blocking(WorkspaceCommand::Open)?;
         self.read_close_command()?;
+        self.opencode_request(None)?
+            .blocking_recv()
+            .map_err(|_| "settings worker stopped")??;
         Ok(())
+    }
+
+    pub(super) fn opencode_enabled(&self) -> bool {
+        self.opencode.load(Ordering::Acquire)
+    }
+
+    fn opencode_request(
+        &self,
+        enabled: Option<bool>,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
+        let (sender, receiver) = oneshot::channel();
+        self.commands
+            .send(SettingsRequest::Opencode(enabled, sender))
+            .map_err(|_| "settings worker stopped")?;
+        Ok(receiver)
     }
 
     fn read_command_blocking(&self, kind: WorkspaceCommand) -> Result<String, String> {
@@ -220,6 +245,17 @@ fn read_command(
         .map(Option::unwrap_or_default)
 }
 
+fn read_opencode(connection: &Connection) -> Result<bool, rusqlite::Error> {
+    connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [OPENCODE_SETTING],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map(|value| value.is_none_or(|value| value == "true"))
+}
+
 fn read_startup_history(connection: &Connection) -> Result<StartupHistory, rusqlite::Error> {
     let mut history = BTreeMap::new();
     read_startup_table(connection, StartupKind::Cold, &mut history)?;
@@ -254,9 +290,21 @@ fn persist_settings(
     receiver: mpsc::Receiver<SettingsRequest>,
     workspace_commands: Arc<[RwLock<String>; 2]>,
     startup_history: Arc<RwLock<StartupHistory>>,
+    opencode: Arc<AtomicBool>,
 ) {
     for command in receiver {
         match command {
+            SettingsRequest::Opencode(enabled, reply) => {
+                let result = match enabled {
+                    Some(enabled) => connection.execute(
+                        "INSERT INTO app_settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        params![OPENCODE_SETTING, enabled.to_string()],
+                    ).map(|_| enabled),
+                    None => read_opencode(&connection),
+                };
+                if let Ok(enabled) = result { opencode.store(enabled, Ordering::Release); }
+                let _ = reply.send(result.map(|value| value.to_string()).map_err(|error| error.to_string()));
+            }
             SettingsRequest::SetBranchInstances(enabled) => {
                 if let Err(error) = connection.execute(
                     "INSERT INTO app_settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -347,6 +395,34 @@ fn finish_command(
 }
 
 impl AppService {
+    pub(crate) fn opencode_enabled(&self) -> bool {
+        self.settings.opencode_enabled()
+    }
+
+    pub(crate) fn set_opencode_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
+        let saved = self.settings.opencode_request(Some(enabled))?;
+        let notifier = self.refresh.notifier.clone();
+        let state = Arc::clone(&self.opencode);
+        let (sender, receiver) = oneshot::channel();
+        self.runtime.spawn(async move {
+            let result = saved
+                .await
+                .unwrap_or_else(|_| Err("settings worker stopped".into()));
+            if result.is_ok() {
+                state.reset();
+                let _ = tokio::task::spawn_blocking(move || {
+                    notifier.publish(super::refresh::Refresh::Settings)
+                })
+                .await;
+            }
+            let _ = sender.send(result);
+        });
+        Ok(receiver)
+    }
+
     pub(crate) async fn configure_open_command(
         &self,
         command: String,

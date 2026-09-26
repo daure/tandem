@@ -9,7 +9,7 @@ use crate::environments::{
     command::{docker, run},
     compose,
     config::Config,
-    removal, templates,
+    removal,
 };
 
 fn command(args: &[&str]) -> Result<String, String> {
@@ -50,8 +50,8 @@ fn live_template_deletion_removes_its_containers_volumes_network_and_workspace()
         .as_nanos();
     let namespace = format!("td-delete-{}-{nonce:x}", std::process::id());
     let config = Config::at(home.path().to_owned(), namespace.clone(), 9876).unwrap();
-    let template = templates::create(&config, "website").unwrap();
-    let other = templates::create(&config, "other").unwrap();
+    let template = super::compose_template(&config, "website");
+    let other = super::compose_template(&config, "other");
     let workspace = config.workspaces.join("review");
     fs::create_dir(&workspace).unwrap();
     fs::write(workspace.join("data"), "delete this").unwrap();

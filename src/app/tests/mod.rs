@@ -14,6 +14,7 @@ mod bulk;
 mod guidance;
 mod input_routing;
 mod labels;
+mod opencode;
 mod operations;
 mod properties;
 mod refresh;
@@ -108,28 +109,34 @@ fn tree_rows_show_routed_services_without_gateway_children() {
         ..Default::default()
     });
     let rows = rows::from_snapshot(&snapshot);
-    assert_eq!(rows.len(), 4);
+    assert_eq!(rows.len(), 5);
     assert_eq!(rows[0].label, "website\n 1");
     assert_eq!(rows[0].icon, "󰠲");
     assert_eq!(rows[1].parent, Some(rows[0].id.clone()));
     assert_eq!(rows[1].label, "review · Running");
     assert_eq!(rows[1].icon, "");
+    assert_eq!(rows[1].status_detail, None);
     assert_eq!(rows[2].parent, Some(rows[1].id.clone()));
+    assert_eq!(rows[2].label, "Services");
+    assert_eq!(rows[2].icon, "󰒋");
+    assert_eq!(rows[2].tone, rows::Tone::Success);
+    assert_eq!(rows[2].status_detail.as_deref(), Some("2/2 running"));
+    assert_eq!(rows[3].parent, Some(rows[2].id.clone()));
     assert_eq!(
-        rows[2].label,
+        rows[3].label,
         "web · Running\n http://localhost:9876/review/web/ · 󰈀 8080"
     );
-    assert_eq!(rows[2].icon, "");
-    assert_eq!(rows[3].parent, Some(rows[1].id.clone()));
-    assert_eq!(rows[3].label, "db · Healthy\npostgres:17.5-alpine");
-    assert_eq!(rows[3].icon, "");
+    assert_eq!(rows[3].icon, "");
+    assert_eq!(rows[4].parent, Some(rows[2].id.clone()));
+    assert_eq!(rows[4].label, "db · Healthy\npostgres:17.5-alpine");
+    assert_eq!(rows[4].icon, "");
     assert_eq!(
-        rows[2].gateway_url.as_deref(),
+        rows[3].gateway_url.as_deref(),
         Some("http://localhost:9876/review/web/")
     );
     snapshot.templates.clear();
     let rows = rows::from_snapshot(&snapshot);
-    assert_eq!(rows.len(), 4);
+    assert_eq!(rows.len(), 5);
     assert!(rows[0].label.contains("[missing]"));
     assert_eq!(rows[1].parent, Some(rows[0].id.clone()));
 }
@@ -158,9 +165,11 @@ fn row_backgrounds_follow_tree_order() {
 
     assert!(background("template:/tmp/templates/docs"));
     assert!(!background("instance:guide"));
-    assert!(background("service:guide:web"));
-    assert!(!background("template:/tmp/templates/website"));
-    assert!(background("instance:review"));
+    assert!(background("services:guide"));
+    assert!(!background("service:guide:web"));
+    assert!(background("template:/tmp/templates/website"));
+    assert!(!background("instance:review"));
+    assert!(background("services:review"));
     assert!(!background("service:review:web"));
 }
 
@@ -187,7 +196,7 @@ fn template_rows_with_instances_precede_empty_templates_and_sort_by_name() {
 }
 
 #[test]
-fn setup_jobs_are_visible_and_completed_jobs_are_grouped() {
+fn setup_jobs_are_nested_under_setup_and_services_are_nested_under_services() {
     let mut snapshot = snapshot();
     let mut setup = snapshot.instances[0].services[0].clone();
     setup.name = "repo-sync".into();
@@ -199,19 +208,20 @@ fn setup_jobs_are_visible_and_completed_jobs_are_grouped() {
     for status in ["up", "exited 0", "down (exit 1)"] {
         snapshot.instances[0].services[1].status = status.into();
         let rows = rows::from_snapshot(&snapshot);
-        assert_eq!(rows.len(), if status == "exited 0" { 5 } else { 4 });
+        assert_eq!(rows.len(), 6);
         let setup = rows
             .iter()
             .find(|row| row.id == "service:review:repo-sync")
             .unwrap();
         assert_eq!(setup.resource_text().to_string(), "");
+        assert_eq!(setup.parent.as_deref(), Some("setup:review"));
         assert_eq!(
-            setup.parent.as_deref(),
-            Some(if status == "exited 0" {
-                "setup:review"
-            } else {
-                "instance:review"
-            })
+            rows.iter()
+                .find(|row| row.id == "service:review:web")
+                .unwrap()
+                .parent
+                .as_deref(),
+            Some("services:review")
         );
         assert!(
             rows[1]
@@ -222,11 +232,25 @@ fn setup_jobs_are_visible_and_completed_jobs_are_grouped() {
     }
 
     snapshot.templates.clear();
-    assert_eq!(rows::from_snapshot(&snapshot).len(), 4);
+    assert_eq!(rows::from_snapshot(&snapshot).len(), 6);
 
     snapshot.instances[0].services[1].one_shot = false;
     let rows = rows::from_snapshot(&snapshot);
-    assert_eq!(rows[3].id, "service:review:repo-sync");
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.id == "services:review")
+            .unwrap()
+            .label,
+        "Services"
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.id == "service:review:repo-sync")
+            .unwrap()
+            .parent
+            .as_deref(),
+        Some("services:review")
+    );
 }
 
 #[test]
@@ -546,7 +570,51 @@ fn control_semicolon_opens_the_selected_instance_workspace() {
 }
 
 #[test]
-fn data_view_starts_with_templates_expanded_and_instances_collapsed() {
+fn startup_waits_for_complete_inventory_before_showing_and_selecting_rows() {
+    tuicore::init();
+    let mut app = root(AppService::for_tests());
+    let mut inventory = snapshot();
+    let mut empty_template = inventory.templates[0].clone();
+    empty_template.name = "aardvark".into();
+    empty_template.directory = "/tmp/templates/aardvark".into();
+    inventory.templates.insert(0, empty_template);
+    inventory.loading = true;
+    inventory.instances.clear();
+
+    app.update_snapshot(inventory.clone());
+    let area = Rect::new(0, 0, 130, 40);
+    app.layout(area, &mut tuicore::LayoutCtx::new());
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            app.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    let loading_text = rendered_lines(&terminal, area).join("");
+    assert!(!loading_text.contains("aardvark"));
+    assert!(!loading_text.contains("website"));
+
+    inventory.loading = false;
+    inventory.instances = snapshot().instances;
+    app.update_snapshot(inventory);
+    app.layout(area, &mut tuicore::LayoutCtx::new());
+    assert_eq!(app.selected().unwrap().template, "website");
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            app.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    let loaded_text = rendered_lines(&terminal, area).join("");
+    assert!(loaded_text.contains("website"));
+    assert!(loaded_text.contains("aardvark"));
+}
+
+#[test]
+fn data_view_starts_expanded_through_instances() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
@@ -563,13 +631,14 @@ fn data_view_starts_with_templates_expanded_and_instances_collapsed() {
 
     let text = rendered_lines(&terminal, area).join("");
     assert!(text.contains("review"));
+    assert!(text.contains("Service"));
     assert!(!text.contains("http://localhost:9876/review/web/"));
     assert!(!text.contains("Templates / instances"));
     assert!(!text.contains("Status"));
 }
 
 #[test]
-fn global_h_clears_search_focuses_the_first_template_and_collapses_instances() {
+fn global_h_clears_search_focuses_the_first_template_and_expands_instances() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
@@ -611,11 +680,58 @@ fn global_h_clears_search_focuses_the_first_template_and_collapses_instances() {
         })
         .unwrap();
     assert!(rendered_lines(&terminal, area).join("").contains("review"));
+    assert!(rendered_lines(&terminal, area).join("").contains("Service"));
     assert!(
         !rendered_lines(&terminal, area)
             .join("")
             .contains("http://localhost:9876/review/web/")
     );
+}
+
+#[test]
+fn z_toggles_templates_and_instances_without_expanding_their_groups() {
+    tuicore::init();
+    let mut snapshot = snapshot();
+    let mut setup = snapshot.instances[0].services[0].clone();
+    setup.name = "migrate".into();
+    setup.one_shot = true;
+    setup.status = "exited 0".into();
+    setup.url = None;
+    setup.port = None;
+    snapshot.instances[0].services.push(setup);
+    let mut tree = super::Instances::new(super::instances::state(rows::from_snapshot(&snapshot)));
+    let area = Rect::new(0, 0, 130, 40);
+    tree.layout(area, &mut tuicore::LayoutCtx::new());
+    tree.focus(None, true, &mut tuicore::FocusCtx::default());
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+
+    tree.event(&TuiEvent::Key(KeyEvent::from(Key::Char('z'))), &mut ctx);
+    tree.layout(area, &mut tuicore::LayoutCtx::new());
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            tree.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    assert!(!rendered_lines(&terminal, area).join("").contains("review"));
+
+    tree.event(&TuiEvent::Key(KeyEvent::from(Key::Char('z'))), &mut ctx);
+    tree.layout(area, &mut tuicore::LayoutCtx::new());
+    terminal
+        .draw(|frame| {
+            let mut render = RenderCtx::new();
+            tree.render(frame, area, &mut render);
+            render.flush(frame);
+        })
+        .unwrap();
+    let text = rendered_lines(&terminal, area).join("");
+    assert!(text.contains("review"));
+    assert!(text.contains("Setup · 1 completed"));
+    assert!(text.contains("Service"));
+    assert!(!text.contains("migrate · Completed"));
+    assert!(!text.contains("web · Running"));
 }
 
 #[test]
@@ -703,7 +819,14 @@ fn detail_tabs_keep_the_header_and_close_control_above_the_content() {
         for (row, title, content, value) in [
             (&rows[0], "Metadata", "Template", "website"),
             (&rows[1], "Details", "Instance", "review"),
-            (&rows[2], "Details", "Service", "web"),
+            (
+                rows.iter()
+                    .find(|row| row.id == "service:review:web")
+                    .unwrap(),
+                "Details",
+                "Service",
+                "web",
+            ),
         ] {
             let mut details = super::dialogs::details(row);
             let area = Rect::new(0, 0, width, 24);
@@ -1075,12 +1198,8 @@ fn instance_action_menu_lists_instance_actions() {
 }
 
 fn expand_first_instance(tree: &mut crate::app::Instances) {
-    tree.focus(None, true, &mut tuicore::FocusCtx::default());
-    let mut ctx = EventCtx::new(AnimationSettings::default());
-    for key in [Key::Down, Key::Right, Key::Home] {
-        tree.event(&TuiEvent::Key(KeyEvent::from(key)), &mut ctx);
-    }
-    tree.focus(None, false, &mut tuicore::FocusCtx::default());
+    tree.expand_for_tests("instance:review");
+    tree.expand_for_tests("services:review");
 }
 
 #[test]

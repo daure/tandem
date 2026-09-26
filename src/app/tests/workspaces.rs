@@ -59,7 +59,7 @@ fn repository_setup_rows_precede_jobs_and_copy_absolute_checkout_paths() {
 }
 
 #[test]
-fn workspace_rows_have_ready_status_and_an_informational_service_placeholder() {
+fn workspace_rows_append_the_empty_state_to_a_childless_services_group() {
     tuicore::init();
     let mut inventory = snapshot();
     inventory.templates[0].compose_file.clear();
@@ -72,16 +72,20 @@ fn workspace_rows_have_ready_status_and_an_informational_service_placeholder() {
     let instance = rows.iter().find(|row| row.id == "instance:review").unwrap();
     assert_eq!(instance.status.as_deref(), Some("Workspace ready"));
     assert!(instance.resource_text().to_string().is_empty());
-    let empty = rows
-        .iter()
-        .find(|row| row.id == "no-services:review")
-        .unwrap();
-    assert_eq!(empty.parent.as_deref(), Some("instance:review"));
-    assert_eq!(empty.text("", None).to_string(), "(no services configured)");
-    assert_eq!(empty.height(), 1);
-    assert!(empty.informational);
+    let services = rows.iter().find(|row| row.id == "services:review").unwrap();
+    assert_eq!(services.parent.as_deref(), Some("instance:review"));
     assert_eq!(
-        empty.text("", None).lines[0].spans[0].style.fg,
+        services.text("", None).to_string(),
+        "󰒋 Services · (no services configured)"
+    );
+    assert_eq!(services.height(), 1);
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row.parent.as_deref() == Some("services:review"))
+    );
+    assert_eq!(
+        services.text("", None).lines[0].spans[3].style.fg,
         Some(tuicore::theme().muted_fg())
     );
     let mut app = root(AppService::for_tests());

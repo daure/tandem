@@ -173,7 +173,16 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
     let mut app = root(AppService::for_tests());
     app.update_snapshot(Default::default());
     let line = toolbar_line(&mut app, 130);
-    assert!(line.contains(" — ·  —"), "{line}");
+    assert!(line.contains(" —"), "{line}");
+    assert!(!line.contains(" · "), "{line}");
+
+    let mut guidance_only = snapshot();
+    guidance_only.instances[0].services.clear();
+    guidance_only.instances[0].workspace_only = true;
+    guidance_only.instances[0].runtime.workspace_ready = true;
+    app.update_snapshot(guidance_only);
+    let line = toolbar_line(&mut app, 130);
+    assert!(!line.contains(" · "), "{line}");
 
     let spinner = tuicore::Spinner::new().glyph().to_owned();
     let mut initial = snapshot();
@@ -206,10 +215,7 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
         tuicore::theme().muted_fg()
     );
     let narrow = toolbar_line(&mut app, 40);
-    assert!(
-        narrow.contains("Template") && narrow.contains("󰑓 R"),
-        "{narrow}"
-    );
+    assert!(narrow.contains("󰠲 T") && narrow.contains("󰑓 R"), "{narrow}");
     assert!(
         !narrow.contains("MiB"),
         "unavailable totals should remain hidden when they do not fit: {narrow}"
@@ -228,7 +234,9 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
 
     inventory.instances[0].services[0].status = "paused".into();
     app.update_snapshot(inventory);
-    assert!(toolbar_line(&mut app, 130).contains(" — ·  20 MiB · paused"));
+    let line = toolbar_line(&mut app, 130);
+    assert!(line.contains(" — · paused"), "{line}");
+    assert!(!line.contains(" · "), "{line}");
 }
 
 #[test]
@@ -428,4 +436,80 @@ fn compact_refresh_button_honors_a_configured_hotkey() {
     let mut ctx = EventCtx::new(AnimationSettings::default());
     toolbar.event(&TuiEvent::Key(KeyEvent::from(Key::Char('G'))), &mut ctx);
     assert!(matches!(ctx.messages(), [Msg::Refresh]));
+}
+
+#[test]
+fn history_toggle_beside_running_filter_controls_saved_sessions_across_instances() {
+    use crate::store::opencode::{Activity, Session, Snapshot};
+    tuicore::init();
+    let mut app = root(AppService::for_tests());
+    let mut inventory = snapshot();
+    let mut other = inventory.instances[0].clone();
+    other.name = "other".into();
+    other.workspace = "/tmp/workspaces/other".into();
+    inventory.instances.push(other);
+    app.service.set_opencode_snapshot_for_tests(Snapshot {
+        sessions: inventory
+            .instances
+            .iter()
+            .map(|instance| Session {
+                id: format!("ses_{}", instance.name),
+                title: "Saved conversation".into(),
+                directory: instance.workspace.clone(),
+                activity: Activity::Idle,
+                ..Default::default()
+            })
+            .collect(),
+        clients: Vec::new(),
+        error: None,
+    });
+    app.update_snapshot(inventory.clone());
+    for width in [40, 130] {
+        let mut layout = tuicore::LayoutCtx::new();
+        app.layout(Rect::new(0, 0, width, 30), &mut layout);
+        let target = |name: &str| {
+            layout
+                .focus_targets()
+                .iter()
+                .find(|target| target.path.keys().iter().any(|key| key.as_str() == name))
+                .unwrap()
+                .clone()
+        };
+        let history = target("opencode-history");
+        assert_eq!(history.area.right() + 1, target("running-only").area.x);
+        let line = toolbar_line(&mut app, width);
+        assert!(line.contains("󰋚"), "{line}");
+        if width >= super::super::MOBILE_TABS_WIDTH {
+            assert!(line.contains("|O|"), "{line}");
+        }
+        for enabled in [true, false] {
+            let mut ctx = EventCtx::new(AnimationSettings::default());
+            app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('O'))), &mut ctx);
+            assert!(ctx.messages().is_empty());
+            assert_eq!(app.opencode_history, enabled);
+            for instance in ["review", "other"] {
+                super::super::instances::set_highlighted(
+                    &app.instances,
+                    Some(format!("opencode:{instance}:ses_{instance}")),
+                );
+                assert_eq!(app.selected().is_some(), enabled);
+            }
+        }
+    }
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(app.service.set_opencode_enabled(false).unwrap())
+        .unwrap()
+        .unwrap();
+    app.update_snapshot(inventory);
+    let mut layout = tuicore::LayoutCtx::new();
+    app.layout(Rect::new(0, 0, 130, 30), &mut layout);
+    assert!(!layout.focus_targets().iter().any(|target| {
+        target
+            .path
+            .keys()
+            .iter()
+            .any(|key| key.as_str() == "opencode-history")
+    }));
+    assert!(!toolbar_line(&mut app, 130).contains("󰋚"));
 }

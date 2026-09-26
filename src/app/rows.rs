@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::store::environments::{
     EnvironmentSnapshot, Instance, InstanceService, Operation, OperationState, ResourceUsage,
-    Severity, StartupKind, StartupTiming, Status, UsageSummary,
+    Severity, StartupKind, StartupTiming, Status, Template, UsageSummary,
 };
 use ratatui::{
     style::{Color, Style},
@@ -97,26 +97,12 @@ fn instance_summary(instance: &Instance, startup: Option<&StartupTiming>) -> Ins
         summary.severity = Severity::Info;
         summary.busy = true;
     }
-    let detail = if summary.expected > 0 {
-        Some(format!(
-            "{}/{} running{}",
-            summary.running,
-            summary.expected,
-            summary
-                .detail
-                .as_ref()
-                .map(|detail| format!(" · {detail}"))
-                .unwrap_or_default()
-        ))
-    } else {
-        summary.detail.clone()
-    };
     InstanceSummary {
         label: summary.label,
         tone: summary.severity.into(),
         loading: summary.busy,
         icon: status_icon(summary.status),
-        detail,
+        detail: summary.detail,
         detail_tone: summary.detail_severity.into(),
     }
 }
@@ -153,13 +139,19 @@ fn format_seconds(milliseconds: u64) -> String {
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(super) struct Row {
+    pub opencode: Option<super::opencode::Target>,
     pub id: String,
     pub parent: Option<String>,
     pub label: String,
+    pub template_capabilities: String,
     pub status: Option<String>,
     pub icon: &'static str,
     pub tone: Tone,
     pub loading: bool,
+    pub secondary_icon: &'static str,
+    pub secondary_tone: Tone,
+    pub secondary_loading: bool,
+    pub activity_timer: Option<(u64, u64)>,
     pub usage: Option<ResourceUsage>,
     pub memory_limit_bytes: Option<u64>,
     pub template: String,
@@ -208,7 +200,7 @@ impl Row {
         )
     }
 
-    pub(super) fn text(&self, spinner: &str, _available_width: Option<u16>) -> Text<'static> {
+    pub(super) fn text(&self, spinner: &str, available_width: Option<u16>) -> Text<'static> {
         let mut lines = self.label.lines();
         let icon = if self.loading { spinner } else { self.icon };
         let first = lines.next().unwrap_or_default();
@@ -233,6 +225,12 @@ impl Row {
             ));
         } else {
             first_line.push(Span::raw(first.to_owned()));
+        }
+        if !self.template_capabilities.is_empty() {
+            first_line.push(Span::styled(
+                format!(" {}", self.template_capabilities),
+                Style::default().fg(tuicore::theme().muted_fg()),
+            ));
         }
         if let Some(detail) = &self.status_detail {
             first_line.push(Span::styled(
@@ -261,11 +259,34 @@ impl Row {
                 Style::default().fg(description_tone),
             )));
         } else {
-            text.extend(lines.map(|line| {
-                Line::from(Span::styled(
-                    line.to_owned(),
-                    Style::default().fg(tuicore::theme().muted_fg()),
-                ))
+            text.extend(lines.enumerate().map(|(index, line)| {
+                if index == 0 && (self.secondary_loading || !self.secondary_icon.is_empty()) {
+                    let icon = if self.secondary_loading {
+                        spinner
+                    } else {
+                        self.secondary_icon
+                    };
+                    let icon = format!("{icon} ");
+                    let icon_width = Line::from(icon.as_str()).width();
+                    let line = available_width.map_or_else(
+                        || line.to_owned(),
+                        |width| {
+                            truncate_with_ellipsis(
+                                line,
+                                usize::from(width).saturating_sub(icon_width),
+                            )
+                        },
+                    );
+                    Line::from(vec![
+                        Span::styled(icon, Style::default().fg(self.secondary_tone.color())),
+                        Span::styled(line, Style::default().fg(tuicore::theme().muted_fg())),
+                    ])
+                } else {
+                    Line::from(Span::styled(
+                        line.to_owned(),
+                        Style::default().fg(tuicore::theme().muted_fg()),
+                    ))
+                }
             }));
         }
         Text::from(text)
@@ -319,6 +340,28 @@ impl Row {
             .or_else(|| self.cleanup_target.clone())
             .or_else(|| self.parent.is_none().then(|| self.template.clone()))
     }
+}
+
+fn truncate_with_ellipsis(value: &str, max_width: usize) -> String {
+    if Line::from(value).width() <= max_width {
+        return value.to_owned();
+    }
+    if max_width <= 3 {
+        return ".".repeat(max_width);
+    }
+    let content_width = max_width - 3;
+    let mut result = String::new();
+    let mut width = 0;
+    for character in value.chars() {
+        let character_width = Line::from(character.to_string()).width();
+        if width + character_width > content_width {
+            break;
+        }
+        result.push(character);
+        width += character_width;
+    }
+    result.push_str("...");
+    result
 }
 
 pub(super) fn resource_text_with_spinner(
@@ -450,7 +493,7 @@ pub(super) fn assign_alternating_backgrounds(rows: &mut [Row], query: &str) {
     }
 }
 
-fn compact_duration(milliseconds: u64) -> String {
+pub(super) fn compact_duration(milliseconds: u64) -> String {
     let seconds = milliseconds.div_ceil(1_000);
     if seconds < 60 {
         format!("{seconds}s")
@@ -482,6 +525,28 @@ fn template_summary(
         ));
     }
     summary
+}
+
+fn template_capabilities(template: &Template) -> String {
+    if template.error.is_some() {
+        return String::new();
+    }
+    let mut icons = Vec::new();
+    if !template.workspace_only() {
+        icons.push("󰡨");
+    }
+    match template.manifest.repositories.len() {
+        0 => {}
+        1 => icons.push("󰳏"),
+        _ => icons.push("󰳐"),
+    }
+    if !template.manifest.routes.is_empty() {
+        icons.push(PORT_ICON);
+    }
+    if template.guidance_source.is_some() {
+        icons.push("󱓷");
+    }
+    icons.join(" ")
 }
 
 fn ready_services<'a>(
@@ -559,6 +624,7 @@ fn from_snapshot_with_operations_and_totals(
             .count();
         rows.push(Row {
             id: format!("template:{}", template.directory),
+            template_capabilities: template_capabilities(template),
             parent: None,
             label: format!(
                 "{}{}\n{}",
@@ -704,12 +770,18 @@ fn from_snapshot_with_operations_and_totals(
             operation_progress(operations, "create_instance", &instance.name).map(str::to_owned);
         rows.push(Row {
             id: instance_id.clone(),
+            opencode: None,
+            template_capabilities: String::new(),
             parent: Some(parent),
             label: format!("{} · {}", instance.name, summary.label),
             status: Some(summary.label),
             icon: summary.icon,
             tone: summary.tone,
             loading: summary.loading,
+            secondary_icon: "",
+            secondary_tone: Tone::default(),
+            secondary_loading: false,
+            activity_timer: None,
             usage: ResourceUsage::total(instance.services.iter()),
             memory_limit_bytes: InstanceService::total_memory_limit(instance.services.iter()),
             template: instance.template.clone(),
@@ -743,7 +815,16 @@ fn from_snapshot_with_operations_and_totals(
             can_restart: instance.can_restart(),
         });
         let setup_id = format!("setup:{}", instance.name);
+        let instance_row = rows.last().expect("instance row").clone();
         setup::append(&mut rows, instance);
+        let service_count = instance
+            .services
+            .iter()
+            .filter(|service| !service.one_shot)
+            .count();
+        let services = setup::services(&instance_row, instance, service_count);
+        let services_id = services.id.clone();
+        rows.push(services);
         for service in &instance.services {
             let service_id = if service.runtime.replica > 1 {
                 format!(
@@ -772,13 +853,13 @@ fn from_snapshot_with_operations_and_totals(
             let label = format!("{label} · {}", service_summary.label);
             rows.push(Row {
                 id: service_id.clone(),
-                parent: Some(
-                    if service.one_shot && service_summary.status == Status::Completed {
-                        setup_id.clone()
-                    } else {
-                        instance_id.clone()
-                    },
-                ),
+                opencode: None,
+                template_capabilities: String::new(),
+                parent: Some(if service.one_shot {
+                    setup_id.clone()
+                } else {
+                    services_id.clone()
+                }),
                 label: route_detail
                     .as_ref()
                     .or(service.image.as_ref())
@@ -787,6 +868,10 @@ fn from_snapshot_with_operations_and_totals(
                 icon: status_icon(service_summary.status),
                 tone: service_summary.severity.into(),
                 loading: service_summary.busy,
+                secondary_icon: "",
+                secondary_tone: Tone::default(),
+                secondary_loading: false,
+                activity_timer: None,
                 usage: service.usage,
                 memory_limit_bytes: service.memory_limit_bytes,
                 template: instance.template.clone(),

@@ -348,7 +348,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a dedicated editable template folder with a working static-web Compose starter and routing manifest; refuses existing names. Does not start containers."
+        description = "Create a blank editable template folder containing only tandem.json with {}. Refuses existing names. Its instances prepare workspaces with standard AGENTS.md guidance; add Compose, repositories, routes, or tandem-agents.md as needed. Does not start containers."
     )]
     async fn create_template(
         &self,
@@ -378,7 +378,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Prepare an instance from a trusted template. Requires confirmed=true after user approval. Workspace-only templates prepare guidance and any declared Git repositories without Docker; guidance-only templates require no Git. Service templates start Compose and the shared gateway and verify configured readiness. With wait=false, poll get_operation in this process."
+        description = "Prepare an instance from a trusted template. Requires confirmed=true after user approval. Workspace-only templates prepare guidance and any declared Git repositories without Docker; blank and guidance-only templates require no Git. Service templates start Compose and the shared gateway and verify configured readiness. With wait=false, poll get_operation in this process."
     )]
     async fn create_instance(
         &self,

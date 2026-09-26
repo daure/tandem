@@ -4,6 +4,7 @@ use crate::store::environments::Instance;
 mod close_command;
 mod instance_batch;
 mod open_command;
+mod opencode;
 
 #[test]
 fn mutations_require_confirmation_before_admission() {

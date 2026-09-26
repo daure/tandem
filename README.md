@@ -9,7 +9,7 @@ gateway exposes declared HTTP services at `http://localhost:9876/<instance>/<ser
 Building requires Rust and the sibling `../tuicore` package. Service templates require a local Docker
 Engine and Docker Compose v2 or newer; container images are pulled on first use. Repository-only
 templates require Linux and host Git but their lifecycle does not require Docker.
-Guidance-only templates prepare a workspace folder without Git or Docker.
+Blank and guidance-only templates prepare a workspace folder without Git or Docker.
 
 ```bash
 cargo run                   # TUI
@@ -18,13 +18,15 @@ cargo run -- mcp            # protocol-only stdio MCP
 cargo run -- serve          # HTTP MCP at http://127.0.0.1:7345/mcp
 ```
 
-1. Press `T` or use the Template button to create a template named `website`; its folder contains a working static web starter.
+1. Press `T` or use the Template button to create a template named `website`; its folder contains only `tandem.json` with `{}`.
 2. Press `Enter` on a template, instance or service to view its details. Template details include
    metadata, available Compose source and the manifest.
 3. Press `n`, enter `review`, then Enter or Ctrl+S to confirm execution; watch progress in Details.
 4. Expand the template row using the DataView's configured expansion key (shown in its action bar)
-   and select `review`; open `http://localhost:9876/review/web/index.html`.
-5. Press `s` on an instance or service to confirm stopping it when running, or starting it when stopped.
+   and select `review`; the blank workspace is ready and contains standard `AGENTS.md` guidance.
+   Add repositories, `compose.yaml`, routes, or `tandem-agents.md` to the template as needed; use a new
+   instance name when switching from workspace-only to container-backed execution.
+5. For container-backed instances, press `s` on an instance or service to confirm stopping it when running, or starting it when stopped.
    Service actions use existing containers and leave dependencies and the shared gateway untouched;
    workspace data and volumes are kept. The `.` Actions menu includes **Start service** and **Stop service**.
    Service start checks running state, configured healthchecks and gateway content within ten minutes;
@@ -206,7 +208,7 @@ with the deletion confirmation. If containers are absent, recovery requires a ma
 and template ownership receipt; it checks Docker project membership before removing remaining data.
 Recovery with missing execution-kind metadata requires Docker access. Unverifiable ownership leaves data intact.
 
-Workspace-only instances (repository-only or guidance-only) show **Workspace ready** after preparation and guidance generation, retain
+Workspace-only instances (blank, repository-only, or guidance-only) show **Workspace ready** after preparation and guidance generation, retain
 their workspace path, and show a single muted **(no services configured)** child when expanded. They hide
 CPU/memory metrics and disable container Start/Stop/Restart actions; Open, Details and Delete remain
 available. Failed preparation retains completed checkouts and reports its error; retry New instance
@@ -253,28 +255,28 @@ references; those checks occur during startup. Direct file edits are validated w
 
 ## Template layout and routing
 
-A template may contain `compose.yaml`, a repository-declaring `tandem.json`, `tandem-agents.md`, or a combination. Compose-only
+A template contains `compose.yaml`, `tandem.json`, `tandem-agents.md`, or a combination. Compose-only
 templates use empty manifest defaults: services have no Tandem routes, one-shot roles, or managed clones.
 Repository-only templates omit `compose.yaml`, declare at least one repository, and omit routes and
 one-shots. Guidance-only templates supply `tandem-agents.md` with an optional manifest and prepare an
-otherwise empty workspace containing generated `AGENTS.md`. Templates without Compose require either
-repositories or a guidance file; empty unrelated directories are not templates. An empty Compose services
-map is invalid. The template creator supplies a Compose starter;
-edit the dedicated template directory to select another shape. Existing instances retain their launch
+otherwise empty workspace containing generated `AGENTS.md`. Blank templates contain only `tandem.json`
+with `{}` and prepare the same workspace shape. Empty unrelated directories are not templates, and an
+empty Compose services map is invalid. The template creator supplies a blank template;
+edit its dedicated directory to add capabilities. Existing instances retain their launch
 kind; use a new instance name to switch between workspace-only and container-backed execution.
 
 ```text
 <TANDEM_HOME>/templates/website/
-  compose.yaml
   tandem.json
-  site/index.html
+  compose.yaml                   # optional services
+  tandem-agents.md                # optional template guidance
   scripts/                       # optional, edited by the agent
   config/                        # optional, edited by the agent
 ```
 
 Relative mounts, builds, env files, and scripts resolve against the template directory. Tandem renders
 a private `.tandem-<namespace>-<instance>.compose.json` beside the Compose file. The rendered artifact
-may contain secrets; keep it out of Git. The starter includes an appropriate `.gitignore`.
+may contain secrets; exclude `.tandem-*.compose.json` and `.tandem-*.owner.json` from Git.
 
 `tandem.json` declares each public service's internal port, prefix behavior, and readiness content
 assertion. No route is inferred for databases or other non-HTTP services. `strip_prefix=true` sends
@@ -397,6 +399,78 @@ Use repeat-safe commands because a failed filesystem removal can cause the hook 
 MCP agents read and save this shared setting through `get_close_command` and `set_close_command`;
 saving requires approval with `confirmed=true` and does not execute it. Deletion reads the persisted
 value, including changes from another process. Configure only trusted host commands.
+
+### OpenCode integration
+
+**Enable opencode integration** in Settings defaults to on and persists across restarts.
+Turning it off hides the integration rows, counts, and actions and cancels Tandem's observation
+and navigation tasks. Existing OpenCode servers, conversations, panes, and workspace commands
+remain under their current owners. Re-enable it to request a fresh observation.
+
+Install the companion once:
+
+```bash
+tandem opencode-setup
+```
+
+The command writes the bundled TUI companion under `$TANDEM_HOME/opencode-plugin` and prints
+its absolute path. Add that path to the `plugin` array in your OpenCode **`tui.json`**, preserving
+other entries, then reopen OpenCode clients. With managed dotfiles, edit the managed source and
+apply it. The command leaves your OpenCode configuration untouched. The companion requires the
+OpenCode TUI plugin API (verified with OpenCode 1.18.29); navigation requires Zellij 0.45 or later.
+
+The companion reports each client's current conversation, including switches through the session
+picker. Tandem joins those reports to live Zellij panes and local OpenCode server status:
+
+| Child-row state | Meaning | Navigation action |
+| --- | --- | --- |
+| attached · busy | A pane displays a conversation that is working or retrying | Goto panel |
+| attached · idle | A pane displays an idle conversation | Goto panel |
+| detached · busy | A conversation is working without an observed pane | Open panel |
+| saved | An idle conversation has no observed pane | Open panel |
+
+Instance rows show `OpenCode: 3 live · 2 attached · 2 busy`. Counts describe distinct conversations:
+attached and busy overlap, while live is their union. Multiple panes displaying one conversation
+appear beneath its child row and count once. **Enter** on a conversation or pane child opens a
+bottom-docked dialog with **Conversation**, **Details**, and **Actions** tabs. Conversation loads
+the complete user/agent message history on demand, with newest messages first so the latest
+answer and question are immediately available. Text, reasoning, attachment names, and tool-status
+summaries are displayed in a wrapped, scrollable, searchable Markdown viewer. Reopen the dialog
+to refresh its read-only snapshot. Responses are bounded to 8 MiB; oversized histories produce an
+explicit error rather than a silently truncated transcript. Closing the dialog cancels a pending read.
+
+Use the **Actions** tab to jump to a specific pane. The **`.`** menu has one action: **Goto panel**
+for an attached conversation or **Open panel** for a detached conversation. Both use `Ctrl+;`.
+Navigation works across tabs and Zellij sessions.
+Stacked targets become active and expanded. The **󰋚 history toggle** beside **󰑮** in the toolbar
+shows or hides saved conversations across all instances; history is hidden by default. The toggle
+supports mouse clicks and keyboard focus/activation and appears when the integration is enabled.
+Workspace matching includes repository
+subdirectories and selects the closest owning workspace.
+
+Open panel creates a stacked pane in an observed tab for that instance, or creates a tab when
+there is no observed destination. It attaches to the conversation's running local server without
+sending a prompt. An unavailable server produces an error; use your open command to start it.
+
+Discovery uses companion receipts in `$XDG_STATE_HOME/tandem/opencode` (default
+`~/.local/state/tandem/opencode`) and station daemon `port`/`dirs/*.dir` receipts under
+`$OC_DAEMON_STATE` (default `$XDG_STATE_HOME/opencode-daemon`). Directory markers identify which
+server serves each workspace; a cached directory alone does not count as a live conversation.
+The companion publishes once per second; Tandem polls about every two seconds while its TUI runs.
+Receipts require a live client PID and expire after ten seconds. The independently installed
+companion continues reporting while Tandem's integration is disabled.
+
+HTTP access is loopback-only, with redirects and proxies disabled. Authenticated servers use
+`OPENCODE_SERVER_PASSWORD` and optionally `OPENCODE_SERVER_USERNAME` from Tandem's environment.
+New OpenCode panes inherit Zellij's environment, which must also provide the server credentials.
+History includes up to 1,000 recent root conversations per reachable server; busy conversations
+are fetched separately when needed. Subagent conversations are excluded from the server inventory.
+Unavailable observations and clients without the companion show an incomplete-observation label
+and details instead of trustworthy counts. Confirmed deleted conversations are removed on refresh,
+including when the history page is full or a client still reports the deleted conversation.
+Refresh failures retain cached rows with stale markers
+and do not generate recurring notifications. Cold standalone clients can report their displayed
+conversation through the companion; detached work and history require a discoverable local server.
 
 ## Safety and lifecycle
 

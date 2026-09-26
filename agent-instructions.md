@@ -9,6 +9,8 @@ A template is a shared development recipe; an instance has its own name and work
   initializing a repository, committing, or pushing.
 - Edit template files in the returned directory; keep reusable scripts there.
   Template edits are shared across instances; keep application edits in instance workspaces.
+  New templates contain only `tandem.json` with `{}`. Blank templates prepare workspace-only instances
+  with standard `AGENTS.md` guidance; add repositories, Compose, routes, or template guidance as needed.
 - Use `manifest_schema` to construct `tandem.json`.
   Save complete manifests through
   `update_template_manifest` with approval to change shared configuration. Validation preserves the file
@@ -88,7 +90,7 @@ A template is a shared development recipe; an instance has its own name and work
   requires Docker access for recovery; unverifiable ownership blocks deletion and preserves data.
 - Inspect `list_instances` for runtime evidence and retained failures. Running is not proof of health;
   Docker healthchecks and gateway content readiness are separate checks.
-  Workspace-only instances (repository-only or guidance-only) are retained across processes and report
+  Workspace-only instances (blank, repository-only, or guidance-only) are retained across processes and report
   `Workspace ready` after any provisioning and guidance generation; this does not certify application tests.
   Their lifecycle requires no Docker.
   Stop preserves them without work, and container restart/service actions do not apply. Retry failed

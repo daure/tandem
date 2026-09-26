@@ -53,9 +53,25 @@ A serial refresh worker coalesces inventory requests and uses persisted revision
 
 Long-running mutations publish progress through operation records. Completion is based on fresh observations of the targeted resources, not command exit alone. External commands run with bounded lifetimes and keep their output away from terminal and MCP protocol streams.
 
+## OpenCode observation
+
+`service/opencode` owns a cancellable, single-flight observer and navigation tasks, gated by the
+persisted `integrations.opencode` setting. `environments/opencode` reads client-presence and
+station-daemon receipts, queries loopback OpenCode HTTP endpoints, and invokes bounded Zellij
+commands. `store/opencode` owns session state, overlapping counts, and workspace matching;
+the TUI projects these snapshots into instance summaries and conversation/pane children.
+
+The bundled OpenCode TUI companion runs in each client and publishes its current route's
+conversation ID with PID, heartbeat, server, and Zellij identity. Server processes are shared
+across directories and do not own client attachment identity. Fresh receipts and live panes
+establish attachment; server session status establishes activity. Titles are presentation data.
+Unknown observations stay explicit, and disabling the integration discards its cache and cancels
+its work without changing externally owned servers or panes. Companion installation is an
+explicit CLI operation; user-owned OpenCode configuration is preserved.
+
 ## Template and workspace model
 
-A template may describe a Compose environment, a repository-backed workspace, or guidance-only setup. Instance execution kind is fixed when prepared because container-backed and workspace-only instances have different ownership evidence and lifecycle behavior.
+A template may describe a Compose environment, a repository-backed workspace, a guidance-only setup, or a blank workspace identified by an empty `tandem.json` object. New templates contain only that manifest. Instance execution kind is fixed when prepared because container-backed and workspace-only instances have different ownership evidence and lifecycle behavior.
 
 Template manifests declare core-managed repositories, routes, and setup jobs. Template authors own application-specific setup and prefix-aware routing. Tandem owns safe provisioning, generated workspace guidance, and lifecycle coordination.
 

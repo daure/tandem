@@ -6,6 +6,7 @@ use serde::Serialize;
 mod creation;
 mod dev_server;
 mod environments;
+mod opencode;
 mod refresh;
 mod settings;
 
@@ -19,6 +20,7 @@ pub(crate) struct AppService {
     settings: Arc<settings::Settings>,
     refresh: Arc<refresh::RefreshWorker>,
     state: Arc<ServiceState>,
+    opencode: Arc<opencode::Integration>,
 }
 
 struct ServiceState {
@@ -56,6 +58,7 @@ impl AppService {
             settings,
             environments,
             refresh,
+            opencode: Arc::new(opencode::Integration::new()),
             state: Arc::new(ServiceState {
                 started_at: Instant::now(),
                 #[cfg(test)]

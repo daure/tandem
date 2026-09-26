@@ -7,6 +7,24 @@
 5. Put tests in sibling `tests/` directories. Treat warnings as build failures.
 6. Maintain `agent-instructions.md` according to the guidance below.
 
+## OpenCode live verification
+
+For changes to the OpenCode companion, session tracking, or Zellij navigation, offer this
+development-only check and obtain user approval before running it:
+
+```bash
+python3 src/environments/opencode/tests/live.py
+```
+
+Requires Linux with Python 3, OpenCode (verified with 1.18.29), and Zellij 0.45 or later on `PATH`.
+It starts temporary servers and terminal clients with isolated configuration, sends no model
+prompts, and cleans up its test resources. Passing checks cover companion loading, conversation
+switches, exact stacked-pane focus, and client-close detection.
+
+Keep this check explicitly opt-in and outside routine test commands, CI, builds, installation,
+and release workflows. Python is a development prerequisite for this check, not a Tandem runtime
+dependency.
+
 ## MCP agent guidance
 
 `agent-instructions.md` is the seed for the editable runtime guidance served by `get_instructions`.

@@ -20,6 +20,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[command(about = "Install the OpenCode TUI companion and print its tui.json plugin entry")]
+    OpencodeSetup,
     #[command(about = "Create an instance if absent; leave existing instances unchanged")]
     NewInstance {
         name: String,
@@ -82,6 +84,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::try_parse_from(normalize_arguments(std::env::args_os()))
         .unwrap_or_else(|error| error.exit());
     match cli.command {
+        Some(Commands::OpencodeSetup) => {
+            let service = crate::service::AppService::initialize()?;
+            println!("{}", service.setup_opencode()?);
+            Ok(())
+        }
         None => {
             tuicore::init();
             crate::run()

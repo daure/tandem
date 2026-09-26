@@ -9,6 +9,7 @@ mod docker;
 mod gateway;
 mod journal;
 mod lifecycle;
+pub(crate) mod opencode;
 mod ownership;
 mod removal;
 mod repositories;

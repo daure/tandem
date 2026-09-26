@@ -13,7 +13,7 @@ use tuicore::{
     TuiEvent, TuiNode, line_width,
 };
 
-use super::{Msg, open_route_key};
+use super::{Msg, open_panel_key, open_route_key};
 
 const MENU_FIELD_WIDTH: u16 = 42;
 const MENU_CONTENT_WIDTH: u16 = MENU_FIELD_WIDTH - 2;
@@ -29,6 +29,8 @@ pub(super) enum Action {
     UpdateDescription,
     OpenBrowser,
     OpenCommand,
+    OpenPanel,
+    GotoPanel,
     Details,
     NewInstance,
     Start,
@@ -54,6 +56,9 @@ impl Action {
             Self::Yank => unreachable!("yank opens its own menu"),
             Self::UpdateDescription => unreachable!("description editing opens its own dialog"),
             Self::OpenBrowser | Self::OpenCommand => 10,
+            Self::OpenPanel | Self::GotoPanel => {
+                unreachable!("OpenCode panel actions have a fixed hotkey")
+            }
             Self::RestartInstance | Self::RestartService => 7,
             Self::Details => 0,
             Self::NewInstance => 1,
@@ -77,6 +82,8 @@ impl Action {
             Self::UpdateDescription => "Update description",
             Self::OpenBrowser => "Open in browser",
             Self::OpenCommand => "Run open command",
+            Self::OpenPanel => "Open panel",
+            Self::GotoPanel => "Goto panel",
             Self::Details => "View details",
             Self::NewInstance => "New instance",
             Self::Start => "Start instance",
@@ -111,6 +118,7 @@ pub(super) struct Target {
     pub template_available: bool,
     pub repository: bool,
     pub cleanup: bool,
+    pub opencode_attached: Option<bool>,
 }
 
 impl ActionMenu {
@@ -152,7 +160,13 @@ impl ActionMenu {
     }
 
     pub(super) fn open(&mut self, target: Target, ctx: &mut EventCtx<Msg>) {
-        self.actions = if target.cleanup {
+        self.actions = if let Some(attached) = target.opencode_attached {
+            vec![if attached {
+                Action::GotoPanel
+            } else {
+                Action::OpenPanel
+            }]
+        } else if target.cleanup {
             vec![
                 Action::CopyInstanceName,
                 Action::Details,
@@ -250,6 +264,7 @@ fn action_text(action: Action, keys: &[KeySpec; 11], enabled: bool) -> Text<'sta
         Action::Yank => "y".into(),
         Action::UpdateDescription => "d".into(),
         Action::OpenBrowser => open_route_key().label(),
+        Action::OpenPanel | Action::GotoPanel => open_panel_key().label(),
         _ => keys
             .get(action.index())
             .copied()

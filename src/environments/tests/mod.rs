@@ -23,18 +23,53 @@ fn fixture() -> (tempfile::TempDir, Config) {
     (directory, config)
 }
 
+fn compose_template(config: &Config, name: &str) -> crate::store::environments::Template {
+    let template = templates::create(config, name).unwrap();
+    fs::write(
+        std::path::Path::new(&template.directory).join("compose.yaml"),
+        "services:\n  web:\n    image: nginx:1.28-alpine\n",
+    )
+    .unwrap();
+    fs::write(
+        &template.manifest_file,
+        json!({"routes": {"web": {
+            "port": 80, "strip_prefix": true,
+            "readiness_path": "index.html", "readiness_contains": "Tandem template"
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    templates::get(config, name).unwrap()
+}
+
 #[test]
-fn templates_have_editable_absolute_paths_and_preserve_existing_content() {
+fn blank_templates_have_an_empty_manifest_and_preserve_existing_content() {
     let (_directory, config) = fixture();
     assert!(templates::list(&config).unwrap().is_empty());
     let template = templates::create(&config, "web-app").unwrap();
     assert!(std::path::Path::new(&template.directory).is_absolute());
-    assert!(template.compose_source.contains("./site"));
-    fs::write(&template.compose_file, "services: {}\n").unwrap();
+    assert!(template.workspace_only());
+    assert!(template.compose_source.is_empty());
+    assert!(template.guidance_source.is_none());
+    assert_eq!(
+        template.manifest,
+        crate::store::environments::Manifest::default()
+    );
+    assert_eq!(template.manifest_source.as_deref(), Some("{}\n"));
+    let files = fs::read_dir(&template.directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(files, ["tandem.json"]);
+    let edited = "{\"description\":\"My workspace\"}\n";
+    fs::write(&template.manifest_file, edited).unwrap();
     assert!(templates::create(&config, "web-app").is_err());
     assert_eq!(
-        templates::get(&config, "web-app").unwrap().compose_source,
-        "services: {}\n"
+        templates::get(&config, "web-app")
+            .unwrap()
+            .manifest_source
+            .as_deref(),
+        Some(edited)
     );
     assert_eq!(templates::list(&config).unwrap().len(), 1);
 }
@@ -63,6 +98,11 @@ fn template_manifest_source_preserves_file_contents_for_inspection() {
         assert_eq!(listed[0].manifest_source.as_deref(), Some(invalid));
     }
 
+    fs::write(
+        std::path::Path::new(&template.directory).join("compose.yaml"),
+        "services: {}\n",
+    )
+    .unwrap();
     fs::remove_file(&template.manifest_file).unwrap();
     let template = environment.get_template("website").unwrap();
     assert!(template.manifest_source.is_none());
@@ -198,7 +238,7 @@ fn instance_names_preserve_capital_letters() {
 fn pending_instance_creation_is_visible_before_containers_exist() {
     let (_directory, config) = fixture();
     let environment = Environments::new(config.clone());
-    templates::create(&config, "website").unwrap();
+    compose_template(&config, "website");
 
     environment
         .begin_instance("review", "website".into(), Some("Review environment"))
@@ -306,7 +346,7 @@ fn completed_stop_remains_projected_until_fresh_inventory_arrives() {
 fn pending_instance_shows_expected_services_before_docker_discovers_containers() {
     let (_directory, config) = fixture();
     let environment = Environments::new(config.clone());
-    templates::create(&config, "website").unwrap();
+    compose_template(&config, "website");
     let operation = environment
         .begin("create_instance", "review", Some("website".into()))
         .unwrap();
@@ -354,7 +394,7 @@ fn pending_instance_shows_expected_services_before_docker_discovers_containers()
 #[test]
 fn gateway_labels_use_instance_service_boundaries_and_opt_in_prefix_stripping() {
     let (_directory, config) = fixture();
-    let mut template = templates::create(&config, "web-app").unwrap();
+    let mut template = compose_template(&config, "web-app");
     let mut model = json!({"services":{"web":{"image":"nginx","volumes":[{"type":"bind","source":"/template/site","target":"/srv"}]}},"networks":{"default":{}}});
     compose::decorate(
         &config,
@@ -400,7 +440,7 @@ fn gateway_labels_use_instance_service_boundaries_and_opt_in_prefix_stripping() 
 #[test]
 fn compose_rejects_host_ports_conflicting_labels_and_unknown_routes() {
     let (_directory, config) = fixture();
-    let template = templates::create(&config, "web-app").unwrap();
+    let template = compose_template(&config, "web-app");
     for service in [
         json!({"ports":[{"published":"8000","target":80}]}),
         json!({"network_mode":"host"}),

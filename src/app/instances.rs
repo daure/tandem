@@ -1,4 +1,9 @@
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    time::Duration,
+};
 
 use ratatui::{
     Frame,
@@ -23,6 +28,7 @@ pub(super) struct State {
     highlighted: Option<String>,
     searching: bool,
     rows_changed: bool,
+    select_first: bool,
     select_created: Option<(bool, String)>,
 }
 
@@ -57,6 +63,13 @@ pub(super) fn replace_rows(state: &SharedState, rows: Vec<Row>) -> bool {
     state.rows = rows;
     state.rows_changed = true;
     true
+}
+
+pub(super) fn replace_rows_and_select_first(state: &SharedState, rows: Vec<Row>) {
+    let mut state = state.borrow_mut();
+    state.rows = rows;
+    state.rows_changed = true;
+    state.select_first = true;
 }
 
 pub(super) fn select_created(
@@ -95,16 +108,20 @@ pub(super) struct Instances {
     state: SharedState,
     spinner: Rc<RefCell<Spinner>>,
     stripe_query: String,
+    session_timers: HashMap<String, SessionTimer>,
+    timer_display_phase: Duration,
+}
+
+struct SessionTimer {
+    sample: (u64, u64),
+    elapsed: Duration,
+    displayed_seconds: u64,
 }
 
 impl Instances {
     pub(super) fn new(state: SharedState) -> Self {
         let rows = state.borrow().rows.clone();
-        let expanded = rows
-            .iter()
-            .filter(|row| row.parent.is_none())
-            .map(|row| row.id.clone())
-            .collect::<Vec<_>>();
+        let expanded = Self::overview_expanded_ids(&rows);
         let spinner = Rc::new(RefCell::new(Spinner::new()));
         let cell_spinner = Rc::clone(&spinner);
         let cpu_spinner = Rc::clone(&spinner);
@@ -160,19 +177,23 @@ impl Instances {
             state,
             spinner,
             stripe_query: String::new(),
+            session_timers: HashMap::new(),
+            timer_display_phase: Duration::ZERO,
         };
+        instances.tick_session_timers(Duration::ZERO);
         instances.record_highlighted();
         instances
     }
 
     fn sync_rows(&mut self) -> bool {
-        let mut rows = {
+        let (mut rows, select_first) = {
             let mut state = self.state.borrow_mut();
             if !state.rows_changed {
                 return false;
             }
             state.rows_changed = false;
-            state.rows.clone()
+            let select_first = std::mem::take(&mut state.select_first);
+            (state.rows.clone(), select_first)
         };
         let select_created =
             self.state
@@ -208,10 +229,54 @@ impl Instances {
             })
             .map(|row| row.id.clone())
             .collect::<Vec<_>>();
+        let new_instances = rows
+            .iter()
+            .filter(|row| {
+                row.instance.is_some()
+                    && !self.tree.rows().iter().any(|current| current.id == row.id)
+            })
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>();
+        let deleted_instance_replacement = self.tree.highlighted_id().and_then(|highlighted| {
+            let current = self.tree.rows().iter().find(|row| row.id == highlighted)?;
+            if current.instance.is_none() || rows.iter().any(|row| row.id == highlighted) {
+                return None;
+            }
+            let siblings = self
+                .tree
+                .rows()
+                .iter()
+                .filter(|row| row.parent == current.parent && row.instance.is_some())
+                .collect::<Vec<_>>();
+            let position = siblings.iter().position(|row| row.id == highlighted)?;
+            siblings[position + 1..]
+                .iter()
+                .chain(siblings[..position].iter().rev())
+                .find(|candidate| rows.iter().any(|row| row.id == candidate.id))
+                .map(|row| row.id.clone())
+                .or_else(|| {
+                    current
+                        .parent
+                        .as_ref()
+                        .filter(|parent| rows.iter().any(|row| &row.id == *parent))
+                        .cloned()
+                })
+        });
         self.tree.set_rows(rows);
+        self.tick_session_timers(Duration::ZERO);
         self.stripe_query = query;
         for id in templates_with_new_children {
             self.tree.expand(&id);
+        }
+        for id in new_instances {
+            self.tree.expand(&id);
+        }
+        if let Some(id) = deleted_instance_replacement {
+            self.tree.highlight_id(&id);
+        }
+        if select_first {
+            self.highlight_first_template();
+            self.tree.reveal_highlighted();
         }
         if let Some((id, parent)) = select_created {
             self.tree.set_search_query("");
@@ -224,6 +289,60 @@ impl Instances {
             self.state.borrow_mut().select_created = None;
         }
         self.record_highlighted();
+        true
+    }
+
+    fn tick_session_timers(&mut self, dt: Duration) -> bool {
+        self.timer_display_phase = self.timer_display_phase.saturating_add(dt);
+        let display_tick = self.timer_display_phase >= Duration::from_secs(1);
+        self.timer_display_phase =
+            Duration::from_nanos(u64::from(self.timer_display_phase.subsec_nanos()));
+        self.session_timers.retain(|id, _| {
+            self.tree
+                .rows()
+                .iter()
+                .any(|row| &row.id == id && row.activity_timer.is_some())
+        });
+        let mut updates = Vec::new();
+        for row in self.tree.rows() {
+            let Some(sample) = row.activity_timer else {
+                continue;
+            };
+            let timer = self
+                .session_timers
+                .entry(row.id.clone())
+                .or_insert(SessionTimer {
+                    sample,
+                    elapsed: Duration::from_millis(sample.1),
+                    displayed_seconds: sample.1 / 1_000,
+                });
+            if sample.0 != timer.sample.0 {
+                timer.elapsed = Duration::from_millis(sample.1);
+                timer.displayed_seconds = timer.elapsed.as_secs();
+            } else if sample != timer.sample {
+                timer.elapsed = timer.elapsed.max(Duration::from_millis(sample.1));
+            } else {
+                timer.elapsed = timer.elapsed.saturating_add(dt);
+            }
+            timer.sample = sample;
+            if display_tick {
+                timer.displayed_seconds = timer.elapsed.as_secs();
+            }
+            let detail = rows::compact_duration(timer.displayed_seconds.saturating_mul(1_000));
+            if row.status_detail.as_deref() != Some(&detail) {
+                updates.push((row.id.clone(), detail));
+            }
+        }
+        if updates.is_empty() {
+            return false;
+        }
+        let mut rows = self.tree.rows().to_vec();
+        for (id, detail) in updates {
+            if let Some(row) = rows.iter_mut().find(|row| row.id == id) {
+                row.status_detail = Some(detail);
+            }
+        }
+        self.tree.set_rows(rows);
         true
     }
 
@@ -245,30 +364,91 @@ impl Instances {
         self.record_highlighted();
     }
 
-    fn focus_first_template(&mut self, ctx: &mut EventCtx<Msg>) {
-        self.tree.clear_search();
-        let template_ids = self
+    fn overview_expanded_ids(rows: &[Row]) -> Vec<String> {
+        rows.iter()
+            .filter(|row| row.parent.is_none() || row.instance.is_some())
+            .map(|row| row.id.clone())
+            .collect()
+    }
+
+    fn highlight_first_template(&mut self) {
+        let first = self
             .tree
             .rows()
             .iter()
-            .filter(|row| row.parent.is_none())
-            .map(|row| row.id.clone())
-            .collect::<Vec<_>>();
+            .find(|row| row.parent.is_none())
+            .map(|row| row.id.clone());
+        if let Some(id) = first {
+            self.tree.highlight_id(&id);
+        }
+    }
+
+    fn focus_expanded_overview(&mut self, ctx: &mut EventCtx<Msg>) {
+        self.tree.clear_search();
         self.tree.collapse_all();
-        for id in &template_ids {
-            self.tree.expand(id);
+        for id in Self::overview_expanded_ids(self.tree.rows()) {
+            self.tree.expand(&id);
         }
-        if let Some(id) = template_ids.first() {
-            self.tree.highlight_id(id);
-            self.tree.reveal_highlighted();
-        }
+        self.highlight_first_template();
+        self.tree.reveal_highlighted();
         self.after_event();
         ctx.focus(super::initial_focus());
+    }
+
+    fn toggles_overview_expansion(&self, event: &TuiEvent) -> bool {
+        if self.tree.is_searching() {
+            return false;
+        }
+        let TuiEvent::Key(key) = event else {
+            return false;
+        };
+        tuicore::keybindings()
+            .data_view()
+            .toggle_all_expansion_matches(*key)
+    }
+
+    fn toggle_overview_expansion(&mut self, ctx: &mut EventCtx<Msg>) -> EventOutcome {
+        let parent_ids = self
+            .tree
+            .rows()
+            .iter()
+            .filter_map(|row| row.parent.clone())
+            .collect::<HashSet<_>>();
+        let expandable_ids = self
+            .tree
+            .rows()
+            .iter()
+            .filter(|row| {
+                parent_ids.contains(&row.id) && (row.parent.is_none() || row.instance.is_some())
+            })
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>();
+        let mut all_expanded = true;
+        for id in &expandable_ids {
+            all_expanded &= !self.tree.expand(id).changed;
+        }
+        self.tree.collapse_all();
+        if !all_expanded {
+            for id in expandable_ids {
+                self.tree.expand(&id);
+            }
+        }
+        self.after_event();
+        ctx.request_layout();
+        ctx.request_redraw();
+        ctx.stop_propagation();
+        EventOutcome::Handled
     }
 
     #[cfg(test)]
     pub(super) fn search_query(&self) -> &str {
         &self.tree.transform_state().search
+    }
+
+    #[cfg(test)]
+    pub(super) fn expand_for_tests(&mut self, id: &str) {
+        self.tree.expand(&id.to_owned());
+        self.after_event();
     }
 }
 
@@ -290,9 +470,12 @@ impl TuiNode<Msg> for Instances {
         self.sync_rows();
         if matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "shift+h")
         {
-            self.focus_first_template(ctx);
+            self.focus_expanded_overview(ctx);
             ctx.stop_propagation();
             return EventOutcome::Handled;
+        }
+        if self.toggles_overview_expansion(event) {
+            return self.toggle_overview_expansion(ctx);
         }
         let outcome = self.tree.event(event, ctx);
         self.after_event();
@@ -308,9 +491,12 @@ impl TuiNode<Msg> for Instances {
         self.sync_rows();
         if matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "shift+h")
         {
-            self.focus_first_template(ctx);
+            self.focus_expanded_overview(ctx);
             ctx.stop_propagation();
             return EventOutcome::Handled;
+        }
+        if self.toggles_overview_expansion(event) {
+            return self.toggle_overview_expansion(ctx);
         }
         let outcome = self.tree.dispatch_event(route, event, ctx);
         self.after_event();
@@ -319,22 +505,25 @@ impl TuiNode<Msg> for Instances {
 
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         let changed = self.sync_rows();
+        let timer_changed = self.tick_session_timers(dt);
         let mut result =
             <DataView<Row, String> as TuiNode<Msg>>::tick(&mut self.tree, dt, settings);
-        if self
-            .state
-            .borrow()
-            .rows
-            .iter()
-            .any(|row| row.loading || row.metrics.memory_waiting || row.metrics.cpu_waiting)
-        {
+        if self.state.borrow().rows.iter().any(|row| {
+            row.loading
+                || row.secondary_loading
+                || row.metrics.memory_waiting
+                || row.metrics.cpu_waiting
+        }) {
             result = result.merge(Animated::tick(
                 &mut *self.spinner.borrow_mut(),
                 dt,
                 settings,
             ));
         }
-        if changed {
+        if !self.session_timers.is_empty() {
+            result.active = true;
+        }
+        if changed || timer_changed {
             result.merge(TickResult::CHANGED)
         } else {
             result

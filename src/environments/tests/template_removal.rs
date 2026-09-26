@@ -160,8 +160,8 @@ impl Docker {
 #[test]
 fn template_deletion_cleans_running_stopped_paused_and_orphaned_instances() {
     let (_directory, config) = fixture();
-    let template = templates::create(&config, "website").unwrap();
-    let other = templates::create(&config, "other").unwrap();
+    let template = compose_template(&config, "website");
+    let other = compose_template(&config, "other");
     let mut docker = Docker::default();
     docker.instance(&config, &template, "running", &["running", "paused"]);
     docker.instance(&config, &template, "stopped", &["exited"]);
@@ -251,7 +251,7 @@ fn template_deletion_cleans_running_stopped_paused_and_orphaned_instances() {
 #[test]
 fn cleanup_failure_keeps_ownership_for_a_complete_retry() {
     let (_directory, config) = fixture();
-    let template = templates::create(&config, "website").unwrap();
+    let template = compose_template(&config, "website");
     let mut docker = Docker::default();
     docker.instance(&config, &template, "review", &["running"]);
     docker.fail_volume_removal = true;
@@ -280,7 +280,7 @@ fn cleanup_failure_keeps_ownership_for_a_complete_retry() {
 #[test]
 fn deletion_requires_verified_ownership_and_available_docker() {
     let (_directory, config) = fixture();
-    let template = templates::create(&config, "website").unwrap();
+    let template = compose_template(&config, "website");
     let mut docker = Docker::default();
     docker.instance(&config, &template, "review", &["running"]);
     let mut foreign = docker.containers["review-0"].clone();
@@ -308,7 +308,7 @@ fn deletion_requires_verified_ownership_and_available_docker() {
 #[test]
 fn template_removal_rejects_unsafe_names_and_busy_templates() {
     let (_directory, config) = fixture();
-    let template = templates::create(&config, "website").unwrap();
+    let template = compose_template(&config, "website");
     let mut docker = Docker::default();
     for name in ["", "..", "../website", "/tmp/website", "gateway"] {
         assert!(docker.remove(&config, name).is_err());
@@ -353,7 +353,7 @@ fn template_and_workspace_symlinks_cannot_delete_unrelated_data() {
     symlink(outside.path(), config.templates.join("alias")).unwrap();
     let mut docker = Docker::default();
     assert!(docker.remove(&config, "alias").is_err());
-    let template = templates::create(&config, "website").unwrap();
+    let template = compose_template(&config, "website");
     docker.instance(&config, &template, "review", &["running"]);
     fs::remove_dir_all(config.workspaces.join("review")).unwrap();
     symlink(outside.path(), config.workspaces.join("review")).unwrap();

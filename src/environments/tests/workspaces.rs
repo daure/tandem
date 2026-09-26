@@ -42,14 +42,18 @@ fn ready_workspace(config: &Config, template: &Template, name: &str) {
 }
 
 #[test]
-fn workspace_templates_require_repositories_or_guidance_and_reject_service_metadata_atomically() {
+fn workspace_templates_accept_empty_manifests_and_reject_service_metadata_atomically() {
     let (_directory, config) = fixture();
     let template = workspace_template(&config);
     assert!(template.workspace_only());
     assert_eq!(templates::list(&config).unwrap().len(), 1);
+    let blank = templates::update_manifest(&config, "local", Default::default()).unwrap();
+    assert!(blank.workspace_only());
+    assert!(blank.manifest.repositories.is_empty());
+    assert!(blank.guidance_source.is_none());
+    assert_eq!(templates::get(&config, "local").unwrap(), blank);
     let original = fs::read(&template.manifest_file).unwrap();
     for value in [
-        json!({}),
         json!({"repositories": template.manifest.repositories, "one_shots": ["setup"]}),
         json!({"repositories": template.manifest.repositories, "routes": {"web": {"port": 80, "readiness_path": "", "readiness_contains": "ok"}}}),
     ] {

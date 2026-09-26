@@ -4,7 +4,7 @@ use crate::store::environments::Manifest;
 #[test]
 fn manifest_updates_validate_before_replacing_the_file_and_repair_invalid_json() {
     let (_home, config) = fixture();
-    let template = templates::create(&config, "website").unwrap();
+    let template = compose_template(&config, "website");
     let original = fs::read(&template.manifest_file).unwrap();
     for invalid in [
         json!({"routes":{"web":{"port":0,"readiness_path":"","readiness_contains":"ready"}}}),

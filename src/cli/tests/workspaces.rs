@@ -126,6 +126,46 @@ fn compose_only_instances_generate_service_guidance_without_repository_or_http_c
 }
 
 #[test]
+fn blank_workspaces_create_reopen_and_delete_without_git_or_docker() {
+    let fixture = repository_fixture();
+    let template = fixture.home.join("templates/website");
+    fs::write(template.join("tandem.json"), "{}\n").unwrap();
+    fs::write(
+        fixture.bin.join("git"),
+        "#!/bin/sh\nprintf invoked > \"$TANDEM_HOME/git-called\"\nexit 99\n",
+    )
+    .unwrap();
+    fs::set_permissions(fixture.bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
+    fixture.save_command("test -s AGENTS.md && printf opened > \"$TANDEM_HOME/opened\"");
+
+    success(fixture.run(&["new-instance", "scratch", "-t", "website", "-oc"]));
+    let workspace = fixture.home.join("workspaces/scratch");
+    assert_eq!(fs::read_dir(&workspace).unwrap().count(), 1);
+    let guidance = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
+    assert!(guidance.starts_with("# scratch\n"));
+    for section in ["## Repositories", "## Services", "## Docker", "## HTTP"] {
+        assert!(!guidance.contains(section), "{guidance}");
+    }
+    let record_path = fixture.home.join("runtime/cli-test/scratch.json");
+    let record: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
+    assert_eq!(record["expected"]["workspace_only"], true);
+    assert_eq!(record["expected"]["runtime"]["workspace_ready"], true);
+    fs::write(workspace.join("notes.md"), "Keep my notes").unwrap();
+    success(fixture.run(&["new-instance", "scratch", "-t", "website", "-oc"]));
+    assert_eq!(
+        fs::read_to_string(workspace.join("notes.md")).unwrap(),
+        "Keep my notes"
+    );
+    assert!(fixture.home.join("opened").exists());
+    success(fixture.run(&["delete-instance", "scratch"]));
+    assert!(!workspace.exists());
+    assert!(!record_path.exists());
+    assert!(!fixture.home.join("git-called").exists());
+    assert!(!fixture.home.join("docker-calls").exists());
+}
+
+#[test]
 fn guidance_only_workspaces_create_open_and_delete_without_git_or_docker() {
     let fixture = repository_fixture();
     let template = fixture.home.join("templates/website");

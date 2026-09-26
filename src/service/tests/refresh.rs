@@ -221,7 +221,11 @@ fn manual_refresh_rereads_external_template_edits() {
     let original = service.environment_snapshot().templates[0]
         .compose_source
         .clone();
-    std::fs::write(template.compose_file, "services: {}\n").unwrap();
+    std::fs::write(
+        std::path::Path::new(&template.directory).join("compose.yaml"),
+        "services: {}\n",
+    )
+    .unwrap();
     assert_eq!(
         service.environment_snapshot().templates[0].compose_source,
         original

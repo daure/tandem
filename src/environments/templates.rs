@@ -77,6 +77,7 @@ pub(crate) fn update_manifest(
     validate_workspace_template(
         &manifest,
         !template.workspace_only(),
+        true,
         template.guidance_source.is_some(),
     )?;
     let mut temporary = tempfile::Builder::new()
@@ -145,6 +146,7 @@ fn read_template(config: &Config, name: &str) -> Result<Template, String> {
         validate_workspace_template(
             &manifest,
             compose_source.is_some(),
+            manifest_source.is_some(),
             guidance_source.is_some(),
         )?;
         Ok(manifest)
@@ -170,13 +172,12 @@ fn read_template(config: &Config, name: &str) -> Result<Template, String> {
 fn validate_workspace_template(
     manifest: &Manifest,
     has_compose: bool,
+    has_manifest: bool,
     has_guidance: bool,
 ) -> Result<(), String> {
     if !has_compose {
-        if manifest.repositories.is_empty() && !has_guidance {
-            return Err(
-                "templates without compose.yaml must declare repositories or supply tandem-agents.md".into(),
-            );
+        if !has_manifest && !has_guidance {
+            return Err("templates require compose.yaml, tandem.json, or tandem-agents.md".into());
         }
         if !manifest.routes.is_empty() || !manifest.one_shots.is_empty() {
             return Err("routes and one_shots require compose.yaml".into());
@@ -245,32 +246,7 @@ pub(crate) fn create(config: &Config, name: &str) -> Result<Template, String> {
     let _lock = gateway::lock(config, &format!("template-{name}"))?;
     let directory = config.templates.join(name);
     fs::create_dir(&directory).map_err(|error| format!("create template {name}: {error}"))?;
-    write_new(
-        &directory.join("compose.yaml"),
-        include_str!("scaffold/compose.yaml"),
-    )?;
-    write_new(
-        &directory.join("tandem.json"),
-        include_str!("scaffold/tandem.json"),
-    )?;
-    fs::create_dir(directory.join("site")).map_err(|error| error.to_string())?;
-    write_new(
-        &directory.join("site/index.html"),
-        include_str!("scaffold/index.html"),
-    )?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(
-            directory.join("site/index.html"),
-            fs::Permissions::from_mode(0o644),
-        )
-        .map_err(|error| error.to_string())?;
-    }
-    write_new(
-        &directory.join(".gitignore"),
-        ".tandem-*.compose.json\n.tandem-*.owner.json\n",
-    )?;
+    write_new(&directory.join("tandem.json"), "{}\n")?;
     get(config, name)
 }
 

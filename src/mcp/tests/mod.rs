@@ -169,6 +169,9 @@ fn template_tools_return_object_payloads_and_mutations_require_confirmation() {
         let templates = server.list_templates().await.unwrap().0;
         let json = serde_json::to_value(templates).unwrap();
         assert_eq!(json["templates"][0]["directory"], created.directory);
+        assert!(created.workspace_only());
+        assert_eq!(created.manifest_source.as_deref(), Some("{}\n"));
+        assert!(created.guidance_source.is_none());
         let error = server
             .create_instance(Parameters(super::CreateInstanceInput {
                 template: "website".into(),

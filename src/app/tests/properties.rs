@@ -9,7 +9,13 @@ fn detail_search_matches_property_names_and_multiline_values() {
     for (row, value_query, expected_property) in [
         (&rows[0], "neonquartz", "Description"),
         (&rows[1], "review", "Instance"),
-        (&rows[2], "nginx", "Image"),
+        (
+            rows.iter()
+                .find(|row| row.id == "service:review:web")
+                .unwrap(),
+            "nginx",
+            "Image",
+        ),
     ] {
         for (query, property) in [
             ("Memory limit", "Memory limit"),

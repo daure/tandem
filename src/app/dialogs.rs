@@ -171,7 +171,12 @@ pub(super) fn description_entry(value: &str) -> Modal {
     )
 }
 
-pub(super) fn settings(branch_instances: bool, open_command: &str, close_command: &str) -> Modal {
+pub(super) fn settings(
+    branch_instances: bool,
+    opencode: bool,
+    open_command: &str,
+    close_command: &str,
+) -> Modal {
     let mut input = TextInput::new()
         .placeholder("Empty: open workspace folder")
         .on_change(Msg::OpenCommandChanged);
@@ -200,6 +205,20 @@ pub(super) fn settings(branch_instances: bool, open_command: &str, close_command
                             .focused(true)
                             .on_change(Msg::SetBranchInstances),
                         FlexItem::content(),
+                    )
+                    .child(
+                        "opencode-integration",
+                        Toggle::new("Enable opencode integration")
+                            .checked(opencode)
+                            .on_change(Msg::SetOpencodeIntegration),
+                        FlexItem::content(),
+                    )
+                    .child(
+                        "opencode-setup",
+                        Paragraph::new(
+                            "OpenCode tracking requires its TUI companion: tandem opencode-setup",
+                        ),
+                        FlexItem::fit_content(),
                     )
                     .child(
                         "open-command",
