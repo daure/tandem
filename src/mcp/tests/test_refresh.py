@@ -59,6 +59,9 @@ class RefreshTests(unittest.TestCase):
             root = Path(directory)
             home = root / "home"
             disable_history_cleanup(home)
+            config = root / "tuicore"
+            config.mkdir()
+            (config / "tui.toml").write_text("[preset.animation]\nenabled = false\n")
             docker = root / "docker"
             docker.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TANDEM_HOME/docker-calls"\n')
             docker.chmod(0o755)
@@ -66,6 +69,7 @@ class RefreshTests(unittest.TestCase):
                 **os.environ, "PATH": f"{root}{os.pathsep}{os.environ['PATH']}",
                 "TANDEM_HOME": str(home), "TANDEM_NAMESPACE": "refresh-test",
                 "XDG_STATE_HOME": str(root / "state"), "XDG_CONFIG_HOME": str(root / "config"),
+                "TUICORE_CONFIG_DIR": str(config),
                 "TERM": "xterm-256color",
             }
             for key in list(environment):
@@ -117,6 +121,9 @@ class RefreshTests(unittest.TestCase):
                     (external / "tandem.json").write_text("{ invalid json")
                     terminal.output = b""
                     terminal.send(b"R")
+                    terminal.wait_for(lambda: b"tandem.json:" in terminal.output and inventory_calls() == 5)
+                    # A resize repaints text that the terminal diff can otherwise reuse from the success toast.
+                    fcntl.ioctl(terminal.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 44, 151, 0, 0))
                     terminal.wait_for(lambda: b"Refresh completed with errors" in terminal.output
                                       and inventory_calls() == 5)
                     terminal.send(b"\x1b[O")
