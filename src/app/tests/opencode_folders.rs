@@ -64,6 +64,7 @@ fn project(observation: &Snapshot, history: bool) -> Vec<rows::Row> {
         observation,
         &owners,
         history,
+        false,
     )
 }
 
@@ -120,6 +121,31 @@ fn folder_activity_uses_clients_outside_the_conversation_display_window() {
             .any(|row| row.id == "opencode:external:/work/z-busy:busy")
     );
     assert_eq!(roots(&rows)[2], "opencode-workspace:/work/z-busy");
+
+    let mut app = root(AppService::for_tests());
+    app.service
+        .set_opencode_snapshot_for_tests(observation.clone());
+    app.update_snapshot(snapshot());
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+    app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut ctx);
+    app.handle_message(Msg::SetOpencodeHistory(true), &mut ctx);
+    app.handle_message(Msg::SetRunningOnly(true), &mut ctx);
+    assert!(
+        roots(&app.project_rows(&snapshot(), &[])).contains(&"opencode-workspace:/work/z-busy")
+    );
+
+    for session in &mut observation.sessions {
+        session.stale = true;
+    }
+    for client in &mut observation.clients {
+        client.stale = true;
+    }
+    app.service.set_opencode_snapshot_for_tests(observation);
+    app.update_snapshot(snapshot());
+    assert_eq!(
+        roots(&app.project_rows(&snapshot(), &[])),
+        ["instance:review"]
+    );
 }
 
 #[test]
@@ -181,7 +207,45 @@ fn empty_known_external_folders_can_launch_a_new_session() {
 }
 
 #[test]
-fn running_filter_keeps_external_folders_and_does_not_reclassify_filtered_owned_workspaces() {
+fn sessions_running_filter_hides_empty_instance_parents() {
+    tuicore::init();
+    let inventory = snapshot();
+    let mut observation = observation();
+    observation.sessions.retain(|session| session.id != "owned");
+    observation
+        .directories
+        .push(inventory.instances[0].workspace.clone());
+    let mut app = root(AppService::for_tests());
+    app.service.set_opencode_snapshot_for_tests(observation);
+    app.update_snapshot(inventory.clone());
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+
+    for history in [false, true] {
+        app.handle_message(Msg::SetOpencodeHistory(history), &mut ctx);
+        app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut ctx);
+        app.handle_message(Msg::SetRunningOnly(false), &mut ctx);
+        assert!(roots(&app.project_rows(&inventory, &[])).contains(&"instance:review"));
+
+        app.handle_message(Msg::SetRunningOnly(true), &mut ctx);
+        let rows = app.project_rows(&inventory, &[]);
+        assert!(!roots(&rows).contains(&"instance:review"));
+        for parent in rows.iter().filter(|row| row.parent.is_none()) {
+            assert!(rows.iter().any(|row| {
+                row.parent.as_deref() == Some(parent.id.as_str()) && row.opencode.is_some()
+            }));
+        }
+
+        app.handle_message(Msg::SetAttachedSessionsOnly(false), &mut ctx);
+        assert!(
+            app.project_rows(&inventory, &[])
+                .iter()
+                .any(|row| row.id == "instance:review")
+        );
+    }
+}
+
+#[test]
+fn running_filter_keeps_live_external_folders_and_preserves_workspace_ownership() {
     tuicore::init();
     let mut inventory = snapshot();
     inventory.instances[0].services[0].status = "down (exit 0)".into();
@@ -190,9 +254,29 @@ fn running_filter_keeps_external_folders_and_does_not_reclassify_filtered_owned_
     app.update_snapshot(inventory.clone());
     let mut ctx = EventCtx::new(AnimationSettings::default());
     app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut ctx);
-    app.handle_message(Msg::SetRunningOnly(true), &mut ctx);
-    let rows = app.project_rows(&inventory, &[]);
-    assert!(rows.iter().all(|row| row.instance.is_none()));
-    assert!(!roots(&rows).contains(&"opencode-workspace:/tmp/workspaces/review/repo"));
-    assert!(roots(&rows).contains(&"opencode-workspace:/work/b-empty"));
+    for history in [false, true] {
+        app.handle_message(Msg::SetOpencodeHistory(history), &mut ctx);
+        app.handle_message(Msg::SetRunningOnly(true), &mut ctx);
+        let rows = app.project_rows(&inventory, &[]);
+        assert!(rows.iter().all(|row| row.instance.is_none()));
+        let mut expected = vec![
+            "opencode-workspace:/work/a-idle",
+            "opencode-workspace:/work/y-new",
+            "opencode-workspace:/work/z-busy",
+        ];
+        if history {
+            expected.push("opencode-workspace:/work/d-detached");
+        }
+        assert_eq!(roots(&rows), expected);
+        for row in &rows {
+            if let Some(parent) = &row.parent {
+                assert!(rows.iter().any(|candidate| candidate.id == *parent));
+            }
+        }
+        app.handle_message(Msg::SetRunningOnly(false), &mut ctx);
+        assert_eq!(
+            roots(&app.project_rows(&inventory, &[])),
+            roots(&project(&observation(), history))
+        );
+    }
 }

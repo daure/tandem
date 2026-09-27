@@ -1,7 +1,9 @@
 use ratatui::widgets::Borders;
+use std::{cell::RefCell, rc::Rc};
 use tuicore::{
-    CrossSize, Dialog, DialogAction, Flex, FlexItem, FormField, KeySpec, Language, Padding,
-    Paragraph, SyntaxHighlighter, Tab, Tabs, TabsVariant, TextInput, Toggle,
+    CrossSize, Dialog, DialogAction, Dropdown, DropdownCommitMode, Flex, FlexItem, FormField,
+    KeySpec, Language, Padding, Paragraph, SyntaxHighlighter, Tab, Tabs, TabsVariant, TextInput,
+    Toggle,
 };
 
 use super::{Modal, Msg, properties::Properties, rows::Row};
@@ -174,21 +176,36 @@ pub(super) fn description_entry(value: &str) -> Modal {
 pub(super) fn settings(
     branch_instances: bool,
     opencode: bool,
-    open_command: &str,
-    close_command: &str,
+    clear_opencode_history: bool,
+    fade_seconds: u64,
+    mut sounds: Vec<crate::store::completion::SoundChoice>,
+    selected_sound: &str,
+    sound_choice: Rc<RefCell<Option<String>>>,
 ) -> Modal {
     let mut input = TextInput::new()
-        .placeholder("Empty: open workspace folder")
-        .on_change(Msg::OpenCommandChanged);
-    input.set_value(open_command);
+        .numbers_only(true)
+        .max_len(4)
+        .on_change(Msg::CompletionFadeChanged);
+    input.set_value(fade_seconds.to_string());
     input.set_insert_mode(false);
     input.move_cursor_to_end();
-    let mut close_input = TextInput::new()
-        .placeholder("Empty: no command before workspace deletion")
-        .on_change(Msg::CloseCommandChanged);
-    close_input.set_value(close_command);
-    close_input.set_insert_mode(false);
-    close_input.move_cursor_to_end();
+    if !sounds.iter().any(|sound| sound.id == selected_sound) {
+        sounds.push(crate::store::completion::SoundChoice {
+            id: selected_sound.into(),
+            label: format!("Unavailable: {selected_sound} (using system default)"),
+        });
+    }
+    let sound = Dropdown::single(
+        sounds,
+        |sound| sound.id.clone(),
+        |sound| sound.label.clone(),
+    )
+    .variant(tuicore::DropdownVariant::Bordered)
+    .label("Completion sound")
+    .selected_one(selected_sound.to_owned())
+    .commit_mode(DropdownCommitMode::Explicit)
+    .max_popup_height(12)
+    .on_select(move |selected| *sound_choice.borrow_mut() = selected.into_iter().next());
     Box::new(
         Dialog::new()
             .top_left("Settings")
@@ -214,20 +231,20 @@ pub(super) fn settings(
                         FlexItem::content(),
                     )
                     .child(
-                        "opencode-setup",
-                        Paragraph::new(
-                            "OpenCode tracking requires its TUI companion: tandem opencode-setup",
-                        ),
-                        FlexItem::fit_content(),
+                        "clear-opencode-history",
+                        Toggle::new("Clear OpenCode history on new instance")
+                            .checked(clear_opencode_history)
+                            .on_change(Msg::SetClearOpencodeHistory),
+                        FlexItem::content(),
                     )
                     .child(
-                        "open-command",
-                        FormField::new("Open command", input),
+                        "completion-fade",
+                        FormField::new("Completion fade duration", input),
                         FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
                     )
                     .child(
-                        "close-command",
-                        FormField::new("Close command", close_input),
+                        "completion-sound",
+                        sound,
                         FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
                     ),
             ),

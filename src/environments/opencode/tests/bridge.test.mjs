@@ -12,6 +12,7 @@ test("presence follows the displayed conversation, home route, and client dispos
   let dispose
   let route = { name: "session", params: { sessionID: "ses_one" } }
   let activity = "busy"
+  let questions = []
   const api = {
     route: { get current() { return route } },
     state: {
@@ -28,6 +29,7 @@ test("presence follows the displayed conversation, home route, and client dispos
           tokens: { input: 150_000, output: 1_000, reasoning: 0, cache: { read: 0, write: 0 } },
         }],
         status: () => ({ type: activity }),
+        question: () => questions,
       },
       config: { agent: { tracer: { color: "#FB923C" } } },
       provider: [{
@@ -61,6 +63,10 @@ test("presence follows the displayed conversation, home route, and client dispos
       variant: "high",
     },
   )
+  questions = [{ id: "que_one", sessionID: "ses_one" }]
+  t.mock.timers.tick(1000)
+  await waitFor(async () => (await receipt()).activity === "awaiting_answer")
+  questions = []
   route = { name: "session", params: { sessionID: "ses_two" } }
   activity = "idle"
   t.mock.timers.tick(1000)
@@ -108,6 +114,7 @@ async function promptClient(t, prompt, ready = true) {
         get: () => ({ title: "New session", directory: "/work/review" }),
         messages: () => [],
         status: () => ({ type: "idle" }),
+        question: () => [],
       },
     },
     client: { session: {
@@ -151,8 +158,21 @@ test("initial prompts wait for readiness, navigate locally, and submit literal t
   assert.deepEqual(prompt.slice(0, 2), ["prompt", {
     directory: "/work/review", sessionID: "ses_new", parts: [{ type: "text", text }],
   }])
+  client.api.state.session.messages = () => [{ id: "msg_initial", role: "user" }]
+  client.api.state.part = () => [{ type: "text", text }]
   t.mock.timers.tick(3000)
   await waitFor(async () => (await client.receipt()).id === "ses_new")
+  assert.equal((await client.receipt()).server, "")
+  assert.equal((await client.receipt()).last_question, "Explain 'this'; $(touch injected) second line")
+  client.api.state.session.messages = () => [
+    { id: "msg_initial", role: "user" },
+    { id: "msg_followup", role: "user" },
+  ]
+  client.api.state.part = (id) => id === "msg_followup"
+    ? [{ type: "text", text: "Now review the tests" }, { type: "file", filename: "tests.rs" }]
+    : [{ type: "text", text }]
+  t.mock.timers.tick(1000)
+  await waitFor(async () => (await client.receipt()).last_question === "Now review the tests")
   assert.equal(client.calls.length, 3)
 })
 

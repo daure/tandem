@@ -1,6 +1,9 @@
 use super::*;
 mod actions;
 mod folders;
+mod history;
+mod history_server;
+mod questions;
 mod startup;
 use serde_json::json;
 use std::{
@@ -22,6 +25,8 @@ struct Server {
     requests: Arc<std::sync::Mutex<Vec<String>>>,
     full_history: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
+    pending_questions: Arc<std::sync::Mutex<BTreeMap<String, Vec<String>>>>,
+    failed_question_directories: Arc<std::sync::Mutex<BTreeSet<String>>>,
     failed_status_directories: Arc<std::sync::Mutex<BTreeSet<String>>>,
     receipt_update: Arc<std::sync::Mutex<Option<(PathBuf, String)>>>,
 }
@@ -41,6 +46,11 @@ impl Server {
         let full = full_history.clone();
         let busy = Arc::new(AtomicBool::new(true));
         let active = busy.clone();
+        let pending_questions =
+            Arc::new(std::sync::Mutex::new(BTreeMap::<String, Vec<String>>::new()));
+        let pending = pending_questions.clone();
+        let failed_question_directories = Arc::new(std::sync::Mutex::new(BTreeSet::new()));
+        let failed_questions = failed_question_directories.clone();
         let failed_status_directories = Arc::new(std::sync::Mutex::new(BTreeSet::new()));
         let failed = failed_status_directories.clone();
         let receipt_update = Arc::new(std::sync::Mutex::new(None::<(PathBuf, String)>));
@@ -75,6 +85,26 @@ impl Server {
                         json!({"ses_busy":{"type":"busy"}, "ses_background":{"type":"retry"}})
                     } else {
                         json!({})
+                    }
+                } else if request.contains("/question?directory=") {
+                    let target = request.split_whitespace().nth(1).unwrap();
+                    let url = reqwest::Url::parse(&format!("http://localhost{target}")).unwrap();
+                    let directory = url
+                        .query_pairs()
+                        .find(|(key, _)| key == "directory")
+                        .unwrap()
+                        .1;
+                    if failed_questions
+                        .lock()
+                        .unwrap()
+                        .contains(directory.as_ref())
+                    {
+                        status = "503 Service Unavailable";
+                        json!({"error":"Questions unavailable"})
+                    } else {
+                        json!(pending.lock().unwrap().get(directory.as_ref()).into_iter().flatten()
+                            .map(|id| json!({"id":format!("que_{id}"),"sessionID":id,"questions":[]}))
+                            .collect::<Vec<_>>())
                     }
                 } else if request.contains("/session/status") {
                     json!({})
@@ -132,6 +162,8 @@ impl Server {
             requests,
             full_history,
             busy,
+            pending_questions,
+            failed_question_directories,
             failed_status_directories,
             receipt_update,
         }

@@ -21,6 +21,16 @@ pub(crate) struct AppService {
     refresh: Arc<refresh::RefreshWorker>,
     state: Arc<ServiceState>,
     opencode: Arc<opencode::Integration>,
+    sound_choices: Arc<Vec<crate::store::completion::SoundChoice>>,
+    #[cfg(not(test))]
+    sound_playback: Arc<SoundPlayback>,
+}
+
+#[cfg(not(test))]
+#[derive(Default)]
+struct SoundPlayback {
+    generation: std::sync::atomic::AtomicU64,
+    gate: std::sync::Mutex<()>,
 }
 
 struct ServiceState {
@@ -30,7 +40,7 @@ struct ServiceState {
     #[cfg(test)]
     opened_system_targets: std::sync::Mutex<Vec<String>>,
     #[cfg(test)]
-    completion_sounds: std::sync::atomic::AtomicUsize,
+    completion_sounds: std::sync::Mutex<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -61,6 +71,9 @@ impl AppService {
             environments,
             refresh,
             opencode: Arc::new(opencode::Integration::new()),
+            sound_choices: Arc::new(crate::environments::sound::available()),
+            #[cfg(not(test))]
+            sound_playback: Arc::new(SoundPlayback::default()),
             state: Arc::new(ServiceState {
                 started_at: Instant::now(),
                 #[cfg(test)]
@@ -68,7 +81,7 @@ impl AppService {
                 #[cfg(test)]
                 opened_system_targets: std::sync::Mutex::new(Vec::new()),
                 #[cfg(test)]
-                completion_sounds: std::sync::atomic::AtomicUsize::new(0),
+                completion_sounds: std::sync::Mutex::new(Vec::new()),
             }),
         })
     }
@@ -104,28 +117,57 @@ impl AppService {
     }
 
     pub(crate) fn play_completion_sound(&self) {
+        let choice = self.completion_sound_choice();
+        let choice = if self.sound_choices.iter().any(|sound| sound.id == choice) {
+            choice
+        } else {
+            String::new()
+        };
+        self.play_sound(choice);
+    }
+
+    pub(crate) fn completion_sound_choices(&self) -> Vec<crate::store::completion::SoundChoice> {
+        self.sound_choices.as_ref().clone()
+    }
+
+    fn play_sound(&self, selection: String) {
         #[cfg(test)]
         {
-            self.state
-                .completion_sounds
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.state.completion_sounds.lock().unwrap().push(selection);
         }
         #[cfg(not(test))]
-        self.runtime.spawn_blocking(|| {
-            if let Err(error) = crate::environments::sound::play_completion() {
-                crate::diagnostics::record_error(
-                    "could not play completion sound",
-                    &std::io::Error::other(error),
-                );
-            }
-        });
+        {
+            use std::sync::atomic::Ordering;
+            let playback = Arc::clone(&self.sound_playback);
+            let generation = playback.generation.fetch_add(1, Ordering::AcqRel) + 1;
+            self.runtime.spawn_blocking(move || {
+                let _guard = playback
+                    .gate
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if let Err(error) = crate::environments::sound::play_completion(&selection, || {
+                    playback.generation.load(Ordering::Acquire) != generation
+                }) {
+                    crate::diagnostics::record_error(
+                        "could not play completion sound",
+                        &std::io::Error::other(error),
+                    );
+                }
+            });
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_sound_choices_for_tests(
+        &mut self,
+        choices: Vec<crate::store::completion::SoundChoice>,
+    ) {
+        self.sound_choices = Arc::new(choices);
     }
 
     #[cfg(test)]
     pub(crate) fn completion_sound_count_for_tests(&self) -> usize {
-        self.state
-            .completion_sounds
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.state.completion_sounds.lock().unwrap().len()
     }
 }
 

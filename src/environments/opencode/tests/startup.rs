@@ -1,5 +1,61 @@
 use super::*;
 
+#[test]
+fn standalone_clients_publish_prompt_and_question_activity_without_a_server_url() {
+    let root = tempfile::tempdir().unwrap();
+    let observer = observer(root.path());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut snapshot = Snapshot::default();
+    for (text, expected) in [
+        ("Review this issue", "Review this issue"),
+        ("Follow up\nwith details", "Follow up with details"),
+    ] {
+        presence(&observer, "standalone.json", "ses_standalone", 7, "");
+        let path = observer.presence.join("standalone.json");
+        let mut receipt: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        receipt["last_question"] = json!(text);
+        fs::write(path, receipt.to_string()).unwrap();
+        snapshot = runtime
+            .block_on(observer.observe(&["/work/review".into()], snapshot))
+            .unwrap();
+        let session = &snapshot.sessions[0];
+        assert!(session.attached());
+        assert!(session.server.is_empty());
+        assert!(session.question_observed);
+        assert_eq!(session.last_question.as_deref(), Some(expected));
+    }
+    let path = observer.presence.join("standalone.json");
+    let mut receipt: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    receipt["activity"] = json!("awaiting_answer");
+    fs::write(path, receipt.to_string()).unwrap();
+    let snapshot = runtime
+        .block_on(observer.observe(&["/work/review".into()], snapshot))
+        .unwrap();
+    assert_eq!(snapshot.sessions[0].activity, Activity::AwaitingAnswer);
+}
+
+#[test]
+fn a_session_without_a_server_does_not_block_other_sessions_message_fetches() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::start();
+    let observer = observer(root.path());
+    presence(&observer, "standalone.json", "ses_standalone", 8, "");
+    presence(&observer, "shared.json", "ses_busy", 7, &server.url);
+    let snapshot = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(observer.observe(&["/work/review".into()], Snapshot::default()))
+        .unwrap();
+    let shared = snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == "ses_busy")
+        .unwrap();
+    assert_eq!(shared.last_question.as_deref(), Some("Latest question"));
+    assert!(shared.question_observed);
+}
+
 fn starting_observer(root: &Path, server: &Server) -> Observer {
     let observer = observer(root);
     let station = observer.daemons.join("station");

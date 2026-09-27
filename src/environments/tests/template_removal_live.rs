@@ -120,14 +120,7 @@ fn live_template_deletion_removes_its_containers_volumes_network_and_workspace()
     assert!(volumes.iter().any(|name| name != &volume));
     command(&["pause", &container]).unwrap();
 
-    removal::template(
-        &config,
-        "website",
-        60,
-        Arc::new(|_| {}),
-        &Default::default(),
-    )
-    .unwrap();
+    removal::template(&config, "website", 60, Arc::new(|_| {})).unwrap();
 
     assert!(command(&["inspect", &container]).is_err());
     assert!(command(&["network", "inspect", &network]).is_err());

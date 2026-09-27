@@ -109,7 +109,7 @@ fn overview_places_other_opencode_workspaces_before_templates() {
 }
 
 #[test]
-fn overview_expansion_stops_at_external_workspace_rows() {
+fn overview_keeps_other_opencode_workspaces_collapsed_on_startup_and_shift_h() {
     use crate::app::instances::{self, Instances};
 
     tuicore::init();
@@ -133,26 +133,20 @@ fn overview_expansion_stops_at_external_workspace_rows() {
 
     let startup = render(&mut tree, &mut terminal);
     assert!(startup.contains("Other OpenCode workspaces"), "{startup}");
-    assert!(startup.contains("/work/ledger"), "{startup}");
+    assert!(!startup.contains("/work/ledger"), "{startup}");
     assert!(!startup.contains("Add CSV export"), "{startup}");
 
     tree.focus(None, true, &mut tuicore::FocusCtx::default());
     let mut ctx = EventCtx::new(AnimationSettings::default());
-    tree.event(&TuiEvent::Key(KeyEvent::from(Key::Char('z'))), &mut ctx);
-    assert!(!render(&mut tree, &mut terminal).contains("/work/ledger"));
-    tree.event(&TuiEvent::Key(KeyEvent::from(Key::Char('z'))), &mut ctx);
-    let expanded = render(&mut tree, &mut terminal);
-    assert!(expanded.contains("/work/ledger"), "{expanded}");
-    assert!(!expanded.contains("Add CSV export"), "{expanded}");
-
-    instances::set_attached_sessions_only(&state, true);
+    tree.expand_for_tests("opencode-workspaces");
+    assert!(render(&mut tree, &mut terminal).contains("/work/ledger"));
     tree.event(
         &TuiEvent::Hotkey(HotkeyEvent::Commit("shift+h".into())),
         &mut ctx,
     );
     let home = render(&mut tree, &mut terminal);
-    assert!(home.contains("/work/ledger"), "{home}");
-    assert!(home.contains("Add CSV export"), "{home}");
+    assert!(home.contains("Other OpenCode workspaces"), "{home}");
+    assert!(!home.contains("/work/ledger"), "{home}");
 }
 
 #[test]
@@ -227,15 +221,17 @@ fn switching_from_agents_to_templates_collapses_external_workspaces() {
         rendered_lines(terminal, area).join("\n")
     };
     assert!(render(&mut tree, &mut terminal).contains("Add CSV export"));
+    tree.highlight_for_tests("opencode-workspace:/work/ledger");
 
     let mut templates = rows::from_snapshot(&snapshot());
     super::super::opencode::append_rows(&mut templates, &external_observation(), false);
     instances::set_attached_sessions_only(&state, false);
     instances::replace_rows(&state, templates);
+    instances::request_center_highlighted(&state);
     let switched = render(&mut tree, &mut terminal);
 
     assert!(switched.contains("Other OpenCode workspaces"), "{switched}");
-    assert!(switched.contains("/work/ledger"), "{switched}");
+    assert!(!switched.contains("/work/ledger"), "{switched}");
     assert!(!switched.contains("Add CSV export"), "{switched}");
 }
 

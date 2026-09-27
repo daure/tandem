@@ -1,7 +1,7 @@
-use std::{path::Path, process::Stdio, sync::Arc};
+use std::sync::Arc;
 
 #[cfg(not(test))]
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use super::AppService;
 use super::refresh::Refresh;
@@ -46,7 +46,7 @@ impl AppService {
         }
         snapshot
     }
-    pub(crate) fn environment_keys(&self) -> [tuicore::KeySpec; 11] {
+    pub(crate) fn environment_keys(&self) -> [tuicore::KeySpec; 10] {
         self.environments.config.keys
     }
 
@@ -82,76 +82,6 @@ impl AppService {
             return Err("gateway URL must use HTTP or HTTPS".into());
         }
         self.open_system_target(url)
-    }
-
-    pub(crate) fn open_workspace(
-        &self,
-        workspace: &str,
-        instance: &str,
-    ) -> Result<tokio::task::JoinHandle<Result<(), String>>, String> {
-        if !Path::new(workspace).is_absolute() {
-            return Err("workspace path must be absolute".into());
-        }
-        let workspace = workspace.to_owned();
-        let instance = instance.to_owned();
-        let settings = Arc::clone(&self.settings);
-        let environments = Arc::clone(&self.environments);
-        #[cfg(test)]
-        let state = Arc::clone(&self.state);
-        Ok(self.runtime.spawn(async move {
-            let result = async {
-                let target = workspace.clone();
-                let name = instance.clone();
-                let workspace_environments = Arc::clone(&environments);
-                tokio::task::spawn_blocking(move || {
-                    workspace_environments.prepare_workspace_open(&target, &name)
-                })
-                .await
-                .map_err(|error| error.to_string())??;
-                let command = settings.read_open_command().await?;
-                #[cfg(test)]
-                if command.trim().is_empty() {
-                    state.opened_system_targets.lock().unwrap().push(workspace);
-                    return Ok(());
-                }
-                let description = environments
-                    .snapshot()
-                    .instances
-                    .iter()
-                    .find(|candidate| candidate.name == instance)
-                    .map(|candidate| candidate.description.as_str())
-                    .unwrap_or_default()
-                    .to_owned();
-                run_workspace_command(&command, &workspace, &instance, Some(&description))
-                    .await
-            }
-            .await;
-            if let Err(error) = &result {
-                crate::diagnostics::record_error(
-                    "cannot open workspace",
-                    &std::io::Error::other(error.clone()),
-                );
-            }
-            result
-        }))
-    }
-
-    pub(crate) async fn run_open_command(
-        &self,
-        name: String,
-        confirmed: bool,
-    ) -> Result<String, String> {
-        if !confirmed {
-            return Err(
-                "confirmation_required: the open command executes with local host privileges"
-                    .into(),
-            );
-        }
-        let workspace = self.environments.workspace(&name)?;
-        self.open_workspace(&workspace, &name)?
-            .await
-            .map_err(|_| "workspace opener task failed".to_owned())??;
-        Ok(workspace)
     }
 
     fn open_system_target(&self, target: &str) -> Result<(), String> {
@@ -236,18 +166,9 @@ impl AppService {
         )))
     }
 
-    pub(crate) fn delete_instance(
-        &self,
-        name: &str,
-        close_command: bool,
-    ) -> Result<Vec<String>, String> {
+    pub(crate) fn delete_instance(&self, name: &str) -> Result<Vec<String>, String> {
         let operation = self.environments.begin("delete_instance", name, None)?;
-        let operation = self.schedule_operation_with_close_command(
-            operation,
-            60,
-            Startup::default(),
-            close_command,
-        );
+        let operation = self.schedule_operation(operation, 60, Startup::default());
         let operation = self.runtime.block_on(self.wait_operation(&operation.id))?;
         if operation.state != OperationState::Succeeded {
             let mut error = operation
@@ -377,17 +298,7 @@ impl AppService {
         &self,
         operation: Operation,
         timeout: u64,
-        startup: Startup,
-    ) -> Operation {
-        self.schedule_operation_with_close_command(operation, timeout, startup, true)
-    }
-
-    fn schedule_operation_with_close_command(
-        &self,
-        operation: Operation,
-        timeout: u64,
         mut startup: Startup,
-        run_close_command: bool,
     ) -> Operation {
         let action = operation.action.as_str();
         let operation_id = operation.id.clone();
@@ -404,19 +315,21 @@ impl AppService {
         let notifier = self.refresh.notifier.clone();
         let refresh = Refresh::for_operation(action);
         startup.branch_instances = action == "create_instance" && self.branch_instances();
+        if action == "create_instance" {
+            let settings = Arc::clone(&self.settings);
+            let runtime = self.runtime.handle().clone();
+            startup.before_creation = Some(Box::new(move |workspace, deadline| {
+                settings.refresh()?;
+                if settings.opencode_enabled() && settings.clear_opencode_history() {
+                    runtime.block_on(crate::environments::opencode::clear_history(workspace, deadline))?;
+                }
+                Ok(())
+            }));
+        }
         let settings = Arc::clone(&self.settings);
         self.runtime.spawn_blocking(move || {
             notifier.publish(refresh);
-            let close_command = if run_close_command
-                && matches!(
-                    worker_operation.action.as_str(),
-                    "delete_instance" | "delete_template" | "remove_template"
-                ) {
-                settings.read_close_command()
-            } else {
-                Ok(String::new())
-            };
-            environments.execute(worker_operation, timeout, startup, close_command);
+            environments.execute(worker_operation, timeout, startup);
             if let Some((template, kind)) = startup_timing
                 && let Ok(operation) = environments.operation(&operation_id)
                 && operation.state == OperationState::Succeeded
@@ -497,51 +410,4 @@ impl AppService {
     pub(crate) async fn get_instructions(&self) -> Result<Instructions, String> {
         self.environment_call(Environments::instructions).await
     }
-}
-
-async fn run_workspace_command(
-    command: &str,
-    workspace: &str,
-    instance: &str,
-    description: Option<&str>,
-) -> Result<(), String> {
-    let status = spawn_workspace_command(command, workspace, instance, description)?
-        .wait()
-        .await
-        .map_err(|error| format!("cannot wait for workspace opener: {error}"))?;
-    if !status.success() {
-        return Err(format!("workspace opener exited with {status}"));
-    }
-    Ok(())
-}
-
-fn spawn_workspace_command(
-    command: &str,
-    workspace: &str,
-    instance: &str,
-    description: Option<&str>,
-) -> Result<tokio::process::Child, String> {
-    let mut process = if command.trim().is_empty() {
-        let mut process = tokio::process::Command::new("xdg-open");
-        process.arg(workspace);
-        process
-    } else {
-        let mut process = tokio::process::Command::new("sh");
-        process
-            .arg("-c")
-            .arg(command)
-            .env("TANDEM_INSTANCE", instance)
-            .env("TANDEM_WORKSPACE", workspace)
-            .current_dir(workspace);
-        if let Some(description) = description {
-            process.env("TANDEM_DESCRIPTION", description);
-        }
-        process
-    };
-    process
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("cannot launch workspace opener: {error}"))
 }

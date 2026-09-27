@@ -24,7 +24,13 @@ fn new_sessions_attach_without_resuming_and_stack_in_the_observed_tab() {
     };
     tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(observer.new_session(directory, "review", "other", Some(&pane), Some("Explain 'this'; $(touch injected)\nsecond line")))
+        .block_on(observer.new_session(
+            directory,
+            "review",
+            "other",
+            Some(&pane),
+            Some("Explain 'this'; $(touch injected)\nsecond line"),
+        ))
         .unwrap();
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
     assert!(calls.contains(&format!("new-pane --stacked --name  --tab-id 4 --cwd {directory} -- env TANDEM_INITIAL_PROMPT=Explain 'this'; $(touch injected)\nsecond line opencode attach {} --dir {directory}\n", server.url)), "{calls}");
@@ -126,9 +132,7 @@ fn new_session_selects_the_destination_tab_and_focuses_its_exact_new_pane() {
         ("main", 99, 4)
     );
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
-    let created = calls
-        .find("new-pane --stacked --name  --tab-id 4")
-        .unwrap();
+    let created = calls.find("new-pane --stacked --name  --tab-id 4").unwrap();
     let selected = calls.find("go-to-tab-by-id 4").expect(&calls);
     let visible = calls.find("hide-floating-panes --tab-id 4").expect(&calls);
     let focused = calls.find("focus-pane-id terminal_99").expect(&calls);
@@ -244,7 +248,13 @@ fn new_sessions_reject_missing_workspaces_and_non_zellij_navigation() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     assert!(
         runtime
-            .block_on(observer.new_session(root.path().to_str().unwrap(), "workspace", "", None, None))
+            .block_on(observer.new_session(
+                root.path().to_str().unwrap(),
+                "workspace",
+                "",
+                None,
+                None
+            ))
             .unwrap_err()
             .contains("inside Zellij")
     );

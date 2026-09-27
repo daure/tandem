@@ -1,5 +1,4 @@
 mod cleanup;
-mod close_command;
 mod command;
 mod compose;
 pub(crate) mod config;
@@ -14,7 +13,6 @@ mod ownership;
 mod removal;
 mod repositories;
 mod resources;
-#[cfg(not(test))]
 pub(crate) mod sound;
 mod stats;
 mod templates;
@@ -709,13 +707,7 @@ impl Environments {
             })
     }
 
-    pub fn execute(
-        self: &Arc<Self>,
-        operation: Operation,
-        timeout: u64,
-        startup: Startup,
-        close_command: Result<String, String>,
-    ) {
+    pub fn execute(self: &Arc<Self>, operation: Operation, timeout: u64, startup: Startup) {
         let mut config = self.config.clone();
         config.operation_id = Some(operation.id.clone());
         if let Some(job) = self
@@ -740,21 +732,6 @@ impl Environments {
                 job.operation.progress.push(line);
             }
         });
-        let environment = Arc::clone(self);
-        let id = operation.id.clone();
-        let close_command = close_command::CloseCommand::new(
-            close_command,
-            Arc::new(move |warning| {
-                if let Some(job) = environment
-                    .operations
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .get_mut(&id)
-                {
-                    job.operation.warnings.push(warning);
-                }
-            }),
-        );
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             match operation.action.as_str() {
                 "create_instance" => lifecycle::start(
@@ -786,20 +763,17 @@ impl Environments {
                     .map(|()| None)
                 }
                 "delete_instance" => {
-                    lifecycle::delete(&config, &operation.name, progress, &close_command)
-                        .map(|()| None)
+                    lifecycle::delete(&config, &operation.name, progress).map(|()| None)
                 }
                 "stop_template" => {
                     lifecycle::stop_template(&config, &operation.name, progress).map(|()| None)
                 }
                 "delete_template" => {
-                    lifecycle::delete_template(&config, &operation.name, progress, &close_command)
-                        .map(|()| None)
+                    lifecycle::delete_template(&config, &operation.name, progress).map(|()| None)
                 }
                 "create_template" => self.create_template(&operation.name).map(|_| None),
                 "remove_template" => {
-                    removal::template(&config, &operation.name, timeout, progress, &close_command)
-                        .map(|()| None)
+                    removal::template(&config, &operation.name, timeout, progress).map(|()| None)
                 }
                 _ => Err("unknown operation".into()),
             }

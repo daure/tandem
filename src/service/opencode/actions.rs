@@ -42,7 +42,9 @@ impl AppService {
         // A short-lived CLI has no TUI observation cache yet.
         let snapshot = tokio::time::timeout(
             Duration::from_secs(15),
-            self.opencode.observer.observe(&[workspace.to_owned()], Snapshot::default()),
+            self.opencode
+                .observer
+                .observe(&[workspace.to_owned()], Snapshot::default()),
         )
         .await
         .map_err(|_| "OpenCode observation timed out")??;
@@ -51,8 +53,15 @@ impl AppService {
             Path::new(directory).starts_with(workspace)
         })?;
         self.validate_opencode_launch()?;
-        self.opencode.observer
-            .new_session(workspace, name, current, destination.as_ref(), initial_prompt)
+        self.opencode
+            .observer
+            .new_session(
+                workspace,
+                name,
+                current,
+                destination.as_ref(),
+                initial_prompt,
+            )
             .await
             .map(|_| ())
     }
@@ -143,17 +152,29 @@ fn session_destination(
     preferred: Option<Pane>,
     matches: impl Fn(&str) -> bool,
 ) -> Result<Option<Pane>, String> {
-    let panes = snapshot.sessions.iter()
+    let panes = snapshot
+        .sessions
+        .iter()
         .filter(|session| matches(&session.directory))
         .flat_map(|session| &session.panes)
-        .chain(snapshot.clients.iter()
-            .filter(|client| matches(&client.directory))
-            .map(|client| &client.pane))
+        .chain(
+            snapshot
+                .clients
+                .iter()
+                .filter(|client| matches(&client.directory))
+                .map(|client| &client.pane),
+        )
         .collect::<Vec<_>>();
-    if preferred.as_ref().is_some_and(|pane| !panes.contains(&pane)) {
+    if preferred
+        .as_ref()
+        .is_some_and(|pane| !panes.contains(&pane))
+    {
         return Err("OpenCode pane is unavailable; refresh and try again".into());
     }
-    Ok(preferred.or_else(|| panes.into_iter()
-        .min_by_key(|pane| pane.session != current)
-        .cloned()))
+    Ok(preferred.or_else(|| {
+        panes
+            .into_iter()
+            .min_by_key(|pane| pane.session != current)
+            .cloned()
+    }))
 }

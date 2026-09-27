@@ -13,42 +13,63 @@ use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::oneshot;
 
 use super::AppService;
-use crate::store::environments::StartupKind;
+use crate::store::{
+    completion::{DEFAULT_FADE_SECONDS, MAX_FADE_SECONDS},
+    environments::StartupKind,
+};
 
 const BRANCH_INSTANCES_SETTING: &str = "instances.branch";
-const OPEN_COMMAND_SETTING: &str = "instances.open_command";
-const OPENCODE_SETTING: &str = "integrations.opencode";
+#[derive(Clone, Copy)]
+enum OpencodeSetting {
+    Integration,
+    ClearHistory,
+}
+
+impl OpencodeSetting {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Integration => "integrations.opencode",
+            Self::ClearHistory => "opencode.clear_history_on_creation",
+        }
+    }
+}
 type CommandReply = oneshot::Sender<Result<String, String>>;
 type StartupHistory = BTreeMap<(String, StartupKind), Vec<u64>>;
 
 #[derive(Clone, Copy)]
-pub(super) enum WorkspaceCommand {
-    Open,
-    Close,
+pub(super) enum FeedbackSetting {
+    FadeSeconds,
+    Sound,
 }
 
-impl WorkspaceCommand {
+impl FeedbackSetting {
     fn key(self) -> &'static str {
         match self {
-            Self::Open => OPEN_COMMAND_SETTING,
-            Self::Close => "instances.close_command",
+            Self::FadeSeconds => "completion.fade_seconds",
+            Self::Sound => "completion.sound",
+        }
+    }
+
+    fn default_value(self) -> &'static str {
+        match self {
+            Self::FadeSeconds => "20",
+            Self::Sound => "",
         }
     }
 }
 
 pub(super) struct Settings {
     branch_instances: AtomicBool,
-    opencode: Arc<AtomicBool>,
-    workspace_commands: Arc<[RwLock<String>; 2]>,
+    opencode: Arc<[AtomicBool; 2]>,
+    feedback: Arc<[RwLock<String>; 2]>,
     startup_history: Arc<RwLock<StartupHistory>>,
     commands: mpsc::Sender<SettingsRequest>,
 }
 
 enum SettingsRequest {
     SetBranchInstances(bool),
-    Opencode(Option<bool>, CommandReply),
-    SetCommand(WorkspaceCommand, String, CommandReply),
-    ReadCommand(WorkspaceCommand, CommandReply),
+    Opencode(OpencodeSetting, Option<bool>, CommandReply),
+    Feedback(FeedbackSetting, Option<String>, CommandReply),
     RecordStartup {
         template: String,
         kind: StartupKind,
@@ -74,14 +95,20 @@ impl Settings {
             )
             .optional()?
             .is_none_or(|value| value == "true");
-        let workspace_commands = Arc::new([
-            RwLock::new(read_command(&connection, WorkspaceCommand::Open)?),
-            RwLock::new(read_command(&connection, WorkspaceCommand::Close)?),
+        connection.execute_batch(include_str!(
+            "../../migrations/0004_completion_settings.sql"
+        ))?;
+        let feedback = Arc::new([
+            RwLock::new(read_feedback(&connection, FeedbackSetting::FadeSeconds)?),
+            RwLock::new(read_feedback(&connection, FeedbackSetting::Sound)?),
         ]);
-        let opencode = Arc::new(AtomicBool::new(read_opencode(&connection)?));
+        let opencode = Arc::new([
+            AtomicBool::new(read_opencode(&connection, OpencodeSetting::Integration)?),
+            AtomicBool::new(read_opencode(&connection, OpencodeSetting::ClearHistory)?),
+        ]);
         let cached_opencode = Arc::clone(&opencode);
         let startup_history = Arc::new(RwLock::new(read_startup_history(&connection)?));
-        let cached_commands = Arc::clone(&workspace_commands);
+        let cached_feedback = Arc::clone(&feedback);
         let cached_startup_history = Arc::clone(&startup_history);
         let (commands, receiver) = mpsc::channel();
         thread::Builder::new()
@@ -90,7 +117,7 @@ impl Settings {
                 persist_settings(
                     connection,
                     receiver,
-                    cached_commands,
+                    cached_feedback,
                     cached_startup_history,
                     cached_opencode,
                 )
@@ -99,7 +126,7 @@ impl Settings {
         Ok(Self {
             branch_instances: AtomicBool::new(branch_instances),
             opencode,
-            workspace_commands,
+            feedback,
             startup_history,
             commands,
         })
@@ -117,78 +144,57 @@ impl Settings {
         Ok(())
     }
 
-    fn command(&self, kind: WorkspaceCommand) -> String {
-        self.workspace_commands[kind as usize]
+    fn feedback(&self, kind: FeedbackSetting) -> String {
+        self.feedback[kind as usize]
             .read()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
     }
 
-    fn set_command(
+    fn feedback_request(
         &self,
-        kind: WorkspaceCommand,
-        command: String,
+        kind: FeedbackSetting,
+        value: Option<String>,
     ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
-        if command.contains('\0') {
-            return Err("workspace command must not contain NUL bytes".into());
-        }
         let (sender, receiver) = oneshot::channel();
         self.commands
-            .send(SettingsRequest::SetCommand(kind, command, sender))
+            .send(SettingsRequest::Feedback(kind, value, sender))
             .map_err(|_| "settings worker stopped".to_owned())?;
         Ok(receiver)
     }
 
-    pub(super) async fn read_open_command(&self) -> Result<String, String> {
-        self.read_command(WorkspaceCommand::Open).await
-    }
-
-    async fn read_command(&self, kind: WorkspaceCommand) -> Result<String, String> {
-        let (sender, receiver) = oneshot::channel();
-        self.commands
-            .send(SettingsRequest::ReadCommand(kind, sender))
-            .map_err(|_| "settings worker stopped".to_owned())?;
-        receiver
-            .await
-            .map_err(|_| "settings worker stopped".to_owned())?
-    }
-
-    pub(super) fn read_close_command(&self) -> Result<String, String> {
-        self.read_command_blocking(WorkspaceCommand::Close)
-    }
-
-    pub(super) fn refresh_commands(&self) -> Result<(), String> {
-        self.read_command_blocking(WorkspaceCommand::Open)?;
-        self.read_close_command()?;
-        self.opencode_request(None)?
-            .blocking_recv()
-            .map_err(|_| "settings worker stopped")??;
+    pub(super) fn refresh(&self) -> Result<(), String> {
+        for kind in [FeedbackSetting::FadeSeconds, FeedbackSetting::Sound] {
+            self.feedback_request(kind, None)?
+                .blocking_recv()
+                .map_err(|_| "settings worker stopped")??;
+        }
+        for kind in [OpencodeSetting::Integration, OpencodeSetting::ClearHistory] {
+            self.opencode_request(kind, None)?
+                .blocking_recv()
+                .map_err(|_| "settings worker stopped")??;
+        }
         Ok(())
     }
 
     pub(super) fn opencode_enabled(&self) -> bool {
-        self.opencode.load(Ordering::Acquire)
+        self.opencode[OpencodeSetting::Integration as usize].load(Ordering::Acquire)
+    }
+
+    pub(super) fn clear_opencode_history(&self) -> bool {
+        self.opencode[OpencodeSetting::ClearHistory as usize].load(Ordering::Acquire)
     }
 
     fn opencode_request(
         &self,
+        kind: OpencodeSetting,
         enabled: Option<bool>,
     ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
         let (sender, receiver) = oneshot::channel();
         self.commands
-            .send(SettingsRequest::Opencode(enabled, sender))
+            .send(SettingsRequest::Opencode(kind, enabled, sender))
             .map_err(|_| "settings worker stopped")?;
         Ok(receiver)
-    }
-
-    fn read_command_blocking(&self, kind: WorkspaceCommand) -> Result<String, String> {
-        let (sender, receiver) = oneshot::channel();
-        self.commands
-            .send(SettingsRequest::ReadCommand(kind, sender))
-            .map_err(|_| "settings worker stopped".to_owned())?;
-        receiver
-            .blocking_recv()
-            .map_err(|_| "settings worker stopped".to_owned())?
     }
 
     pub(super) fn startup_averages(&self, kind: StartupKind) -> BTreeMap<String, u64> {
@@ -231,9 +237,9 @@ impl Settings {
     }
 }
 
-fn read_command(
+fn read_feedback(
     connection: &Connection,
-    kind: WorkspaceCommand,
+    kind: FeedbackSetting,
 ) -> Result<String, rusqlite::Error> {
     connection
         .query_row(
@@ -242,14 +248,14 @@ fn read_command(
             |row| row.get(0),
         )
         .optional()
-        .map(Option::unwrap_or_default)
+        .map(|value| value.unwrap_or_else(|| kind.default_value().into()))
 }
 
-fn read_opencode(connection: &Connection) -> Result<bool, rusqlite::Error> {
+fn read_opencode(connection: &Connection, kind: OpencodeSetting) -> Result<bool, rusqlite::Error> {
     connection
         .query_row(
             "SELECT value FROM app_settings WHERE key = ?1",
-            [OPENCODE_SETTING],
+            [kind.key()],
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -288,21 +294,21 @@ fn read_startup_table(
 fn persist_settings(
     connection: Connection,
     receiver: mpsc::Receiver<SettingsRequest>,
-    workspace_commands: Arc<[RwLock<String>; 2]>,
+    feedback: Arc<[RwLock<String>; 2]>,
     startup_history: Arc<RwLock<StartupHistory>>,
-    opencode: Arc<AtomicBool>,
+    opencode: Arc<[AtomicBool; 2]>,
 ) {
     for command in receiver {
         match command {
-            SettingsRequest::Opencode(enabled, reply) => {
+            SettingsRequest::Opencode(kind, enabled, reply) => {
                 let result = match enabled {
                     Some(enabled) => connection.execute(
                         "INSERT INTO app_settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                        params![OPENCODE_SETTING, enabled.to_string()],
+                        params![kind.key(), enabled.to_string()],
                     ).map(|_| enabled),
-                    None => read_opencode(&connection),
+                    None => read_opencode(&connection, kind),
                 };
-                if let Ok(enabled) = result { opencode.store(enabled, Ordering::Release); }
+                if let Ok(enabled) = result { opencode[kind as usize].store(enabled, Ordering::Release); }
                 let _ = reply.send(result.map(|value| value.to_string()).map_err(|error| error.to_string()));
             }
             SettingsRequest::SetBranchInstances(enabled) => {
@@ -313,15 +319,15 @@ fn persist_settings(
                     crate::diagnostics::record_error("could not persist settings", &error);
                 }
             }
-            SettingsRequest::SetCommand(kind, value, reply) => {
-                let result = connection.execute(
+            SettingsRequest::Feedback(kind, value, reply) => {
+                let result = match value {
+                    Some(value) => connection.execute(
                     "INSERT INTO app_settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                     params![kind.key(), value],
-                ).map(|_| value);
-                finish_command(result, &workspace_commands[kind as usize], reply);
-            }
-            SettingsRequest::ReadCommand(kind, reply) => {
-                finish_command(read_command(&connection, kind), &workspace_commands[kind as usize], reply);
+                    ).map(|_| value),
+                    None => read_feedback(&connection, kind),
+                };
+                finish_feedback(result, &feedback[kind as usize], reply);
             }
             SettingsRequest::RecordStartup {
                 template,
@@ -382,14 +388,14 @@ fn startup_table(kind: StartupKind) -> &'static str {
     }
 }
 
-fn finish_command(
+fn finish_feedback(
     result: Result<String, rusqlite::Error>,
     cache: &RwLock<String>,
     reply: CommandReply,
 ) {
     match &result {
         Ok(value) => *cache.write().unwrap_or_else(|error| error.into_inner()) = value.clone(),
-        Err(error) => crate::diagnostics::record_error("workspace command settings failed", error),
+        Err(error) => crate::diagnostics::record_error("completion settings failed", error),
     }
     let _ = reply.send(result.map_err(|error| error.to_string()));
 }
@@ -403,7 +409,26 @@ impl AppService {
         &self,
         enabled: bool,
     ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
-        let saved = self.settings.opencode_request(Some(enabled))?;
+        self.set_opencode_setting(OpencodeSetting::Integration, enabled)
+    }
+
+    pub(crate) fn clear_opencode_history(&self) -> bool {
+        self.settings.clear_opencode_history()
+    }
+
+    pub(crate) fn set_clear_opencode_history(
+        &self,
+        enabled: bool,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
+        self.set_opencode_setting(OpencodeSetting::ClearHistory, enabled)
+    }
+
+    fn set_opencode_setting(
+        &self,
+        kind: OpencodeSetting,
+        enabled: bool,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
+        let saved = self.settings.opencode_request(kind, Some(enabled))?;
         let notifier = self.refresh.notifier.clone();
         let state = Arc::clone(&self.opencode);
         let (sender, receiver) = oneshot::channel();
@@ -412,7 +437,9 @@ impl AppService {
                 .await
                 .unwrap_or_else(|_| Err("settings worker stopped".into()));
             if result.is_ok() {
-                state.reset();
+                if matches!(kind, OpencodeSetting::Integration) {
+                    state.reset();
+                }
                 let _ = tokio::task::spawn_blocking(move || {
                     notifier.publish(super::refresh::Refresh::Settings)
                 })
@@ -423,70 +450,49 @@ impl AppService {
         Ok(receiver)
     }
 
-    pub(crate) async fn configure_open_command(
+    pub(crate) fn completion_fade_seconds(&self) -> u64 {
+        self.settings
+            .feedback(FeedbackSetting::FadeSeconds)
+            .parse::<u64>()
+            .ok()
+            .filter(|seconds| (1..=MAX_FADE_SECONDS).contains(seconds))
+            .unwrap_or(DEFAULT_FADE_SECONDS)
+    }
+
+    pub(crate) fn completion_sound_choice(&self) -> String {
+        self.settings.feedback(FeedbackSetting::Sound)
+    }
+
+    pub(crate) fn set_completion_fade_seconds(
         &self,
-        command: String,
-        confirmed: bool,
-    ) -> Result<String, String> {
-        if !confirmed {
-            return Err(
-                "confirmation_required: the open command executes with local host privileges"
-                    .into(),
-            );
+        value: String,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
+        let seconds = value
+            .parse::<u64>()
+            .ok()
+            .filter(|seconds| (1..=MAX_FADE_SECONDS).contains(seconds))
+            .ok_or("Fade duration must be between 1 and 3600 seconds")?;
+        self.set_feedback(FeedbackSetting::FadeSeconds, seconds.to_string())
+    }
+
+    pub(crate) fn set_completion_sound_choice(
+        &self,
+        value: String,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
+        if !self.sound_choices.iter().any(|sound| sound.id == value) {
+            return Err("The selected sound is unavailable".into());
         }
-        self.set_open_command(command)?
-            .await
-            .map_err(|_| "settings worker stopped".to_owned())?
+        let saved = self.set_feedback(FeedbackSetting::Sound, value.clone())?;
+        self.play_sound(value);
+        Ok(saved)
     }
 
-    pub(crate) fn open_command(&self) -> String {
-        self.settings.command(WorkspaceCommand::Open)
-    }
-
-    pub(crate) fn set_open_command(
+    fn set_feedback(
         &self,
-        command: String,
+        kind: FeedbackSetting,
+        value: String,
     ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
-        self.set_workspace_command(WorkspaceCommand::Open, command)
-    }
-
-    pub(crate) async fn configure_close_command(
-        &self,
-        command: String,
-        confirmed: bool,
-    ) -> Result<String, String> {
-        if !confirmed {
-            return Err(
-                "confirmation_required: the close command executes with local host privileges"
-                    .into(),
-            );
-        }
-        self.set_close_command(command)?
-            .await
-            .map_err(|_| "settings worker stopped".to_owned())?
-    }
-
-    pub(crate) fn close_command(&self) -> String {
-        self.settings.command(WorkspaceCommand::Close)
-    }
-
-    pub(crate) fn set_close_command(
-        &self,
-        command: String,
-    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
-        self.set_workspace_command(WorkspaceCommand::Close, command)
-    }
-
-    pub(crate) async fn get_close_command(&self) -> Result<String, String> {
-        self.settings.read_command(WorkspaceCommand::Close).await
-    }
-
-    fn set_workspace_command(
-        &self,
-        kind: WorkspaceCommand,
-        command: String,
-    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
-        let saved = self.settings.set_command(kind, command)?;
+        let saved = self.settings.feedback_request(kind, Some(value))?;
         let notifier = self.refresh.notifier.clone();
         let (sender, receiver) = oneshot::channel();
         self.runtime.spawn(async move {
@@ -502,10 +508,6 @@ impl AppService {
             let _ = sender.send(result);
         });
         Ok(receiver)
-    }
-
-    pub(crate) async fn get_open_command(&self) -> Result<String, String> {
-        self.settings.read_open_command().await
     }
 
     pub(crate) fn branch_instances(&self) -> bool {

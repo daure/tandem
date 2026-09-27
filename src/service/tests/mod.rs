@@ -1,9 +1,8 @@
 use super::super::AppService;
 use crate::store::environments::Instance;
 
-mod close_command;
+mod completion_settings;
 mod instance_batch;
-mod open_command;
 mod opencode;
 
 #[test]

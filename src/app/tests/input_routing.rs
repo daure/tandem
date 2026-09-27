@@ -173,12 +173,9 @@ fn status_bar_menu_opens_branch_instance_settings() {
 }
 
 #[test]
-fn saved_open_command_runs_from_the_instance_shortcut_and_menu() {
+fn settings_duration_input_accepts_digits_and_persists_the_value() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
-    let workspace = tempfile::tempdir().unwrap();
-    std::fs::write(workspace.path().join("AGENTS.md"), "Workspace guidance\n").unwrap();
-    let command = "printf '%s' \"$TANDEM_WORKSPACE\" > opened";
     let settings = AnimationSettings {
         enabled: false,
         ..AnimationSettings::default()
@@ -195,7 +192,7 @@ fn saved_open_command_runs_from_the_instance_shortcut_and_menu() {
                 .path
                 .keys()
                 .iter()
-                .any(|key| key.as_str() == "open-command")
+                .any(|key| key.as_str() == "completion-fade")
         })
         .unwrap();
     let route = EventRoute::new(input.path.clone());
@@ -205,62 +202,39 @@ fn saved_open_command_runs_from_the_instance_shortcut_and_menu() {
         &TuiEvent::Key(KeyEvent::from(Key::Enter)),
         &mut input_ctx,
     );
-    app.dispatch_event(&route, &TuiEvent::Paste(command.into()), &mut input_ctx);
+    app.dispatch_event(&route, &TuiEvent::Paste("4x5".into()), &mut input_ctx);
+    assert!(input_ctx.messages().is_empty());
+    app.dispatch_event(
+        &route,
+        &TuiEvent::Key(KeyEvent::from(Key::Home)),
+        &mut input_ctx,
+    );
+    for _ in 0..2 {
+        app.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Delete)),
+            &mut input_ctx,
+        );
+    }
+    let mut input_ctx = EventCtx::new(settings);
+    app.dispatch_event(&route, &TuiEvent::Paste("45".into()), &mut input_ctx);
     let value = input_ctx
         .messages()
         .iter()
         .find_map(|message| match message {
-            Msg::OpenCommandChanged(value) => Some(value.clone()),
+            Msg::CompletionFadeChanged(value) => Some(value.clone()),
             _ => None,
         })
-        .expect("editing the input emits its command");
-    assert_eq!(value, command);
-    app.handle_message(Msg::OpenCommandChanged(value), &mut EventCtx::new(settings));
-    app.service.flush_settings();
-    assert_eq!(app.service.open_command(), command);
-    assert!(!workspace.path().join("opened").exists());
-    let close_command = "printf '%s' \"$TANDEM_INSTANCE\" > closed";
-    let close_input = layout
-        .focus_targets()
-        .iter()
-        .find(|target| {
-            target
-                .path
-                .keys()
-                .iter()
-                .any(|key| key.as_str() == "close-command")
-        })
-        .unwrap();
-    let mut close_ctx = EventCtx::new(settings);
-    app.dispatch_event(
-        &EventRoute::new(close_input.path.clone()),
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
-        &mut close_ctx,
-    );
-    app.dispatch_event(
-        &EventRoute::new(close_input.path.clone()),
-        &TuiEvent::Paste(close_command.into()),
-        &mut close_ctx,
-    );
-    let value = close_ctx
-        .messages()
-        .iter()
-        .find_map(|message| match message {
-            Msg::CloseCommandChanged(value) => Some(value.clone()),
-            _ => None,
-        })
-        .expect("editing the close input emits its command");
-    assert_eq!(value, close_command);
+        .expect("editing the input emits its duration");
+    assert_eq!(value, "45");
     app.handle_message(
-        Msg::CloseCommandChanged(value),
+        Msg::CompletionFadeChanged(value),
         &mut EventCtx::new(settings),
     );
     app.service.flush_settings();
-    assert_eq!(app.service.close_command(), close_command);
-    assert!(!workspace.path().join("closed").exists());
+    assert_eq!(app.service.completion_fade_seconds(), 45);
     app.handle_message(Msg::Close, &mut EventCtx::new(settings));
     app.handle_message(Msg::OpenSettings, &mut EventCtx::new(settings));
-    assert_eq!(app.open_command, command);
     layout.layout(&mut app, area);
     let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
     terminal
@@ -271,55 +245,74 @@ fn saved_open_command_runs_from_the_instance_shortcut_and_menu() {
         })
         .unwrap();
     let text = rendered_lines(&terminal, area).join("\n");
-    assert!(text.contains("Open command"), "{text}");
-    assert!(text.contains("Close command"), "{text}");
-    assert!(text.contains(command), "{text}");
-    assert!(text.contains(close_command), "{text}");
+    assert!(text.contains("Completion fade"), "{text}");
+    assert!(text.contains("45"), "{text}");
+    assert!(text.contains("Completion sound"), "{text}");
+}
 
-    app.handle_message(Msg::Close, &mut EventCtx::new(settings));
-    let mut snapshot = snapshot();
-    snapshot.instances[0].workspace = workspace.path().to_str().unwrap().into();
-    app.set_rows_for_tests(rows::from_snapshot(&snapshot));
-    super::super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
-    for menu in [false, true] {
-        if menu {
-            for character in ".Run open command".chars() {
-                app.event(
-                    &TuiEvent::Key(KeyEvent::from(Key::Char(character))),
-                    &mut EventCtx::new(settings),
-                );
-            }
-            app.event(
-                &TuiEvent::Key(KeyEvent::from(Key::Enter)),
-                &mut EventCtx::new(settings),
-            );
-            assert!(!app.menu_layer().is_active());
-        } else {
-            app.event(
-                &TuiEvent::Key(KeyEvent {
-                    code: Key::Char(';'),
-                    modifiers: KeyModifiers::CONTROL,
-                }),
-                &mut EventCtx::new(settings),
-            );
-        }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            if std::fs::read_to_string(workspace.path().join("opened"))
-                .ok()
-                .as_deref()
-                == workspace.path().to_str()
-            {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "custom workspace command did not finish"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        std::fs::remove_file(workspace.path().join("opened")).unwrap();
-        assert!(!app.view.is_active());
-    }
-    assert!(app.service.opened_system_targets().is_empty());
+#[test]
+fn sound_dropdown_previews_and_saves_only_when_a_choice_is_confirmed() {
+    tuicore::init();
+    let mut service = AppService::for_tests();
+    service.set_sound_choices_for_tests(vec![
+        crate::store::completion::SoundChoice {
+            id: String::new(),
+            label: "System default".into(),
+        },
+        crate::store::completion::SoundChoice {
+            id: "/sounds/bell.oga".into(),
+            label: "Bell".into(),
+        },
+    ]);
+    let mut app = root(service);
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
+    app.handle_message(Msg::OpenSettings, &mut EventCtx::new(settings));
+    let area = Rect::new(0, 0, 130, 40);
+    let mut layout = LayoutEngine::new();
+    layout.layout(&mut app, area);
+    let field = layout
+        .focus_targets()
+        .iter()
+        .find(|target| {
+            target
+                .path
+                .keys()
+                .iter()
+                .any(|key| key.as_str() == "completion-sound")
+        })
+        .unwrap();
+    app.dispatch_focus(field, true, &mut tuicore::FocusCtx::default());
+    app.dispatch_event(
+        &EventRoute::new(field.path.clone()),
+        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &mut EventCtx::new(settings),
+    );
+    let route = popup_route(&mut app, area);
+    app.dispatch_event(
+        &route,
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char('j'),
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut EventCtx::new(settings),
+    );
+    assert_eq!(app.service.completion_sound_count_for_tests(), 0);
+    assert_eq!(app.service.completion_sound_choice(), "");
+    app.dispatch_event(
+        &route,
+        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &mut EventCtx::new(settings),
+    );
+    app.settings_save
+        .take()
+        .expect("confirming a new sound saves it")
+        .blocking_recv()
+        .unwrap()
+        .unwrap();
+    assert_eq!(app.service.completion_sound_choice(), "/sounds/bell.oga");
+    assert_eq!(app.service.completion_sound_count_for_tests(), 1);
+    assert!(!app.completion_sound);
 }

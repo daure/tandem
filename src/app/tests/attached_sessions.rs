@@ -245,10 +245,7 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
     for width in [40, 80, 130] {
         let (layout, lines) = render(&mut app, width);
         let text = lines.join("\n");
-        assert!(lines[1].contains("󰚩"), "{text}");
-        if width == 130 {
-            assert!(lines[1].contains("|A|"), "{text}");
-        }
+        assert!(lines[0].contains("Sessions · Instances"), "{text}");
         let history = layout
             .focus_targets()
             .iter()
@@ -286,10 +283,12 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
                 .iter()
                 .position(|line| line.contains(&format!("Conversation {id}")))
                 .unwrap();
-            assert!(
-                lines[index + 1].contains(&format!("Question {id}")),
-                "{text}"
-            );
+            if id != "saved" {
+                assert!(
+                    lines[index + 1].contains(&format!("Question {id}")),
+                    "{text}"
+                );
+            }
         }
         assert!(text.contains(" review · Stopped · 󰠲 website"), "{text}");
         assert!(text.contains("(no description)"), "{text}");
@@ -328,30 +327,21 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
     app.handle_message(Msg::SetRunningOnly(true), &mut ctx);
     assert!(app.running_only && !app.opencode_history);
     app.update_snapshot(inventory);
-    assert!(app.toolbar_state.borrow().attached_sessions_only);
-    let (layout, _) = render(&mut app, 130);
+    assert_eq!(app.tabs_mut().selected_index(), 0);
+    let (layout, lines) = render(&mut app, 130);
     let target = layout
         .focus_targets()
         .iter()
-        .find(|target| {
-            target
-                .path
-                .keys()
-                .iter()
-                .any(|key| key.as_str() == "attached-sessions-only")
-        })
+        .find(|target| target.id.as_str() == "tabs")
         .unwrap();
+    let column = lines[0].split_once("Instances").unwrap().0.chars().count() as u16;
     let mut activation = EventCtx::new(AnimationSettings::default());
     app.dispatch_event(
         &EventRoute::new(target.path.clone()),
-        &click(target.area),
+        &click(Rect::new(column, 0, 1, 1)),
         &mut activation,
     );
-    assert!(matches!(
-        activation.messages(),
-        [Msg::SetAttachedSessionsOnly(false)]
-    ));
-    app.handle_message(Msg::SetAttachedSessionsOnly(false), &mut ctx);
+    assert_eq!(app.tabs_mut().selected_index(), 1);
     assert!(!app.attached_sessions_only);
     assert!(app.running_only && !app.opencode_history);
     let (layout, lines) = render(&mut app, 130);
@@ -551,14 +541,9 @@ fn attached_mode_updates_on_detach_and_leaves_the_view_when_integration_is_disab
         .unwrap();
     app.update_snapshot(snapshot());
     assert!(!app.attached_sessions_only);
-    let (layout, lines) = render(&mut app, 130);
-    assert!(!lines[1].contains("󰚩"));
+    assert_eq!(app.tabs_mut().selected_index(), 0);
+    let (_, lines) = render(&mut app, 130);
+    assert!(!lines[0].contains("Sessions"));
+    assert!(lines[0].contains("Instances"));
     assert!(lines.join("\n").contains("review"));
-    assert!(!layout.focus_targets().iter().any(|target| {
-        target
-            .path
-            .keys()
-            .iter()
-            .any(|key| key.as_str() == "attached-sessions-only")
-    }));
 }

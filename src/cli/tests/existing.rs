@@ -55,10 +55,7 @@ fn existing_running_and_stopped_instances_are_unchanged_with_optional_opening() 
             assert_inspection_only(&fixture);
             if flag.is_some() {
                 let opened = fixture.home.join("opened");
-                let expected = format!(
-                    "{}\n",
-                    fixture.home.join("workspaces/review").display()
-                );
+                let expected = format!("{}\n", fixture.home.join("workspaces/review").display());
                 let deadline = Instant::now() + Duration::from_secs(5);
                 while fs::read_to_string(&opened).ok().as_deref() != Some(&expected) {
                     assert!(Instant::now() < deadline, "opener did not run");

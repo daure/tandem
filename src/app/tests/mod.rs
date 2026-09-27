@@ -14,6 +14,7 @@ mod attached_sessions;
 mod bulk;
 mod completion;
 mod guidance;
+mod history_settings;
 mod input_routing;
 mod labels;
 mod opencode;
@@ -607,41 +608,6 @@ fn copy_hotkeys_are_registered_on_the_instances_tab() {
                 | ("yu", [Msg::CopyGatewayUrl])
         ));
     }
-}
-
-#[test]
-fn control_semicolon_opens_the_selected_instance_workspace() {
-    tuicore::init();
-    let mut app = root(AppService::for_tests());
-    let directory = tempfile::tempdir().unwrap();
-    let workspace = directory.path().join("review");
-    std::fs::create_dir(&workspace).unwrap();
-    std::fs::write(workspace.join("AGENTS.md"), "Workspace guidance\n").unwrap();
-    let mut snapshot = snapshot();
-    snapshot.instances[0].workspace = workspace.display().to_string();
-    app.set_rows_for_tests(rows::from_snapshot(&snapshot));
-    super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
-
-    app.event(
-        &TuiEvent::Key(KeyEvent {
-            code: Key::Char(';'),
-            modifiers: KeyModifiers::CONTROL,
-        }),
-        &mut EventCtx::new(AnimationSettings::default()),
-    );
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while app.service.opened_system_targets().is_empty() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "workspace opener did not finish"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert_eq!(
-        app.service.opened_system_targets(),
-        [workspace.display().to_string()]
-    );
 }
 
 #[test]
@@ -1312,7 +1278,6 @@ fn instance_action_menu_lists_instance_actions() {
         ("Yank", "y"),
         ("Update description", "d"),
         ("View details", "Enter"),
-        ("Run open command", "⌃;"),
         ("New instance", "i"),
         ("Start instance", "s"),
         ("Stop instance", "s"),

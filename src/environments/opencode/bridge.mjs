@@ -60,6 +60,15 @@ export default {
       const session = sessionID ? api.state.session.get(sessionID) : undefined
       if (sessionID && !session) return
       const messages = sessionID ? api.state.session.messages(sessionID) : []
+      const question = messages.findLast((message) => message.role === "user")
+      const questionText = question
+        ? api.state.part(question.id)
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join(" ")
+          .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, "")
+          .replace(/\s+/gu, " ").trim()
+        : ""
       const reply = messages.findLast((message) => message.role === "assistant")
       const last = messages.findLast((message) => message.role === "assistant" && message.tokens.output > 0)
       const provider = reply
@@ -75,6 +84,7 @@ export default {
       const attach = process.argv.indexOf("attach")
       const server = attach >= 0 ? process.argv[attach + 1] : ""
       const status = sessionID ? api.state.session.status(sessionID) : undefined
+      const awaitingAnswer = sessionID ? api.state.session.question(sessionID).length > 0 : false
       const record = {
         pid: process.pid,
         observed_at: Date.now(),
@@ -82,7 +92,10 @@ export default {
         title: session?.title ?? "OpenCode",
         directory: session?.directory ?? api.state.path.directory,
         server: server ?? "",
-        activity: status?.type === "busy" || status?.type === "retry" ? "busy" : "idle",
+        last_question: questionText ? Array.from(questionText).slice(0, 4096).join("") : undefined,
+        activity: awaitingAnswer
+          ? "awaiting_answer"
+          : status?.type === "busy" || status?.type === "retry" ? "busy" : "idle",
         agent: reply?.agent,
         agent_color: reply?.agent ? api.state.config.agent?.[reply.agent]?.color : undefined,
         model: reply ? `${reply.providerID}/${reply.modelID}` : undefined,

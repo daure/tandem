@@ -28,7 +28,6 @@ pub(super) enum Action {
     Yank,
     UpdateDescription,
     OpenBrowser,
-    OpenCommand,
     OpenPanel,
     GotoPanel,
     CloseSession,
@@ -58,7 +57,7 @@ impl Action {
             | Self::CopyCheckoutPath => unreachable!("copy actions have fixed hotkeys"),
             Self::Yank => unreachable!("yank opens its own menu"),
             Self::UpdateDescription => unreachable!("description editing opens its own dialog"),
-            Self::OpenBrowser | Self::OpenCommand => 10,
+            Self::OpenBrowser => unreachable!("browser action has a fixed hotkey"),
             Self::OpenPanel
             | Self::GotoPanel
             | Self::CloseSession
@@ -88,7 +87,6 @@ impl Action {
             Self::Yank => "Yank",
             Self::UpdateDescription => "Update description",
             Self::OpenBrowser => "Open in browser",
-            Self::OpenCommand => "Run open command",
             Self::OpenPanel => "Open panel",
             Self::GotoPanel => "Goto panel",
             Self::CloseSession => "Close session",
@@ -136,7 +134,7 @@ pub(super) struct Target {
 }
 
 impl ActionMenu {
-    pub(super) fn new(keys: [KeySpec; 11]) -> Self {
+    pub(super) fn new(keys: [KeySpec; 10]) -> Self {
         let selected = Rc::new(RefCell::new(None));
         let selection = Rc::clone(&selected);
         let enabled = Rc::new(RefCell::new(Vec::new()));
@@ -220,7 +218,6 @@ impl ActionMenu {
                 Action::Yank,
                 Action::UpdateDescription,
                 Action::Details,
-                Action::OpenCommand,
                 Action::NewInstance,
                 Action::Start,
                 Action::Stop,
@@ -283,7 +280,7 @@ impl ActionMenu {
     }
 }
 
-fn action_text(action: Action, keys: &[KeySpec; 11], enabled: bool) -> Text<'static> {
+fn action_text(action: Action, keys: &[KeySpec; 10], enabled: bool) -> Text<'static> {
     let label = action.label();
     let hotkey = match action {
         Action::CopyTemplateName | Action::CopyCheckoutPath => "yy".into(),

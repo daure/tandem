@@ -124,8 +124,8 @@ pub(crate) enum Msg {
     NameChanged(String),
     DescriptionChanged(String),
     OpenSettings,
-    OpenCommandChanged(String),
-    CloseCommandChanged(String),
+    CompletionFadeChanged(String),
+    CompletionSoundSelected(String),
     NewTemplate,
     Refresh,
     StopAll,
@@ -133,6 +133,7 @@ pub(crate) enum Msg {
     SetRunningOnly(bool),
     SetBranchInstances(bool),
     SetOpencodeIntegration(bool),
+    SetClearOpencodeHistory(bool),
     OpenOpencode(String, Option<crate::store::opencode::Pane>),
     SetOpencodeHistory(bool),
     SetAttachedSessionsOnly(bool),
@@ -171,7 +172,7 @@ enum Intent {
     PurgeAll(Vec<String>),
 }
 
-type Content = Tabs<Msg>;
+type Content = Split<Tabs<Msg>, Flex<Msg>>;
 trait ModalNode: TuiNode<Msg> + DockChrome {
     fn set_bottom_left(&mut self, _title: String) {}
 }
@@ -198,7 +199,7 @@ pub(crate) struct App {
     instances: SharedState,
     toolbar_state: toolbar::SharedState,
     running_only: bool,
-    keys: [KeySpec; 11],
+    keys: [KeySpec; 10],
     refresh_schedule: refresh::RefreshSchedule,
     manual_refresh: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
     notifications: ToastRack,
@@ -207,7 +208,7 @@ pub(crate) struct App {
     intent: Option<Intent>,
     name: String,
     description: String,
-    open_command: String,
+    settings_sound_choice: Rc<RefCell<Option<String>>>,
     settings_save: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
     description_save: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
     area: Rect,
@@ -236,9 +237,10 @@ pub(crate) fn root(service: AppService) -> App {
                 template_directory: instance.template_directory.clone(),
             })
             .collect::<Vec<_>>();
-        rows = opencode::attached_rows_for_owners(rows, &opencode_snapshot, &owners, false);
+        rows = opencode::attached_rows_for_owners(rows, &opencode_snapshot, &owners, false, false);
     }
     let instances = instances::state(rows);
+    instances::set_completion_fade(&instances, service.completion_fade_seconds());
     instances::set_attached_sessions_only(&instances, opencode_enabled);
     let toolbar_state = Rc::new(RefCell::new(toolbar::State::from_snapshots(
         &snapshot,
@@ -247,11 +249,11 @@ pub(crate) fn root(service: AppService) -> App {
     {
         let mut toolbar_state = toolbar_state.borrow_mut();
         toolbar_state.opencode_enabled = opencode_enabled;
-        toolbar_state.attached_sessions_only = opencode_enabled;
         toolbar_state.completion_sound = false;
     }
-    let mut content = Tabs::new(vec![Tab::new(
-        "Instances",
+    // Both tabs project the same retained tree so search and toolbar controls stay shared.
+    let content = Split::vertical(
+        overview_tabs(opencode_enabled, opencode_enabled),
         Flex::column()
             .child(
                 "template-actions",
@@ -264,16 +266,8 @@ pub(crate) fn root(service: AppService) -> App {
                 Instances::new(instances.clone()),
                 FlexItem::fill(1),
             ),
-    )])
-    .variant(TabsVariant::OneRow)
-    .action_hotkey("yy", |_| Msg::CopyName)
-    .action_hotkey("yi", |_| Msg::CopyName)
-    .action_hotkey("yd", |_| Msg::CopyDescription)
-    .action_hotkey("yw", |_| Msg::CopyWorkspace)
-    .action_hotkey("yu", |_| Msg::CopyGatewayUrl);
-    for sequence in ["yy", "yi", "yd", "yw", "yu"] {
-        content.set_action_hotkey_visible(sequence, false);
-    }
+    )
+    .constraints(Constraint::Length(1), Constraint::Fill(1));
     let main = Split::vertical(
         content,
         StatusBar::new()
@@ -327,7 +321,7 @@ pub(crate) fn root(service: AppService) -> App {
         intent: None,
         name: String::new(),
         description: String::new(),
-        open_command: String::new(),
+        settings_sound_choice: Rc::new(RefCell::new(None)),
         settings_save: None,
         description_save: None,
         area: Rect::default(),
@@ -343,9 +337,17 @@ pub(crate) fn root(service: AppService) -> App {
 
 impl App {
     fn update_snapshot(&mut self, snapshot: EnvironmentSnapshot) -> bool {
+        let opencode_enabled = self.service.opencode_enabled();
+        let tabs_changed = self.toolbar_state.borrow().opencode_enabled != opencode_enabled;
+        if tabs_changed {
+            self.attached_sessions_only &= opencode_enabled;
+            *self.tabs_mut() = overview_tabs(opencode_enabled, self.attached_sessions_only);
+            self.toolbar_state.borrow_mut().opencode_enabled = opencode_enabled;
+            instances::set_attached_sessions_only(&self.instances, self.attached_sessions_only);
+        }
         if snapshot.loading {
             self.snapshot = snapshot;
-            return false;
+            return tabs_changed;
         }
         let initial_load_completed = self.snapshot.loading;
         let operations = self.service.operations();
@@ -356,9 +358,6 @@ impl App {
             self.service.play_completion_sound();
         }
         self.opencode_snapshot = opencode_snapshot;
-        if !self.service.opencode_enabled() {
-            self.attached_sessions_only = false;
-        }
         instances::set_attached_sessions_only(&self.instances, self.attached_sessions_only);
         let rows = self.project_rows(&snapshot, &operations);
         let rows_changed = if initial_load_completed {
@@ -367,18 +366,15 @@ impl App {
         } else {
             instances::replace_rows(&self.instances, rows)
         };
-        self.toolbar_state.borrow_mut().opencode_enabled = self.service.opencode_enabled();
-        self.toolbar_state.borrow_mut().attached_sessions_only = self.attached_sessions_only;
         let mut toolbar_state = toolbar::State::from_snapshots(&snapshot, &self.opencode_snapshot);
         let totals_changed = toolbar_state.totals != self.toolbar_state.borrow().totals;
         toolbar_state.running_only = self.running_only;
-        toolbar_state.opencode_enabled = self.service.opencode_enabled();
+        toolbar_state.opencode_enabled = opencode_enabled;
         toolbar_state.show_saved = self.opencode_history;
-        toolbar_state.attached_sessions_only = self.attached_sessions_only;
         toolbar_state.completion_sound = self.completion_sound;
         *self.toolbar_state.borrow_mut() = toolbar_state;
         self.snapshot = snapshot;
-        snapshot_changed || rows_changed || totals_changed
+        snapshot_changed || rows_changed || totals_changed || tabs_changed
     }
 
     fn selected(&self) -> Option<Row> {
@@ -391,6 +387,10 @@ impl App {
 
     fn menu_layer_mut(&mut self) -> &mut MenuLayer {
         self.view.base_mut().base_mut().base_mut()
+    }
+
+    fn tabs_mut(&mut self) -> &mut Tabs<Msg> {
+        self.menu_layer_mut().base_mut().first_mut().first_mut()
     }
 
     fn yank_layer(&self) -> &YankLayer {
@@ -475,13 +475,17 @@ impl App {
                 }
             }
             Msg::SetAttachedSessionsOnly(enabled) => {
-                if self.service.opencode_enabled() {
-                    self.attached_sessions_only = enabled;
-                    self.update_snapshot(self.snapshot.clone());
-                    instances::request_center_highlighted(&self.instances);
-                    ctx.request_layout();
-                    ctx.request_redraw();
-                }
+                let opencode_enabled = self.service.opencode_enabled();
+                let enabled = enabled && opencode_enabled;
+                self.attached_sessions_only = enabled;
+                self.tabs_mut().select_index_with_settings(
+                    usize::from(opencode_enabled && !enabled),
+                    ctx.animation(),
+                );
+                self.update_snapshot(self.snapshot.clone());
+                instances::request_center_highlighted(&self.instances);
+                ctx.request_layout();
+                ctx.request_redraw();
             }
             Msg::SetCompletionSound(enabled) => {
                 self.completion_sound = enabled;
@@ -499,21 +503,18 @@ impl App {
             Msg::NameChanged(name) => self.name = name,
             Msg::DescriptionChanged(description) => self.description = description,
             Msg::OpenSettings => self.open_settings(ctx),
-            Msg::OpenCommandChanged(command) => {
-                self.open_command = command;
-                match self.service.set_open_command(self.open_command.clone()) {
-                    Ok(reply) => {
-                        self.settings_save = Some(reply);
-                    }
-                    Err(error) => {
-                        ctx.notify(Notification::error("Cannot save open command", error))
-                    }
+            Msg::CompletionFadeChanged(value) => {
+                match self.service.set_completion_fade_seconds(value) {
+                    Ok(reply) => self.settings_save = Some(reply),
+                    Err(error) => self.view.layer_mut().set_bottom_left(error),
                 }
             }
-            Msg::CloseCommandChanged(command) => match self.service.set_close_command(command) {
-                Ok(reply) => self.settings_save = Some(reply),
-                Err(error) => ctx.notify(Notification::error("Cannot save close command", error)),
-            },
+            Msg::CompletionSoundSelected(value) => {
+                match self.service.set_completion_sound_choice(value) {
+                    Ok(reply) => self.settings_save = Some(reply),
+                    Err(error) => ctx.notify(Notification::error("Cannot select sound", error)),
+                }
+            }
             Msg::NewTemplate => self.action(2, ctx),
             Msg::Refresh => self.action(4, ctx),
             Msg::StopAll => self.confirm_stop_all(ctx),
@@ -522,6 +523,12 @@ impl App {
             Msg::SetBranchInstances(enabled) => {
                 if let Err(error) = self.service.set_branch_instances(enabled) {
                     ctx.notify(Notification::error("Cannot save settings", error));
+                }
+            }
+            Msg::SetClearOpencodeHistory(enabled) => {
+                match self.service.set_clear_opencode_history(enabled) {
+                    Ok(reply) => self.settings_save = Some(reply),
+                    Err(error) => ctx.notify(Notification::error("Cannot save settings", error)),
                 }
             }
             Msg::CopyName => {
@@ -788,13 +795,16 @@ impl App {
     fn open_settings(&mut self, ctx: &mut EventCtx<Msg>) {
         self.intent = None;
         self.settings_save = None;
-        self.open_command = self.service.open_command();
+        self.settings_sound_choice.borrow_mut().take();
         self.open(
             dialogs::settings(
                 self.service.branch_instances(),
                 self.service.opencode_enabled(),
-                &self.open_command,
-                &self.service.close_command(),
+                self.service.clear_opencode_history(),
+                self.service.completion_fade_seconds(),
+                self.service.completion_sound_choices(),
+                &self.service.completion_sound_choice(),
+                Rc::clone(&self.settings_sound_choice),
             ),
             ctx,
         );
@@ -881,10 +891,6 @@ impl App {
                 }
                 action_menu::Action::OpenBrowser => {
                     self.open_gateway(ctx);
-                    return;
-                }
-                action_menu::Action::OpenCommand => {
-                    self.open_workspace(ctx);
                     return;
                 }
                 action_menu::Action::OpenPanel | action_menu::Action::GotoPanel => {
@@ -1157,9 +1163,6 @@ impl App {
             }
             8 => self.confirm_stop_all(ctx),
             9 => self.confirm_purge_all(ctx),
-            10 => {
-                self.open_workspace(ctx);
-            }
             6 => {
                 if let Some(row) = row.as_ref().filter(|row| row.is_template()) {
                     self.intent = Some(Intent::DeleteTemplate(row.template.clone()));
@@ -1228,20 +1231,6 @@ impl App {
         true
     }
 
-    fn open_workspace(&self, ctx: &mut EventCtx<Msg>) -> bool {
-        let Some((workspace, instance)) = self
-            .selected()
-            .filter(|row| row.service.is_none())
-            .and_then(|row| Some((row.workspace?, row.instance?)))
-        else {
-            return false;
-        };
-        if let Err(error) = self.service.open_workspace(&workspace, &instance) {
-            ctx.notify(Notification::error("Cannot open workspace", error));
-        }
-        true
-    }
-
     fn returns_to_data_view(event: &TuiEvent) -> bool {
         let TuiEvent::Key(key) = event else {
             return false;
@@ -1258,14 +1247,15 @@ impl App {
         }
         self.running_only = false;
         self.opencode_history = false;
-        self.attached_sessions_only = true;
+        self.attached_sessions_only = self.service.opencode_enabled();
+        self.tabs_mut()
+            .select_index_with_settings(0, ctx.animation());
         {
             let mut toolbar = self.toolbar_state.borrow_mut();
             toolbar.running_only = false;
             toolbar.show_saved = false;
-            toolbar.attached_sessions_only = true;
         }
-        instances::set_attached_sessions_only(&self.instances, true);
+        instances::set_attached_sessions_only(&self.instances, self.attached_sessions_only);
         let operations = self.service.operations();
         instances::replace_rows(
             &self.instances,
@@ -1273,6 +1263,27 @@ impl App {
         );
         ctx.request_layout();
         ctx.request_redraw();
+    }
+
+    fn navigate_tabs(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
+        if self.view.is_active() || self.transient_menu_active() || !self.service.opencode_enabled()
+        {
+            return false;
+        }
+        let TuiEvent::Key(key) = event else {
+            return false;
+        };
+        let bindings = tuicore::keybindings();
+        if !bindings.tabs().previous_matches(*key) && !bindings.tabs().next_matches(*key) {
+            return false;
+        }
+        // With two tabs, wrapping left or right selects the other view.
+        self.handle_message(
+            Msg::SetAttachedSessionsOnly(!self.attached_sessions_only),
+            ctx,
+        );
+        ctx.stop_propagation();
+        true
     }
 
     fn handle_key(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
@@ -1397,6 +1408,14 @@ impl App {
     }
 
     fn after_event(&mut self, ctx: &mut EventCtx<Msg>) {
+        let sound = self.settings_sound_choice.borrow_mut().take();
+        if let Some(sound) = sound {
+            self.handle_message(Msg::CompletionSoundSelected(sound), ctx);
+        }
+        let sessions = self.service.opencode_enabled() && self.tabs_mut().selected_index() == 0;
+        if sessions != self.attached_sessions_only {
+            self.handle_message(Msg::SetAttachedSessionsOnly(sessions), ctx);
+        }
         self.drain_action_menu(ctx);
         self.drain_yank_menu(ctx);
         self.drain_route_menu(ctx);
@@ -1445,7 +1464,7 @@ impl TuiNode<Msg> for App {
             self.service.poll_environments();
         }
         self.show_agent_overview(event, ctx);
-        if self.handle_key(event, ctx) {
+        if self.navigate_tabs(event, ctx) || self.handle_key(event, ctx) {
             return EventOutcome::Handled;
         }
         let outcome = if self.transient_menu_active() {
@@ -1466,6 +1485,9 @@ impl TuiNode<Msg> for App {
             self.service.poll_environments();
         }
         self.show_agent_overview(event, ctx);
+        if self.navigate_tabs(event, ctx) {
+            return EventOutcome::Handled;
+        }
         // Toolbar and status-bar controls own their input, including instance action keys.
         let status_bar_route = route.path.keys().starts_with(&[
             tuicore::ChildKey::first(),
@@ -1511,11 +1533,13 @@ impl TuiNode<Msg> for App {
         outcome
     }
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        instances::set_completion_fade(&self.instances, self.service.completion_fade_seconds());
         self.service.poll_opencode();
         self.poll_opencode_action();
         if self.refresh_schedule.tick(Instant::now()) {
             self.service.poll_environments();
         }
+        let opencode_enabled = self.toolbar_state.borrow().opencode_enabled;
         let mut changed = self.sync_environment();
         changed |= self.poll_description_save();
         if let Some(reply) = &mut self.settings_save {
@@ -1532,11 +1556,14 @@ impl TuiNode<Msg> for App {
                     self.view
                         .layer_mut()
                         .set_bottom_left(format!("Cannot save settings: {error}"));
+                } else {
+                    self.view.layer_mut().set_bottom_left(String::new());
                 }
                 changed = true;
             }
         }
         let mut result = self.view.tick(dt, settings);
+        result.layout |= opencode_enabled != self.toolbar_state.borrow().opencode_enabled;
         self.poll_manual_refresh();
         result = result.merge(self.notifications.tick(dt, settings));
         if changed {
@@ -1552,9 +1579,11 @@ impl TuiNode<Msg> for App {
     }
     fn focus(&mut self, target: Option<&FocusId>, focused: bool, ctx: &mut FocusCtx<Msg>) {
         self.view.focus(target, focused, ctx);
+        self.tabs_mut().set_focused(true, ctx.animation());
     }
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<Msg>) {
         self.view.dispatch_focus(target, focused, ctx);
+        self.tabs_mut().set_focused(true, ctx.animation());
     }
     fn focus_reveal_area(&self, target: &FocusTarget) -> Option<Rect> {
         self.view.focus_reveal_area(target)
@@ -1574,6 +1603,27 @@ impl TuiNode<Msg> for App {
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.view.destroy(ctx);
     }
+}
+
+fn overview_tabs(opencode_enabled: bool, sessions: bool) -> Tabs<Msg> {
+    let mut pages = Vec::new();
+    if opencode_enabled {
+        pages.push(Tab::text("Sessions", ""));
+    }
+    pages.push(Tab::text("Instances", ""));
+    let mut tabs = Tabs::new(pages)
+        .selected(usize::from(opencode_enabled && !sessions))
+        .focused(true)
+        .variant(TabsVariant::OneRow)
+        .action_hotkey("yy", |_| Msg::CopyName)
+        .action_hotkey("yi", |_| Msg::CopyName)
+        .action_hotkey("yd", |_| Msg::CopyDescription)
+        .action_hotkey("yw", |_| Msg::CopyWorkspace)
+        .action_hotkey("yu", |_| Msg::CopyGatewayUrl);
+    for sequence in ["yy", "yi", "yd", "yw", "yu"] {
+        tabs.set_action_hotkey_visible(sequence, false);
+    }
+    tabs
 }
 
 fn details_width_percent(width: u16) -> u16 {

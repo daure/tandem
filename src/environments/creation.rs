@@ -3,12 +3,15 @@ use std::time::{Duration, Instant};
 use super::{Environments, docker, gateway, journal, lifecycle, templates};
 use crate::store::environments::{Instance, validate_instance_name, validate_name};
 
+type BeforeCreation = Box<dyn FnOnce(&str, Instant) -> Result<(), String> + Send>;
+
 #[derive(Default)]
 pub(crate) struct Startup {
     pub branch_instances: bool,
     pub description: Option<String>,
     pub workspace_ready: Option<tokio::sync::oneshot::Sender<String>>,
     pub instance_lock: Option<gateway::Lock>,
+    pub before_creation: Option<BeforeCreation>,
 }
 
 impl Environments {

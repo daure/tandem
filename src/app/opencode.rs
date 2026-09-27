@@ -142,7 +142,7 @@ pub(super) fn attached_rows(rows: Vec<Row>, snapshot: &Snapshot) -> Vec<Row> {
             })
         })
         .collect::<Vec<_>>();
-    attached_rows_for_owners(rows, snapshot, &owners, false)
+    attached_rows_for_owners(rows, snapshot, &owners, false, false)
 }
 
 pub(super) fn attached_rows_for_owners(
@@ -150,6 +150,7 @@ pub(super) fn attached_rows_for_owners(
     snapshot: &Snapshot,
     owners: &[Owner],
     show_saved: bool,
+    running_only: bool,
 ) -> Vec<Row> {
     append_rows_for_owners(&mut rows, snapshot, show_saved, false, owners, false);
     let visible_session = |row: &Row| {
@@ -183,7 +184,22 @@ pub(super) fn attached_rows_for_owners(
             .then_some(row)
         })
         .collect();
-    append_external_rows(&mut grouped, snapshot, show_saved, false, owners);
+    append_external_rows(
+        &mut grouped,
+        snapshot,
+        show_saved,
+        false,
+        owners,
+        running_only,
+    );
+    if running_only {
+        let session_parents = grouped
+            .iter()
+            .filter(|row| visible_session(row))
+            .filter_map(|row| row.parent.clone())
+            .collect::<std::collections::HashSet<_>>();
+        grouped.retain(|row| row.parent.is_some() || session_parents.contains(&row.id));
+    }
     folders::active_first(&mut grouped, snapshot, owners);
     resources::apply(&mut grouped, snapshot, owners);
     super::rows::assign_alternating_backgrounds(&mut grouped, "");
@@ -371,7 +387,7 @@ fn append_rows_for_owners(
         rows.splice(insertion..insertion, children);
     }
     if include_external {
-        append_external_rows(rows, snapshot, show_saved, group_sessions, owners);
+        append_external_rows(rows, snapshot, show_saved, group_sessions, owners, false);
         resources::apply(rows, snapshot, owners);
     }
     super::rows::assign_alternating_backgrounds(rows, "");
@@ -392,7 +408,10 @@ fn append_session_rows(
     };
     let attached = session.attached();
     let saved = session.saved();
-    let new_session = !saved && session.last_question.is_none() && session.question_observed;
+    let new_session = !saved
+        && session.activity != Activity::AwaitingAnswer
+        && session.last_question.is_none()
+        && session.question_observed;
     let (secondary_icon, secondary_tone) = if session.stale {
         (STALE_ICON, Tone::Warning)
     } else if new_session {
@@ -400,6 +419,7 @@ fn append_session_rows(
     } else {
         match session.activity {
             Activity::Busy => ("", Tone::Info),
+            Activity::AwaitingAnswer => ("", Tone::Success),
             Activity::Idle => (
                 FINISHED_ICON,
                 if attached { Tone::Success } else { Tone::Muted },
@@ -452,12 +472,16 @@ fn append_session_rows(
         opencode_activity: (!session.stale).then_some(session.activity),
         parent: Some(parent.to_owned()),
         label,
-        icon: "󰚩",
+        icon: if session.activity == Activity::AwaitingAnswer {
+            "󱚟"
+        } else {
+            "󰚩"
+        },
         tone: if session.stale {
             Tone::Warning
         } else if session.activity == Activity::Busy {
             Tone::Info
-        } else if attached {
+        } else if attached || session.activity == Activity::AwaitingAnswer {
             Tone::Success
         } else {
             Tone::Muted
@@ -554,6 +578,7 @@ fn append_external_rows(
     show_saved: bool,
     overview: bool,
     owners: &[Owner],
+    running_only: bool,
 ) {
     let outside_tandem = |directory: &str| {
         workspace_owner(
@@ -594,6 +619,22 @@ fn append_external_rows(
             .or_default()
             .1
             .push(client);
+    }
+    if running_only {
+        let live_directories = snapshot
+            .sessions
+            .iter()
+            .filter(|session| session.live() && !session.stale)
+            .map(|session| session.directory.as_str())
+            .chain(
+                snapshot
+                    .clients
+                    .iter()
+                    .filter(|client| !client.stale)
+                    .map(|client| client.directory.as_str()),
+            )
+            .collect::<std::collections::HashSet<_>>();
+        workspaces.retain(|directory, _| live_directories.contains(directory.as_str()));
     }
     if workspaces.is_empty() {
         return;
@@ -798,7 +839,9 @@ fn compare_sessions(a: &Session, b: &Session) -> std::cmp::Ordering {
                 .activity_started_at_milliseconds
                 .unwrap_or(a.updated)
                 .cmp(&b.activity_started_at_milliseconds.unwrap_or(b.updated)),
-            Activity::Idle | Activity::Unknown => b.updated.cmp(&a.updated),
+            Activity::Idle | Activity::AwaitingAnswer | Activity::Unknown => {
+                b.updated.cmp(&a.updated)
+            }
         })
         .then_with(|| a.id.cmp(&b.id))
 }
@@ -808,6 +851,7 @@ fn session_order(session: &Session) -> u8 {
         return 3;
     }
     match (session.activity, session.attached()) {
+        (Activity::AwaitingAnswer, _) => 0,
         (Activity::Idle, true) => 0,
         (Activity::Idle, false) => 1,
         (Activity::Unknown, _) => 1,
@@ -939,6 +983,7 @@ impl App {
                 &self.opencode_snapshot,
                 &owners,
                 self.opencode_history,
+                self.running_only,
             )
         } else {
             append_rows_for_owners(

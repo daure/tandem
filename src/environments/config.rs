@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::store::environments::validate_name;
-use tuicore::{Key, KeyEvent, KeyModifiers, KeySpec};
+use tuicore::{Key, KeyEvent, KeySpec};
 
 #[derive(Clone)]
 pub(crate) struct Config {
@@ -15,7 +15,7 @@ pub(crate) struct Config {
     pub instructions: PathBuf,
     pub namespace: String,
     pub port: u16,
-    pub keys: [KeySpec; 11],
+    pub keys: [KeySpec; 10],
     pub operation_id: Option<String>,
 }
 
@@ -48,7 +48,6 @@ impl Config {
             "RESTART",
             "STOP_ALL",
             "PURGE_ALL",
-            "OPEN_COMMAND",
         ]
         .iter()
         .enumerate()
@@ -93,7 +92,6 @@ impl Config {
                 KeySpec::plain('r'),
                 KeySpec::shifted('s'),
                 KeySpec::shifted('p'),
-                KeySpec::key_with_modifiers(Key::Char(';'), KeyModifiers::CONTROL),
             ],
             operation_id: None,
         };
@@ -143,10 +141,6 @@ impl Config {
 fn action_key(name: &str, value: &str) -> Result<KeySpec, String> {
     match (name, value.to_ascii_lowercase().as_str()) {
         ("INFO", "enter") => Ok(KeySpec::key(Key::Enter)),
-        ("OPEN_COMMAND", "ctrl+;") => Ok(KeySpec::key_with_modifiers(
-            Key::Char(';'),
-            KeyModifiers::CONTROL,
-        )),
         _ if value.len() == 1 && value.as_bytes()[0].is_ascii_alphabetic() => Ok(KeySpec::from(
             KeyEvent::from(Key::Char(value.as_bytes()[0] as char)),
         )),
@@ -154,7 +148,6 @@ fn action_key(name: &str, value: &str) -> Result<KeySpec, String> {
             "TANDEM_KEY_{name} must be one ASCII letter{}",
             match name {
                 "INFO" => " or 'Enter'",
-                "OPEN_COMMAND" => " or 'ctrl+;'",
                 _ => "",
             }
         )),

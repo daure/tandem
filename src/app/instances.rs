@@ -22,6 +22,8 @@ use super::{
     rows::{self, Row},
 };
 
+const OPENCODE_WORKSPACES_ID: &str = "opencode-workspaces";
+
 mod completion;
 mod selection;
 
@@ -38,6 +40,7 @@ pub(super) struct State {
     attached_sessions_only: bool,
     mode_changed: bool,
     pub(super) resource_right_gutter: u16,
+    completion_fade: Duration,
 }
 
 pub(super) type SharedState = Rc<RefCell<State>>;
@@ -45,6 +48,7 @@ pub(super) type SharedState = Rc<RefCell<State>>;
 pub(super) fn state(rows: Vec<Row>) -> SharedState {
     Rc::new(RefCell::new(State {
         rows,
+        completion_fade: Duration::from_secs(crate::store::completion::DEFAULT_FADE_SECONDS),
         ..Default::default()
     }))
 }
@@ -57,6 +61,10 @@ pub(super) fn selected(state: &SharedState) -> Option<Row> {
         .iter()
         .find(|row| &row.id == highlighted)
         .cloned()
+}
+
+pub(super) fn set_completion_fade(state: &SharedState, seconds: u64) {
+    state.borrow_mut().completion_fade = Duration::from_secs(seconds);
 }
 
 pub(super) fn is_searching(state: &SharedState) -> bool {
@@ -139,7 +147,7 @@ pub(super) struct Instances {
     stripe_query: String,
     session_timers: HashMap<String, SessionTimer>,
     timer_display_phase: Duration,
-    completion: Rc<RefCell<completion::Pulses>>,
+    completion: Rc<RefCell<completion::Markers>>,
     scroll_preset: tuicore::ScrollPreset,
 }
 
@@ -163,8 +171,11 @@ impl Instances {
         let spinner = Rc::new(RefCell::new(Spinner::new()));
         let cell_spinner = Rc::clone(&spinner);
         let cpu_spinner = Rc::clone(&spinner);
-        let completion = Rc::new(RefCell::new(completion::Pulses::default()));
+        let completion = Rc::new(RefCell::new(completion::Markers::new(
+            state.borrow().completion_fade,
+        )));
         let row_completion = Rc::clone(&completion);
+        let row_pulse = Rc::clone(&completion);
         let tree = DataView::new(rows, |row: &Row| row.id.clone())
             .focus_id(TREE_FOCUS)
             .columns(vec![
@@ -211,7 +222,8 @@ impl Instances {
                 row.alternate_background
                     .then(|| Style::default().bg(tuicore::theme().surface_bg()))
             })
-            .row_style_transform(move |row, style| row_completion.borrow().style(row, style))
+            .row_style_transform(move |row, style| row_pulse.borrow().style(row, style))
+            .left_gutter_overlay_by(move |row, style| row_completion.borrow().marker(row, style))
             .expanded(expanded);
         let mut instances = Self {
             tree,
@@ -296,6 +308,7 @@ impl Instances {
             .filter(|row| {
                 row.parent.is_none()
                     && (agent_view || !Self::external_workspace(row))
+                    && !Self::external_workspaces_group(row)
                     && !self
                         .tree
                         .rows()
@@ -342,21 +355,17 @@ impl Instances {
             .highlighted_id()
             .filter(|_| self.state.borrow().center_highlighted)
             .filter(|highlighted| rows.iter().any(|row| &row.id == highlighted))
-            .filter(|highlighted| {
-                !(mode_changed
-                    && !agent_view
-                    && rows
-                        .iter()
-                        .find(|row| &row.id == highlighted)
-                        .and_then(|row| row.parent.as_deref())
-                        .is_some_and(|parent| parent.starts_with("opencode-workspace:")))
-            })
             .or_else(|| {
                 selection::pane_replacement(
                     self.tree.rows(),
                     &rows,
                     self.tree.highlighted_id().as_deref(),
                 )
+            })
+            .filter(|highlighted| {
+                !(mode_changed
+                    && !agent_view
+                    && Self::external_workspace_descendant(&rows, highlighted))
             });
         self.completion
             .borrow_mut()
@@ -503,7 +512,10 @@ impl Instances {
     fn overview_expanded_ids(rows: &[Row]) -> Vec<String> {
         rows.iter()
             .filter(|row| {
-                (row.parent.is_none() && !Self::external_workspace(row)) || row.instance.is_some()
+                (row.parent.is_none()
+                    && !Self::external_workspace(row)
+                    && !Self::external_workspaces_group(row))
+                    || row.instance.is_some()
             })
             .map(|row| row.id.clone())
             .collect()
@@ -513,6 +525,21 @@ impl Instances {
         row.id.starts_with("opencode-workspace:")
     }
 
+    fn external_workspaces_group(row: &Row) -> bool {
+        row.id == OPENCODE_WORKSPACES_ID
+    }
+
+    fn external_workspace_descendant(rows: &[Row], id: &str) -> bool {
+        let mut current = rows.iter().find(|row| row.id == id);
+        while let Some(parent) = current.and_then(|row| row.parent.as_deref()) {
+            if parent == OPENCODE_WORKSPACES_ID {
+                return true;
+            }
+            current = rows.iter().find(|row| row.id == parent);
+        }
+        false
+    }
+
     fn fully_expanded_ids(rows: &[Row], include_external: bool) -> Vec<String> {
         let parent_ids = rows
             .iter()
@@ -520,7 +547,9 @@ impl Instances {
             .collect::<HashSet<_>>();
         rows.iter()
             .filter(|row| {
-                parent_ids.contains(&row.id) && (include_external || !Self::external_workspace(row))
+                parent_ids.contains(&row.id)
+                    && !Self::external_workspaces_group(row)
+                    && (include_external || !Self::external_workspace(row))
             })
             .map(|row| row.id.clone())
             .collect()
@@ -613,6 +642,12 @@ impl Instances {
         self.tree.expand(&id.to_owned());
         self.after_event();
     }
+
+    #[cfg(test)]
+    pub(super) fn highlight_for_tests(&mut self, id: &str) {
+        self.tree.highlight_id(&id.to_owned());
+        self.after_event();
+    }
 }
 
 impl TuiNode<Msg> for Instances {
@@ -689,7 +724,11 @@ impl TuiNode<Msg> for Instances {
         let timer_changed = self.tick_session_timers(dt);
         let mut result =
             <DataView<Row, String> as TuiNode<Msg>>::tick(&mut self.tree, dt, settings);
-        result = result.merge(self.completion.borrow_mut().tick(dt, settings));
+        result = result.merge(self.completion.borrow_mut().tick(
+            dt,
+            settings,
+            self.state.borrow().completion_fade,
+        ));
         if self.state.borrow().rows.iter().any(|row| {
             row.loading
                 || row.secondary_loading

@@ -1,9 +1,11 @@
 mod conversation;
+mod history;
 mod navigation;
 mod resources;
 mod transport;
 
 pub(crate) use conversation::load as conversation;
+pub(crate) use history::clear as clear_history;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -36,6 +38,7 @@ struct Presence {
     title: String,
     directory: String,
     server: String,
+    last_question: Option<String>,
     activity: Activity,
     agent: Option<String>,
     agent_color: Option<String>,
@@ -68,6 +71,12 @@ struct RemoteTime {
 struct RemoteStatus {
     #[serde(rename = "type")]
     kind: String,
+}
+
+#[derive(Deserialize)]
+struct RemoteQuestion {
+    #[serde(rename = "sessionID")]
+    session_id: String,
 }
 
 #[derive(Deserialize)]
@@ -207,18 +216,22 @@ impl Observer {
         let mut question_refresh = BTreeSet::new();
         for (server, directories) in servers {
             let mut statuses = BTreeMap::new();
+            let mut pending_questions = BTreeSet::new();
             let mut status_tasks = tokio::task::JoinSet::new();
             for directory in &directories {
                 let mut path = reqwest::Url::parse("http://localhost/session/status")
                     .map_err(|error| error.to_string())?;
                 path.query_pairs_mut().append_pair("directory", directory);
                 let target = format!("{}?{}", path.path(), path.query().unwrap_or_default());
+                let questions_target = format!("/question?{}", path.query().unwrap_or_default());
                 let client = client.clone();
                 let server = server.clone();
                 let directory = directory.clone();
                 status_tasks.spawn(async move {
-                    let result =
-                        get::<BTreeMap<String, RemoteStatus>>(&client, &server, &target).await;
+                    let result = tokio::try_join!(
+                        get::<BTreeMap<String, RemoteStatus>>(&client, &server, &target),
+                        get::<Vec<RemoteQuestion>>(&client, &server, &questions_target),
+                    );
                     (directory, result)
                 });
             }
@@ -226,7 +239,11 @@ impl Observer {
             while let Some(result) = status_tasks.join_next().await {
                 let (directory, result) = result.map_err(|error| error.to_string())?;
                 match result {
-                    Ok(found) => statuses.extend(found),
+                    Ok((found, questions)) => {
+                        statuses.extend(found);
+                        pending_questions
+                            .extend(questions.into_iter().map(|question| question.session_id));
+                    }
                     Err(error) => {
                         // Directory initialization can fail independently on a shared server.
                         failed_status.insert(directory.clone());
@@ -290,6 +307,7 @@ impl Observer {
             let candidates: BTreeSet<_> = statuses
                 .keys()
                 .cloned()
+                .chain(pending_questions.iter().cloned())
                 .chain(
                     presences
                         .iter()
@@ -335,6 +353,8 @@ impl Observer {
                 let status_failed = failed_status.contains(&item.directory);
                 let activity = if status_failed {
                     Activity::Unknown
+                } else if pending_questions.contains(&item.id) {
+                    Activity::AwaitingAnswer
                 } else {
                     match statuses.get(&item.id).map(|s| s.kind.as_str()) {
                         Some("busy" | "retry") => Activity::Busy,
@@ -466,6 +486,22 @@ impl Observer {
                     ..Default::default()
                 });
             session.title = clean(&presence.title);
+            if let Some(question) = &presence.last_question {
+                let question = question
+                    .chars()
+                    .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+                    .collect::<String>()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(4096)
+                    .collect::<String>();
+                if !question.is_empty() {
+                    session.last_question = Some(question);
+                    session.question_observed = true;
+                }
+            }
             if presence.agent.is_some() {
                 session.agent = presence.agent.clone();
             }
@@ -594,7 +630,10 @@ impl Observer {
                 (id, turn)
             });
         }
-        while let Some(Ok((id, Ok(turn)))) = question_tasks.join_next().await {
+        while let Some(result) = question_tasks.join_next().await {
+            let Ok((id, Ok(turn))) = result else {
+                continue;
+            };
             if let Some(session) = sessions.get_mut(&id) {
                 session.question_observed = true;
                 if let Some(turn) = turn {
@@ -687,7 +726,7 @@ fn update_activity_timing(candidate: &mut Session, previous: Option<&Session>, o
             candidate.activity_started_at_milliseconds = Some(started);
             candidate.activity_elapsed_milliseconds = Some(observed_at.saturating_sub(started));
         }
-        Activity::Idle => {
+        Activity::Idle | Activity::AwaitingAnswer => {
             candidate.activity_started_at_milliseconds = None;
             candidate.activity_elapsed_milliseconds = previous.and_then(|session| {
                 session
@@ -722,7 +761,7 @@ fn apply_turn_timing(session: &mut Session, turn: &LatestTurn, observed_at: u64)
                 session.activity_elapsed_milliseconds = Some(completed - started);
             }
         }
-        Activity::Unknown => {}
+        Activity::AwaitingAnswer | Activity::Unknown => {}
     }
 }
 

@@ -54,43 +54,6 @@ struct UpdateTemplateManifestInput {
     confirmed: bool,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct SetOpenCommandInput {
-    /// Trusted host shell command. Use "$TANDEM_INSTANCE" for the instance name, "$TANDEM_WORKSPACE" for its path, and "$TANDEM_DESCRIPTION" for its description; empty restores the folder opener.
-    command: String,
-    /// Approval to configure host command execution when a user opens an instance.
-    #[serde(default)]
-    confirmed: bool,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct SetCloseCommandInput {
-    /// Trusted host shell command, run before workspace deletion. Quote "$TANDEM_INSTANCE" and "$TANDEM_WORKSPACE"; empty disables it.
-    command: String,
-    /// Approval for automatic host command execution during instance deletion, including purges and template deletion.
-    #[serde(default)]
-    confirmed: bool,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct RunOpenCommandInput {
-    /// Existing instance name; its workspace must be a real directory beneath Tandem's workspace root.
-    name: String,
-    /// Approval to execute the saved host command in this instance workspace.
-    #[serde(default)]
-    confirmed: bool,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-struct OpenCommandSetting {
-    command: String,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-struct OpenCommandRun {
-    workspace: String,
-}
-
 #[derive(Debug, Serialize, JsonSchema)]
 struct TemplateList {
     templates: Vec<Template>,
@@ -108,7 +71,7 @@ struct CreateInstanceInput {
     template: String,
     /// Instance name; 1–40 letters, digits or hyphens; starts with a letter/digit; gateway is reserved.
     name: String,
-    /// Set only after approval for host Git repository provisioning and this trusted Compose template's local Docker privileges.
+    /// Approval for host Git, trusted Compose privileges, and permanent OpenCode history cleanup when enabled (default on).
     #[serde(default)]
     confirmed: bool,
     /// Wait for content readiness (default true); false returns an operation to poll.
@@ -260,67 +223,6 @@ impl Transport<RoleServer> for TolerantStdioTransport {
 #[tool_router]
 impl McpServer {
     #[tool(
-        description = "Read the persisted workspace close command. Empty disables the deletion hook."
-    )]
-    async fn get_close_command(&self) -> Result<Json<OpenCommandSetting>, String> {
-        self.service
-            .get_close_command()
-            .await
-            .map(|command| Json(OpenCommandSetting { command }))
-    }
-
-    #[tool(
-        description = "Save a trusted close command after user approval (confirmed=true). Saving does not execute it. Instance deletion, purges and template deletion run it through sh -c in each existing workspace before removing that folder, with TANDEM_INSTANCE and TANDEM_WORKSPACE set. Empty disables it. Failures or a ten-second timeout produce operation warnings and deletion continues. Stop/restart do not run it."
-    )]
-    async fn set_close_command(
-        &self,
-        Parameters(input): Parameters<SetCloseCommandInput>,
-    ) -> Result<Json<OpenCommandSetting>, String> {
-        let command = self
-            .service
-            .configure_close_command(input.command, input.confirmed)
-            .await?;
-        Ok(Json(OpenCommandSetting { command }))
-    }
-
-    #[tool(
-        description = "Read the persisted workspace open command. Empty means the system folder opener."
-    )]
-    async fn get_open_command(&self) -> Result<Json<OpenCommandSetting>, String> {
-        self.service
-            .get_open_command()
-            .await
-            .map(|command| Json(OpenCommandSetting { command }))
-    }
-
-    #[tool(
-        description = "Save a trusted workspace open command after user approval (confirmed=true). Saving does not execute it. On instance opening, runs via sh -c in the workspace with TANDEM_INSTANCE, TANDEM_WORKSPACE and TANDEM_DESCRIPTION set; quote the variables. Empty restores the folder opener."
-    )]
-    async fn set_open_command(
-        &self,
-        Parameters(input): Parameters<SetOpenCommandInput>,
-    ) -> Result<Json<OpenCommandSetting>, String> {
-        let command = self
-            .service
-            .configure_open_command(input.command, input.confirmed)
-            .await?;
-        Ok(Json(OpenCommandSetting { command }))
-    }
-
-    #[tool(
-        description = "Run the saved workspace open command for a named instance. Requires confirmed=true after user approval; runs through sh -c in the workspace with TANDEM_INSTANCE, TANDEM_WORKSPACE and TANDEM_DESCRIPTION set. An empty saved command uses the system folder opener."
-    )]
-    async fn run_open_command(
-        &self,
-        Parameters(input): Parameters<RunOpenCommandInput>,
-    ) -> Result<Json<OpenCommandRun>, String> {
-        self.service
-            .run_open_command(input.name, input.confirmed)
-            .await
-            .map(|workspace| Json(OpenCommandRun { workspace }))
-    }
-
-    #[tool(
         description = "Read editable agent guidance, absolute instructions/template/workspace paths, and the generated tandem.json manifest_schema. Call this before using Tandem."
     )]
     async fn get_instructions(&self) -> Result<Json<Instructions>, String> {
@@ -378,7 +280,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Prepare an instance from a trusted template. Requires confirmed=true after user approval. Workspace-only templates prepare guidance and any declared Git repositories without Docker; blank and guidance-only templates require no Git. Service templates start Compose and the shared gateway and verify configured readiness. With wait=false, poll get_operation in this process."
+        description = "Prepare an instance from a trusted template after user approval. New instances permanently clear exact-workspace OpenCode history when integration and creation cleanup are enabled (default on); active clients or cleanup failures block creation. Workspace-only templates prepare guidance and declared repositories without Docker; blank and guidance-only templates require no Git. Service templates start Compose and the gateway and verify readiness. With wait=false, poll get_operation in this process."
     )]
     async fn create_instance(
         &self,

@@ -25,7 +25,6 @@ pub(super) struct State {
     pub running_only: bool,
     pub opencode_enabled: bool,
     pub show_saved: bool,
-    pub attached_sessions_only: bool,
     pub completion_sound: bool,
 }
 
@@ -63,7 +62,6 @@ impl State {
             running_only: false,
             opencode_enabled: false,
             show_saved: false,
-            attached_sessions_only: false,
             completion_sound: false,
         }
     }
@@ -76,7 +74,6 @@ pub(super) struct Toolbar {
     refresh: Button<Msg>,
     running: Toggle<Msg>,
     history: Toggle<Msg>,
-    attached: Toggle<Msg>,
     sound: Toggle<Msg>,
     history_visible: bool,
     sound_visible: bool,
@@ -86,14 +83,12 @@ pub(super) struct Toolbar {
     template_key: KeySpec,
     running_key: KeySpec,
     history_key: KeySpec,
-    attached_key: KeySpec,
     sound_key: KeySpec,
     bulk_keys: [KeySpec; 2],
     template_area: Rect,
     refresh_area: Rect,
     running_area: Rect,
     history_area: Rect,
-    attached_area: Rect,
     sound_area: Rect,
     stop_area: Rect,
     purge_area: Rect,
@@ -125,7 +120,6 @@ impl Toolbar {
         let purge_disabled = state.borrow().purge_targets.is_empty();
         let running_key = KeySpec::shifted('u');
         let history_key = KeySpec::shifted('o');
-        let attached_key = KeySpec::shifted('a');
         let sound_key = KeySpec::shifted('n');
         let history_visible = state.borrow().opencode_enabled;
         Self {
@@ -144,10 +138,6 @@ impl Toolbar {
                 .hotkey(hotkey(history_key))
                 .preserve_focus_on_hotkey(true)
                 .on_change(Msg::SetOpencodeHistory),
-            attached: Toggle::new("󰚩")
-                .hotkey(hotkey(attached_key))
-                .preserve_focus_on_hotkey(true)
-                .on_change(Msg::SetAttachedSessionsOnly),
             sound: Toggle::new("󰕾")
                 .hotkey(hotkey(sound_key))
                 .preserve_focus_on_hotkey(true)
@@ -168,14 +158,12 @@ impl Toolbar {
             template_key,
             running_key,
             history_key,
-            attached_key,
             sound_key,
             bulk_keys: [stop_key, purge_key],
             template_area: Rect::default(),
             refresh_area: Rect::default(),
             running_area: Rect::default(),
             history_area: Rect::default(),
-            attached_area: Rect::default(),
             sound_area: Rect::default(),
             stop_area: Rect::default(),
             purge_area: Rect::default(),
@@ -252,19 +240,14 @@ impl Toolbar {
         let purge_disabled = state.purge_targets.is_empty();
         let running_only = state.running_only;
         let show_saved = state.show_saved;
-        let attached_sessions_only = state.attached_sessions_only;
         let completion_sound = state.completion_sound;
         let changed = self.stop.is_disabled() != stop_disabled
             || self.purge.is_disabled() != purge_disabled
             || self.running.is_checked() != running_only
             || self.history.is_checked() != show_saved
-            || self.attached.is_checked() != attached_sessions_only
             || self.sound.is_checked() != completion_sound
             || self.history_visible != state.opencode_enabled;
         self.history_visible = state.opencode_enabled;
-        if self.attached.is_checked() != attached_sessions_only {
-            self.attached.set_value(attached_sessions_only);
-        }
         if self.history.is_checked() != show_saved {
             self.history.set_value(show_saved);
         }
@@ -283,15 +266,6 @@ impl Toolbar {
         let TuiEvent::Key(key) = event else {
             return false;
         };
-        if self.history_visible && self.attached_key.matches(*key) {
-            let outcome = self.attached.toggle();
-            if outcome.changed {
-                ctx.emit(Msg::SetAttachedSessionsOnly(outcome.value));
-                ctx.request_redraw();
-            }
-            ctx.stop_propagation();
-            return true;
-        }
         if self.history_visible && self.sound_key.matches(*key) {
             let outcome = self.sound.toggle();
             if outcome.changed {
@@ -348,9 +322,8 @@ impl TuiNode<Msg> for Toolbar {
                     .measure(proposal)
                     .preferred
                     .width
-                    .saturating_add(self.attached.measure(proposal).preferred.width)
                     .saturating_add(self.sound.measure(proposal).preferred.width)
-                    .saturating_add(3)
+                    .saturating_add(2)
             } else {
                 0
             })
@@ -437,26 +410,6 @@ impl TuiNode<Msg> for Toolbar {
             0
         };
         let history_right_padding = u16::from(self.history_visible);
-        let attached_width = if self.history_visible {
-            let measured = self.attached.measure(proposal).preferred.width;
-            let visible = if compact {
-                measured.saturating_sub(4)
-            } else {
-                measured
-            };
-            visible.min(area.width.saturating_sub(
-                refresh_width
-                    + purge_width
-                    + stop_width
-                    + running_width
-                    + history_width
-                    + history_right_padding
-                    + 2 * spacing,
-            ))
-        } else {
-            0
-        };
-        let attached_right_padding = u16::from(attached_width > 0 && !compact);
         let sound_width = if self.sound_visible {
             let measured = self.sound.measure(proposal).preferred.width;
             let visible = if compact {
@@ -471,8 +424,6 @@ impl TuiNode<Msg> for Toolbar {
                     + running_width
                     + history_width
                     + history_right_padding
-                    + attached_width
-                    + attached_right_padding
                     + 2 * spacing,
             ))
         } else {
@@ -482,8 +433,6 @@ impl TuiNode<Msg> for Toolbar {
         let filters_width = running_width
             .saturating_add(history_width)
             .saturating_add(history_right_padding)
-            .saturating_add(attached_width)
-            .saturating_add(attached_right_padding)
             .saturating_add(sound_width)
             .saturating_add(sound_right_padding);
         let actions_width = purge_width
@@ -528,16 +477,8 @@ impl TuiNode<Msg> for Toolbar {
             sound_width,
             area.height.min(1),
         );
-        self.attached_area = Rect::new(
-            self.sound_area.right().saturating_add(sound_right_padding),
-            area.y,
-            attached_width,
-            area.height.min(1),
-        );
         self.history_area = Rect::new(
-            self.attached_area
-                .right()
-                .saturating_add(attached_right_padding),
+            self.sound_area.right().saturating_add(sound_right_padding),
             area.y,
             history_width,
             area.height.min(1),
@@ -581,11 +522,6 @@ impl TuiNode<Msg> for Toolbar {
                 });
             }
             ctx.push_slot(
-                ChildKey::new("attached-sessions-only"),
-                self.attached_area,
-                |ctx| self.attached.layout(self.attached_area, ctx),
-            );
-            ctx.push_slot(
                 ChildKey::new("opencode-history"),
                 self.history_area,
                 |ctx| self.history.layout(self.history_area, ctx),
@@ -614,7 +550,6 @@ impl TuiNode<Msg> for Toolbar {
             if self.sound_visible {
                 <Toggle<Msg> as TuiNode<Msg>>::render(&self.sound, frame, self.sound_area, ctx);
             }
-            <Toggle<Msg> as TuiNode<Msg>>::render(&self.attached, frame, self.attached_area, ctx);
             <Toggle<Msg> as TuiNode<Msg>>::render(&self.history, frame, self.history_area, ctx);
         }
         <Button<Msg> as TuiNode<Msg>>::render(&self.stop, frame, self.stop_area, ctx);
@@ -631,12 +566,6 @@ impl TuiNode<Msg> for Toolbar {
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
         self.sync_disabled();
         if self.action_hotkey(event, ctx) {
-            return EventOutcome::Handled;
-        }
-        if self.history_visible
-            && (self.attached.is_focused() || matches!(event, TuiEvent::Mouse(_)))
-            && self.attached.event(event, ctx) == EventOutcome::Handled
-        {
             return EventOutcome::Handled;
         }
         if self.sound_visible
@@ -691,15 +620,6 @@ impl TuiNode<Msg> for Toolbar {
         if self.history_visible
             && let Some(path) = route
                 .path
-                .without_first_if(&ChildKey::new("attached-sessions-only"))
-        {
-            return self
-                .attached
-                .dispatch_event(&EventRoute::new(path), event, ctx);
-        }
-        if self.history_visible
-            && let Some(path) = route
-                .path
                 .without_first_if(&ChildKey::new("opencode-history"))
         {
             return self
@@ -726,11 +646,6 @@ impl TuiNode<Msg> for Toolbar {
             settings,
         ));
         if self.history_visible {
-            result = result.merge(<Toggle<Msg> as TuiNode<Msg>>::tick(
-                &mut self.attached,
-                dt,
-                settings,
-            ));
             result = result.merge(<Toggle<Msg> as TuiNode<Msg>>::tick(
                 &mut self.history,
                 dt,
@@ -765,18 +680,12 @@ impl TuiNode<Msg> for Toolbar {
         let running_focused = focused && target.is_some_and(|target| target.as_str() == "toggle");
         self.running.focus(target, running_focused, ctx);
         if !focused {
-            self.attached.focus(target, false, ctx);
             self.history.focus(target, false, ctx);
             self.sound.focus(target, false, ctx);
         }
     }
 
     fn dispatch_focus(&mut self, target: &FocusTarget, focused: bool, ctx: &mut FocusCtx<Msg>) {
-        if let Some(target) = target.for_child(&ChildKey::new("attached-sessions-only")) {
-            self.attached
-                .dispatch_focus(&target, focused && self.history_visible, ctx);
-            return;
-        }
         if let Some(target) = target.for_child(&ChildKey::new("opencode-history")) {
             self.history
                 .dispatch_focus(&target, focused && self.history_visible, ctx);
@@ -799,7 +708,6 @@ impl TuiNode<Msg> for Toolbar {
     }
 
     fn init(&mut self, ctx: &mut LifecycleCtx<Msg>) {
-        self.attached.init(ctx);
         self.history.init(ctx);
         self.sound.init(ctx);
         self.running.init(ctx);
@@ -808,7 +716,6 @@ impl TuiNode<Msg> for Toolbar {
         }
     }
     fn mount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
-        self.attached.mount(ctx);
         self.history.mount(ctx);
         self.sound.mount(ctx);
         self.running.mount(ctx);
@@ -817,7 +724,6 @@ impl TuiNode<Msg> for Toolbar {
         }
     }
     fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
-        self.attached.unmount(ctx);
         self.history.unmount(ctx);
         self.sound.unmount(ctx);
         self.running.unmount(ctx);
@@ -826,7 +732,6 @@ impl TuiNode<Msg> for Toolbar {
         }
     }
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
-        self.attached.destroy(ctx);
         self.history.destroy(ctx);
         self.sound.destroy(ctx);
         self.running.destroy(ctx);

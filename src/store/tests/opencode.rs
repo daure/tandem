@@ -27,11 +27,15 @@ fn counts_overlap_without_counting_multiple_panes_twice() {
             activity: Activity::Idle,
             ..Default::default()
         },
+        Session {
+            activity: Activity::AwaitingAnswer,
+            ..Default::default()
+        },
     ];
     assert_eq!(
         Counts::of(sessions.iter()),
         Counts {
-            live: 3,
+            live: 4,
             attached: 2,
             busy: 2
         }
@@ -42,7 +46,8 @@ fn counts_overlap_without_counting_multiple_panes_twice() {
             "attached · busy",
             "attached · idle",
             "detached · busy",
-            "saved"
+            "saved",
+            "detached · awaiting answer"
         ]
     );
 }
@@ -63,7 +68,7 @@ fn workspace_matching_uses_path_boundaries_and_the_closest_parent() {
 }
 
 #[test]
-fn completion_requires_a_fresh_busy_to_idle_transition_for_the_same_session() {
+fn completion_requires_a_fresh_busy_to_ready_transition_for_the_same_session() {
     let snapshot = |id: &str, activity, stale| Snapshot {
         sessions: vec![Session {
             id: id.into(),
@@ -75,15 +80,15 @@ fn completion_requires_a_fresh_busy_to_idle_transition_for_the_same_session() {
     };
     let busy = snapshot("session", Activity::Busy, false);
 
-    assert!(snapshot("session", Activity::Idle, false).completed_since(&busy));
-    assert!(!snapshot("other", Activity::Idle, false).completed_since(&busy));
     assert!(!snapshot("session", Activity::Unknown, false).completed_since(&busy));
-    assert!(!snapshot("session", Activity::Idle, true).completed_since(&busy));
-    assert!(
-        !snapshot("session", Activity::Idle, false).completed_since(&snapshot(
-            "session",
-            Activity::Busy,
-            true,
-        ))
-    );
+    for activity in [Activity::Idle, Activity::AwaitingAnswer] {
+        let ready = snapshot("session", activity, false);
+        assert!(ready.completed_since(&busy));
+        assert!(!snapshot("other", activity, false).completed_since(&busy));
+        assert!(!snapshot("session", activity, true).completed_since(&busy));
+        assert!(!ready.completed_since(&snapshot("session", Activity::Busy, true)));
+        assert!(!ready.completed_since(&Snapshot::default()));
+        assert!(!ready.completed_since(&ready));
+        assert!(!ready.completed_since(&snapshot("session", Activity::AwaitingAnswer, false)));
+    }
 }

@@ -67,19 +67,17 @@ A template is a shared development recipe; an instance has its own name and work
 
 ## Operations
 
+- With OpenCode integration and creation-history cleanup enabled (both default on), creating a new
+  instance permanently deletes conversations for its exact workspace path, including history left by
+  a deleted instance with the same name. Include this in creation approval. Existing instances and
+  provisioning retries retain conversations. Active clients or cleanup failures block creation;
+  close clients or ask the user to disable cleanup if they want to preserve history.
 - Tandem writes workspace-root `AGENTS.md` after repository preparation and before any container startup,
-  and generates it if missing before opening a workspace. Read it and the repository guidance it lists.
+  and generates it if missing before launching OpenCode in an instance workspace. Read it and the
+  repository guidance it lists.
   For service instances, inspect containers for missing mappings and runtime state
   for current health. The base template at `workspace_agents_template` affects future generation;
   bundled updates replace it after backing up local edits.
-- Workspace open and close commands are shared within a Tandem home and execute through host `sh -c` in the
-  workspace. Configure and run only trusted commands with approval; quote `"$TANDEM_WORKSPACE"`
-  and `"$TANDEM_INSTANCE"` when using them. Open commands also receive the instance description in
-  `TANDEM_DESCRIPTION`.
-  MCP deletion and purges run the saved close command before removing each existing workspace, after
-  Docker cleanup; CLI `delete-instance` opts in with `--close-command` or `-cc`, including headless runs.
-  Empty disables it; failures and ten-second timeouts produce operation warnings while
-  deletion continues within its cleanup deadline. Use repeat-safe commands for deletion retries.
 - Run trusted templates with approval: repository provisioning uses host Git and credentials;
   Docker execution grants local privileges.
   Keep environments local; gateway routes share a browser origin.

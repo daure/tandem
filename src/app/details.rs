@@ -111,10 +111,6 @@ pub(super) fn instance(instance: &Instance) -> Vec<Property> {
                 "Unrecorded; start instance to capture configuration"
             },
         ),
-        Property::new(
-            "Open command",
-            "Run open command from the instance Actions menu.",
-        ),
     ];
     if let Some(detail) = summary.detail {
         rows.push(Property::new("Status detail", detail).tone(summary.detail_severity.into()));

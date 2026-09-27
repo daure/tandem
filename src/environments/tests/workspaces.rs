@@ -140,18 +140,13 @@ fn workspace_template_removal_and_purges_release_identity_without_docker() {
     let template = workspace_template(&config);
     ready_workspace(&config, &template, "one");
     ready_workspace(&config, &template, "two");
-    lifecycle::delete_template(&config, "local", Arc::new(|_| {}), &Default::default()).unwrap();
+    lifecycle::delete_template(&config, "local", Arc::new(|_| {})).unwrap();
     assert!(journal::workspaces(&config).unwrap().is_empty());
     assert!(std::path::Path::new(&template.directory).exists());
     ready_workspace(&config, &template, "three");
-    removal::template_with(
-        &config,
-        "local",
-        30,
-        Arc::new(|_| {}),
-        &Default::default(),
-        |_, _, _| panic!("workspace removal must not call Docker"),
-    )
+    removal::template_with(&config, "local", 30, Arc::new(|_| {}), |_, _, _| {
+        panic!("workspace removal must not call Docker")
+    })
     .unwrap();
     assert!(journal::workspaces(&config).unwrap().is_empty());
     assert!(!std::path::Path::new(&template.directory).exists());
@@ -180,5 +175,5 @@ fn launch_kind_changes_and_forged_workspace_ownership_are_rejected() {
     record["expected"]["workspace"] = "/outside".into();
     fs::write(record_path, record.to_string()).unwrap();
     assert!(journal::workspace_instance(&config, "review").is_err());
-    assert!(lifecycle::delete(&config, "review", Arc::new(|_| {}), &Default::default()).is_err());
+    assert!(lifecycle::delete(&config, "review", Arc::new(|_| {})).is_err());
 }

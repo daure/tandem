@@ -63,9 +63,11 @@ fn advance(view: &mut Instances, milliseconds: u64) {
 }
 
 #[test]
-fn completed_session_pulses_twice_over_600ms_with_selection_and_text_intact() {
+fn completion_gutter_pulses_twice_then_rises_and_fades_over_20_seconds() {
     tuicore::init();
-    for focused in [false, true] {
+    for (focused, activity) in [false, true].into_iter().flat_map(|focused| {
+        [Activity::Idle, Activity::AwaitingAnswer].map(|activity| (focused, activity))
+    }) {
         let state = instances::state(rows(Activity::Busy, false));
         instances::set_attached_sessions_only(&state, true);
         let mut view = Instances::new(state.clone());
@@ -82,8 +84,21 @@ fn completed_session_pulses_twice_over_600ms_with_selection_and_text_intact() {
             .iter()
             .position(|line| line.contains("Completing session"))
             .unwrap();
-        instances::replace_rows(&state, rows(Activity::Idle, false));
-        let (baseline, after) = render(&mut view);
+        let completed = rows(activity, false);
+        if activity == Activity::AwaitingAnswer {
+            let row = completed
+                .iter()
+                .find(|row| row.id.ends_with(":completing"))
+                .unwrap();
+            assert_eq!(row.icon, "󱚟");
+            assert_eq!(row.tone, rows::Tone::Success);
+            assert_eq!(row.secondary_icon, "");
+            assert_eq!(row.secondary_tone, rows::Tone::Success);
+            assert!(!row.secondary_loading);
+            assert!(row.activity_timer.is_none());
+        }
+        instances::replace_rows(&state, completed);
+        let (initial, after) = render(&mut view);
         let y = after
             .iter()
             .position(|line| line.contains("Completing session"))
@@ -93,13 +108,29 @@ fn completed_session_pulses_twice_over_600ms_with_selection_and_text_intact() {
             .position(|line| line.contains("Idle neighbour"))
             .unwrap() as u16;
         assert!(usize::from(y) < previous_y);
-        for (step, strength) in [0.1, 0.2, 0.1, 0.0, 0.1, 0.2, 0.1, 0.0]
-            .into_iter()
-            .enumerate()
-        {
-            advance(&mut view, 75);
-            if step == 1 {
-                let mut refreshed = rows(Activity::Idle, false);
+        let mut elapsed = 0;
+        for (milliseconds, strength, marker_strength) in [
+            (0, 0.0, 0.0),
+            (75, 0.1, 0.5),
+            (150, 0.2, 1.0),
+            (225, 0.1, 0.5),
+            (300, 0.0, 0.0),
+            (375, 0.1, 0.5),
+            (450, 0.2, 1.0),
+            (525, 0.1, 0.5),
+            (600, 0.0, 0.0),
+            (675, 0.0, 0.5),
+            (750, 0.0, 1.0),
+            (5_750, 0.0, 0.75),
+            (10_750, 0.0, 0.5),
+            (15_750, 0.0, 0.25),
+            (20_725, 0.0, 0.00125),
+            (20_750, 0.0, 0.0),
+        ] {
+            advance(&mut view, milliseconds - elapsed);
+            elapsed = milliseconds;
+            if milliseconds == 5_750 {
+                let mut refreshed = rows(activity, false);
                 for row in &mut refreshed {
                     row.metrics.age_seconds = Some(1);
                 }
@@ -109,38 +140,62 @@ fn completed_session_pulses_twice_over_600ms_with_selection_and_text_intact() {
             assert!(lines[y as usize].contains("Completing session"));
             for line in y..y + 2 {
                 for x in 0..80 {
-                    let original = baseline.cell((x, line)).unwrap();
+                    let original = initial.cell((x, line)).unwrap();
                     let cell = actual.cell((x, line)).unwrap();
-                    let expected = if strength == 0.0 {
-                        original.bg
-                    } else {
-                        let theme = tuicore::theme();
-                        let bg = if original.bg == Color::Reset {
+                    let theme = tuicore::theme();
+                    let background = |color| {
+                        let color = if color == Color::Reset {
                             theme.background_bg()
                         } else {
-                            original.bg
+                            color
                         };
-                        let bg = if matches!(bg, Color::Rgb(..)) {
-                            bg
+                        if matches!(color, Color::Rgb(..)) {
+                            color
                         } else {
                             theme.dialog_bg()
-                        };
-                        tuicore::lerp_color(bg, theme.success_fg(), strength)
+                        }
                     };
-                    assert_eq!(
-                        cell.bg, expected,
-                        "focused={focused}, step={step}, x={x}, y={line}"
-                    );
-                    assert_eq!(cell.fg, original.fg);
+                    let expected_bg = if strength == 0.0 {
+                        original.bg
+                    } else {
+                        tuicore::lerp_color(background(original.bg), theme.success_fg(), strength)
+                    };
+                    assert_eq!(cell.bg, expected_bg);
                     assert_eq!(cell.modifier, original.modifier);
+                    if x == 0 && milliseconds < 20_750 {
+                        assert_eq!(cell.symbol(), "┃");
+                        assert_eq!(
+                            cell.fg,
+                            tuicore::lerp_color(
+                                background(expected_bg),
+                                theme.success_fg(),
+                                marker_strength,
+                            ),
+                            "focused={focused}, elapsed={milliseconds}, y={line}",
+                        );
+                    } else if x == 0 {
+                        assert_eq!(cell.symbol(), " ");
+                    } else {
+                        assert_eq!(cell.fg, original.fg);
+                        assert_eq!(cell.symbol(), original.symbol());
+                    }
                 }
             }
             for line in neighbour_y..neighbour_y + 2 {
                 for x in 0..80 {
-                    assert_eq!(actual.cell((x, line)), baseline.cell((x, line)));
+                    assert_eq!(actual.cell((x, line)), initial.cell((x, line)));
                 }
             }
         }
+        let selected = instances::selected(&state).unwrap();
+        let baseline_state = instances::state(rows(activity, false));
+        instances::set_attached_sessions_only(&baseline_state, true);
+        let mut baseline = Instances::new(baseline_state);
+        baseline.highlight_for_tests(&selected.id);
+        if focused {
+            baseline.focus(None, true, &mut tuicore::FocusCtx::default());
+        }
+        assert_eq!(render(&mut view).1, render(&mut baseline).1);
         assert!(
             !view
                 .tick(Duration::from_millis(50), AnimationSettings::default())
@@ -150,28 +205,57 @@ fn completed_session_pulses_twice_over_600ms_with_selection_and_text_intact() {
 }
 
 #[test]
-fn disabling_animations_clears_the_pulse_without_replaying_on_reenable() {
+fn configured_duration_controls_the_final_gutter_fade() {
+    tuicore::init();
+    let state = instances::state(rows(Activity::Busy, false));
+    instances::set_attached_sessions_only(&state, true);
+    instances::set_completion_fade(&state, 2);
+    let mut view = Instances::new(state.clone());
+    render(&mut view);
+    instances::replace_rows(&state, rows(Activity::Idle, false));
+    render(&mut view);
+    advance(&mut view, 750);
+    let (peak, lines) = render(&mut view);
+    let y = lines.iter().position(|line| line.contains('┃')).unwrap() as u16;
+    assert_eq!(peak.cell((0, y)).unwrap().fg, tuicore::theme().success_fg());
+    advance(&mut view, 1_000);
+    let (halfway, _) = render(&mut view);
+    assert_eq!(halfway.cell((0, y)).unwrap().symbol(), "┃");
+    assert_ne!(
+        halfway.cell((0, y)).unwrap().fg,
+        peak.cell((0, y)).unwrap().fg
+    );
+    advance(&mut view, 1_000);
+    assert!(render(&mut view).1.iter().all(|line| !line.contains('┃')));
+    assert!(
+        !view
+            .tick(Duration::ZERO, AnimationSettings::default())
+            .active
+    );
+}
+
+#[test]
+fn disabling_animations_clears_the_marker_without_replaying_on_reenable() {
     tuicore::init();
     let state = instances::state(rows(Activity::Busy, false));
     instances::set_attached_sessions_only(&state, true);
     let mut view = Instances::new(state.clone());
     render(&mut view);
     instances::replace_rows(&state, rows(Activity::Idle, false));
-    let (baseline, _) = render(&mut view);
-    advance(&mut view, 150);
-    assert_ne!(render(&mut view).0, baseline);
+    assert!(render(&mut view).1.iter().any(|line| line.starts_with('┃')));
     let disabled = AnimationSettings {
         enabled: false,
         ..Default::default()
     };
     assert!(!view.tick(Duration::ZERO, disabled).active);
-    assert_eq!(render(&mut view).0, baseline);
+    let (baseline, lines) = render(&mut view);
+    assert!(lines.iter().all(|line| !line.contains('┃')));
     advance(&mut view, 300);
     assert_eq!(render(&mut view).0, baseline);
 }
 
 #[test]
-fn initial_stale_and_view_switch_observations_do_not_pulse() {
+fn completion_markers_require_a_fresh_busy_transition_in_the_same_view() {
     tuicore::init();
     for (previous, current, switch) in [
         (Vec::new(), rows(Activity::Idle, false), false),
@@ -209,7 +293,8 @@ fn initial_stale_and_view_switch_observations_do_not_pulse() {
             instances::set_attached_sessions_only(&state, false);
         }
         instances::replace_rows(&state, current);
-        let (baseline, _) = render(&mut view);
+        let (baseline, lines) = render(&mut view);
+        assert!(lines.iter().all(|line| !line.contains('┃')));
         advance(&mut view, 300);
         assert_eq!(render(&mut view).0, baseline);
         assert!(
@@ -240,6 +325,36 @@ fn a_session_reappearing_after_filtering_does_not_replay_completion() {
             .tick(Duration::ZERO, AnimationSettings::default())
             .active
     );
+}
+
+#[test]
+fn completion_markers_clear_on_new_work_and_expire_after_elapsed_time() {
+    tuicore::init();
+    let state = instances::state(rows(Activity::Busy, false));
+    instances::set_attached_sessions_only(&state, true);
+    let mut view = Instances::new(state.clone());
+    render(&mut view);
+    instances::replace_rows(&state, rows(Activity::Idle, false));
+    assert!(render(&mut view).1.iter().any(|line| line.contains('┃')));
+    advance(&mut view, 5_000);
+
+    instances::replace_rows(&state, rows(Activity::Busy, false));
+    assert!(render(&mut view).1.iter().all(|line| !line.contains('┃')));
+    instances::replace_rows(&state, rows(Activity::Idle, false));
+    render(&mut view);
+    advance(&mut view, 750);
+    let (buffer, lines) = render(&mut view);
+    let y = lines.iter().position(|line| line.contains('┃')).unwrap() as u16;
+    assert_eq!(
+        buffer.cell((0, y)).unwrap().fg,
+        tuicore::theme().success_fg()
+    );
+    assert!(
+        !view
+            .tick(Duration::from_secs(20), AnimationSettings::default())
+            .active
+    );
+    assert!(render(&mut view).1.iter().all(|line| !line.contains('┃')));
 }
 
 #[test]
@@ -282,4 +397,34 @@ fn completion_sound_is_opt_in_and_plays_once_per_busy_to_idle_transition() {
     app.update_snapshot(snapshot());
     assert!(!app.completion_sound);
     assert_eq!(app.service.completion_sound_count_for_tests(), 1);
+}
+
+#[test]
+fn question_waits_notify_once_and_resume_normal_completion_feedback() {
+    tuicore::init();
+    let service = AppService::for_tests();
+    service.set_opencode_snapshot_for_tests(observation(Activity::Busy, false));
+    let mut app = root(service);
+    app.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Char('N'))),
+        &mut EventCtx::new(AnimationSettings::default()),
+    );
+    assert!(app.completion_sound);
+    for (activity, expected_sounds) in [
+        (Activity::AwaitingAnswer, 1),
+        (Activity::AwaitingAnswer, 1),
+        (Activity::Idle, 1),
+        (Activity::Busy, 1),
+        (Activity::AwaitingAnswer, 2),
+        (Activity::Busy, 2),
+        (Activity::Idle, 3),
+    ] {
+        app.service
+            .set_opencode_snapshot_for_tests(observation(activity, false));
+        app.update_snapshot(snapshot());
+        assert_eq!(
+            app.service.completion_sound_count_for_tests(),
+            expected_sounds
+        );
+    }
 }

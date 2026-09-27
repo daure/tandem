@@ -87,8 +87,7 @@ tandem new-instance review --template website
 tandem new-instance review -t website --opencode
 tandem new-instance review -t website -o "Explain this project"
 tandem delete-instance review
-tandem delete-instance review --close-command
-tandem delete-instance review -cc --headless
+tandem delete-instance review --headless
 ```
 
 For a new instance, the template must exist. Invoking this command authorizes host Git provisioning
@@ -117,8 +116,9 @@ container-created files are outside this milestone; declare repositories for ear
 Client lifetime does not delay CLI exit. Launch failures make the CLI fail after startup completes,
 or immediately for an existing instance; prepared workspaces remain available.
 
-Initial prompts require the bundled Tandem TUI companion: run `tandem opencode-setup` after updating
-Tandem and ensure its printed entry is in OpenCode's `tui.json` plugin array. Each new client receives
+Initial prompts require the bundled Tandem TUI companion. The release shell installer refreshes it and
+prints its OpenCode `tui.json` plugin entry; after source or manual updates, run `tandem opencode-setup`.
+Ensure the printed entry is in the plugin array. Each new client receives
 `TANDEM_INITIAL_PROMPT`; the companion consumes and clears it, waits for readiness, creates a fresh
 conversation, navigates only that client, and submits the text once through the server API.
 Blank text opens a blank client. Prompt requests use the server's configured agent/model defaults.
@@ -128,11 +128,8 @@ The companion reports submission failures in the new client and does not retry u
 
 `delete-instance` permanently removes the named instance's owned containers, workspace, private volumes,
 networks, rendered Compose file, and ownership receipt. It leaves templates, shared images, and the gateway intact.
-`--close-command` (also `-cc`) opts into running the saved close command before workspace removal;
-without it, CLI deletion skips that command. An empty saved command does nothing.
 `--headless` (also `-h`) launches deletion in a detached Tandem process and returns after that process starts.
-It preserves the close-command flag but cannot report the deletion result; inspect diagnostic logs or
-runtime state for failures.
+Inspect diagnostic logs or runtime state for the detached deletion result.
 
 ### Workspace agent context
 
@@ -187,11 +184,11 @@ subdirectory and can differ from the container's working directory. Missing conf
 unidentified mappings display `Not identified`; named volumes and image-only code require runtime
 inspection. Malformed or mismatched rendered configuration blocks generation.
 
-Every new instance receives a root `AGENTS.md` after repository preparation and before any container startup, even without an open command.
-CLI, TUI and MCP opening also generate it if missing; generation failures block the opener, including
-the system folder opener. Existing regular files are preserved, while symlinks and directories are
+Every new instance receives a root `AGENTS.md` after repository preparation and before any container startup.
+OpenCode launches in instance workspaces also generate it if missing; generation failures block the launch.
+Existing regular files are preserved, while symlinks and directories are
 rejected. This is a configuration snapshot: keep local guidance current as repositories or services
-change. To regenerate from the editable template, move the workspace file aside and open the instance.
+change. To regenerate from the editable template, move the workspace file aside and launch OpenCode in the instance.
 Template-owned clone jobs and container-created files appear only after their own setup completes.
 
 ## Statuses
@@ -219,7 +216,7 @@ Recovery with missing execution-kind metadata requires Docker access. Unverifiab
 Workspace-only instances (blank, repository-only, or guidance-only) use a folder icon after
 preparation and guidance generation, retain their workspace path, and show a single subtle
 **(no services configured)** child when expanded. They hide
-CPU/memory metrics and disable container Start/Stop/Restart actions; Open, Details and Delete remain
+CPU/memory metrics and disable container Start/Stop/Restart actions; OpenCode, Details and Delete remain
 available. Failed preparation retains completed checkouts and reports its error; retry New instance
 with the same template/name after correcting the cause. Docker failures do not make these workspaces stale.
 
@@ -230,8 +227,8 @@ with the same template/name after correcting the cause. Docker failures do not m
 ```
 
 The MCP tools are `get_instructions`, `list_templates`, `get_template`, `create_template`, `update_template_manifest`,
-`list_instances`, `create_instance`, `get_operation`, `stop_instance`, `start_service`, `stop_service`, `restart_instance`, `restart_service`, `get_open_command`,
-`set_open_command`, `run_open_command`, and `get_status`.
+`list_instances`, `create_instance`, `get_operation`, `stop_instance`, `delete_instance`, `start_service`,
+`stop_service`, `restart_instance`, `restart_service`, and `get_status`.
 List tools return objects with `templates` or `instances` arrays. Mutating instance tools require
 `confirmed=true` after user approval; create waits for readiness by default, or accepts `wait=false`.
 `get_operation` reports in-process progress, elapsed time, and `running`/`succeeded`/`failed` outcomes.
@@ -357,66 +354,57 @@ guidance files are user-owned; update them explicitly when adopting this workflo
 | `TANDEM_KEY_RESTART` | `r` | Restart the selected instance or service after confirmation |
 | `TANDEM_KEY_STOP_ALL` | `S` | Stop instances across all templates after confirmation |
 | `TANDEM_KEY_PURGE_ALL` | `P` | Purge instances across all templates after confirmation |
-| `TANDEM_KEY_OPEN_COMMAND` | `ctrl+;` | Run the saved open command for the selected instance |
 
-Application hotkey overrides accept distinct ASCII letters; `TANDEM_KEY_INFO` also accepts `Enter`,
-and `TANDEM_KEY_OPEN_COMMAND` also accepts `ctrl+;`. Shared navigation, focus, and component keys use
-tuicore configuration. The TUI displays resolved key labels. Ctrl+; requires a terminal that reports
-the modifier; the Actions menu or a letter override works when the terminal cannot send it.
+Application hotkey overrides accept distinct ASCII letters; `TANDEM_KEY_INFO` also accepts `Enter`.
+Shared navigation, focus, and component keys use tuicore configuration. The TUI displays resolved key labels.
 
-### Workspace commands
+### Workspace actions
 
-In Settings, edits to **Open command** save immediately. Press `Ctrl+;` on an instance or choose
-**Run open command** from its `.` Actions menu to execute it. An empty or whitespace-only setting
-opens the workspace with `xdg-open`.
 Press `y`, or choose **Yank** from the `.` Actions menu, to open the copy menu for the selected
 instance or routed service. For an instance, `i` copies its name and `w` copies its absolute workspace path;
 for a routed service, `u` copies its URL.
-A custom command runs on the host via `sh -c`, with the workspace as its working directory, the
-instance name in `TANDEM_INSTANCE`, the absolute path in `TANDEM_WORKSPACE`, and its description in
-`TANDEM_DESCRIPTION`. Quote `"$TANDEM_WORKSPACE"`; paths are passed as
-environment data, not interpolated into shell code. Choose **Open in browser** from a routed service's
+Choose **Open in browser** from a routed service's
 `.` Actions menu, or press `Ctrl+Enter` on that service, to open its URL. On an instance,
 `Ctrl+Enter` opens its only routed service directly or displays a chooser when several are available;
 each chooser option is shown as `<service> - <url>`.
 
-The setting is stored in `$TANDEM_HOME/settings.sqlite3`. MCP agents can read it with
-`get_open_command` and save it with `set_open_command` using `command` and `confirmed=true`
-after approval. Saving never executes the command. Opening an instance reads the current persisted
-value, including changes from another process; Tandem saves notify active TUI Settings caches.
-Close and reopen Settings to display external changes.
+### Completion settings
 
-`run_open_command` executes the persisted command for a named instance workspace after user approval
-with `confirmed=true`. It accepts stopped instances whose workspace remains available.
+**Completion fade** accepts whole seconds from 1 to 3600 and defaults to 20. It controls the
+gutter marker's final fade; the two short pulses and 150 ms rise keep their fixed timing.
+Valid edits save immediately in `$TANDEM_HOME/settings.sqlite3` and apply to active markers.
 
-Commands inherit the TUI process's environment, including terminal-multiplexer session variables,
-but have disconnected stdin/stdout/stderr. Use noninteractive launcher commands; failures are
-recorded in Tandem's diagnostic logs. Commands run asynchronously and do not block keyboard input.
-
-**Close command** in Settings saves immediately. TUI and MCP deletion run it automatically before
-removing an existing instance workspace, after its Docker resources are removed; CLI deletion requires
-`--close-command` or `-cc`. It uses host `sh -c`, the
-workspace as its working directory, and the same `TANDEM_INSTANCE` and `TANDEM_WORKSPACE` variables.
-An empty or whitespace-only command disables the hook. Individual deletion, Purge all, template
-purges, and template deletion use it; stop and restart preserve workspaces and do not run it.
-The command has a ten-second limit. Launch failures, nonzero exits, and timeouts produce warnings
-while deletion continues. Warnings appear in TUI completion notifications, CLI stderr, MCP operation
-`warnings`, and diagnostic logs. Cleanup remains subject to its operation deadline.
-Missing workspaces skip the hook; unsafe workspace paths fail validation before command execution.
-Use repeat-safe commands because a failed filesystem removal can cause the hook to run again on retry.
-
-MCP agents read and save this shared setting through `get_close_command` and `set_close_command`;
-saving requires approval with `confirmed=true` and does not execute it. Deletion reads the persisted
-value, including changes from another process. Configure only trusted host commands.
+**Completion sound** lists installed `.oga`, `.ogg`, and `.wav` files from the user and system
+XDG sound directories. Confirming a dropdown selection saves it and plays a preview, even when
+the toolbar's completion-sound toggle is off. Moving the highlight is silent. Playback is
+asynchronous; a new preview replaces the previous sound. System default uses the desktop's
+`complete` event; an unavailable saved choice falls back to it. Restart Tandem to discover
+newly installed sounds. Playback failures are recorded in diagnostic logs.
 
 ### OpenCode integration
+
+**Clear OpenCode history on new instance** in Settings defaults to on and persists across restarts.
+With OpenCode integration enabled, creation permanently deletes saved conversations for the exact
+workspace directory before provisioning or launching a client. Reusing a deleted instance name starts
+with clean history; reopening an existing instance, attaching a session, and retrying provisioning
+preserve conversations. Subdirectories and similarly named workspaces are separate scopes.
+Cleanup refuses known attached clients, busy conversations, pending questions, and child conversations
+outside the workspace. Close active clients before recreating an instance. API failures block creation;
+correct the error and retry, or turn off the setting to retain history. Completed deletions cannot be
+undone if later provisioning fails.
+
+Cleanup uses discovered directory servers or starts a temporary local `opencode serve` process with
+plugins disabled when none is discovered. OpenCode must be available on `PATH` for that fallback;
+the process is stopped after cleanup. Cleanup is bounded by 60 seconds and the creation deadline,
+and refuses inventories of 10,000 or more sessions rather than risking incomplete deletion.
 
 **Enable opencode integration** in Settings defaults to on and persists across restarts.
 Turning it off hides the integration rows, counts, and actions and cancels Tandem's observation
 and navigation tasks. Existing OpenCode servers, conversations, panes, and workspace commands
 remain under their current owners. Re-enable it to request a fresh observation.
 
-Install the companion once:
+The release shell installer installs the companion after placing the Tandem binary and prints the
+`tui.json` plugin entry. For source builds or manual refreshes, install it with:
 
 ```bash
 tandem opencode-setup
@@ -487,8 +475,6 @@ directory when no server is known. Created panes have the fixed Zellij title **O
 immediately selects the new client, including when its destination is another tab or Zellij session.
 The DataView selects that client's row when observation arrives and reveals its parent groups;
 conversation titles in the DataView remain independent of the pane title.
-The saved workspace open command remains a separate action,
-available with `Ctrl+;` on an instance.
 
 Use **Enter → Actions** to jump to a specific pane or resume a conversation. **Goto panel** and
 **Open panel** use `o`; navigation works across tabs and Zellij sessions. Closing a pane preserves
@@ -502,8 +488,12 @@ The toggle supports mouse clicks and keyboard focus/activation and appears when 
 Workspace matching includes repository
 subdirectories and selects the closest owning workspace.
 
-The **󰚩 Agents toggle** (`Shift+A`) groups conversations beneath instance rows and outside-Tandem
-directory groups. All known OpenCode folders remain visible, including folders without open clients.
+The top **Sessions** tab groups conversations beneath instance rows and outside-Tandem
+directory groups. The **Instances** tab shows the template and instance tree. Click either tab
+or press `[` / `]` from any main-view control to switch left / right while retaining control focus.
+The tab header stays visually active; dialogs and action menus own their keyboard input.
+`Shift+A` also switches views when the integration is enabled.
+All known OpenCode folders remain visible in Sessions, including folders without open clients.
 Folders with attached clients (idle or busy) come first; inactive folders follow, preserving the
 instance/external ordering within each section. Known folders come from conversations, clients, and
 local server directory receipts; the observer remembers them while the integration remains enabled.
@@ -513,17 +503,20 @@ timer, then the latest question with its activity indicator. Search includes tem
 History (`Shift+O`) controls saved and detached conversation children independently of folder
 visibility; with history off, only attached children appear. Select an inactive folder and press `n`
 to launch a new client. Running-only (`Shift+U`) filters instance
-groups while retaining workspace-only instances and outside-Tandem groups. Both filter values carry
-across views. Clients without a conversation appear beneath their instance or external directory.
+groups while retaining workspace-only instances and outside-Tandem groups. The toolbar actions,
+filter values, search, and completion-sound setting are shared across both tabs.
+Clients without a conversation appear beneath their instance or external directory.
 The first toolbar toggle, **󰕾 completion sound** (`Shift+N`), plays the desktop completion sound when a freshly observed
 conversation changes from busy to idle. It is off by default and appears when the integration is
 enabled on toolbars at least 50 columns wide; its hotkey remains active at narrower widths. The
 desktop audio service controls playback. All toolbar toggles support mouse and keyboard activation.
 
-A freshly observed busy-to-idle conversation pulses twice over 600 ms at its sorted position.
-Each 300 ms pulse eases into and out of the semantic success tint while preserving selection
-and text colors. Initial, stale, and filter-only observations do not trigger a pulse; disabling
-animations suppresses the effect.
+A freshly observed conversation changing from busy to idle or awaiting an answer shows a `┃`
+marker spanning its lines in the far-left gutter. The marker and row background pulse twice
+over 600 ms. The marker then rises to full success color over 150 ms and fades into the
+background over the configured fade duration (20 seconds by default) before disappearing.
+Text positions, selection, and text colors stay intact. Initial, stale, and filter-only observations do not trigger these effects;
+disabling animations suppresses them.
 
 New session and Open panel create a stacked pane in an observed tab for the instance or external
 directory, or create a named tab when there is no observed destination. Open panel attaches to the

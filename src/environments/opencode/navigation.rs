@@ -226,9 +226,8 @@ impl Observer {
         if !valid_id(&session.id) || !Path::new(&session.directory).is_absolute() {
             return Err("Invalid OpenCode session target".into());
         }
-        let server = local_server(&session.server).ok_or(
-            "The OpenCode server is unavailable; reopen the workspace with your open command",
-        )?;
+        let server = local_server(&session.server)
+            .ok_or("The OpenCode server is unavailable; start its server and retry")?;
         let _: serde_json::Value = get(&transport::client()?, &server, "/global/health").await?;
         self.launch_panel(
             &session.directory,
@@ -276,7 +275,10 @@ impl Observer {
         // Set this in the pane's command, not in Zellij's long-lived server environment.
         let mut command = vec![
             "env".into(),
-            format!("TANDEM_INITIAL_PROMPT={}", initial_prompt.unwrap_or_default()),
+            format!(
+                "TANDEM_INITIAL_PROMPT={}",
+                initial_prompt.unwrap_or_default()
+            ),
         ];
         command.extend(if let Some(server) = server {
             let _: serde_json::Value =

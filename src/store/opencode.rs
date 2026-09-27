@@ -9,9 +9,16 @@ pub(crate) mod resources;
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Activity {
     Busy,
+    AwaitingAnswer,
     Idle,
     #[default]
     Unknown,
+}
+
+impl Activity {
+    pub fn completed(self) -> bool {
+        matches!(self, Self::Idle | Self::AwaitingAnswer)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -59,7 +66,7 @@ impl Session {
     }
 
     pub fn live(&self) -> bool {
-        self.attached() || self.activity == Activity::Busy
+        self.attached() || matches!(self.activity, Activity::Busy | Activity::AwaitingAnswer)
     }
 
     pub fn saved(&self) -> bool {
@@ -69,6 +76,8 @@ impl Session {
     pub fn label(&self) -> &'static str {
         match (self.attached(), self.activity) {
             (true, Activity::Busy) => "attached · busy",
+            (true, Activity::AwaitingAnswer) => "attached · awaiting answer",
+            (false, Activity::AwaitingAnswer) => "detached · awaiting answer",
             (true, Activity::Idle) => "attached · idle",
             (false, Activity::Busy) => "detached · busy",
             (false, Activity::Idle) => "saved",
@@ -113,7 +122,7 @@ impl Snapshot {
     pub fn completed_since(&self, previous: &Self) -> bool {
         self.sessions.iter().any(|session| {
             !session.stale
-                && session.activity == Activity::Idle
+                && session.activity.completed()
                 && previous.sessions.iter().any(|candidate| {
                     candidate.id == session.id
                         && !candidate.stale

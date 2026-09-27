@@ -51,8 +51,28 @@ pub(super) async fn get_optional<T: DeserializeOwned>(
     server: &str,
     path: &str,
 ) -> Result<Option<T>, String> {
+    request(client, server, path, reqwest::Method::GET).await
+}
+
+pub(super) async fn delete(
+    client: &reqwest::Client,
+    server: &str,
+    path: &str,
+) -> Result<(), String> {
+    match request::<bool>(client, server, path, reqwest::Method::DELETE).await? {
+        Some(true) | None => Ok(()),
+        Some(false) => Err("OpenCode refused session deletion".into()),
+    }
+}
+
+async fn request<T: DeserializeOwned>(
+    client: &reqwest::Client,
+    server: &str,
+    path: &str,
+    method: reqwest::Method,
+) -> Result<Option<T>, String> {
     let server = local_server(server).ok_or("OpenCode server must be local HTTP")?;
-    let mut request = client.get(format!("{server}{path}"));
+    let mut request = client.request(method, format!("{server}{path}"));
     if let Ok(password) = std::env::var("OPENCODE_SERVER_PASSWORD") {
         request = request.basic_auth(
             std::env::var("OPENCODE_SERVER_USERNAME").unwrap_or_else(|_| "opencode".into()),

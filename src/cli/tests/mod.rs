@@ -1,7 +1,7 @@
 use super::*;
 
 fn parse(arguments: &[&str]) -> Result<Cli, clap::Error> {
-    Cli::try_parse_from(normalize_arguments(arguments.iter().map(OsString::from)))
+    Cli::try_parse_from(arguments)
 }
 
 #[test]
@@ -31,8 +31,16 @@ fn new_instance_accepts_long_short_and_mixed_options() {
             Some(Some("extra value")),
             Some("Review environment"),
         ),
-        (vec!["review", "-t", "website", "--opencode="], Some(Some("")), None),
-        (vec!["review", "-t", "website", "--opencode=--help"], Some(Some("--help")), None),
+        (
+            vec!["review", "-t", "website", "--opencode="],
+            Some(Some("")),
+            None,
+        ),
+        (
+            vec!["review", "-t", "website", "--opencode=--help"],
+            Some(Some("--help")),
+            None,
+        ),
     ] {
         let mut arguments = vec!["tandem", "new-instance"];
         arguments.extend(&options);
@@ -87,68 +95,4 @@ fn delete_instance_requires_a_name() {
     };
     assert_eq!(name, "review");
     assert!(headless);
-}
-
-#[test]
-fn delete_instance_close_command_is_an_optional_boolean_flag() {
-    for options in [
-        vec!["review"],
-        vec!["review", "--close-command"],
-        vec!["-cc", "review"],
-        vec!["review", "-h", "-cc"],
-        vec!["--headless", "--close-command", "review"],
-    ] {
-        let mut arguments = vec!["tandem", "delete-instance"];
-        arguments.extend(&options);
-        let Some(Commands::DeleteInstance {
-            name,
-            headless,
-            close_command,
-        }) = parse(&arguments).unwrap().command
-        else {
-            panic!("expected delete-instance");
-        };
-        assert_eq!(name, "review");
-        assert_eq!(
-            headless,
-            options.contains(&"-h") || options.contains(&"--headless")
-        );
-        assert_eq!(
-            close_command,
-            options.contains(&"-cc") || options.contains(&"--close-command")
-        );
-    }
-    for arguments in [
-        vec!["tandem", "delete-instance", "--close-command"],
-        vec![
-            "tandem",
-            "delete-instance",
-            "review",
-            "--close-command=echo",
-        ],
-        vec!["tandem", "delete-instance", "review", "-c"],
-        vec!["tandem", "delete-instance", "review", "-oc"],
-    ] {
-        assert!(parse(&arguments).is_err(), "{arguments:?}");
-    }
-}
-
-#[test]
-fn command_aliases_preserve_values_boundaries_and_other_commands() {
-    for arguments in [
-        vec!["tandem", "new-instance", "review", "-o", "-cc"],
-        vec!["tandem", "new-instance", "review", "-cc"],
-        vec!["tandem", "delete-instance", "--", "-cc"],
-        vec!["tandem", "serve", "-cc"],
-    ] {
-        assert_eq!(
-            normalize_arguments(arguments.iter().map(OsString::from)),
-            arguments.iter().map(OsString::from).collect::<Vec<_>>()
-        );
-    }
-    assert!(parse(&["tandem"]).unwrap().command.is_none());
-    assert!(matches!(
-        parse(&["tandem", "mcp"]).unwrap().command,
-        Some(Commands::Mcp)
-    ));
 }

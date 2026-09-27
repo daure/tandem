@@ -55,12 +55,8 @@ impl AppService {
                 let Ok(workspace) = ready.await else {
                     return Ok(());
                 };
-                self.launch_instance_opencode(
-                    &workspace,
-                    name,
-                    initial_prompt.as_deref(),
-                )
-                .await
+                self.launch_instance_opencode(&workspace, name, initial_prompt.as_deref())
+                    .await
             };
             let (operation, opened) = tokio::join!(self.wait_operation(&operation.id), open);
             let operation = operation?;
@@ -82,5 +78,4 @@ impl AppService {
                 .ok_or_else(|| "startup completed without an instance".into())
         })
     }
-
 }

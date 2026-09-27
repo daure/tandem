@@ -10,6 +10,7 @@ use crate::store::environments::{
 };
 
 mod concurrency;
+mod creation_history;
 mod guidance;
 mod manifest_updates;
 mod restart;
@@ -575,12 +576,7 @@ fn operation_admission_rejects_duplicates_and_locks_release_on_drop() {
             .begin("create_template", "website", None)
             .is_err()
     );
-    environment.execute(
-        operation.clone(),
-        60,
-        super::Startup::default(),
-        Ok(String::new()),
-    );
+    environment.execute(operation.clone(), 60, super::Startup::default());
     assert_eq!(
         environment.operation(&operation.id).unwrap().state,
         OperationState::Succeeded
@@ -648,7 +644,7 @@ fn instance_deletion_removes_only_its_workspace() {
     fs::create_dir_all(&workspace).unwrap();
     fs::write(workspace.join("data.txt"), "instance data").unwrap();
 
-    lifecycle::remove_workspace(&config, "review", Arc::new(|_| {}), &Default::default()).unwrap();
+    lifecycle::remove_workspace(&config, "review", Arc::new(|_| {})).unwrap();
 
     assert!(!workspace.exists());
 }
@@ -674,10 +670,7 @@ fn instance_deletion_rejects_a_workspace_symlink_that_escapes_its_root() {
     fs::write(outside.path().join("data.txt"), "keep").unwrap();
     std::os::unix::fs::symlink(outside.path(), config.workspaces.join("review")).unwrap();
 
-    assert!(
-        lifecycle::remove_workspace(&config, "review", Arc::new(|_| {}), &Default::default())
-            .is_err()
-    );
+    assert!(lifecycle::remove_workspace(&config, "review", Arc::new(|_| {})).is_err());
     assert!(outside.path().join("data.txt").exists());
 }
 

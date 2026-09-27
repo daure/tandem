@@ -19,6 +19,263 @@ fn toolbar_line(app: &mut super::super::App, width: u16) -> String {
 }
 
 #[test]
+fn tabs_switch_projections_and_share_toolbar_controls_and_search() {
+    tuicore::init();
+    for width in [40, 80, 130] {
+        let service = AppService::for_tests();
+        service.set_opencode_snapshot_for_tests(super::attached_sessions::observation());
+        let mut app = crate::app::root(service);
+        app.update_snapshot(snapshot());
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
+        let area = Rect::new(0, 0, width, 30);
+        let mut layout = LayoutEngine::new();
+        layout.layout(&mut app, area);
+        let tabs = layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.id.as_str() == "tabs")
+            .unwrap()
+            .clone();
+        let route = EventRoute::new(tabs.path.clone());
+
+        for (key, sessions) in [(']', false), ('[', true)] {
+            app.dispatch_event(
+                &route,
+                &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
+                &mut EventCtx::new(settings),
+            );
+            assert_eq!(app.attached_sessions_only, sessions);
+            let text = rendered_lines(&toolbar_terminal(&mut app, width), area).join("\n");
+            assert_eq!(text.contains("Conversation busy"), sessions, "{text}");
+            assert_eq!(text.contains("Service"), !sessions, "{text}");
+        }
+
+        let mut ctx = EventCtx::new(settings);
+        app.handle_message(Msg::SetRunningOnly(true), &mut ctx);
+        app.handle_message(Msg::SetOpencodeHistory(true), &mut ctx);
+        app.handle_message(Msg::SetCompletionSound(true), &mut ctx);
+        layout.layout(&mut app, area);
+        let tree = layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.id.as_str() == super::super::TREE_FOCUS)
+            .unwrap()
+            .clone();
+        app.dispatch_focus(&tree, true, &mut tuicore::FocusCtx::default());
+        let tree_route = EventRoute::new(tree.path);
+        for key in "/missing-workspace"
+            .chars()
+            .map(Key::Char)
+            .chain([Key::Enter])
+        {
+            app.dispatch_event(
+                &tree_route,
+                &TuiEvent::Key(KeyEvent::from(key)),
+                &mut EventCtx::new(settings),
+            );
+        }
+        let toolbar = toolbar_line(&mut app, width);
+        for (label, sessions) in [("Instances", false), ("Sessions", true)] {
+            let lines = rendered_lines(&toolbar_terminal(&mut app, width), area);
+            let column = lines[0].split_once(label).unwrap().0.chars().count() as u16;
+            app.dispatch_event(
+                &route,
+                &TuiEvent::Mouse(tuicore::MouseEvent {
+                    kind: tuicore::MouseEventKind::Down(tuicore::MouseButton::Left),
+                    column,
+                    row: 0,
+                    modifiers: KeyModifiers::NONE,
+                }),
+                &mut EventCtx::new(settings),
+            );
+            assert_eq!(app.attached_sessions_only, sessions);
+            assert!(app.running_only && app.opencode_history && app.completion_sound);
+            let lines = rendered_lines(&toolbar_terminal(&mut app, width), area);
+            assert_eq!(lines[1], toolbar);
+            assert!(lines[2].contains("missing-workspace"), "{}", lines[2]);
+            assert!(!lines[3..].iter().any(|line| line.contains("review")));
+            layout.layout(&mut app, area);
+            for action in ["new-template", "stop-all", "purge-all", "refresh"] {
+                assert!(layout.focus_targets().iter().any(|target| target.enabled
+                    && target.path.keys().iter().any(|key| key.as_str() == action)));
+            }
+        }
+    }
+}
+
+#[test]
+fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_enabled() {
+    tuicore::init();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
+    for disabled_at_startup in [true, false] {
+        let service = AppService::for_tests();
+        if disabled_at_startup {
+            runtime
+                .block_on(service.set_opencode_enabled(false).unwrap())
+                .unwrap()
+                .unwrap();
+        }
+        let mut app = crate::app::root(service);
+        app.update_snapshot(snapshot());
+        if !disabled_at_startup {
+            app.handle_message(
+                Msg::SetOpencodeIntegration(false),
+                &mut EventCtx::new(settings),
+            );
+            runtime
+                .block_on(app.settings_save.take().unwrap())
+                .unwrap()
+                .unwrap();
+            app.update_snapshot(snapshot());
+        }
+        for width in [40, 130] {
+            let area = Rect::new(0, 0, width, 30);
+            let mut layout = LayoutEngine::new();
+            layout.layout(&mut app, area);
+            let tabs = layout
+                .focus_targets()
+                .iter()
+                .find(|target| target.id.as_str() == "tabs")
+                .unwrap()
+                .clone();
+            let route = EventRoute::new(tabs.path);
+            let header = rendered_lines(&toolbar_terminal(&mut app, width), area)[0].clone();
+            assert!(header.contains("Instances"), "{header}");
+            assert!(!header.contains("Sessions"), "{header}");
+            for key in ['[', ']', 'A'] {
+                app.dispatch_event(
+                    &route,
+                    &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
+                    &mut EventCtx::new(settings),
+                );
+                assert!(!app.attached_sessions_only);
+                assert_eq!(app.tabs_mut().selected_index(), 0);
+            }
+            app.handle_message(
+                Msg::SetAttachedSessionsOnly(true),
+                &mut EventCtx::new(settings),
+            );
+            assert!(!app.attached_sessions_only);
+            app.handle_message(Msg::SetRunningOnly(true), &mut EventCtx::new(settings));
+            let overview = layout
+                .focus_targets()
+                .iter()
+                .find(|target| target.hotkey_sequences.iter().any(|key| key == "shift+h"))
+                .unwrap();
+            app.dispatch_event(
+                &EventRoute::new(overview.path.clone()),
+                &TuiEvent::Hotkey(HotkeyEvent::Commit("shift+h".into())),
+                &mut EventCtx::new(settings),
+            );
+            assert!(!app.attached_sessions_only);
+            assert!(!app.running_only);
+            assert_eq!(app.tabs_mut().selected_index(), 0);
+            let text = rendered_lines(&toolbar_terminal(&mut app, width), area).join("\n");
+            assert!(text.contains("review"), "{text}");
+            assert!(text.contains("Service"), "{text}");
+        }
+        runtime
+            .block_on(app.service.set_opencode_enabled(true).unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(app.update_snapshot(snapshot()));
+        assert!(!app.attached_sessions_only);
+        assert_eq!(app.tabs_mut().selected_index(), 1);
+        let header =
+            rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30))[0].clone();
+        assert!(header.contains("Sessions · Instances"), "{header}");
+        app.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char('['))),
+            &mut EventCtx::new(settings),
+        );
+        assert!(app.attached_sessions_only);
+        assert_eq!(app.tabs_mut().selected_index(), 0);
+    }
+}
+
+#[test]
+fn bracket_navigation_keeps_control_focus_and_the_tab_header_active() {
+    tuicore::init();
+    let mut app = crate::app::root(AppService::for_tests());
+    app.update_snapshot(snapshot());
+    let settings = AnimationSettings {
+        enabled: false,
+        ..Default::default()
+    };
+    let mut layout = LayoutEngine::new();
+    layout.layout(&mut app, Rect::new(0, 0, 130, 30));
+    let targets = layout.focus_targets().to_vec();
+    let header = |app: &mut App| {
+        let terminal = toolbar_terminal(app, 130);
+        (0..130)
+            .map(|x| terminal.backend().buffer().cell((x, 0)).unwrap().clone())
+            .collect::<Vec<_>>()
+    };
+    let active_header = header(&mut app);
+    let tabs = targets
+        .iter()
+        .find(|target| target.id.as_str() == "tabs")
+        .unwrap();
+    app.dispatch_focus(tabs, false, &mut tuicore::FocusCtx::new(settings));
+    assert_eq!(header(&mut app), active_header);
+
+    for target in targets.iter().filter(|target| target.enabled) {
+        app.dispatch_focus(target, true, &mut tuicore::FocusCtx::new(settings));
+        for (key, sessions) in [(']', false), ('[', true), ('[', false), (']', true)] {
+            let mut ctx = EventCtx::new(settings);
+            let outcome = app.dispatch_event(
+                &EventRoute::new(target.path.clone()),
+                &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
+                &mut ctx,
+            );
+            assert_eq!(outcome, tuicore::EventOutcome::Handled);
+            assert_eq!(app.attached_sessions_only, sessions, "{:?}", target.path);
+            assert!(ctx.focus_request().is_none(), "{:?}", target.path);
+        }
+        app.dispatch_focus(target, false, &mut tuicore::FocusCtx::new(settings));
+        assert_eq!(header(&mut app), active_header);
+    }
+    for key in [']', '['] {
+        app.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
+            &mut EventCtx::new(settings),
+        );
+        assert_eq!(app.attached_sessions_only, key == '[');
+    }
+    let tree = targets
+        .iter()
+        .find(|target| target.id.as_str() == super::super::TREE_FOCUS)
+        .unwrap();
+    app.dispatch_focus(tree, true, &mut tuicore::FocusCtx::new(settings));
+    for key in "/12][".chars() {
+        app.dispatch_event(
+            &EventRoute::new(tree.path.clone()),
+            &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
+            &mut EventCtx::new(settings),
+        );
+        assert_eq!(app.attached_sessions_only, key != ']');
+    }
+    let lines = rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30));
+    assert!(lines[2].contains("12"), "{}", lines[2]);
+    app.handle_message(Msg::NewTemplate, &mut EventCtx::new(settings));
+    assert!(app.view.is_active());
+    for key in ['[', ']'] {
+        app.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
+            &mut EventCtx::new(settings),
+        );
+        assert!(app.attached_sessions_only);
+    }
+}
+
+#[test]
 fn running_filter_keeps_only_templates_with_running_services_or_opencode_sessions() {
     tuicore::init();
     let mut inventory = snapshot();
@@ -89,7 +346,6 @@ fn running_filter_keeps_only_templates_with_running_services_or_opencode_session
                 .unwrap()
         };
         let template = target("new-template");
-        let attached = target("attached-sessions-only");
         let history = target("opencode-history");
         let running = target("running-only");
         if width >= 50 {
@@ -97,15 +353,11 @@ fn running_filter_keeps_only_templates_with_running_services_or_opencode_session
             assert_eq!(template.area.right() + 1, sound.area.x);
             assert_eq!(
                 sound.area.right() + u16::from(width >= super::super::MOBILE_TABS_WIDTH),
-                attached.area.x
+                history.area.x
             );
         } else {
-            assert_eq!(template.area.right(), attached.area.x);
+            assert_eq!(template.area.right(), history.area.x);
         }
-        assert_eq!(
-            attached.area.right() + u16::from(width >= super::super::MOBILE_TABS_WIDTH),
-            history.area.x
-        );
         assert_eq!(history.area.right() + 1, running.area.x);
         let line = toolbar_line(&mut app, width);
         assert!(line.contains("󰑮") && line.contains("|U|"), "{line}");
@@ -115,13 +367,12 @@ fn running_filter_keeps_only_templates_with_running_services_or_opencode_session
             "Template"
         };
         assert!(
-            line.find(template_icon).unwrap() < line.find("󰚩").unwrap(),
+            line.find(template_icon).unwrap() < line.find("󰋚").unwrap(),
             "{line}"
         );
         if width >= 50 {
-            assert!(line.find("󰕾").unwrap() < line.find("󰚩").unwrap(), "{line}");
+            assert!(line.find("󰕾").unwrap() < line.find("󰋚").unwrap(), "{line}");
         }
-        assert!(line.find("󰚩").unwrap() < line.find("󰋚").unwrap(), "{line}");
         assert!(line.find("󰋚").unwrap() < line.find("󰑮").unwrap(), "{line}");
     }
 
@@ -218,11 +469,11 @@ fn global_h_opens_the_expanded_agent_view_and_clears_other_filters() {
     let terminal = toolbar_terminal(&mut app, 130);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 130, 30));
     assert!(
-        !lines[1].contains("○── 󰚩 |A|")
-            && lines[1].contains("○── 󰕾 |N| ──● 󰚩 |A| ○── 󰋚 |O| ○── 󰑮 |U|"),
+        lines[1].contains("○── 󰕾 |N| ○── 󰋚 |O| ○── 󰑮 |U|"),
         "{}",
         lines[1]
     );
+    assert_eq!(app.tabs_mut().selected_index(), 0);
     let overview = lines.join("\n");
     assert!(overview.contains("review"), "{overview}");
     assert!(overview.contains("Conversation busy"), "{overview}");

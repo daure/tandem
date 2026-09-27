@@ -200,14 +200,10 @@ fn service_mutations_update_an_independent_observer_and_rejected_manifests_do_no
 
     writer
         .runtime
-        .block_on(writer.configure_open_command("editor .".into(), true))
+        .block_on(writer.set_completion_fade_seconds("45".into()).unwrap())
+        .unwrap()
         .unwrap();
-    wait_for(|| observer.open_command() == "editor .");
-    writer
-        .runtime
-        .block_on(writer.configure_close_command("close-editor".into(), true))
-        .unwrap();
-    wait_for(|| observer.close_command() == "close-editor");
+    wait_for(|| observer.completion_fade_seconds() == 45);
 }
 
 #[test]

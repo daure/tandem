@@ -27,9 +27,8 @@ pub(super) fn template(
     name: &str,
     timeout: u64,
     progress: Progress,
-    close_command: &super::close_command::CloseCommand,
 ) -> Result<(), String> {
-    template_with(config, name, timeout, progress, close_command, run)
+    template_with(config, name, timeout, progress, run)
 }
 
 pub(super) fn template_with(
@@ -37,21 +36,19 @@ pub(super) fn template_with(
     name: &str,
     timeout: u64,
     progress: Progress,
-    close_command: &super::close_command::CloseCommand,
     execute: impl FnMut(Command, Duration, Option<Progress>) -> Result<String, String>,
 ) -> Result<(), String> {
     crate::store::environments::validate_name(name)?;
     let _template_lock = gateway::lock(config, &format!("template-{name}"))?;
     let directory = templates::removal_directory(config, name)?;
     let deadline = Instant::now() + Duration::from_secs(timeout);
-    if remove_workspace_template(config, name, &directory, deadline, &progress, close_command)? {
+    if remove_workspace_template(config, name, &directory, deadline, &progress)? {
         return Ok(());
     }
     let mut remover = Remover {
         config,
         deadline,
         progress,
-        close_command,
         execute,
     };
     let inventory = runtime::inspect_with(config, remover.deadline, &mut remover.execute)?;
@@ -141,7 +138,6 @@ fn remove_workspace_template(
     directory: &Path,
     deadline: Instant,
     progress: &Progress,
-    close_command: &super::close_command::CloseCommand,
 ) -> Result<bool, String> {
     if directory.join("compose.yaml").exists() {
         return Ok(false);
@@ -167,7 +163,7 @@ fn remove_workspace_template(
     }
     for instance_name in &names {
         remaining(deadline)?;
-        lifecycle::remove_workspace(config, instance_name, progress.clone(), close_command)?;
+        lifecycle::remove_workspace(config, instance_name, progress.clone())?;
         ownership::forget(config, name, instance_name)?;
         journal::forget(config, instance_name)?;
     }
@@ -180,7 +176,6 @@ struct Remover<'a, F> {
     config: &'a Config,
     deadline: Instant,
     progress: Progress,
-    close_command: &'a super::close_command::CloseCommand,
     execute: F,
 }
 
@@ -297,12 +292,7 @@ impl<F: FnMut(Command, Duration, Option<Progress>) -> Result<String, String>> Re
                 ));
             }
         }
-        lifecycle::remove_workspace(
-            self.config,
-            &plan.name,
-            self.progress.clone(),
-            self.close_command,
-        )
+        lifecycle::remove_workspace(self.config, &plan.name, self.progress.clone())
     }
 }
 

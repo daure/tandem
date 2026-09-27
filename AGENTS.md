@@ -9,6 +9,18 @@
 
 ## OpenCode live verification
 
+After changing `src/environments/opencode/bridge.mjs`, install the rebuilt companion at the path
+used by `~/.config/opencode/tui.json`:
+
+```bash
+cargo build --bin tandem
+TANDEM_HOME="$HOME/.local/share/tandem" target/debug/tandem opencode-setup
+```
+
+Do not use `cargo run` for this installation because the repository runner sources
+`projects/env.sh` and targets the development Tandem home. Verify the installed `bridge.mjs`
+contains the change, then tell the user it was installed and that open clients need restarting.
+
 For changes to the OpenCode companion, session tracking, or Zellij navigation, offer this
 development-only check and obtain user approval before running it:
 
