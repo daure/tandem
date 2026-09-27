@@ -12,6 +12,9 @@ import time
 import urllib.request
 
 
+BINARY = Path(__file__).resolve().parents[3] / os.environ.get("CARGO_TARGET_DIR", "target") / "debug/tandem"
+
+
 class Client:
     def __init__(self, binary, environment):
         self.process = subprocess.Popen(

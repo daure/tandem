@@ -13,10 +13,7 @@ import termios
 import time
 import unittest
 
-from stdio_smoke import Client
-
-
-BINARY = Path(__file__).resolve().parents[3] / "target/debug/tandem"
+from stdio_smoke import BINARY, Client
 
 
 class Terminal:
@@ -84,13 +81,14 @@ class RefreshTests(unittest.TestCase):
             terminal = Terminal(environment)
             try:
                 terminal.wait_for(lambda: inventory_calls() == 1 and b"Instances" in terminal.output)
+                terminal.send(b"]A")
                 terminal.send(b"\x1b[O")
                 terminal.drain_for(11)
                 self.assertEqual(inventory_calls(), 1, "Unfocused TUI must skip ten-second inventory polls")
 
                 client = Client(BINARY, environment)
                 try:
-                    client.tool("create_template", {"name": "mcp-visible"})
+                    template = client.tool("create_template", {"name": "mcp-visible"})
                     terminal.wait_for(lambda: b"mcp-visible" in terminal.output)
                     self.assertEqual(inventory_calls(), 1, "Template notification must not inspect Docker")
 
@@ -123,6 +121,7 @@ class RefreshTests(unittest.TestCase):
                                       and inventory_calls() == 5)
                     terminal.send(b"\x1b[O")
 
+                    (Path(template["directory"]) / "compose.yaml").write_text("services:\n  web:\n    image: nginx\n")
                     operation = client.tool("create_instance", {
                         "template": "mcp-visible", "name": "fails-config",
                         "confirmed": True, "timeout_seconds": 5,

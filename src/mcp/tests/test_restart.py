@@ -10,9 +10,7 @@ import threading
 import time
 import unittest
 
-from stdio_smoke import Client
-
-BINARY = Path(__file__).resolve().parents[3] / "target/debug/tandem"
+from stdio_smoke import BINARY, Client
 
 DOCKER = '''#!/usr/bin/env python3
 from datetime import datetime, timezone
@@ -165,6 +163,7 @@ class RestartTests(unittest.TestCase):
         self.addCleanup(worker.join)
         self.addCleanup(server.shutdown)
         template = self.client.tool("create_template", {"name": "website"})
+        (Path(template["directory"]) / "compose.yaml").write_text("services:\n  web:\n    image: nginx\n  db:\n    image: postgres\n")
         Path(template["manifest_file"]).write_text(json.dumps({"routes": {
             "web": {"port": 80, "readiness_path": "health", "readiness_contains": "application ready"},
             "db": {"port": 80, "readiness_path": "unrelated", "readiness_contains": "unused"},

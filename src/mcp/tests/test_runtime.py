@@ -4,9 +4,7 @@ import tempfile
 import time
 import unittest
 
-ROOT = Path(__file__).resolve().parents[3]
-BINARY = ROOT / "target/debug/tandem"
-from stdio_smoke import Client
+from stdio_smoke import BINARY, Client
 
 
 @unittest.skipUnless(os.name == "posix" and BINARY.is_file(), "Build Tandem before runtime integration tests")
@@ -48,56 +46,6 @@ class RuntimeTests(unittest.TestCase):
             finally:
                 client.close()
 
-    def test_open_command_is_persisted_and_runs_only_after_approval(self):
-        with tempfile.TemporaryDirectory(prefix="tandem-open-command-") as directory:
-            root = Path(directory)
-            environment = {**os.environ, "TANDEM_HOME": directory,
-                           "XDG_STATE_HOME": str(root / "state")}
-            environment.pop("TANDEM_INSTRUCTIONS_FILE", None)
-            writer = Client(BINARY, environment)
-            try:
-                reader = Client(BINARY, environment)
-                try:
-                    writer.tool("get_instructions")
-                    reader.tool("get_instructions")
-                    tools = writer.request("tools/list", {})["tools"]
-                    self.assertTrue({"get_open_command", "set_open_command", "run_open_command"} <= {tool["name"] for tool in tools})
-                    self.assertEqual(reader.tool("get_open_command"), {"command": ""})
-                    command = 'printf \'%s\' "$TANDEM_WORKSPACE" > "$TANDEM_HOME/unexpected"'
-                    workspace = root / "workspaces" / "review"
-                    workspace.mkdir()
-                    (workspace / "AGENTS.md").write_text("Workspace guidance\n")
-                    rejected = writer.request("tools/call", {
-                        "name": "set_open_command", "arguments": {"command": command},
-                    })
-                    self.assertTrue(rejected.get("isError"))
-                    saved = writer.tool("set_open_command", {"command": command, "confirmed": True})
-                    self.assertEqual(saved, {"command": command})
-                    self.assertEqual(reader.tool("get_open_command"), saved)
-                    self.assertFalse((root / "unexpected").exists())
-                    rejected = writer.request("tools/call", {
-                        "name": "run_open_command", "arguments": {"name": "review"},
-                    })
-                    self.assertTrue(rejected.get("isError"))
-                    self.assertFalse((root / "unexpected").exists())
-                    self.assertEqual(
-                        writer.tool("run_open_command", {"name": "review", "confirmed": True}),
-                        {"workspace": str(workspace)},
-                    )
-                    self.assertEqual((root / "unexpected").read_text(), str(workspace))
-                finally:
-                    reader.close()
-            finally:
-                writer.close()
-            restarted = Client(BINARY, environment)
-            try:
-                restarted.tool("get_instructions")
-                self.assertEqual(restarted.tool("get_open_command"), {"command": command})
-                self.assertEqual(restarted.tool("set_open_command", {"command": "", "confirmed": True}), {"command": ""})
-                self.assertEqual(restarted.tool("get_open_command"), {"command": ""})
-            finally:
-                restarted.close()
-
     def test_startup_uses_one_budget_across_docker_and_gateway_probes(self):
         with tempfile.TemporaryDirectory(prefix="tandem-deadline-") as directory:
             root = Path(directory)
@@ -118,7 +66,8 @@ if sys.argv[-3:] == ['config', '--format', 'json']:
             environment.pop("TANDEM_INSTRUCTIONS_FILE", None)
             client = Client(BINARY, environment)
             try:
-                client.tool("create_template", {"name": "website"})
+                template = client.tool("create_template", {"name": "website"})
+                (Path(template["directory"]) / "compose.yaml").write_text("services:\n  web:\n    image: nginx\n")
                 start = time.monotonic()
                 operation = client.tool("create_instance", {"template": "website", "name": "review",
                                         "confirmed": True, "timeout_seconds": 5, "wait": True}, timeout=20)

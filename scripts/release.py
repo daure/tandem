@@ -72,7 +72,7 @@ def preflight():
     run("cargo", "build", "--locked", env=RELEASE_CHECK_ENV)
     run(
         "python3", "-W", "error", "-m", "unittest", "discover", "-s", "src/mcp/tests",
-        env={"PYTHONDONTWRITEBYTECODE": "1"},
+        env={**RELEASE_CHECK_ENV, "PYTHONDONTWRITEBYTECODE": "1"},
     )
 
 

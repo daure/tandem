@@ -158,7 +158,7 @@ class ReleaseGitTests(unittest.TestCase):
                     )
                 self.assertIn(
                     (("python3", "-W", "error", "-m", "unittest", "discover", "-s", "src/mcp/tests"),
-                     {"env": {"PYTHONDONTWRITEBYTECODE": "1"}}),
+                     {"env": {**expected_release_check_env, "PYTHONDONTWRITEBYTECODE": "1"}}),
                     calls,
                 )
                 self.assertEqual(tomllib.loads((repo / "Cargo.toml").read_text())["dependencies"]["tuicore"], {"path": "../tuicore"})
