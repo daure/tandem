@@ -13,7 +13,7 @@ import termios
 import time
 import unittest
 
-from stdio_smoke import BINARY, Client
+from stdio_smoke import BINARY, Client, disable_history_cleanup
 
 
 class Terminal:
@@ -58,7 +58,7 @@ class RefreshTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="tandem-refresh-") as directory:
             root = Path(directory)
             home = root / "home"
-            home.mkdir()
+            disable_history_cleanup(home)
             docker = root / "docker"
             docker.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TANDEM_HOME/docker-calls"\n')
             docker.chmod(0o755)

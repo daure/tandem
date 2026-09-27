@@ -4,7 +4,7 @@ import tempfile
 import time
 import unittest
 
-from stdio_smoke import BINARY, Client
+from stdio_smoke import BINARY, Client, disable_history_cleanup
 
 
 @unittest.skipUnless(os.name == "posix" and BINARY.is_file(), "Build Tandem before runtime integration tests")
@@ -60,6 +60,7 @@ if sys.argv[-3:] == ['config', '--format', 'json']:
     print(json.dumps({'services': {'web': {'image': 'nginx'}}}))
 """)
             executable.chmod(0o755)
+            disable_history_cleanup(root / "home")
             environment = {**os.environ, "PATH": f"{root}{os.pathsep}{os.environ['PATH']}",
                            "TANDEM_HOME": str(root / "home"), "TANDEM_NAMESPACE": "deadline-test",
                            "TANDEM_GATEWAY_PORT": "9886", "XDG_STATE_HOME": str(root / "state")}

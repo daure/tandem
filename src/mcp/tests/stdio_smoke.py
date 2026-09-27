@@ -1,18 +1,30 @@
 """Exercise the real stdio protocol; --live also starts/stops a routed Docker instance."""
 
 import argparse
+from contextlib import closing
 import json
 import os
 from pathlib import Path
 import select
 import socket
+import sqlite3
 import subprocess
 import tempfile
 import time
 import urllib.request
 
 
-BINARY = Path(__file__).resolve().parents[3] / os.environ.get("CARGO_TARGET_DIR", "target") / "debug/tandem"
+ROOT = Path(__file__).resolve().parents[3]
+BINARY = ROOT / os.environ.get("CARGO_TARGET_DIR", "target") / "debug/tandem"
+
+
+def disable_history_cleanup(home):
+    home.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(home / "settings.sqlite3")) as connection, connection:
+        connection.executescript((ROOT / "migrations/0001_app_settings.sql").read_text())
+        connection.execute(
+            "INSERT INTO app_settings(key, value) VALUES ('opencode.clear_history_on_creation', 'false')"
+        )
 
 
 class Client:
