@@ -122,7 +122,7 @@ impl AppService {
                     .map(|candidate| candidate.description.as_str())
                     .unwrap_or_default()
                     .to_owned();
-                run_workspace_command(&command, &workspace, &instance, None, Some(&description))
+                run_workspace_command(&command, &workspace, &instance, Some(&description))
                     .await
             }
             .await;
@@ -503,10 +503,9 @@ async fn run_workspace_command(
     command: &str,
     workspace: &str,
     instance: &str,
-    open_param: Option<&str>,
     description: Option<&str>,
 ) -> Result<(), String> {
-    let status = spawn_workspace_command(command, workspace, instance, open_param, description)?
+    let status = spawn_workspace_command(command, workspace, instance, description)?
         .wait()
         .await
         .map_err(|error| format!("cannot wait for workspace opener: {error}"))?;
@@ -516,11 +515,10 @@ async fn run_workspace_command(
     Ok(())
 }
 
-pub(super) fn spawn_workspace_command(
+fn spawn_workspace_command(
     command: &str,
     workspace: &str,
     instance: &str,
-    open_param: Option<&str>,
     description: Option<&str>,
 ) -> Result<tokio::process::Child, String> {
     let mut process = if command.trim().is_empty() {
@@ -535,9 +533,6 @@ pub(super) fn spawn_workspace_command(
             .env("TANDEM_INSTANCE", instance)
             .env("TANDEM_WORKSPACE", workspace)
             .current_dir(workspace);
-        if let Some(open_param) = open_param {
-            process.env("TANDEM_OPEN_PARAM", open_param);
-        }
         if let Some(description) = description {
             process.env("TANDEM_DESCRIPTION", description);
         }

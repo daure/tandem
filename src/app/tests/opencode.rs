@@ -427,6 +427,77 @@ fn session_views_put_recent_completions_first_and_recent_starts_last() {
 }
 
 #[test]
+fn saved_sessions_follow_live_sessions_and_clients_in_every_workspace() {
+    let pane = Pane {
+        session: "main".into(),
+        id: 7,
+        tab_id: 4,
+        tab_name: "review".into(),
+    };
+    let mut observation = Snapshot::default();
+    for (scope, directory) in [
+        ("owned", "/tmp/workspaces/review"),
+        ("external", "/work/external"),
+    ] {
+        for (state, activity, attached, updated) in [
+            ("attached", Activity::Idle, true, 100),
+            ("unknown", Activity::Unknown, false, 200),
+            ("busy", Activity::Busy, true, 300),
+            ("saved", Activity::Idle, false, 900),
+        ] {
+            observation.sessions.push(Session {
+                id: format!("ses_{scope}_{state}"),
+                title: state.into(),
+                directory: directory.into(),
+                activity,
+                panes: attached.then(|| pane.clone()).into_iter().collect(),
+                updated,
+                ..Default::default()
+            });
+        }
+        observation.clients.push(Client {
+            title: "OpenCode".into(),
+            directory: directory.into(),
+            server: "http://127.0.0.1:4199".into(),
+            pane: Pane {
+                id: if scope == "owned" { 8 } else { 9 },
+                ..pane.clone()
+            },
+            stale: false,
+            awaiting_presence_since: None,
+        });
+    }
+
+    let mut projected = rows::from_snapshot(&snapshot());
+    super::super::opencode::append_rows(&mut projected, &observation, true);
+
+    for (scope, parent) in [
+        ("owned", "sessions:review"),
+        ("external", "opencode-workspace:/work/external"),
+    ] {
+        let children = projected
+            .iter()
+            .filter(|row| row.parent.as_deref() == Some(parent))
+            .filter_map(|row| match row.opencode.as_ref()? {
+                super::super::opencode::Target::Session { id, .. } => Some(id.as_str()),
+                super::super::opencode::Target::Client { .. } => Some("client"),
+                super::super::opencode::Target::Workspace => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            children,
+            [
+                format!("ses_{scope}_attached"),
+                format!("ses_{scope}_unknown"),
+                "client".into(),
+                format!("ses_{scope}_busy"),
+                format!("ses_{scope}_saved"),
+            ]
+        );
+    }
+}
+
+#[test]
 fn disabling_integration_removes_rows_and_counts_and_clears_the_cached_observation() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
@@ -535,7 +606,6 @@ fn child_rows_show_four_states_with_overlapping_counts_and_explicit_history() {
             Tone::Muted,
         ),
         ("ses_2", Tone::Info, "⠋", Tone::Info, "29s", Tone::Info),
-        ("ses_3", Tone::Muted, "", Tone::Muted, "1m54s", Tone::Muted),
     ] {
         let row = rows
             .iter()
@@ -558,6 +628,15 @@ fn child_rows_show_four_states_with_overlapping_counts_and_explicit_history() {
         assert!(row.label.ends_with(&format!("\nQuestion {}", &id[4..])));
         assert!(!row.label.contains(id));
     }
+    let saved = rows
+        .iter()
+        .find(|row| row.id == "opencode:review:ses_3")
+        .unwrap();
+    assert_eq!(saved.label, "Conversation 3");
+    assert_eq!(saved.height(), 1);
+    assert_eq!(saved.text("", None).to_string(), "󰚩 Conversation 3");
+    assert_eq!(saved.status_detail, None);
+    assert!(saved.opencode_metadata.is_none());
     assert!(
         rows.iter()
             .filter(|row| row.opencode.is_some())
@@ -704,10 +783,12 @@ fn session_timers_share_a_display_beat_across_refreshes_and_stop_when_idle() {
     tree.tick(Duration::from_secs(10), AnimationSettings::default());
     let text = render(&mut tree, &mut terminal);
     assert!(
-        text.contains("Quick ping · 5s · 84K (31%) · Tracer · GPT-5.6 Sol OpenAI · high"),
+        text.lines()
+            .any(|line| line.trim_end().ends_with("󰚩 Quick ping")),
         "{text}"
     );
-    assert!(text.contains(" Sleep for 30 seconds"), "{text}");
+    assert!(!text.contains("Quick ping ·"), "{text}");
+    assert!(text.contains("Sleep for 30 seconds"), "{text}");
 }
 
 #[test]
@@ -872,7 +953,7 @@ fn instance_children_group_opencode_sessions_before_setup_and_services() {
         ["sessions:review", "setup:review", "services:review"]
     );
     let sessions = rows.iter().find(|row| row.id == "sessions:review").unwrap();
-    assert_eq!(sessions.text("", None).to_string(), "󰚩 Sessions");
+    assert_eq!(sessions.text("", None).to_string(), "󰭻 Sessions");
     assert_eq!(sessions.tone, Tone::Success);
     assert!(!sessions.loading);
     assert_eq!(sessions.height(), 1);
@@ -912,7 +993,7 @@ fn sessions_group_is_muted_for_history_only_and_green_with_an_attached_session()
     let mut rows = rows::from_snapshot(&snapshot());
     super::super::opencode::append_rows(&mut rows, &observation, true);
     let sessions = rows.iter().find(|row| row.id == "sessions:review").unwrap();
-    assert_eq!(sessions.text("", None).to_string(), "󰚩 Sessions");
+    assert_eq!(sessions.text("", None).to_string(), "󰭻 Sessions");
     assert_eq!(sessions.tone, Tone::Muted);
     assert!(!sessions.loading);
     assert_eq!(
@@ -1032,7 +1113,7 @@ fn session_menu_and_shortcut_open_or_goto_the_panel() {
         let expected = if attached { "Goto panel" } else { "Open panel" };
         assert!(
             text.lines()
-                .any(|line| line.contains(expected) && line.trim_end().ends_with("⌃;")),
+                .any(|line| line.contains(expected) && line.trim_end().ends_with('o')),
             "{text}"
         );
         assert_eq!(
@@ -1050,22 +1131,11 @@ fn session_menu_and_shortcut_open_or_goto_the_panel() {
         );
         let mut shortcut_ctx = EventCtx::new(AnimationSettings::default());
         app.event(
-            &TuiEvent::Key(KeyEvent {
-                code: Key::Char(';'),
-                modifiers: KeyModifiers::CONTROL,
-            }),
+            &TuiEvent::Key(KeyEvent::from(Key::Char('o'))),
             &mut shortcut_ctx,
         );
-        if attached {
-            assert!(shortcut_ctx.notifications().is_empty());
-            assert!(app.opencode_action.is_some());
-        } else {
-            assert_eq!(shortcut_ctx.notifications().len(), 1);
-            assert_eq!(
-                shortcut_ctx.notifications()[0].title(),
-                "Cannot open OpenCode"
-            );
-        }
+        assert!(shortcut_ctx.notifications().is_empty());
+        assert!(app.opencode_action.is_some());
         assert!(!app.view.is_active());
     }
 }
@@ -1139,7 +1209,7 @@ fn external_client_menu_and_c_hotkey_close_its_observed_pane() {
     let text = rendered_lines(&terminal, area).join("\n");
     assert!(
         text.lines()
-            .any(|line| line.contains("Goto panel") && line.trim_end().ends_with("⌃;")),
+            .any(|line| line.contains("Goto panel") && line.trim_end().ends_with('o')),
         "{text}"
     );
     assert!(
@@ -1159,7 +1229,7 @@ fn external_client_menu_and_c_hotkey_close_its_observed_pane() {
 }
 
 #[test]
-fn external_client_ctrl_semicolon_navigates_from_overview_and_attached_views() {
+fn external_client_o_navigates_from_overview_and_attached_views() {
     tuicore::init();
     for attached_only in [false, true] {
         let mut app = root(AppService::for_tests());
@@ -1178,10 +1248,7 @@ fn external_client_ctrl_semicolon_navigates_from_overview_and_attached_views() {
 
         let mut shortcut = EventCtx::new(AnimationSettings::default());
         app.event(
-            &TuiEvent::Key(KeyEvent {
-                code: Key::Char(';'),
-                modifiers: KeyModifiers::CONTROL,
-            }),
+            &TuiEvent::Key(KeyEvent::from(Key::Char('o'))),
             &mut shortcut,
         );
 
@@ -1205,7 +1272,7 @@ fn c_on_an_instance_confirms_closing_all_opencode_sessions() {
 
     assert!(matches!(
         app.intent,
-        Some(super::super::Intent::CloseOpencodeSessions(ref name)) if name == "review"
+        Some(super::super::Intent::CloseOpencodeSessions(crate::store::opencode::CloseScope::Instance(ref name))) if name == "review"
     ));
     let area = Rect::new(0, 0, 130, 40);
     app.layout(area, &mut tuicore::LayoutCtx::new());
@@ -1264,7 +1331,7 @@ fn c_on_the_sessions_group_confirms_closing_all_instance_sessions() {
 
     assert!(matches!(
         app.intent,
-        Some(super::super::Intent::CloseOpencodeSessions(ref name)) if name == "review"
+        Some(super::super::Intent::CloseOpencodeSessions(crate::store::opencode::CloseScope::Instance(ref name))) if name == "review"
     ));
     assert!(app.view.is_active());
 }

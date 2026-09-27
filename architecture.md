@@ -65,8 +65,12 @@ and conversation/pane children.
 The bundled OpenCode TUI companion runs in each client and publishes its current route's
 conversation ID with PID, heartbeat, server, and Zellij identity. Server processes are shared
 across directories and do not own client attachment identity. Fresh receipts and live panes
-establish attachment and authorize navigation or closure of that exact pane; attaching a detached
-conversation requires an owning Tandem instance. Server session status establishes activity. Titles are presentation data.
+establish attachment and authorize navigation or closure of that exact pane. Observed conversations
+can be resumed in their recorded directory on their loopback server, including external workspaces.
+New clients target an instance workspace or an observed directory; instance workspaces receive
+validated guidance preparation, while external directories remain outside Tandem provisioning.
+Bulk closure selects observed panes by instance ownership or exact external directory and excludes
+owned panes from the external aggregate. Server session status establishes activity. Titles are presentation data.
 Unknown observations stay explicit, and disabling the integration discards its cache and cancels
 its work without changing externally owned servers or panes. Companion installation is an
 explicit CLI operation; user-owned OpenCode configuration is preserved.

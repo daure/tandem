@@ -314,8 +314,8 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
     app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('U'))), &mut ctx);
     assert!(app.running_only);
     let filtered = render(&mut app, 130).1.join("\n");
-    assert!(!filtered.contains("Conversation busy"), "{filtered}");
-    assert!(!filtered.contains("Conversation saved"), "{filtered}");
+    assert!(filtered.contains("Conversation busy"), "{filtered}");
+    assert!(filtered.contains("Conversation saved"), "{filtered}");
     app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('U'))), &mut ctx);
     assert!(!app.running_only);
     assert!(
@@ -355,7 +355,9 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
     assert!(!app.attached_sessions_only);
     assert!(app.running_only && !app.opencode_history);
     let (layout, lines) = render(&mut app, 130);
-    assert!(!lines.join("\n").contains("Conversation busy"));
+    assert!(lines.join("\n").contains("review"));
+    instances::set_highlighted(&app.instances, Some("opencode:review:busy".into()));
+    assert_eq!(app.selected().unwrap().id, "opencode:review:busy");
     for name in ["opencode-history", "running-only"] {
         assert!(
             layout.focus_targets().iter().any(|target| target.enabled
@@ -472,7 +474,7 @@ fn filter_and_view_toggles_center_the_selected_row() {
 }
 
 #[test]
-fn agents_history_includes_history_only_instances_and_external_workspaces() {
+fn agents_history_controls_conversations_while_preserving_workspace_groups() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     let mut history = observation();
@@ -503,7 +505,7 @@ fn agents_history_includes_history_only_instances_and_external_workspaces() {
                 assert_eq!(row.parent.as_deref(), Some(parent));
             }
             instances::set_highlighted(&app.instances, Some(parent.into()));
-            assert_eq!(app.selected().is_some(), enabled, "{parent}");
+            assert!(app.selected().is_some(), "{parent}");
         }
     }
 }

@@ -6,8 +6,8 @@ use crate::{
 use ratatui::{buffer::Buffer, style::Color};
 use std::time::Duration;
 
-fn rows(activity: Activity, stale: bool) -> Vec<rows::Row> {
-    let observation = Snapshot {
+fn observation(activity: Activity, stale: bool) -> Snapshot {
+    Snapshot {
         sessions: [
             ("completing", "Completing session", activity, 20),
             ("neighbour", "Idle neighbour", Activity::Idle, 10),
@@ -32,8 +32,11 @@ fn rows(activity: Activity, stale: bool) -> Vec<rows::Row> {
         })
         .collect(),
         ..Default::default()
-    };
-    super::super::opencode::attached_rows(Vec::new(), &observation)
+    }
+}
+
+fn rows(activity: Activity, stale: bool) -> Vec<rows::Row> {
+    super::super::opencode::attached_rows(Vec::new(), &observation(activity, stale))
 }
 
 fn render(view: &mut Instances) -> (Buffer, Vec<String>) {
@@ -237,4 +240,46 @@ fn a_session_reappearing_after_filtering_does_not_replay_completion() {
             .tick(Duration::ZERO, AnimationSettings::default())
             .active
     );
+}
+
+#[test]
+fn completion_sound_is_opt_in_and_plays_once_per_busy_to_idle_transition() {
+    tuicore::init();
+    let service = AppService::for_tests();
+    service.set_opencode_snapshot_for_tests(observation(Activity::Busy, false));
+    let mut app = root(service);
+
+    app.service
+        .set_opencode_snapshot_for_tests(observation(Activity::Idle, false));
+    app.update_snapshot(snapshot());
+    assert_eq!(app.service.completion_sound_count_for_tests(), 0);
+
+    app.service
+        .set_opencode_snapshot_for_tests(observation(Activity::Busy, false));
+    app.update_snapshot(snapshot());
+    app.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Char('N'))),
+        &mut EventCtx::new(AnimationSettings::default()),
+    );
+    assert!(app.completion_sound);
+    assert!(app.toolbar_state.borrow().completion_sound);
+
+    app.service
+        .set_opencode_snapshot_for_tests(observation(Activity::Idle, false));
+    app.update_snapshot(snapshot());
+    app.update_snapshot(snapshot());
+    assert_eq!(app.service.completion_sound_count_for_tests(), 1);
+
+    app.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Char('N'))),
+        &mut EventCtx::new(AnimationSettings::default()),
+    );
+    app.service
+        .set_opencode_snapshot_for_tests(observation(Activity::Busy, false));
+    app.update_snapshot(snapshot());
+    app.service
+        .set_opencode_snapshot_for_tests(observation(Activity::Idle, false));
+    app.update_snapshot(snapshot());
+    assert!(!app.completion_sound);
+    assert_eq!(app.service.completion_sound_count_for_tests(), 1);
 }

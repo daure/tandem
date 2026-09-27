@@ -6,16 +6,16 @@ fn parse(arguments: &[&str]) -> Result<Cli, clap::Error> {
 
 #[test]
 fn new_instance_accepts_long_short_and_mixed_options() {
-    for (options, expected_open_command, expected_description) in [
+    for (options, expected_opencode, expected_description) in [
         (vec!["review", "--template", "website"], None, None),
         (
-            vec!["review", "-t", "website", "--open-command"],
+            vec!["review", "-t", "website", "--opencode"],
             Some(None),
             None,
         ),
-        (vec!["review", "-twebsite", "-oc"], Some(None), None),
+        (vec!["review", "-twebsite", "-o"], Some(None), None),
         (
-            vec!["review", "-t", "website", "-oc", "extra value"],
+            vec!["review", "-t", "website", "-o", "extra value"],
             Some(Some("extra value")),
             None,
         ),
@@ -24,20 +24,22 @@ fn new_instance_accepts_long_short_and_mixed_options() {
                 "review",
                 "-t",
                 "website",
-                "--open-command=extra value",
+                "--opencode=extra value",
                 "-d",
                 "Review environment",
             ],
             Some(Some("extra value")),
             Some("Review environment"),
         ),
+        (vec!["review", "-t", "website", "--opencode="], Some(Some("")), None),
+        (vec!["review", "-t", "website", "--opencode=--help"], Some(Some("--help")), None),
     ] {
         let mut arguments = vec!["tandem", "new-instance"];
         arguments.extend(&options);
         let Some(Commands::NewInstance {
             name,
             template,
-            open_command,
+            opencode,
             description,
         }) = parse(&arguments).unwrap().command
         else {
@@ -46,8 +48,8 @@ fn new_instance_accepts_long_short_and_mixed_options() {
         assert_eq!(name, "review");
         assert_eq!(template, "website");
         assert_eq!(
-            open_command.as_ref().map(|extra| extra.as_deref()),
-            expected_open_command
+            opencode.as_ref().map(|prompt| prompt.as_deref()),
+            expected_opencode
         );
         assert_eq!(description.as_deref(), expected_description);
     }
@@ -59,7 +61,6 @@ fn new_instance_requires_name_and_template() {
         vec!["tandem", "new-instance", "review"],
         vec!["tandem", "new-instance", "-t", "website"],
         vec!["tandem", "new-instance", "review", "-t"],
-        vec!["tandem", "new-instance", "review", "-t", "website", "-o"],
         vec![
             "tandem",
             "new-instance",
@@ -67,7 +68,7 @@ fn new_instance_requires_name_and_template() {
             "-t",
             "website",
             "--",
-            "-oc",
+            "-o",
         ],
     ] {
         assert!(parse(&arguments).is_err(), "{arguments:?}");
@@ -135,10 +136,7 @@ fn delete_instance_close_command_is_an_optional_boolean_flag() {
 #[test]
 fn command_aliases_preserve_values_boundaries_and_other_commands() {
     for arguments in [
-        vec!["tandem", "new-instance", "review", "-t", "-oc"],
-        vec!["tandem", "new-instance", "--template=-oc", "review"],
-        vec!["tandem", "new-instance", "-t", "website", "--", "-oc"],
-        vec!["tandem", "serve", "-oc"],
+        vec!["tandem", "new-instance", "review", "-o", "-cc"],
         vec!["tandem", "new-instance", "review", "-cc"],
         vec!["tandem", "delete-instance", "--", "-cc"],
         vec!["tandem", "serve", "-cc"],

@@ -137,3 +137,111 @@ fn a_closed_client_does_not_follow_a_pane_with_the_same_number_in_another_zellij
     tree.tick(std::time::Duration::ZERO, AnimationSettings::default());
     assert_eq!(instances::selected(&state).unwrap().id, "services:review");
 }
+
+#[test]
+fn creation_selects_the_exact_observed_pane_and_reveals_its_ancestors() {
+    tuicore::init();
+    for agents in [false, true] {
+        for observed_first in [false, true] {
+            let mut app = root(AppService::for_tests());
+            app.handle_message(
+                Msg::SetAttachedSessionsOnly(agents),
+                &mut EventCtx::new(AnimationSettings::default()),
+            );
+            let area = Rect::new(0, 0, 120, 40);
+            app.update_snapshot(snapshot());
+            app.layout(area, &mut tuicore::LayoutCtx::new());
+            let (sender, reply) = tokio::sync::oneshot::channel();
+            app.opencode_action = Some(projection::PendingAction::creation(reply));
+            if observed_first {
+                app.service.set_opencode_snapshot_for_tests(home());
+                app.update_snapshot(snapshot());
+                app.layout(area, &mut tuicore::LayoutCtx::new());
+            }
+            sender.send(Ok(pane(7))).unwrap();
+            app.poll_opencode_action();
+            app.layout(area, &mut tuicore::LayoutCtx::new());
+            if !observed_first {
+                let mut unrelated = home();
+                unrelated.clients[0].pane.session = "other".into();
+                app.service.set_opencode_snapshot_for_tests(unrelated);
+                app.update_snapshot(snapshot());
+                app.layout(area, &mut tuicore::LayoutCtx::new());
+                assert_ne!(
+                    app.selected().map(|row| row.id).as_deref(),
+                    Some("opencode-client:review:other:7")
+                );
+                app.service.set_opencode_snapshot_for_tests(home());
+                app.update_snapshot(snapshot());
+                app.layout(area, &mut tuicore::LayoutCtx::new());
+            }
+            assert_eq!(app.selected().unwrap().id, "opencode-client:review:main:7");
+            app.service.set_opencode_snapshot_for_tests(conversation());
+            app.update_snapshot(snapshot());
+            app.layout(area, &mut tuicore::LayoutCtx::new());
+            assert_eq!(app.selected().unwrap().id, "opencode:review:ses_new");
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut ctx = RenderCtx::new();
+                    app.render(frame, area, &mut ctx);
+                    ctx.flush(frame);
+                })
+                .unwrap();
+            assert!(
+                rendered_lines(&terminal, area)
+                    .join("\n")
+                    .contains("New conversation")
+            );
+        }
+    }
+}
+
+#[test]
+fn created_session_selection_prefers_the_exact_pane_child() {
+    tuicore::init();
+    let state = instances::state(project(&home(), false));
+    let mut tree = Instances::new(state.clone());
+    let mut observation = conversation();
+    observation.sessions[0].panes.push(pane(8));
+    instances::select_opencode_pane(&state, pane(7));
+    instances::replace_rows(&state, project(&observation, false));
+    tree.layout(Rect::new(0, 0, 120, 40), &mut tuicore::LayoutCtx::new());
+    assert_eq!(
+        instances::selected(&state).unwrap().id,
+        "opencode:review:ses_new:main:7"
+    );
+}
+
+#[test]
+fn created_external_client_selection_expands_its_workspace_group() {
+    tuicore::init();
+    for agents in [false, true] {
+        let state = instances::state(project(&Snapshot::default(), agents));
+        instances::set_attached_sessions_only(&state, agents);
+        let mut tree = Instances::new(state.clone());
+        let mut observation = home();
+        observation.clients[0].directory = "/work/external".into();
+        instances::select_opencode_pane(&state, pane(7));
+        instances::replace_rows(&state, project(&observation, agents));
+        let area = Rect::new(0, 0, 120, 40);
+        tree.layout(area, &mut tuicore::LayoutCtx::new());
+        assert_eq!(
+            instances::selected(&state).unwrap().id,
+            "opencode-client:external:/work/external:main:7"
+        );
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| {
+                let mut ctx = RenderCtx::new();
+                tree.render(frame, area, &mut ctx);
+                ctx.flush(frame);
+            })
+            .unwrap();
+        assert!(
+            rendered_lines(&terminal, area)
+                .join("\n")
+                .contains("(new session)")
+        );
+    }
+}

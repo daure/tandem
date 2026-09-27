@@ -5,8 +5,10 @@ use std::{
 
 use crate::{
     environments::opencode::{self, Observer},
-    store::opencode::{Pane, Session, Snapshot},
+    store::opencode::{CloseScope, Pane, Session, Snapshot},
 };
+
+mod actions;
 
 pub(super) struct Integration {
     state: Mutex<State>,
@@ -226,18 +228,17 @@ impl super::AppService {
             )
         };
         let instance = owner(&session.directory).map(str::to_owned);
-        if pane.is_none() && instance.is_none() {
-            return Err("OpenCode workspace is not owned by an instance".into());
-        }
-        let destination = instance.as_deref().and_then(|instance| {
-            snapshot
-                .sessions
-                .iter()
-                .filter(|other| owner(&other.directory) == Some(instance))
-                .flat_map(|other| other.panes.iter())
-                .min_by_key(|pane| pane.session != current)
-                .cloned()
-        });
+        let destination = snapshot
+            .sessions
+            .iter()
+            .filter(|other| match instance.as_deref() {
+                Some(instance) => owner(&other.directory) == Some(instance),
+                None => other.directory == session.directory,
+            })
+            .flat_map(|other| other.panes.iter())
+            .min_by_key(|pane| pane.session != current)
+            .cloned();
+        let name = instance.unwrap_or_else(|| actions::directory_name(&session.directory));
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let mut state = self
             .opencode
@@ -258,14 +259,7 @@ impl super::AppService {
                 observer.jump(&session.id, &pane, &current).await
             } else {
                 observer
-                    .attach(
-                        &session,
-                        instance
-                            .as_deref()
-                            .expect("attach requires an owning instance"),
-                        &current,
-                        destination.as_ref(),
-                    )
+                    .attach(&session, &name, &current, destination.as_ref())
                     .await
             };
             let _ = sender.send(result);
@@ -388,15 +382,17 @@ impl super::AppService {
         Ok(receiver)
     }
 
-    pub(crate) fn close_instance_opencode(
+    pub(crate) fn close_opencode_scope(
         &self,
-        name: &str,
+        scope: &CloseScope,
     ) -> Result<CloseOpencodeOutcome, String> {
         if !self.opencode_enabled() {
             return Err("OpenCode integration is disabled".into());
         }
         let instances = self.environments.snapshot().instances;
-        if !instances.iter().any(|instance| instance.name == name) {
+        if let CloseScope::Instance(name) = scope
+            && !instances.iter().any(|instance| instance.name == *name)
+        {
             return Err("Instance is unavailable; refresh and try again".into());
         }
         let owner = |directory: &str| {
@@ -407,27 +403,40 @@ impl super::AppService {
                     .map(|instance| (instance.name.as_str(), instance.workspace.as_str())),
             )
         };
+        let included = |directory: &str| match scope {
+            CloseScope::Instance(name) => owner(directory) == Some(name.as_str()),
+            CloseScope::Directory(path) => directory == path && owner(directory).is_none(),
+            CloseScope::ExternalWorkspaces => owner(directory).is_none(),
+        };
         let snapshot = self.opencode_snapshot();
         let panes = snapshot
             .sessions
             .iter()
-            .filter(|session| owner(&session.directory) == Some(name))
-            .flat_map(|session| session.panes.iter().cloned())
+            .filter(|session| included(&session.directory))
+            .flat_map(|session| {
+                session
+                    .panes
+                    .iter()
+                    .map(|pane| (session.directory.clone(), pane.clone()))
+            })
             .chain(
                 snapshot
                     .clients
                     .iter()
-                    .filter(|client| owner(&client.directory) == Some(name))
-                    .map(|client| client.pane.clone()),
+                    .filter(|client| included(&client.directory))
+                    .map(|client| (client.directory.clone(), client.pane.clone())),
             )
             .collect::<Vec<_>>();
-        let panes = panes.into_iter().fold(Vec::new(), |mut unique, pane| {
-            if !unique.contains(&pane) {
-                unique.push(pane);
-            }
-            unique
-        });
-        let targets = panes.clone();
+        let panes =
+            panes
+                .into_iter()
+                .fold(Vec::new(), |mut unique: Vec<(String, Pane)>, target| {
+                    if !unique.iter().any(|(_, pane)| *pane == target.1) {
+                        unique.push(target);
+                    }
+                    unique
+                });
+        let targets = panes.iter().map(|(_, pane)| pane.clone()).collect();
         let settings = Arc::clone(&self.settings);
         let observer = self.opencode.observer.clone();
         let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -446,8 +455,8 @@ impl super::AppService {
         state.navigation = Some(self.runtime.spawn(async move {
             let result = if settings.opencode_enabled() {
                 let mut errors = Vec::new();
-                for pane in panes {
-                    if let Err(error) = observer.close_pane(&pane).await {
+                for (directory, pane) in panes {
+                    if let Err(error) = observer.close_in_directory(&directory, &pane).await {
                         errors.push(format!("{} / pane {}: {error}", pane.session, pane.id));
                     }
                 }

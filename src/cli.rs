@@ -28,12 +28,13 @@ enum Commands {
         #[arg(short = 't', long, value_name = "TEMPLATE")]
         template: String,
         #[arg(
+            short = 'o',
             long,
             num_args = 0..=1,
-            value_name = "OPEN_PARAM",
-            help = "Run the saved open command when workspace repositories are on disk, optionally setting TANDEM_OPEN_PARAM (alias: -oc)"
+            value_name = "INITIAL_PROMPT",
+            help = "Open a fresh OpenCode session in Zellij when the workspace is ready, optionally submitting an initial prompt through the Tandem companion"
         )]
-        open_command: Option<Option<String>>,
+        opencode: Option<Option<String>>,
         #[arg(short = 'd', long)]
         description: Option<String>,
     },
@@ -102,13 +103,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         Some(Commands::NewInstance {
             name,
             template,
-            open_command,
+            opencode,
             description,
         }) => {
             let service = crate::service::AppService::initialize()?;
             eprintln!("Checking {name} for template {template}...");
             let (instance, status) =
-                match service.new_instance(&name, template, open_command, description)? {
+                match service.new_instance(&name, template, opencode, description)? {
                     crate::service::NewInstanceOutcome::Created(instance) => (instance, "ready"),
                     crate::service::NewInstanceOutcome::Existing(instance) => {
                         (instance, "already exists; left unchanged")
@@ -170,20 +171,14 @@ fn spawn_headless_delete(name: &str, close_command: bool) -> Result<(), String> 
 fn normalize_arguments(arguments: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
     let mut arguments: Vec<_> = arguments.into_iter().collect();
     let alias = match arguments.get(1).and_then(|argument| argument.to_str()) {
-        Some("new-instance") => ("-oc", "--open-command"),
         Some("delete-instance") => ("-cc", "--close-command"),
         _ => return arguments,
     };
     {
-        // Clap short options are single characters; preserve values and the `--` boundary.
-        let mut template_value = false;
+        // Clap short options are single characters; preserve the `--` boundary.
         for argument in arguments.iter_mut().skip(2) {
-            if template_value {
-                template_value = false;
-            } else if argument == "--" {
+            if argument == "--" {
                 break;
-            } else if alias.0 == "-oc" && (argument == "-t" || argument == "--template") {
-                template_value = true;
             } else if argument == alias.0 {
                 *argument = alias.1.into();
             }

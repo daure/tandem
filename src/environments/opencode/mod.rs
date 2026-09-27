@@ -78,9 +78,13 @@ struct RemotePane {
     tab_id: u32,
     tab_name: String,
     #[serde(default)]
+    is_floating: bool,
+    #[serde(default)]
     pane_cwd: Option<String>,
     #[serde(default)]
     pane_command: Option<String>,
+    #[serde(default)]
+    terminal_command: Option<String>,
 }
 
 impl Observer {
@@ -157,10 +161,15 @@ impl Observer {
             .unwrap_or_default()
             .as_millis() as u64;
         let observer = self.clone();
+        let mut directories = previous
+            .workspace_directories()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
         let previous_resources = previous.resources;
         let (presences, mut servers) = tokio::task::spawn_blocking(move || observer.inventory())
             .await
             .map_err(|error| error.to_string())?;
+        directories.extend(presences.iter().map(|presence| presence.directory.clone()));
         for session in &previous.sessions {
             if let Some(server) = local_server(&session.server) {
                 servers
@@ -190,6 +199,7 @@ impl Observer {
             .values()
             .flat_map(|directories| directories.iter().cloned())
             .collect::<Vec<_>>();
+        directories.extend(known_directories.iter().cloned());
         let mut errors = BTreeSet::new();
         let mut failed_status_directories = BTreeMap::<String, BTreeSet<String>>::new();
         let mut observed_sessions = BTreeSet::new();
@@ -560,6 +570,7 @@ impl Observer {
         let mut questions: Vec<_> = sessions
             .values()
             .filter(|session| question_refresh.contains(&session.id) || !session.question_observed)
+            .filter(|session| !session.saved())
             .map(|session| {
                 (
                     session.id.clone(),
@@ -617,7 +628,10 @@ impl Observer {
                 sessions.contains_key(&process.session_id)
             }
         });
+        directories.extend(sessions.values().map(|session| session.directory.clone()));
+        directories.extend(clients.values().map(|client| client.directory.clone()));
         Ok(Snapshot {
+            directories: directories.into_iter().collect(),
             sessions: sessions.into_values().collect(),
             clients: clients.into_values().collect(),
             resources,

@@ -14,6 +14,8 @@ mod ownership;
 mod removal;
 mod repositories;
 mod resources;
+#[cfg(not(test))]
+pub(crate) mod sound;
 mod stats;
 mod templates;
 mod workspace_agents;

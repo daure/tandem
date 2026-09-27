@@ -80,7 +80,138 @@ test("presence follows the displayed conversation, home route, and client dispos
 async function waitFor(condition) {
   for (let attempt = 0; attempt < 100; attempt++) {
     try { if (await condition()) return } catch {}
-    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setTimeout(resolve, 5))
   }
   assert.fail("presence did not update")
 }
+
+async function promptClient(t, prompt, ready = true) {
+  const root = await mkdtemp(join(tmpdir(), "tandem-prompt-"))
+  const inherited = process.env.TANDEM_INITIAL_PROMPT
+  if (prompt === undefined) delete process.env.TANDEM_INITIAL_PROMPT
+  else process.env.TANDEM_INITIAL_PROMPT = prompt
+  t.mock.timers.enable({ apis: ["setInterval"] })
+  let dispose
+  const calls = []
+  const api = {
+    route: {
+      current: { name: "home" },
+      navigate(name, params) {
+        calls.push(["navigate", name, params])
+        this.current = { name, params }
+      },
+    },
+    state: {
+      ready,
+      path: { directory: "/work/review" },
+      session: {
+        get: () => ({ title: "New session", directory: "/work/review" }),
+        messages: () => [],
+        status: () => ({ type: "idle" }),
+      },
+    },
+    client: { session: {
+      async create(input, options) {
+        calls.push(["create", input, options])
+        return { data: { id: "ses_new" } }
+      },
+      async promptAsync(input, options) { calls.push(["prompt", input, options]) },
+    } },
+    ui: { toast: (input) => calls.push(["toast", input]) },
+    lifecycle: { onDispose: (fn) => { dispose = fn } },
+  }
+  t.after(async () => {
+    await dispose?.()
+    await rm(root, { recursive: true, force: true })
+    if (inherited === undefined) delete process.env.TANDEM_INITIAL_PROMPT
+    else process.env.TANDEM_INITIAL_PROMPT = inherited
+  })
+  return {
+    api, calls,
+    start: () => plugin.tui(api, { presenceDirectory: root }),
+    dispose: () => dispose(),
+    receipt: async () => JSON.parse(await readFile(join(root, `${process.pid}.json`), "utf8")),
+  }
+}
+
+test("initial prompts wait for readiness, navigate locally, and submit literal text once", async (t) => {
+  const text = "Explain 'this'; $(touch injected)\nsecond line"
+  const client = await promptClient(t, text, false)
+  await client.start()
+  assert.equal(process.env.TANDEM_INITIAL_PROMPT, undefined)
+  assert.deepEqual(client.calls, [])
+  client.api.state.ready = true
+  t.mock.timers.tick(1000)
+  await waitFor(() => client.calls.length === 3)
+  const [create, navigate, prompt] = client.calls
+  assert.deepEqual(create.slice(0, 2), ["create", { directory: "/work/review" }])
+  assert.equal(create[2].throwOnError, true)
+  assert.ok(create[2].signal instanceof AbortSignal)
+  assert.deepEqual(navigate, ["navigate", "session", { sessionID: "ses_new" }])
+  assert.deepEqual(prompt.slice(0, 2), ["prompt", {
+    directory: "/work/review", sessionID: "ses_new", parts: [{ type: "text", text }],
+  }])
+  t.mock.timers.tick(3000)
+  await waitFor(async () => (await client.receipt()).id === "ses_new")
+  assert.equal(client.calls.length, 3)
+})
+
+test("absent and blank prompts leave the client on its home route", async (t) => {
+  for (const prompt of [undefined, "", " \n\t"]) {
+    await t.test(JSON.stringify(prompt) ?? "absent", async (t) => {
+      const client = await promptClient(t, prompt)
+      await client.start()
+      assert.deepEqual(client.calls, [])
+      assert.equal(process.env.TANDEM_INITIAL_PROMPT, undefined)
+      assert.equal((await client.receipt()).id, "")
+    })
+  }
+})
+
+test("failed creation or uncertain submission reports one error without automatic retries", async (t) => {
+  for (const method of ["create", "promptAsync"]) {
+    await t.test(method, async (t) => {
+      const client = await promptClient(t, "Start work")
+      let attempts = 0
+      client.api.client.session[method] = async () => {
+        attempts++
+        throw new Error("connection lost")
+      }
+      await client.start()
+      const toast = client.calls.find(([kind]) => kind === "toast")
+      assert.equal(toast[1].variant, "error")
+      assert.match(toast[1].message, /delivery may be uncertain/)
+      t.mock.timers.tick(3000)
+      await client.dispose()
+      assert.equal(attempts, 1)
+      assert.equal(client.calls.filter(([kind]) => kind === "toast").length, 1)
+    })
+  }
+})
+
+test("client disposal cancels pending session creation before navigation or submission", async (t) => {
+  const client = await promptClient(t, "Start work", false)
+  let signal
+  client.api.client.session.create = (_, options) => new Promise((_, reject) => {
+    signal = options.signal
+    signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true })
+  })
+  await client.start()
+  client.api.state.ready = true
+  t.mock.timers.tick(1000)
+  await waitFor(() => signal)
+  await client.dispose()
+  assert.equal(signal.aborted, true)
+  assert.deepEqual(client.calls, [])
+})
+
+test("initial prompt delivery does not replace a conversation chosen during startup", async (t) => {
+  const client = await promptClient(t, "Start work")
+  client.api.client.session.create = async () => {
+    client.api.route.current = { name: "session", params: { sessionID: "ses_chosen" } }
+    return { data: { id: "ses_new" } }
+  }
+  await client.start()
+  assert.deepEqual(client.api.route.current, { name: "session", params: { sessionID: "ses_chosen" } })
+  assert.deepEqual(client.calls.map(([kind]) => kind), ["toast"])
+})

@@ -21,7 +21,7 @@ cargo run -- serve          # HTTP MCP at http://127.0.0.1:7345/mcp
 1. Press `T` or use the Template button to create a template named `website`; its folder contains only `tandem.json` with `{}`.
 2. Press `Enter` on a template, instance or service to view its details. Template details include
    metadata, available Compose source and the manifest.
-3. Press `n`, enter `review`, then Enter or Ctrl+S to confirm execution; watch progress in Details.
+3. Press `i`, enter `review`, then Enter or Ctrl+S to confirm execution; watch progress in Details.
 4. Expand the template row using the DataView's configured expansion key (shown in its action bar)
    and select `review`; the blank workspace is ready and contains standard `AGENTS.md` guidance.
    Add repositories, `compose.yaml`, routes, or `tandem-agents.md` to the template as needed; use a new
@@ -84,9 +84,8 @@ another template or unmanaged containers.
 
 ```bash
 tandem new-instance review --template website
-tandem new-instance review -t website --open-command
-tandem new-instance review -t website -oc
-tandem new-instance review -t website -oc "project notes"
+tandem new-instance review -t website --opencode
+tandem new-instance review -t website -o "Explain this project"
 tandem delete-instance review
 tandem delete-instance review --close-command
 tandem delete-instance review -cc --headless
@@ -99,24 +98,33 @@ startup readiness, prints the workspace and service URLs on success, and exits n
 Failed startups preserve resources for inspection.
 
 An existing instance owned by the requested template is left unchanged, including when stopped or
-paused. The CLI reports that it exists without checking readiness. With `--open-command` or `-oc`,
-it only launches the saved opener in that instance's workspace; template files and repository sources
+paused. The CLI reports that it exists without checking readiness. With `--opencode` or `-o`,
+it opens a fresh OpenCode client in that instance's workspace; template files and repository sources
 are not needed. Ownership mismatches and concurrent instance operations are rejected.
 
-`--open-command` (also spelled `-oc`) optionally accepts an open parameter. `--description` (also spelled `-d`)
-sets the instance description. For a new instance, the workspace-ready signal
-triggers the saved opener after declared repositories have been cloned or validated, any Compose configuration
-has been rendered, and the workspace `AGENTS.md` has been written. Opening and container startup then
-proceed independently. Template-owned
-clone scripts and container-created files are outside this milestone; declare repositories for early
-source access.
-An empty saved command uses the system folder opener. Without the flag, nothing is opened.
-The opener inherits the CLI's environment; custom commands run in the workspace with `TANDEM_INSTANCE`,
-`TANDEM_WORKSPACE`, and `TANDEM_DESCRIPTION` set. When `--open-command` has an open parameter, it is
-available as `TANDEM_OPEN_PARAM`.
-Editor lifetime does not delay startup or CLI exit. Settings/launch failures
-make the CLI fail after startup completes, or immediately for an existing instance. Opener exit failures
-observed while the CLI runs are logged.
+`--opencode` (also `-o`) opens a blank client when used alone and accepts optional initial prompt text.
+Quote multiline or multiword prompts; use `--opencode="--text"` for text beginning with a hyphen.
+Without the flag, creation opens no client. `--description` (also `-d`) sets the new instance description.
+OpenCode launches require Tandem to run inside Zellij with the OpenCode integration enabled.
+The TUI's **New OpenCode session** and CLI use the same pane placement and launch logic: an observed
+instance pane supplies a tab for a stacked pane, otherwise Tandem creates an instance-named tab.
+A known workspace server is reused; otherwise OpenCode starts in the workspace.
+
+For a new instance, OpenCode launches after declared repositories have been cloned or validated,
+Compose configuration has been rendered when applicable, and workspace `AGENTS.md` has been written.
+Opening and container startup then proceed independently. Template-owned clone scripts and
+container-created files are outside this milestone; declare repositories for early source access.
+Client lifetime does not delay CLI exit. Launch failures make the CLI fail after startup completes,
+or immediately for an existing instance; prepared workspaces remain available.
+
+Initial prompts require the bundled Tandem TUI companion: run `tandem opencode-setup` after updating
+Tandem and ensure its printed entry is in OpenCode's `tui.json` plugin array. Each new client receives
+`TANDEM_INITIAL_PROMPT`; the companion consumes and clears it, waits for readiness, creates a fresh
+conversation, navigates only that client, and submits the text once through the server API.
+Blank text opens a blank client. Prompt requests use the server's configured agent/model defaults.
+The prompt travels as a literal process argument and environment value; avoid including secrets.
+CLI success confirms instance readiness and pane launch, not prompt delivery or model completion.
+The companion reports submission failures in the new client and does not retry uncertain requests.
 
 `delete-instance` permanently removes the named instance's owned containers, workspace, private volumes,
 networks, rendered Compose file, and ownership receipt. It leaves templates, shared images, and the gateway intact.
@@ -340,7 +348,7 @@ guidance files are user-owned; update them explicitly when adopting this workflo
 | `TANDEM_GATEWAY_PORT` | `9876` | Shared loopback browser port |
 | `TANDEM_INSTRUCTIONS_FILE` | `$TANDEM_HOME/instructions.md` | Existing Markdown file, read on every tool call |
 | `TANDEM_KEY_INFO` | `Enter` | View details for the selected template, instance or service |
-| `TANDEM_KEY_START` | `n` | Start instance dialog |
+| `TANDEM_KEY_START` | `i` | New instance dialog |
 | `TANDEM_KEY_NEW_TEMPLATE` | `T` | Create template dialog |
 | `TANDEM_KEY_STOP` | `s` | Start/stop the selected instance or service; stop all instances on a template row |
 | `TANDEM_KEY_REFRESH` | `R` | Refresh template/runtime inventory |
@@ -441,8 +449,8 @@ explicit error rather than a silently truncated transcript. Closing the dialog c
 
 Sessions and clients whose directories do not belong to a Tandem instance appear under **Other
 OpenCode workspaces** at the top of the instance tree, grouped by their exact directory. Tandem can
-display their details and conversations, jump to an attached pane, and close an observed pane.
-Attaching or resuming a conversation requires Tandem ownership. Each directory shows its 20 most
+display their details and conversations, create a session, open or jump to a conversation, and close
+observed panes. Each directory shows its 20 most
 recent applicable conversations; a muted final row directs users to OpenCode when more are available.
 
 CPU and memory columns include observed client processes. Tandem reads each distinct client PID's
@@ -460,35 +468,67 @@ or the session display limit. Agents view retains full instance totals, includin
 hidden by that view. A `*` marks partial or stale coverage; details include sample age and client
 collection errors. Exited clients leave the totals on the next successful observation.
 
-Use the **Actions** tab to jump to a specific pane. The **`.`** menu offers **Goto panel** for an
-attached conversation or **Open panel** for a detached conversation. Both use `Ctrl+;`. Attached
-conversations also offer **Close session** (`c`), which closes the selected Zellij pane. Navigation
-works across tabs and Zellij sessions. On an instance row, `c` opens a confirmation to close every
-attached OpenCode Zellij pane owned by that instance.
-Stacked targets become active and expanded. The **󰋚 history toggle** beside **󰑮** in the toolbar
-shows or hides saved conversations across all instances; history is hidden by default. The toggle
-supports mouse clicks and keyboard focus/activation and appears when the integration is enabled.
+The following keys work in the normal tree and Agents view while search and dialogs are closed;
+the **`.`** menu exposes the same row actions:
+
+| Key | Action | Selected row |
+| --- | --- | --- |
+| `n` | New OpenCode session | Instance, Sessions group, external-directory group, conversation, or client/pane |
+| `o` | Open or jump to the selected conversation/pane | Owned or external conversation, or client/pane |
+| `c` | Close the selected Zellij pane | Attached conversation or client/pane |
+| `c` | Confirm closing all observed OpenCode panes in the group | Instance, Sessions group, external-directory group, or Other OpenCode workspaces |
+| `i` | New Tandem instance | Template, instance, or service |
+
+`n` uses the instance workspace from an instance or Sessions group, and the exact directory from an
+external group or OpenCode child. The top-level **Other OpenCode workspaces** group has no creation
+action because it spans directories. New sessions open a blank OpenCode client without sending a
+prompt: they attach to a known local server after checking its health, or start OpenCode in the
+directory when no server is known. Created panes have the fixed Zellij title **OpenCode**. Creation
+immediately selects the new client, including when its destination is another tab or Zellij session.
+The DataView selects that client's row when observation arrives and reveals its parent groups;
+conversation titles in the DataView remain independent of the pane title.
+The saved workspace open command remains a separate action,
+available with `Ctrl+;` on an instance.
+
+Use **Enter → Actions** to jump to a specific pane or resume a conversation. **Goto panel** and
+**Open panel** use `o`; navigation works across tabs and Zellij sessions. Closing a pane preserves
+saved conversation history. Group closure includes observed panes hidden by filters or display
+limits; external-directory groups match their exact directory, and instance groups use workspace
+ownership. The external aggregate closes only outside-Tandem panes.
+Stacked targets become active and expanded. Navigation hides floating panes for tiled targets and
+shows them for floating targets; selecting an already-focused pane succeeds. The **󰋚 history toggle**
+in the toolbar shows or hides saved conversations across all instances; history is hidden by default.
+The toggle supports mouse clicks and keyboard focus/activation and appears when the integration is enabled.
 Workspace matching includes repository
 subdirectories and selects the closest owning workspace.
 
-The **󰚩 Agents toggle** (`Shift+A`) groups conversations beneath instance rows, followed by
-outside-Tandem directory groups. Instance rows show the name, health/status, and a muted template
+The **󰚩 Agents toggle** (`Shift+A`) groups conversations beneath instance rows and outside-Tandem
+directory groups. All known OpenCode folders remain visible, including folders without open clients.
+Folders with attached clients (idle or busy) come first; inactive folders follow, preserving the
+instance/external ordering within each section. Known folders come from conversations, clients, and
+local server directory receipts; the observer remembers them while the integration remains enabled.
+Instance rows show the name, health/status, and a muted template
 name, with the description on the second line. Conversation children show their title and activity
 timer, then the latest question with its activity indicator. Search includes template and instance names.
-History (`Shift+O`) includes saved and detached conversations, including groups with only history;
-with history off, the view shows attached conversations. Running-only (`Shift+U`) filters instance
+History (`Shift+O`) controls saved and detached conversation children independently of folder
+visibility; with history off, only attached children appear. Select an inactive folder and press `n`
+to launch a new client. Running-only (`Shift+U`) filters instance
 groups while retaining workspace-only instances and outside-Tandem groups. Both filter values carry
-across views. Clients without a conversation appear only in outside-Tandem directory groups.
-The toggles support mouse and keyboard activation; Agents and history appear when the integration is enabled.
+across views. Clients without a conversation appear beneath their instance or external directory.
+The first toolbar toggle, **󰕾 completion sound** (`Shift+N`), plays the desktop completion sound when a freshly observed
+conversation changes from busy to idle. It is off by default and appears when the integration is
+enabled on toolbars at least 50 columns wide; its hotkey remains active at narrower widths. The
+desktop audio service controls playback. All toolbar toggles support mouse and keyboard activation.
 
 A freshly observed busy-to-idle conversation pulses twice over 600 ms at its sorted position.
 Each 300 ms pulse eases into and out of the semantic success tint while preserving selection
 and text colors. Initial, stale, and filter-only observations do not trigger a pulse; disabling
 animations suppresses the effect.
 
-Open panel creates a stacked pane in an observed tab for that instance, or creates a tab when
-there is no observed destination. It attaches to the conversation's running local server without
-sending a prompt. An unavailable server produces an error; use your open command to start it.
+New session and Open panel create a stacked pane in an observed tab for the instance or external
+directory, or create a named tab when there is no observed destination. Open panel attaches to the
+conversation's running local server without sending a prompt. An unavailable known server produces
+an error; start that server before retrying.
 
 Discovery uses companion receipts in `$XDG_STATE_HOME/tandem/opencode` (default
 `~/.local/state/tandem/opencode`) and station daemon `port`/`dirs/*.dir` receipts under

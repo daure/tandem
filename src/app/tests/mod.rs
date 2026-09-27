@@ -17,6 +17,8 @@ mod guidance;
 mod input_routing;
 mod labels;
 mod opencode;
+mod opencode_actions;
+mod opencode_folders;
 mod opencode_resources;
 mod opencode_selection;
 mod operations;
@@ -37,7 +39,7 @@ fn root(service: AppService) -> App {
     );
     super::instances::replace_rows(
         &app.instances,
-        super::visible_rows(&app.snapshot, &[], false),
+        super::visible_rows(&app.snapshot, &[], &app.opencode_snapshot, false),
     );
     app
 }
@@ -1250,7 +1252,7 @@ fn template_action_menu_keeps_typed_hotkeys_in_its_search() {
     for (label, hotkey) in [
         ("Copy template name", "yy"),
         ("View details", "Enter"),
-        ("New instance", "n"),
+        ("New instance", "i"),
         ("Stop all instances", "s"),
         ("Purge all instances", "p"),
         ("Delete template", "x"),
@@ -1311,7 +1313,7 @@ fn instance_action_menu_lists_instance_actions() {
         ("Update description", "d"),
         ("View details", "Enter"),
         ("Run open command", "⌃;"),
-        ("New instance", "n"),
+        ("New instance", "i"),
         ("Start instance", "s"),
         ("Stop instance", "s"),
         ("Purge instance", "p"),

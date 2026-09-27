@@ -54,7 +54,7 @@ def main():
             assert "nginx:1.28-alpine" in info
             terminal.send("\x1b")
             wait_for(lambda text: "Template / website" not in text)
-            terminal.send("n")
+            terminal.send("i")
             wait_for(lambda text: "Start instance / website" in text)
             terminal.send("ui-review")
             terminal.send("\r")

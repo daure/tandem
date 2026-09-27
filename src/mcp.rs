@@ -294,7 +294,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Save a trusted workspace open command after user approval (confirmed=true). Saving does not execute it. On instance opening, runs via sh -c in the workspace with TANDEM_INSTANCE, TANDEM_WORKSPACE and TANDEM_DESCRIPTION set; quote the variables. CLI open parameters are exposed as TANDEM_OPEN_PARAM. Empty restores the folder opener."
+        description = "Save a trusted workspace open command after user approval (confirmed=true). Saving does not execute it. On instance opening, runs via sh -c in the workspace with TANDEM_INSTANCE, TANDEM_WORKSPACE and TANDEM_DESCRIPTION set; quote the variables. Empty restores the folder opener."
     )]
     async fn set_open_command(
         &self,

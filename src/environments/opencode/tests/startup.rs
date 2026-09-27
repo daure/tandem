@@ -76,6 +76,56 @@ fn a_starting_pane_keeps_history_saved_and_reconciles_with_its_companion() {
 }
 
 #[test]
+fn saved_history_is_published_without_message_enrichment() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::start();
+    server.busy.store(false, Ordering::Relaxed);
+    let observer = starting_observer(root.path(), &server);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let roots = ["/work/review".into()];
+
+    let discovered = runtime
+        .block_on(observer.observe(&roots, Snapshot::default()))
+        .unwrap();
+
+    assert_eq!(discovered.sessions.len(), 4);
+    assert!(discovered.sessions.iter().all(Session::saved));
+    assert!(
+        discovered
+            .sessions
+            .iter()
+            .all(|session| !session.question_observed)
+    );
+    assert!(
+        server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| !request.contains("/message?"))
+    );
+
+    let refreshed = runtime
+        .block_on(observer.observe(&roots, discovered))
+        .unwrap();
+
+    assert!(
+        refreshed
+            .sessions
+            .iter()
+            .all(|session| !session.question_observed)
+    );
+    assert!(
+        server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| !request.contains("/message?"))
+    );
+}
+
+#[test]
 fn missing_companion_warnings_stay_on_the_pane_and_clear_when_it_closes() {
     let root = tempfile::tempdir().unwrap();
     let server = Server::start();

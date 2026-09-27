@@ -100,7 +100,7 @@ fn bulk_buttons_are_responsive_and_follow_instance_availability() {
 }
 
 #[test]
-fn uppercase_bulk_hotkeys_open_confirmation_and_respect_disabled_states_and_search() {
+fn bulk_hotkeys_open_confirmation_and_respect_disabled_states_and_search() {
     tuicore::init();
     for width in [40, 130] {
         let mut app = root(AppService::for_tests());

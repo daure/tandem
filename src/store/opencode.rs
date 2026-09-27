@@ -22,6 +22,13 @@ pub(crate) struct Pane {
     pub tab_name: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CloseScope {
+    Instance(String),
+    Directory(String),
+    ExternalWorkspaces,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct Session {
     pub id: String,
@@ -83,10 +90,37 @@ pub(crate) struct Client {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Snapshot {
+    pub directories: Vec<String>,
     pub sessions: Vec<Session>,
     pub clients: Vec<Client>,
     pub resources: Vec<resources::ProcessResource>,
     pub error: Option<String>,
+}
+
+impl Snapshot {
+    pub fn workspace_directories(&self) -> impl Iterator<Item = &str> {
+        self.directories
+            .iter()
+            .map(String::as_str)
+            .chain(
+                self.sessions
+                    .iter()
+                    .map(|session| session.directory.as_str()),
+            )
+            .chain(self.clients.iter().map(|client| client.directory.as_str()))
+    }
+
+    pub fn completed_since(&self, previous: &Self) -> bool {
+        self.sessions.iter().any(|session| {
+            !session.stale
+                && session.activity == Activity::Idle
+                && previous.sessions.iter().any(|candidate| {
+                    candidate.id == session.id
+                        && !candidate.stale
+                        && candidate.activity == Activity::Busy
+                })
+        })
+    }
 }
 
 #[derive(Default, Debug, PartialEq, Eq)]

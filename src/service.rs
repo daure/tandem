@@ -29,6 +29,8 @@ struct ServiceState {
     _test_home: Option<tempfile::TempDir>,
     #[cfg(test)]
     opened_system_targets: std::sync::Mutex<Vec<String>>,
+    #[cfg(test)]
+    completion_sounds: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -65,6 +67,8 @@ impl AppService {
                 _test_home: None,
                 #[cfg(test)]
                 opened_system_targets: std::sync::Mutex::new(Vec::new()),
+                #[cfg(test)]
+                completion_sounds: std::sync::atomic::AtomicUsize::new(0),
             }),
         })
     }
@@ -97,6 +101,31 @@ impl AppService {
         port: u16,
     ) -> Result<dev_server::DevServerLease, String> {
         dev_server::DevServerLease::replace(&self.environments.config.home, port)
+    }
+
+    pub(crate) fn play_completion_sound(&self) {
+        #[cfg(test)]
+        {
+            self.state
+                .completion_sounds
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        #[cfg(not(test))]
+        self.runtime.spawn_blocking(|| {
+            if let Err(error) = crate::environments::sound::play_completion() {
+                crate::diagnostics::record_error(
+                    "could not play completion sound",
+                    &std::io::Error::other(error),
+                );
+            }
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn completion_sound_count_for_tests(&self) -> usize {
+        self.state
+            .completion_sounds
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 

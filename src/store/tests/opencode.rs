@@ -61,3 +61,29 @@ fn workspace_matching_uses_path_boundaries_and_the_closest_parent() {
         Some("nested")
     );
 }
+
+#[test]
+fn completion_requires_a_fresh_busy_to_idle_transition_for_the_same_session() {
+    let snapshot = |id: &str, activity, stale| Snapshot {
+        sessions: vec![Session {
+            id: id.into(),
+            activity,
+            stale,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let busy = snapshot("session", Activity::Busy, false);
+
+    assert!(snapshot("session", Activity::Idle, false).completed_since(&busy));
+    assert!(!snapshot("other", Activity::Idle, false).completed_since(&busy));
+    assert!(!snapshot("session", Activity::Unknown, false).completed_since(&busy));
+    assert!(!snapshot("session", Activity::Idle, true).completed_since(&busy));
+    assert!(
+        !snapshot("session", Activity::Idle, false).completed_since(&snapshot(
+            "session",
+            Activity::Busy,
+            true,
+        ))
+    );
+}

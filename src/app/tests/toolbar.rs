@@ -19,7 +19,7 @@ fn toolbar_line(app: &mut super::super::App, width: u16) -> String {
 }
 
 #[test]
-fn filters_follow_template_and_running_filter_keeps_workspace_instances() {
+fn running_filter_keeps_only_templates_with_running_services_or_opencode_sessions() {
     tuicore::init();
     let mut inventory = snapshot();
     let mut other = inventory.instances[0].clone();
@@ -44,7 +44,37 @@ fn filters_follow_template_and_running_filter_keeps_workspace_instances() {
     workspace.workspace_only = true;
     workspace.runtime.workspace_ready = true;
     inventory.instances.push(workspace);
-    let mut app = root(AppService::for_tests());
+    let mut agent_template = inventory.templates[0].clone();
+    agent_template.name = "agent-only".into();
+    agent_template.directory = "/tmp/templates/agent-only".into();
+    agent_template.compose_file.clear();
+    agent_template.compose_source.clear();
+    inventory.templates.push(agent_template);
+    let mut agent = inventory.instances[0].clone();
+    agent.name = "agent".into();
+    agent.template = "agent-only".into();
+    agent.template_directory = "/tmp/templates/agent-only".into();
+    agent.workspace = "/tmp/workspaces/agent".into();
+    agent.services.clear();
+    agent.workspace_only = true;
+    agent.runtime.workspace_ready = true;
+    inventory.instances.push(agent);
+    let mut empty_template = inventory.templates[0].clone();
+    empty_template.name = "new".into();
+    empty_template.directory = "/tmp/templates/new".into();
+    inventory.templates.push(empty_template);
+    let service = AppService::for_tests();
+    service.set_opencode_snapshot_for_tests(crate::store::opencode::Snapshot {
+        sessions: vec![crate::store::opencode::Session {
+            id: "ses_agent".into(),
+            title: "Agent session".into(),
+            directory: "/tmp/workspaces/agent".into(),
+            activity: crate::store::opencode::Activity::Busy,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let mut app = root(service);
     app.update_snapshot(inventory.clone());
 
     for width in [40, 130] {
@@ -62,10 +92,16 @@ fn filters_follow_template_and_running_filter_keeps_workspace_instances() {
         let attached = target("attached-sessions-only");
         let history = target("opencode-history");
         let running = target("running-only");
-        assert_eq!(
-            template.area.right() + u16::from(width >= 50),
-            attached.area.x
-        );
+        if width >= 50 {
+            let sound = target("completion-sound");
+            assert_eq!(template.area.right() + 1, sound.area.x);
+            assert_eq!(
+                sound.area.right() + u16::from(width >= super::super::MOBILE_TABS_WIDTH),
+                attached.area.x
+            );
+        } else {
+            assert_eq!(template.area.right(), attached.area.x);
+        }
         assert_eq!(
             attached.area.right() + u16::from(width >= super::super::MOBILE_TABS_WIDTH),
             history.area.x
@@ -82,6 +118,9 @@ fn filters_follow_template_and_running_filter_keeps_workspace_instances() {
             line.find(template_icon).unwrap() < line.find("󰚩").unwrap(),
             "{line}"
         );
+        if width >= 50 {
+            assert!(line.find("󰕾").unwrap() < line.find("󰚩").unwrap(), "{line}");
+        }
         assert!(line.find("󰚩").unwrap() < line.find("󰋚").unwrap(), "{line}");
         assert!(line.find("󰋚").unwrap() < line.find("󰑮").unwrap(), "{line}");
     }
@@ -91,7 +130,9 @@ fn filters_follow_template_and_running_filter_keeps_workspace_instances() {
         all.contains("review")
             && all.contains("other")
             && all.contains("stopped")
-            && all.contains("workspace"),
+            && all.contains("guidance-only")
+            && all.contains("agent-only")
+            && all.contains("new"),
         "{all}"
     );
     assert!(all.contains(" 2/3"), "{all}");
@@ -104,8 +145,10 @@ fn filters_follow_template_and_running_filter_keeps_workspace_instances() {
         rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30)).join("\n");
     assert!(running.contains("review"), "{running}");
     assert!(running.contains("other"), "{running}");
-    assert!(running.contains("workspace"), "{running}");
+    assert!(running.contains("agent-only"), "{running}");
     assert!(!running.contains("stopped"), "{running}");
+    assert!(!running.contains("guidance-only"), "{running}");
+    assert!(!running.contains("new"), "{running}");
     assert!(running.contains(" 2/3"), "{running}");
 
     inventory
@@ -175,7 +218,8 @@ fn global_h_opens_the_expanded_agent_view_and_clears_other_filters() {
     let terminal = toolbar_terminal(&mut app, 130);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 130, 30));
     assert!(
-        !lines[1].contains("○── 󰚩 |A|") && lines[1].contains("○── 󰋚 |O| ○── 󰑮 |U|"),
+        !lines[1].contains("○── 󰚩 |A|")
+            && lines[1].contains("○── 󰕾 |N| ──● 󰚩 |A| ○── 󰋚 |O| ○── 󰑮 |U|"),
         "{}",
         lines[1]
     );
@@ -206,11 +250,11 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
 
     for width in [80, 130] {
         let line = toolbar_line(&mut app, width);
-        assert!(line.contains(" 8 GiB ·  1 GiB · 500%"), "{line}");
+        assert!(line.trim_end().ends_with(" 8 GiB · 1 GiB 500%"), "{line}");
         for label in ["used", "available", "CPU"] {
             assert!(!line.contains(label), "{line}");
         }
-        assert!(line.find("500%").unwrap() < line.find("󰑓").unwrap());
+        assert!(line.find("󰑓").unwrap() < line.find("").unwrap());
     }
 
     let mut layout = tuicore::LayoutCtx::new();
@@ -229,7 +273,7 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
             &mut EventCtx::new(AnimationSettings::default()),
         );
     }
-    assert!(toolbar_line(&mut app, 130).contains(" 8 GiB ·  1 GiB · 500%"));
+    assert!(toolbar_line(&mut app, 130).contains(" 8 GiB · 1 GiB 500%"));
 
     inventory.instances.pop();
     app.update_snapshot(inventory);
@@ -238,7 +282,49 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
             .tick(std::time::Duration::ZERO, AnimationSettings::default())
             .layout
     );
-    assert!(toolbar_line(&mut app, 130).contains(" 8 GiB ·  0.5 GiB · 250%"));
+    assert!(toolbar_line(&mut app, 130).contains(" 8 GiB · 0.5 GiB 250%"));
+}
+
+#[test]
+fn toolbar_totals_align_with_resource_columns_when_the_scrollbar_appears_and_disappears() {
+    tuicore::init();
+    let mut app = root(AppService::for_tests());
+    let mut inventory = snapshot();
+    inventory.instances[0].services[0].usage = Some(crate::store::environments::ResourceUsage {
+        memory_bytes: 500 * 1048576,
+        cpu_basis_points: Some(25_000),
+        sampled_at_unix_seconds: 42,
+    });
+    for index in 1..4 {
+        let mut instance = inventory.instances[0].clone();
+        instance.name = format!("review-{index}");
+        inventory.instances.push(instance);
+    }
+    app.update_snapshot(inventory.clone());
+
+    for (height, padding) in [(30, 1), (12, 2), (30, 1), (12, 2), (12, 1)] {
+        if height == 12 && padding == 1 {
+            inventory.instances.truncate(1);
+            app.update_snapshot(inventory.clone());
+        }
+        let area = Rect::new(0, 0, 130, height);
+        app.layout(area, &mut tuicore::LayoutCtx::new());
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| {
+                let mut ctx = RenderCtx::new();
+                app.render(frame, area, &mut ctx);
+                ctx.flush(frame);
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let percent_x = |y| (0..area.width).find(|&x| buffer.cell((x, y)).unwrap().symbol() == "%");
+        let totals_x = percent_x(1).expect("toolbar CPU total");
+        assert_eq!(totals_x, area.right() - padding - 1);
+        let row_positions: Vec<_> = (3..height - 1).filter_map(percent_x).collect();
+        assert!(!row_positions.is_empty());
+        assert!(row_positions.iter().all(|&x| x == totals_x));
+    }
 }
 
 #[test]
@@ -247,8 +333,7 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
     let mut app = root(AppService::for_tests());
     app.update_snapshot(Default::default());
     let line = toolbar_line(&mut app, 130);
-    assert!(line.contains(" —"), "{line}");
-    assert!(!line.contains(" · "), "{line}");
+    assert!(line.trim_end().ends_with(" —"), "{line}");
 
     let mut guidance_only = snapshot();
     guidance_only.instances[0].services.clear();
@@ -256,7 +341,7 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
     guidance_only.instances[0].runtime.workspace_ready = true;
     app.update_snapshot(guidance_only);
     let line = toolbar_line(&mut app, 130);
-    assert!(!line.contains(" · "), "{line}");
+    assert!(line.trim_end().ends_with(" —"), "{line}");
 
     let spinner = tuicore::Spinner::new().glyph().to_owned();
     let mut initial = snapshot();
@@ -279,11 +364,11 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
     app.update_snapshot(inventory.clone());
     let line = toolbar_line(&mut app, 130);
     assert!(
-        line.contains(&format!(" — ·  20 MiB · 500% {spinner}")),
+        line.contains(&format!(" — · 20 MiB 500% {spinner}")),
         "{line}"
     );
     let terminal = toolbar_terminal(&mut app, 130);
-    let x = line.chars().position(|character| character == '').unwrap() as u16;
+    let x = line.chars().position(|character| character == '2').unwrap() as u16;
     assert_eq!(
         terminal.backend().buffer().cell((x, 1)).unwrap().fg,
         tuicore::theme().muted_fg()
@@ -304,17 +389,16 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
     app.update_snapshot(inventory.clone());
     let line = toolbar_line(&mut app, 130);
     assert!(line.contains(&spinner), "{line}");
-    assert!(line.contains(" 20 MiB"), "{line}");
+    assert!(line.contains("20 MiB"), "{line}");
 
     inventory.instances[0].services[0].status = "paused".into();
     app.update_snapshot(inventory);
     let line = toolbar_line(&mut app, 130);
-    assert!(line.contains(" — · paused"), "{line}");
-    assert!(!line.contains(" · "), "{line}");
+    assert!(line.contains(" — paused"), "{line}");
 }
 
 #[test]
-fn refresh_button_is_rightmost_and_shows_its_hotkey_at_both_sizes() {
+fn refresh_button_precedes_right_aligned_totals_and_shows_its_hotkey_at_both_sizes() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     for width in [130, 99, 40, 100, 150] {
@@ -332,7 +416,6 @@ fn refresh_button_is_rightmost_and_shows_its_hotkey_at_both_sizes() {
                     .any(|key| key.as_str() == "refresh")
             })
             .unwrap();
-        assert_eq!(target.area.right(), area.right());
         let button_order = layout
             .focus_targets()
             .iter()
@@ -351,11 +434,18 @@ fn refresh_button_is_rightmost_and_shows_its_hotkey_at_both_sizes() {
             })
             .unwrap();
         let lines = rendered_lines(&terminal, area);
-        assert!(lines[1].trim_end().ends_with(if width < 100 {
+        let refresh_label = if width < 100 {
             "󰑓 R"
         } else {
             "󰑓 Refresh"
-        }));
+        };
+        assert!(lines[1].contains(refresh_label));
+        if let Some(totals_x) = lines[1].find('') {
+            assert!(lines[1].find(refresh_label).unwrap() < totals_x);
+            assert!(lines[1].trim_end().ends_with(" —"));
+        } else {
+            assert!(lines[1].trim_end().ends_with(refresh_label));
+        }
         assert!(lines[1].find('').unwrap() < lines[1].find('').unwrap());
         assert!(lines[1].find('').unwrap() < lines[1].find('󰑓').unwrap());
         let label: String = lines[usize::from(target.area.y)]

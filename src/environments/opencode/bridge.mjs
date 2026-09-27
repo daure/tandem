@@ -6,6 +6,8 @@ import { join } from "node:path"
 export default {
   id: "tandem.presence",
   async tui(api, options = {}) {
+    let initialPrompt = process.env.TANDEM_INITIAL_PROMPT
+    delete process.env.TANDEM_INITIAL_PROMPT
     const root = options.presenceDirectory ?? join(
       process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"), "tandem/opencode",
     )
@@ -13,6 +15,39 @@ export default {
     const temporary = `${file}.tmp`
     let stopped = false
     let pending = Promise.resolve()
+    const initialRequest = new AbortController()
+
+    const initializeConversation = async () => {
+      if (stopped || !api.state.ready || initialPrompt === undefined) return
+      const text = initialPrompt
+      // Consume before awaiting: an uncertain HTTP result must never trigger a second submission.
+      initialPrompt = undefined
+      if (!text.trim()) return
+      try {
+        if (api.route.current.name !== "home") throw new Error("Client already has a conversation")
+        const directory = api.state.path.directory
+        const options = {
+          throwOnError: true,
+          signal: AbortSignal.any([initialRequest.signal, AbortSignal.timeout(15_000)]),
+        }
+        const result = await api.client.session.create({ directory }, options)
+        if (stopped) return
+        if (!result.data?.id) throw new Error("Session creation returned no session")
+        if (api.route.current.name !== "home") throw new Error("Client changed conversations")
+        api.route.navigate("session", { sessionID: result.data.id })
+        await api.client.session.promptAsync({
+          directory,
+          sessionID: result.data.id,
+          parts: [{ type: "text", text }],
+        }, options)
+      } catch {
+        if (!stopped) api.ui.toast({
+          variant: "error",
+          title: "Tandem initial prompt",
+          message: "Could not submit the initial prompt. Check this conversation before retrying; delivery may be uncertain.",
+        })
+      }
+    }
 
     const publish = async () => {
       if (stopped) return
@@ -65,13 +100,14 @@ export default {
     }
     const tick = () => {
       // A failed bridge must never interrupt the conversation or write to the terminal.
-      pending = pending.then(publish).catch(() => {})
+      pending = pending.then(publish).catch(() => {}).then(initializeConversation).catch(() => {})
       return pending
     }
     const timer = setInterval(tick, 1000)
     timer.unref?.()
     api.lifecycle.onDispose(async () => {
       stopped = true
+      initialRequest.abort()
       clearInterval(timer)
       await pending
       await Promise.all([rm(file, { force: true }), rm(temporary, { force: true })])

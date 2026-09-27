@@ -12,8 +12,12 @@ use super::{
 use crate::store::opencode::resources::Owner;
 use crate::store::opencode::{Activity, Client, Counts, Pane, Session, Snapshot, workspace_owner};
 
+mod actions;
 mod conversation;
+mod folders;
 mod resources;
+
+pub(super) use actions::{close_scope, new_session_directory};
 
 const FINISHED_ICON: &str = "";
 const NEW_SESSION_ICON: &str = "";
@@ -46,9 +50,14 @@ pub(super) struct ClosingPane {
 }
 
 pub(super) struct PendingAction {
-    reply: tokio::sync::oneshot::Receiver<Result<(), String>>,
+    reply: PendingReply,
     error_title: &'static str,
     closing: Vec<ClosingPane>,
+}
+
+enum PendingReply {
+    Existing(tokio::sync::oneshot::Receiver<Result<(), String>>),
+    Created(tokio::sync::oneshot::Receiver<Result<Pane, String>>),
 }
 
 impl PendingAction {
@@ -58,9 +67,17 @@ impl PendingAction {
         closing: Vec<ClosingPane>,
     ) -> Self {
         Self {
-            reply,
+            reply: PendingReply::Existing(reply),
             error_title,
             closing,
+        }
+    }
+
+    pub(super) fn creation(reply: tokio::sync::oneshot::Receiver<Result<Pane, String>>) -> Self {
+        Self {
+            reply: PendingReply::Created(reply),
+            error_title: "Cannot create OpenCode session",
+            closing: Vec::new(),
         }
     }
 }
@@ -140,17 +157,15 @@ pub(super) fn attached_rows_for_owners(
             target.attached() || show_saved && matches!(target, Target::Session { .. })
         })
     };
-    let instance_ids: std::collections::HashSet<_> = rows
-        .iter()
-        .filter(|row| row.instance.is_some())
-        .map(|row| row.id.clone())
-        .collect();
+    let known_instances = folders::known_instances(snapshot, owners);
     let session_instance_ids: std::collections::HashSet<_> = rows
         .iter()
-        .filter(|row| visible_session(row))
-        .filter_map(|row| row.parent.as_ref())
-        .filter(|parent| instance_ids.contains(*parent))
-        .cloned()
+        .filter(|row| {
+            row.instance
+                .as_deref()
+                .is_some_and(|name| known_instances.contains(name))
+        })
+        .map(|row| row.id.clone())
         .collect();
     let mut grouped: Vec<_> = rows
         .into_iter()
@@ -169,6 +184,7 @@ pub(super) fn attached_rows_for_owners(
         })
         .collect();
     append_external_rows(&mut grouped, snapshot, show_saved, false, owners);
+    folders::active_first(&mut grouped, snapshot, owners);
     resources::apply(&mut grouped, snapshot, owners);
     super::rows::assign_alternating_backgrounds(&mut grouped, "");
     grouped
@@ -304,7 +320,7 @@ fn append_rows_for_owners(
         let ordered_children = sessions
             .iter()
             .copied()
-            .filter(|session| session.activity != Activity::Busy)
+            .filter(|session| session.activity != Activity::Busy && !session.saved())
             .map(SessionChild::Session)
             .chain(clients.into_iter().map(SessionChild::Client))
             .chain(
@@ -312,6 +328,13 @@ fn append_rows_for_owners(
                     .iter()
                     .copied()
                     .filter(|session| session.activity == Activity::Busy)
+                    .map(SessionChild::Session),
+            )
+            .chain(
+                sessions
+                    .iter()
+                    .copied()
+                    .filter(|session| session.saved())
                     .map(SessionChild::Session),
             );
         for child in ordered_children {
@@ -368,7 +391,8 @@ fn append_session_rows(
         session.label()
     };
     let attached = session.attached();
-    let new_session = session.last_question.is_none() && session.question_observed;
+    let saved = session.saved();
+    let new_session = !saved && session.last_question.is_none() && session.question_observed;
     let (secondary_icon, secondary_tone) = if session.stale {
         (STALE_ICON, Tone::Warning)
     } else if new_session {
@@ -383,12 +407,18 @@ fn append_session_rows(
             Activity::Unknown => (UNKNOWN_ICON, Tone::Muted),
         }
     };
-    let secondary = session
-        .last_question
-        .as_deref()
-        .or_else(|| session.question_observed.then_some("(new session)"));
-    let elapsed = session.activity_elapsed_milliseconds.map(compact_duration);
-    let context = context_detail(session);
+    let secondary = if saved {
+        None
+    } else {
+        session
+            .last_question
+            .as_deref()
+            .or_else(|| session.question_observed.then_some("(new session)"))
+    };
+    let elapsed = (!saved)
+        .then(|| session.activity_elapsed_milliseconds.map(compact_duration))
+        .flatten();
+    let context = (!saved).then(|| context_detail(session)).flatten();
     let label = secondary.map_or_else(
         || session.title.clone(),
         |secondary| format!("{}\n{secondary}", session.title),
@@ -447,7 +477,7 @@ fn append_session_rows(
             .into_iter()
             .flatten()
             .reduce(|detail, context| format!("{detail} · {context}")),
-        opencode_metadata: Some(OpenCodeMetadata {
+        opencode_metadata: (!saved).then(|| OpenCodeMetadata {
             agent: session.agent.as_deref().map(display_name),
             agent_color: session.agent_color.clone(),
             model: session.model_name.clone(),
@@ -461,6 +491,7 @@ fn append_session_rows(
         },
         hide_resources: true,
         details,
+        workspace: Some(session.directory.clone()),
         opencode: Some(Target::Session {
             id: session.id.clone(),
             pane: session.panes.first().cloned(),
@@ -476,6 +507,7 @@ fn append_session_rows(
                 label: format!("{} / {} · pane {}", pane.session, pane.tab_name, pane.id),
                 icon: "▣",
                 hide_resources: true,
+                workspace: Some(session.directory.clone()),
                 opencode: Some(Target::Session {
                     id: session.id.clone(),
                     pane: Some(pane.clone()),
@@ -533,6 +565,14 @@ fn append_external_rows(
         .is_none()
     };
     let mut workspaces: BTreeMap<String, (Vec<&Session>, Vec<&Client>)> = BTreeMap::new();
+    if !overview {
+        for directory in snapshot
+            .workspace_directories()
+            .filter(|directory| outside_tandem(directory))
+        {
+            workspaces.entry(directory.to_owned()).or_default();
+        }
+    }
     for session in snapshot.sessions.iter().filter(|session| {
         outside_tandem(&session.directory)
             && (!session.saved() || show_saved)
@@ -577,7 +617,7 @@ fn append_external_rows(
         let ordered_children = sessions
             .iter()
             .copied()
-            .filter(|session| session.activity != Activity::Busy)
+            .filter(|session| session.activity != Activity::Busy && !session.saved())
             .map(SessionChild::Session)
             .chain(clients.into_iter().map(SessionChild::Client))
             .chain(
@@ -585,6 +625,13 @@ fn append_external_rows(
                     .iter()
                     .copied()
                     .filter(|session| session.activity == Activity::Busy)
+                    .map(SessionChild::Session),
+            )
+            .chain(
+                sessions
+                    .iter()
+                    .copied()
+                    .filter(|session| session.saved())
                     .map(SessionChild::Session),
             );
         for child in ordered_children {
@@ -757,11 +804,14 @@ fn compare_sessions(a: &Session, b: &Session) -> std::cmp::Ordering {
 }
 
 fn session_order(session: &Session) -> u8 {
+    if session.saved() {
+        return 3;
+    }
     match (session.activity, session.attached()) {
         (Activity::Idle, true) => 0,
         (Activity::Idle, false) => 1,
-        (Activity::Unknown, _) => 2,
-        (Activity::Busy, _) => 3,
+        (Activity::Unknown, _) => 1,
+        (Activity::Busy, _) => 2,
     }
 }
 
@@ -785,11 +835,12 @@ fn sessions_group(row: &Row, instance: &str, children: &[Row]) -> Row {
         id,
         parent: Some(row.id.clone()),
         label: "Sessions".into(),
-        icon: "󰚩",
+        icon: "󰭻",
         tone,
         loading,
         template: row.template.clone(),
         directory: row.directory.clone(),
+        workspace: row.workspace.clone(),
         hide_resources: true,
         ..Default::default()
     }
@@ -837,6 +888,7 @@ fn client_row(parent: &str, scope: &str, client: &Client, external: bool) -> Row
         },
         secondary_text_tone: (!client.stale).then_some(Tone::Subtle),
         hide_resources: true,
+        workspace: Some(client.directory.clone()),
         details: [external.then(|| Property::new("Ownership", "Outside Tandem"))]
             .into_iter()
             .flatten()
@@ -866,7 +918,12 @@ impl App {
         snapshot: &crate::store::environments::EnvironmentSnapshot,
         operations: &[crate::store::environments::Operation],
     ) -> Vec<Row> {
-        let mut rows = super::visible_rows(snapshot, operations, self.running_only);
+        let mut rows = super::visible_rows(
+            snapshot,
+            operations,
+            &self.opencode_snapshot,
+            self.running_only,
+        );
         let owners = snapshot
             .instances
             .iter()
@@ -897,7 +954,7 @@ impl App {
     }
 
     pub(super) fn open_opencode_dialog(&mut self, row: &Row, ctx: &mut EventCtx<Msg>) -> bool {
-        let Some(Target::Session { id, owned, .. }) = &row.opencode else {
+        let Some(Target::Session { id, .. }) = &row.opencode else {
             return false;
         };
         if !self.service.opencode_enabled() {
@@ -920,12 +977,7 @@ impl App {
                 super::properties::Properties::new(row.details.clone()),
             ),
         ];
-        if *owned || session.attached() {
-            tabs.push(tuicore::Tab::new(
-                "Actions",
-                navigation_buttons(&session, *owned),
-            ));
-        }
+        tabs.push(tuicore::Tab::new("Actions", navigation_buttons(&session)));
         let tabs = tuicore::Tabs::dialog(tabs)
             .variant(tuicore::TabsVariant::OneRow)
             .edge_borders(ratatui::widgets::Borders::TOP)
@@ -946,11 +998,7 @@ impl App {
             return true;
         }
         match target {
-            Target::Session { id, pane, owned } => {
-                if *owned || pane.is_some() {
-                    self.submit_opencode(id, pane.clone(), ctx);
-                }
-            }
+            Target::Session { id, pane, .. } => self.submit_opencode(id, pane.clone(), ctx),
             Target::Client { pane } => self.submit_opencode_client(pane.clone(), ctx),
             Target::Workspace => return false,
         }
@@ -1078,14 +1126,18 @@ impl App {
         closing
     }
 
-    pub(super) fn submit_close_instance_opencode(&mut self, name: String, ctx: &mut EventCtx<Msg>) {
+    pub(super) fn submit_close_opencode_scope(
+        &mut self,
+        scope: crate::store::opencode::CloseScope,
+        ctx: &mut EventCtx<Msg>,
+    ) {
         if self.opencode_action.is_some() {
             self.view
                 .layer_mut()
                 .set_bottom_left("Another OpenCode action is in progress".into());
             return;
         }
-        match self.service.close_instance_opencode(&name) {
+        match self.service.close_opencode_scope(&scope) {
             Ok(outcome) => {
                 let closing = self.optimistically_close_opencode_panes(&outcome.panes);
                 self.opencode_action = Some(PendingAction::new(
@@ -1110,7 +1162,11 @@ impl App {
         };
         let error_title = action.error_title;
         let closing = action.closing.clone();
-        let result = match action.reply.try_recv() {
+        let reply = match &mut action.reply {
+            PendingReply::Existing(reply) => reply.try_recv().map(|result| result.map(|()| None)),
+            PendingReply::Created(reply) => reply.try_recv().map(|result| result.map(Some)),
+        };
+        let result = match reply {
             Ok(result) => result,
             Err(tokio::sync::oneshot::error::TryRecvError::Empty) => return,
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
@@ -1118,6 +1174,11 @@ impl App {
             }
         };
         self.opencode_action = None;
+        if let Ok(Some(pane)) = &result
+            && self.service.opencode_enabled()
+        {
+            super::instances::select_opencode_pane(&self.instances, pane.clone());
+        }
         if let Err(error) = result {
             if !closing.is_empty() {
                 self.closing_opencode_panes
@@ -1131,9 +1192,9 @@ impl App {
     }
 }
 
-fn navigation_buttons(session: &Session, owned: bool) -> Flex<Msg> {
+fn navigation_buttons(session: &Session) -> Flex<Msg> {
     let mut body = Flex::column();
-    if session.panes.is_empty() && owned {
+    if session.panes.is_empty() {
         let id = session.id.clone();
         body = body.child(
             "attach",

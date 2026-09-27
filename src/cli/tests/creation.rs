@@ -14,6 +14,7 @@ use serde_json::json;
 mod cleanup;
 mod deletion;
 mod existing;
+mod opencode;
 mod workspaces;
 
 struct Fixture {
@@ -53,6 +54,7 @@ impl Fixture {
             .unwrap();
         fs::write(bin.join("docker"), DOCKER).unwrap();
         fs::set_permissions(bin.join("docker"), fs::Permissions::from_mode(0o755)).unwrap();
+        opencode::install(&home, &bin);
         fs::write(
             home.join("inspect.json"),
             json!([{
@@ -99,6 +101,10 @@ impl Fixture {
             .env("TANDEM_HOME", &self.home)
             .env("TANDEM_NAMESPACE", "cli-test")
             .env("TANDEM_GATEWAY_PORT", "9876")
+            .env("ZELLIJ_SESSION_NAME", "main")
+            .env("XDG_STATE_HOME", self.home.join("state"))
+            .env("OC_DAEMON_STATE", self.home.join("daemons"))
+            .env_remove("TANDEM_INITIAL_PROMPT")
             .env("RUST_BACKTRACE", "0")
             .env_remove("TANDEM_INSTRUCTIONS_FILE")
             .stdin(Stdio::null())
@@ -149,17 +155,10 @@ fn wait_output(mut child: Child) -> Output {
     child.wait_with_output().unwrap()
 }
 
-const OPEN: &str = r#"test "$(cat app/file.txt)" = 'source content' || exit 21
-test -s AGENTS.md || exit 27
-grep -q './app/AGENTS.md' AGENTS.md || exit 28
-git -C app branch --show-current > "$TANDEM_HOME/branch"
-printf '%s\n%s\n%s\n' "$TANDEM_INSTANCE" "$TANDEM_WORKSPACE" "$PWD" >> "$TANDEM_HOME/opened""#;
-
 #[test]
-fn open_aliases_launch_once_after_checkout_before_compose_startup() {
-    for flag in ["--open-command", "-oc"] {
+fn opencode_launches_once_after_checkout_before_compose_startup() {
+    for flag in ["--opencode", "-o"] {
         let fixture = Fixture::new();
-        fixture.save_command(OPEN);
         let output = wait_output(
             fixture
                 .command(&["new-instance", "review", "-t", "website", flag])
@@ -175,7 +174,7 @@ fn open_aliases_launch_once_after_checkout_before_compose_startup() {
         let workspace = fixture.home.join("workspaces/review");
         assert_eq!(
             fs::read_to_string(fixture.home.join("opened")).unwrap(),
-            format!("review\n{}\n{}\n", workspace.display(), workspace.display())
+            format!("{}\n", workspace.display())
         );
         assert_eq!(
             fs::read_to_string(fixture.home.join("branch")).unwrap(),
@@ -186,19 +185,17 @@ fn open_aliases_launch_once_after_checkout_before_compose_startup() {
 }
 
 #[test]
-fn open_command_parameters_are_available_to_the_saved_command() {
+fn initial_prompts_reach_the_opencode_client_as_literal_text() {
     let fixture = Fixture::new();
-    fixture.save_command(
-        "printf '%s\n%s' \"$TANDEM_OPEN_PARAM\" \"$TANDEM_DESCRIPTION\" > \"$TANDEM_HOME/opened-parameters\"",
-    );
+    let prompt = "Explain 'this' \"project\"; $(touch injected)\nsecond line";
 
     let output = fixture.run(&[
         "new-instance",
         "review",
         "-t",
         "website",
-        "-oc",
-        "from CLI",
+        "-o",
+        prompt,
         "-d",
         "Review environment",
     ]);
@@ -210,14 +207,15 @@ fn open_command_parameters_are_available_to_the_saved_command() {
     );
     assert_eq!(
         fs::read_to_string(fixture.home.join("opened-parameters")).unwrap(),
-        "from CLI\nReview environment"
+        prompt
     );
+    assert!(!fixture.home.join("workspaces/review/injected").exists());
 }
 
 #[test]
-fn creation_without_open_flag_preserves_saved_command_without_executing_it() {
+fn creation_without_opencode_prepares_the_workspace_without_opening_a_client() {
     let fixture = Fixture::new();
-    fixture.save_command(OPEN);
+    fixture.save_command("touch \"$TANDEM_HOME/opened\"");
     let output = fixture.run(&["new-instance", "review", "--template", "website"]);
     assert!(
         output.status.success(),
@@ -235,10 +233,9 @@ fn creation_without_open_flag_preserves_saved_command_without_executing_it() {
 }
 
 #[test]
-fn preparation_failures_never_launch_the_saved_command() {
+fn preparation_failures_never_launch_opencode() {
     for missing in ["template", "repository", "second-repository"] {
         let fixture = Fixture::new();
-        fixture.save_command(OPEN);
         if missing == "repository" {
             fs::remove_dir_all(&fixture.source).unwrap();
         }
@@ -260,7 +257,7 @@ fn preparation_failures_never_launch_the_saved_command() {
         } else {
             "website"
         };
-        let output = fixture.run(&["new-instance", "review", "-t", template, "-oc"]);
+        let output = fixture.run(&["new-instance", "review", "-t", template, "-o"]);
         assert!(!output.status.success());
         assert!(!fixture.home.join("opened").exists());
         assert!(!fixture.home.join("configured").exists());
@@ -277,22 +274,12 @@ fn preparation_failures_never_launch_the_saved_command() {
 }
 
 #[test]
-fn an_empty_command_opens_the_prepared_workspace_with_the_folder_opener() {
+fn opencode_opens_a_prepared_workspace_without_repositories() {
     let fixture = Fixture::new();
     fs::write(fixture.home.join("templates/website/tandem.json"), "{}").unwrap();
-    fs::write(
-        fixture.bin.join("xdg-open"),
-        "#!/bin/sh\ntest -s \"$1/AGENTS.md\" || exit 21\nprintf '%s' \"$1\" > \"$TANDEM_HOME/opened\"\n",
-    )
-    .unwrap();
-    fs::set_permissions(
-        fixture.bin.join("xdg-open"),
-        fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
     let output = wait_output(
         fixture
-            .command(&["new-instance", "review", "-t", "website", "-oc"])
+            .command(&["new-instance", "review", "-t", "website", "-o"])
             .env("EXPECT_OPEN", "1")
             .spawn()
             .unwrap(),
@@ -304,14 +291,13 @@ fn an_empty_command_opens_the_prepared_workspace_with_the_folder_opener() {
     );
     assert_eq!(
         fs::read_to_string(fixture.home.join("opened")).unwrap(),
-        fixture.home.join("workspaces/review").display().to_string()
+        format!("{}\n", fixture.home.join("workspaces/review").display())
     );
 }
 
 #[test]
 fn workspace_guidance_failure_blocks_opening_and_container_startup() {
     let fixture = Fixture::new();
-    fixture.save_command(OPEN);
     fs::write(
         fixture.home.join(".workspace-agents.bundled.md"),
         include_str!("../../../workspace-agents.template.md"),
@@ -322,7 +308,7 @@ fn workspace_guidance_failure_blocks_opening_and_container_startup() {
         "{{unknown}}",
     )
     .unwrap();
-    let output = fixture.run(&["new-instance", "review", "-t", "website", "-oc"]);
+    let output = fixture.run(&["new-instance", "review", "-t", "website", "-o"]);
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr)
@@ -373,10 +359,9 @@ fn an_updated_binary_uses_its_bundled_template_for_new_instances_and_preserves_e
 #[test]
 fn startup_failure_is_reported_after_early_open_and_preserves_checkout() {
     let fixture = Fixture::new();
-    fixture.save_command(OPEN);
     let output = wait_output(
         fixture
-            .command(&["new-instance", "review", "-t", "website", "-oc"])
+            .command(&["new-instance", "review", "-t", "website", "-o"])
             .env("EXPECT_OPEN", "1")
             .env("FAIL_START", "1")
             .spawn()
@@ -394,27 +379,18 @@ fn startup_failure_is_reported_after_early_open_and_preserves_checkout() {
 }
 
 #[test]
-fn a_long_lived_editor_does_not_hold_the_cli_open() {
+fn opencode_launch_failure_reports_a_ready_instance_and_preserves_its_workspace() {
     let fixture = Fixture::new();
-    fixture.save_command(&format!("{OPEN}\nwhile [ -d \"$TANDEM_HOME\" ] && [ ! -f \"$TANDEM_HOME/release-editor\" ]; do sleep 0.05; done\ntouch \"$TANDEM_HOME/editor-ended\""));
     let output = wait_output(
         fixture
-            .command(&["new-instance", "review", "-t", "website", "-oc"])
-            .env("EXPECT_OPEN", "1")
+            .command(&["new-instance", "review", "-t", "website", "-o"])
+            .env("FAIL_OPENCODE", "1")
             .spawn()
             .unwrap(),
     );
-    fs::write(fixture.home.join("release-editor"), "").unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !fixture.home.join("editor-ended").exists() {
-        assert!(Instant::now() < deadline, "editor did not survive CLI exit");
-        thread::sleep(Duration::from_millis(20));
-    }
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("instance is ready, but OpenCode launch failed"));
+    assert!(fixture.home.join("workspaces/review/app/file.txt").is_file());
 }
 
 #[test]

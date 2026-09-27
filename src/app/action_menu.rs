@@ -17,7 +17,7 @@ use super::{Msg, open_panel_key, open_route_key};
 
 const MENU_FIELD_WIDTH: u16 = 42;
 const MENU_CONTENT_WIDTH: u16 = MENU_FIELD_WIDTH;
-const MENU_HEIGHT: u16 = 10;
+pub(super) const MENU_HEIGHT: u16 = 12;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum Action {
@@ -32,6 +32,8 @@ pub(super) enum Action {
     OpenPanel,
     GotoPanel,
     CloseSession,
+    NewSession,
+    CloseSessions,
     Details,
     NewInstance,
     Start,
@@ -57,7 +59,11 @@ impl Action {
             Self::Yank => unreachable!("yank opens its own menu"),
             Self::UpdateDescription => unreachable!("description editing opens its own dialog"),
             Self::OpenBrowser | Self::OpenCommand => 10,
-            Self::OpenPanel | Self::GotoPanel | Self::CloseSession => {
+            Self::OpenPanel
+            | Self::GotoPanel
+            | Self::CloseSession
+            | Self::NewSession
+            | Self::CloseSessions => {
                 unreachable!("OpenCode panel actions have a fixed hotkey")
             }
             Self::RestartInstance | Self::RestartService => 7,
@@ -86,6 +92,8 @@ impl Action {
             Self::OpenPanel => "Open panel",
             Self::GotoPanel => "Goto panel",
             Self::CloseSession => "Close session",
+            Self::NewSession => "New OpenCode session",
+            Self::CloseSessions => "Close all OpenCode sessions",
             Self::Details => "View details",
             Self::NewInstance => "New instance",
             Self::Start => "Start instance",
@@ -123,6 +131,8 @@ pub(super) struct Target {
     pub opencode_session: Option<(bool, bool)>,
     pub close_opencode: bool,
     pub external_opencode: bool,
+    pub new_opencode: bool,
+    pub close_opencode_group: bool,
 }
 
 impl ActionMenu {
@@ -164,17 +174,15 @@ impl ActionMenu {
     }
 
     pub(super) fn open(&mut self, target: Target, ctx: &mut EventCtx<Msg>) {
-        self.actions = if let Some((attached, owned)) = target.opencode_session {
+        self.actions = if let Some((attached, _)) = target.opencode_session {
             if attached {
                 vec![Action::GotoPanel, Action::CloseSession]
-            } else if owned {
-                vec![Action::OpenPanel]
             } else {
-                vec![Action::Details]
+                vec![Action::OpenPanel]
             }
         } else if target.close_opencode {
             vec![Action::GotoPanel, Action::CloseSession]
-        } else if target.external_opencode {
+        } else if target.external_opencode || (target.new_opencode && !target.instance) {
             vec![Action::Details]
         } else if target.cleanup {
             vec![
@@ -232,6 +240,16 @@ impl ActionMenu {
             }
             actions
         };
+        if target.new_opencode {
+            if target.instance {
+                self.actions.push(Action::NewSession);
+            } else {
+                self.actions.insert(0, Action::NewSession);
+            }
+        }
+        if target.close_opencode_group {
+            self.actions.push(Action::CloseSessions);
+        }
         *self.enabled.borrow_mut() = self
             .actions
             .iter()
@@ -275,7 +293,8 @@ fn action_text(action: Action, keys: &[KeySpec; 11], enabled: bool) -> Text<'sta
         Action::UpdateDescription => "d".into(),
         Action::OpenBrowser => open_route_key().label(),
         Action::OpenPanel | Action::GotoPanel => open_panel_key().label(),
-        Action::CloseSession => "c".into(),
+        Action::CloseSession | Action::CloseSessions => "c".into(),
+        Action::NewSession => "n".into(),
         _ => keys
             .get(action.index())
             .copied()
@@ -396,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn external_sessions_expose_navigation_and_close_without_attach() {
+    fn external_sessions_expose_new_open_and_close_actions() {
         let service = AppService::for_tests();
         let mut menu = ActionMenu::new(service.environment_keys());
         let mut ctx = EventCtx::new(AnimationSettings::default());
@@ -412,19 +431,21 @@ mod tests {
             opencode_session: Some(opencode_session),
             close_opencode: opencode_session.0,
             external_opencode: true,
+            new_opencode: true,
+            close_opencode_group: false,
         };
 
         menu.open(target((true, false)), &mut ctx);
-        assert!(menu.actions == [Action::GotoPanel, Action::CloseSession]);
+        assert!(menu.actions == [Action::NewSession, Action::GotoPanel, Action::CloseSession]);
 
         menu.open(target((false, false)), &mut ctx);
-        assert!(menu.actions == [Action::Details]);
+        assert!(menu.actions == [Action::NewSession, Action::OpenPanel]);
 
         let mut client = target((false, false));
         client.opencode_session = None;
         client.close_opencode = true;
         menu.open(client, &mut ctx);
-        assert!(menu.actions == [Action::GotoPanel, Action::CloseSession]);
+        assert!(menu.actions == [Action::NewSession, Action::GotoPanel, Action::CloseSession]);
     }
 
     #[test]

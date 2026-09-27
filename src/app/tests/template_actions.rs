@@ -105,7 +105,7 @@ fn new_instance_uses_a_mode_specific_placeholder() {
     for selected in ["instance:review", "service:review:web", "service:review:db"] {
         crate::app::instances::set_highlighted(&app.instances, Some(selected.into()));
         app.event(
-            &TuiEvent::Key(KeyEvent::from(Key::Char('n'))),
+            &TuiEvent::Key(KeyEvent::from(Key::Char('i'))),
             &mut EventCtx::new(AnimationSettings::default()),
         );
         assert!(

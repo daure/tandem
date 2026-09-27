@@ -15,9 +15,6 @@ fn existing_fixture(state: &str) -> Fixture {
     // Opening an existing workspace is independent of template files and source access.
     fs::remove_dir_all(fixture.home.join("templates/website")).unwrap();
     fs::remove_dir_all(&fixture.source).unwrap();
-    fixture.save_command(
-        "printf '%s\\n%s\\n' \"$TANDEM_INSTANCE\" \"$PWD\" >> \"$TANDEM_HOME/opened\"",
-    );
     fixture
 }
 
@@ -39,7 +36,7 @@ fn assert_inspection_only(fixture: &Fixture) {
 #[test]
 fn existing_running_and_stopped_instances_are_unchanged_with_optional_opening() {
     for state in ["running", "exited", "paused"] {
-        for flag in [None, Some("-oc"), Some("--open-command")] {
+        for flag in [None, Some("-o"), Some("--opencode")] {
             let fixture = existing_fixture(state);
             let mut args = vec!["new-instance", "review", "-t", "website"];
             args.extend(flag);
@@ -59,7 +56,7 @@ fn existing_running_and_stopped_instances_are_unchanged_with_optional_opening() 
             if flag.is_some() {
                 let opened = fixture.home.join("opened");
                 let expected = format!(
-                    "review\n{}\n",
+                    "{}\n",
                     fixture.home.join("workspaces/review").display()
                 );
                 let deadline = Instant::now() + Duration::from_secs(5);
@@ -87,7 +84,7 @@ fn creation_keeps_the_instance_lock_between_admission_and_startup() {
         assert!(Instant::now() < deadline, "startup did not reach Compose");
         thread::sleep(Duration::from_millis(20));
     }
-    let second = fixture.run(&["new-instance", "review", "-t", "website", "-oc"]);
+    let second = fixture.run(&["new-instance", "review", "-t", "website", "-o"]);
     fs::write(fixture.home.join("release-config"), "").unwrap();
     let first = wait_output(first);
     assert!(
@@ -114,7 +111,7 @@ fn an_existing_instance_requires_matching_ownership_before_opening() {
             _ => labels["io.tandem.namespace"] = json!("other"),
         }
         fs::write(path, containers.to_string()).unwrap();
-        let output = fixture.run(&["new-instance", "review", "-t", "website", "-oc"]);
+        let output = fixture.run(&["new-instance", "review", "-t", "website", "-o"]);
         assert!(!output.status.success(), "{mismatch}");
         assert!(!fixture.home.join("opened").exists());
         assert_inspection_only(&fixture);
@@ -131,7 +128,7 @@ fn existing_instances_with_missing_workspaces_are_only_rejected_when_opening() {
             .status
             .success()
     );
-    let output = fixture.run(&["new-instance", "review", "-t", "website", "-oc"]);
+    let output = fixture.run(&["new-instance", "review", "-t", "website", "-o"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("workspace review"));
     assert!(!fixture.home.join("opened").exists());

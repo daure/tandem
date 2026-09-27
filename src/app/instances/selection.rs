@@ -20,6 +20,12 @@ pub(super) fn pane_replacement(
         .map(|row| row.id.clone())
 }
 
+pub(super) fn pane_row<'a>(rows: &'a [Row], pane: &Pane) -> Option<&'a Row> {
+    rows.iter().rev().find(|row| {
+        row_pane(row).is_some_and(|other| other.session == pane.session && other.id == pane.id)
+    })
+}
+
 fn row_pane(row: &Row) -> Option<&Pane> {
     match row.opencode.as_ref()? {
         Target::Client { pane }

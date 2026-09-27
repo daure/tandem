@@ -1,7 +1,10 @@
 use std::{path::Path, process::Stdio, time::Duration};
 
 use serde::de::DeserializeOwned;
-use tokio::{io::AsyncReadExt, process::Command};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt},
+    process::Command,
+};
 
 const LIMIT: u64 = 8 * 1024 * 1024;
 
@@ -83,34 +86,77 @@ pub(super) async fn get_optional<T: DeserializeOwned>(
 }
 
 pub(super) async fn zellij(program: &Path, args: &[String]) -> Result<String, String> {
+    let action = args
+        .windows(2)
+        .find(|pair| pair[0] == "action")
+        .map(|pair| pair[1].as_str())
+        .or_else(|| args.first().map(String::as_str))
+        .unwrap_or("command");
     let mut command = Command::new(program);
     command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
     let mut child = command.spawn().map_err(|_| "Zellij unavailable")?;
-    let mut stdout = child
-        .stdout
+    let stdout = child.stdout.take().ok_or("Zellij output unavailable")?;
+    let stderr = child
+        .stderr
         .take()
-        .ok_or("Zellij output unavailable")?
-        .take(LIMIT + 1);
-    let mut output = Vec::new();
+        .ok_or("Zellij error output unavailable")?;
     let result = tokio::time::timeout(Duration::from_secs(2), async {
-        stdout
-            .read_to_end(&mut output)
-            .await
-            .map_err(|error| error.to_string())?;
-        if output.len() > LIMIT as usize {
-            return Err("Zellij output exceeds 8 MiB".into());
-        }
-        let status = child.wait().await.map_err(|error| error.to_string())?;
-        if !status.success() {
-            return Err(format!("Zellij command failed ({status})"));
+        let (output, stderr, status) = tokio::try_join!(
+            zellij_output(stdout, LIMIT),
+            zellij_output(stderr, 64 * 1024),
+            async { child.wait().await.map_err(|error| error.to_string()) },
+        )?;
+        let stderr = String::from_utf8_lossy(&stderr);
+        let succeeded =
+            status.success() || status.code() == Some(2) && focus_unchanged(action, args, &stderr);
+        if !succeeded {
+            let detail = stderr
+                .chars()
+                .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
+                .collect::<String>();
+            let error = format!("Zellij {action} failed ({status}): {}", detail.trim());
+            crate::diagnostics::record_error(
+                &format!("OpenCode Zellij action {action}"),
+                &std::io::Error::other(error.clone()),
+            );
+            let mut message = error.chars().take(2048).collect::<String>();
+            if error.chars().count() > 2048 {
+                message.push_str("… (see Tandem diagnostic log)");
+            }
+            return Err(message);
         }
         String::from_utf8(output).map_err(|_| "Invalid Zellij output".into())
     })
     .await;
-    result.map_err(|_| "Zellij command timed out".to_owned())?
+    result.map_err(|_| format!("Zellij {action} timed out"))?
+}
+
+fn focus_unchanged(action: &str, args: &[String], stderr: &str) -> bool {
+    match action {
+        "hide-floating-panes" | "show-floating-panes" => true,
+        "focus-pane-id" => args
+            .last()
+            .and_then(|pane| pane.strip_prefix("terminal_"))
+            .and_then(|id| id.parse::<u32>().ok())
+            .is_some_and(|id| stderr.trim() == format!("Pane Terminal({id}) is already focused")),
+        _ => false,
+    }
+}
+
+async fn zellij_output(stream: impl AsyncRead + Unpin, limit: u64) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    stream
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > limit {
+        return Err(format!("Zellij output exceeds {limit} bytes"));
+    }
+    Ok(bytes)
 }

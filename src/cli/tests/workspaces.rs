@@ -23,8 +23,7 @@ fn success(output: Output) -> String {
 #[test]
 fn repository_only_creation_reopens_and_deletes_across_processes_without_docker() {
     let fixture = repository_fixture();
-    fixture.save_command(OPEN);
-    success(fixture.run(&["new-instance", "review", "-t", "website", "-oc"]));
+    success(fixture.run(&["new-instance", "review", "-t", "website", "-o"]));
     let workspace = fixture.home.join("workspaces/review");
     let guidance = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
     assert!(guidance.contains("## Repositories"));
@@ -136,9 +135,7 @@ fn blank_workspaces_create_reopen_and_delete_without_git_or_docker() {
     )
     .unwrap();
     fs::set_permissions(fixture.bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
-    fixture.save_command("test -s AGENTS.md && printf opened > \"$TANDEM_HOME/opened\"");
-
-    success(fixture.run(&["new-instance", "scratch", "-t", "website", "-oc"]));
+    success(fixture.run(&["new-instance", "scratch", "-t", "website", "-o"]));
     let workspace = fixture.home.join("workspaces/scratch");
     assert_eq!(fs::read_dir(&workspace).unwrap().count(), 1);
     let guidance = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
@@ -152,7 +149,7 @@ fn blank_workspaces_create_reopen_and_delete_without_git_or_docker() {
     assert_eq!(record["expected"]["workspace_only"], true);
     assert_eq!(record["expected"]["runtime"]["workspace_ready"], true);
     fs::write(workspace.join("notes.md"), "Keep my notes").unwrap();
-    success(fixture.run(&["new-instance", "scratch", "-t", "website", "-oc"]));
+    success(fixture.run(&["new-instance", "scratch", "-t", "website", "-o"]));
     assert_eq!(
         fs::read_to_string(workspace.join("notes.md")).unwrap(),
         "Keep my notes"
@@ -179,8 +176,7 @@ fn guidance_only_workspaces_create_open_and_delete_without_git_or_docker() {
     )
     .unwrap();
     fs::set_permissions(fixture.bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
-    fixture.save_command("test -s AGENTS.md && printf opened > \"$TANDEM_HOME/opened\"");
-    success(fixture.run(&["new-instance", "review", "-t", "website", "-oc"]));
+    success(fixture.run(&["new-instance", "review", "-t", "website", "-o"]));
     let workspace = fixture.home.join("workspaces/review");
     let generated = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
     assert!(generated.starts_with("# review\n"));
@@ -202,7 +198,7 @@ fn guidance_only_workspaces_create_open_and_delete_without_git_or_docker() {
         "Updated template instructions",
     )
     .unwrap();
-    success(fixture.run(&["new-instance", "review", "-t", "website", "-oc"]));
+    success(fixture.run(&["new-instance", "review", "-t", "website", "-o"]));
     assert_eq!(
         fs::read_to_string(workspace.join("AGENTS.md")).unwrap(),
         "Custom instructions\n"

@@ -59,8 +59,9 @@ def main():
             port = sock.getsockname()[1]
         url = f"http://127.0.0.1:{port}"
 
-        def api(path, body=None):
-            request = urllib.request.Request(url + path, data=None if body is None else json.dumps(body).encode(),
+        def api(path, body=None, method=None):
+            request = urllib.request.Request(url + path, method=method,
+                                             data=None if body is None else json.dumps(body).encode(),
                                              headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(request, timeout=3) as response:
                 return json.load(response)
@@ -68,8 +69,39 @@ def main():
         name = f"tandem-live-{os.getpid()}"
 
         def zj(*args):
-            return subprocess.check_output([zellij, "--session", name, *args], env=env,
-                                           cwd=workspace, text=True, stderr=subprocess.STDOUT, timeout=10).strip()
+            result = subprocess.run([zellij, "--session", name, *args], env=env,
+                                    cwd=workspace, text=True, capture_output=True, timeout=10)
+            unchanged = result.returncode == 2 and (
+                args[:2] in (("action", "hide-floating-panes"), ("action", "show-floating-panes"))
+                or args[:2] == ("action", "focus-pane-id")
+                and result.stderr.strip() == f"Pane Terminal({args[2].removeprefix('terminal_')}) is already focused"
+            )
+            if result.returncode and not unchanged:
+                raise subprocess.CalledProcessError(result.returncode, result.args,
+                                                    output=result.stdout + result.stderr)
+            return result.stdout.strip()
+
+        def focus(pane):
+            panes = json.loads(zj("action", "list-panes", "--all", "--json"))
+            target = next(p for p in panes if not p["is_plugin"]
+                          and p["id"] == int(pane.removeprefix("terminal_")))
+            zj("action", "go-to-tab-by-id", str(target["tab_id"]))
+            zj("action", "show-floating-panes" if target["is_floating"] else "hide-floating-panes",
+               "--tab-id", str(target["tab_id"]))
+            zj("action", "focus-pane-id", pane)
+
+        def client_focused(pane):
+            return any(line.split()[1] == pane for line in zj("action", "list-clients").splitlines()[1:]
+                       if len(line.split()) > 1)
+
+        def wait_title(pane, title):
+            def check():
+                panes = json.loads(zj("action", "list-panes", "--all", "--json"))
+                target = next(p for p in panes if not p["is_plugin"]
+                              and p["id"] == int(pane.removeprefix("terminal_")))
+                assert target["title"] == title, target
+                return target
+            return wait_for(check)
 
         with (root / "server.log").open("w") as log:
             server = subprocess.Popen([opencode, "serve", "--port", str(port), "--hostname", "127.0.0.1"],
@@ -99,7 +131,7 @@ def main():
                         pass
                 threading.Thread(target=drain, daemon=True).start()
                 wait_for(lambda: len(zj("action", "list-clients").splitlines()) > 1)
-                pane = zj("action", "new-pane", "--stacked", "--cwd", str(workspace), "--",
+                pane = zj("action", "new-pane", "--stacked", "--name", "", "--cwd", str(workspace), "--",
                           opencode, "attach", url, "--dir", str(workspace), "--session", first)
                 pane_id = int(pane.removeprefix("terminal_"))
                 presence = root / "state" / "tandem" / "opencode"
@@ -112,25 +144,73 @@ def main():
                 assert record["pane_id"] == pane_id, record
                 assert record["server"] == url, record
                 assert record["activity"] == "idle", record
+                wait_title(pane, "OC | Tandem live first")
                 print("PASS: real OpenCode TUI loads companion and publishes exact session/pane/server identity")
                 api("/tui/select-session", {"sessionID": second})
                 wait_for(lambda: next((r for r in records() if r["id"] == second), None))
                 assert not any(r["id"] == first for r in records())
+                wait_title(pane, "OC | Tandem live second")
+                api(f"/session/{second}", {"title": "Tandem live renamed"}, method="PATCH")
+                wait_title(pane, "OC | Tandem live renamed")
+                print("PASS: pane title follows conversation selection and session title updates")
                 print("PASS: changing conversations updates the existing pane registration")
 
                 other = zj("action", "new-pane", "--stacked", "--", "sleep", "60")
-                zj("action", "focus-pane-id", pane)
+                floating = zj("action", "new-pane", "--floating", "--", "sleep", "60")
+                focus(pane)
+                focus(pane)
+                assert client_focused(pane), zj("action", "list-clients")
                 panes = json.loads(zj("action", "list-panes", "--all", "--json"))
                 target = next(p for p in panes if not p["is_plugin"] and p["id"] == pane_id)
                 sibling = next(p for p in panes if not p["is_plugin"] and p["id"] == int(other.removeprefix("terminal_")))
                 assert target["is_focused"], target
+                assert target["title"] == "OC | Tandem live renamed", target
                 assert not target["is_suppressed"] and target["pane_content_rows"] > 1, target
                 assert sibling["is_suppressed"] or target["pane_content_rows"] > sibling["pane_content_rows"], (target, sibling)
-                print("PASS: focusing a stacked pane expands the exact target")
+                print("PASS: repeated navigation from a floating pane focuses and expands the exact stacked target")
+                zj("action", "close-pane", "--pane-id", floating)
 
                 zj("action", "close-pane", "--pane-id", pane)
                 wait_for(lambda: not records() or all(not Path(f"/proc/{r['pid']}").exists() for r in records()), timeout=15)
                 print("PASS: closing the client invalidates its presence")
+
+                for standalone in (False, True):
+                    directory = root / "fresh" if standalone else workspace
+                    directory.mkdir(exist_ok=True)
+                    if standalone:
+                        tab_id = zj("action", "new-tab", "--name", "fresh", "--cwd", str(directory), "--",
+                                    opencode, str(directory))
+                        panes = json.loads(zj("action", "list-panes", "--all", "--json"))
+                        candidates = [p for p in panes if p["tab_id"] == int(tab_id) and not p["is_plugin"]]
+                        assert len(candidates) == 1, candidates
+                        pane = f"terminal_{candidates[0]['id']}"
+                        zj("action", "rename-pane", "--pane-id", pane, "")
+                        focus(pane)
+                    else:
+                        zj("action", "new-tab", "--name", "away", "--", "sleep", "60")
+                        pane = zj("action", "new-pane", "--stacked", "--name", "", "--tab-id", str(target["tab_id"]),
+                                  "--cwd", str(directory), "--", opencode, "attach", url, "--dir", str(directory))
+                        focus(pane)
+                    record = wait_for(lambda: next((r for r in records()
+                                                   if r["directory"] == str(directory)
+                                                   and Path(f"/proc/{r['pid']}").exists()), None))
+                    assert record["id"] == "", record
+                    assert record["zellij_session"] == name, record
+                    pane = f"terminal_{record['pane_id']}"
+                    target = wait_title(pane, "OpenCode")
+                    assert target["is_focused"], target
+                    assert client_focused(pane), zj("action", "list-clients")
+                    print(f"PASS: {'standalone' if standalone else 'shared-server'} launch opens and selects a fresh client named OpenCode")
+                    if not standalone:
+                        session = api("/session", {})["id"]
+                        api("/tui/select-session", {"sessionID": session})
+                        wait_for(lambda: next((r for r in records() if r["id"] == session), None))
+                        wait_title(pane, "OpenCode")
+                        api(f"/session/{session}", {"title": "Fresh session title"}, method="PATCH")
+                        wait_title(pane, "OC | Fresh session title")
+                        print("PASS: fresh client pane adopts the conversation title without a model prompt")
+                    zj("action", "close-pane", "--pane-id", pane)
+                    wait_for(lambda: not Path(f"/proc/{record['pid']}").exists(), timeout=15)
             except Exception as error:
                 if isinstance(error, subprocess.CalledProcessError):
                     print(error.output)

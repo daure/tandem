@@ -2,7 +2,7 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     rc::Rc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use ratatui::{
@@ -34,8 +34,10 @@ pub(super) struct State {
     center_highlighted: bool,
     select_first: bool,
     select_created: Option<(bool, String)>,
+    select_pane: Option<(crate::store::opencode::Pane, Instant)>,
     attached_sessions_only: bool,
     mode_changed: bool,
+    pub(super) resource_right_gutter: u16,
 }
 
 pub(super) type SharedState = Rc<RefCell<State>>;
@@ -106,9 +108,17 @@ pub(super) fn select_instance(state: &SharedState, name: &str) {
     select_item(state, true, name);
 }
 
+pub(super) fn select_opencode_pane(state: &SharedState, pane: crate::store::opencode::Pane) {
+    let mut state = state.borrow_mut();
+    state.select_pane = Some((pane, Instant::now() + Duration::from_secs(30)));
+    state.select_created = None;
+    state.rows_changed = true;
+}
+
 fn select_item(state: &SharedState, instance: bool, name: &str) {
     let mut state = state.borrow_mut();
     state.select_created = Some((instance, name.into()));
+    state.select_pane = None;
     state.rows_changed = true;
 }
 
@@ -130,6 +140,7 @@ pub(super) struct Instances {
     session_timers: HashMap<String, SessionTimer>,
     timer_display_phase: Duration,
     completion: Rc<RefCell<completion::Pulses>>,
+    scroll_preset: tuicore::ScrollPreset,
 }
 
 struct SessionTimer {
@@ -210,6 +221,7 @@ impl Instances {
             session_timers: HashMap::new(),
             timer_display_phase: Duration::ZERO,
             completion,
+            scroll_preset: tuicore::preset().scroll(),
         };
         instances.tick_session_timers(Duration::ZERO);
         instances.record_highlighted();
@@ -241,7 +253,22 @@ impl Instances {
                 mode_changed,
             )
         };
-        let select_created =
+        let select_pane = {
+            let mut state = self.state.borrow_mut();
+            if state
+                .select_pane
+                .as_ref()
+                .is_some_and(|(_, deadline)| Instant::now() >= *deadline)
+            {
+                state.select_pane = None;
+            }
+            state
+                .select_pane
+                .as_ref()
+                .and_then(|(pane, _)| selection::pane_row(&rows, pane))
+                .map(|row| (row.id.clone(), row.parent.clone()))
+        };
+        let select_created = select_pane.or_else(|| {
             self.state
                 .borrow()
                 .select_created
@@ -256,7 +283,8 @@ impl Instances {
                             }
                         })
                         .map(|row| (row.id.clone(), row.parent.clone()))
-                });
+                })
+        });
         let query = if select_created.is_some() {
             String::new()
         } else {
@@ -372,12 +400,20 @@ impl Instances {
         if let Some((id, parent)) = select_created {
             self.tree.set_search_query("");
             self.stripe_query.clear();
-            if let Some(parent) = parent {
+            let mut ancestor = parent;
+            while let Some(parent) = ancestor {
                 self.tree.expand(&parent);
+                ancestor = self
+                    .tree
+                    .rows()
+                    .iter()
+                    .find(|row| row.id == parent)
+                    .and_then(|row| row.parent.clone());
             }
             self.tree.highlight_id(&id);
             self.tree.reveal_highlighted();
             self.state.borrow_mut().select_created = None;
+            self.state.borrow_mut().select_pane = None;
         }
         self.record_highlighted();
         true
@@ -587,6 +623,20 @@ impl TuiNode<Msg> for Instances {
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.sync_rows();
         let result = <DataView<Row, String> as TuiNode<Msg>>::layout(&mut self.tree, area, ctx);
+        let content_height = self
+            .measure(LayoutProposal::at_most(area.width, u16::MAX))
+            .preferred
+            .height;
+        let scrollbar_visible = match self.scroll_preset.vertical_scrollbar {
+            tuicore::ScrollbarVisibility::Auto => content_height > area.height,
+            tuicore::ScrollbarVisibility::Always => true,
+            tuicore::ScrollbarVisibility::Never => false,
+        };
+        self.state.borrow_mut().resource_right_gutter = u16::from(
+            !area.is_empty()
+                && scrollbar_visible
+                && self.scroll_preset.gutter == tuicore::ScrollbarGutter::Reserve,
+        );
         if std::mem::take(&mut self.state.borrow_mut().center_highlighted) {
             self.tree.reveal_highlighted_centered();
         }

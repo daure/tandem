@@ -84,7 +84,7 @@ impl Config {
             port,
             keys: [
                 KeySpec::key(Key::Enter),
-                KeySpec::plain('n'),
+                KeySpec::plain('i'),
                 KeySpec::shifted('t'),
                 KeySpec::plain('s'),
                 KeySpec::shifted('r'),

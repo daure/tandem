@@ -1,4 +1,6 @@
 use super::*;
+mod actions;
+mod folders;
 mod startup;
 use serde_json::json;
 use std::{
@@ -153,6 +155,7 @@ printf '%s\n' "$*" >> "$root/calls"
 case "$*" in
   list-sessions*) printf 'main\n' ;;
   *list-panes*) cat "$root/panes.json" ;;
+  *new-tab*) printf '9\n' ;;
   *) printf 'terminal_99\n' ;;
 esac
 "#,
@@ -164,7 +167,8 @@ esac
         json!([
             {"id":7,"is_plugin":false,"exited":false,"tab_id":4,"tab_name":"Review"},
             {"id":8,"is_plugin":false,"exited":false,"tab_id":4,"tab_name":"Review"},
-            {"id":9,"is_plugin":false,"exited":false,"tab_id":4,"tab_name":"Review"}
+            {"id":9,"is_plugin":false,"exited":false,"tab_id":4,"tab_name":"Review"},
+            {"id":100,"is_plugin":false,"exited":false,"tab_id":9,"tab_name":"workspace"}
         ])
         .to_string(),
     )
@@ -396,6 +400,7 @@ fn conversation_metadata_survives_status_refreshes_without_message_refetches() {
         snapshot
             .sessions
             .iter()
+            .filter(|session| !session.saved())
             .all(|session| session.agent.as_deref() == Some("tracer"))
     );
     let expected = metadata(&snapshot);
@@ -806,11 +811,12 @@ fn attach_uses_the_instance_tab_or_creates_an_instance_named_tab_with_literal_ar
         .block_on(observer.attach(&session, "review", "main", None))
         .unwrap();
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
-    assert!(
-        calls.contains("new-pane --stacked --tab-id 4 --cwd /work/space ' ; $(touch injected)")
-    );
+    assert!(calls.contains(
+        "new-pane --stacked --name  --tab-id 4 --cwd /work/space ' ; $(touch injected)"
+    ));
     assert!(calls.contains("new-tab --name review"));
     assert!(calls.contains("--session ses_saved"));
+    assert!(calls.contains("rename-pane --pane-id terminal_100 \n"), "{calls}");
     assert!(!root.path().join("injected").exists());
 }
 
