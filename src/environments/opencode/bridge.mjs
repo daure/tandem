@@ -25,7 +25,12 @@ export default {
       const session = sessionID ? api.state.session.get(sessionID) : undefined
       if (sessionID && !session) return
       const messages = sessionID ? api.state.session.messages(sessionID) : []
+      const reply = messages.findLast((message) => message.role === "assistant")
       const last = messages.findLast((message) => message.role === "assistant" && message.tokens.output > 0)
+      const provider = reply
+        ? api.state.provider.find((provider) => provider.id === reply.providerID)
+        : undefined
+      const model = reply ? provider?.models[reply.modelID] : undefined
       const contextTokens = last
         ? last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
         : undefined
@@ -43,6 +48,12 @@ export default {
         directory: session?.directory ?? api.state.path.directory,
         server: server ?? "",
         activity: status?.type === "busy" || status?.type === "retry" ? "busy" : "idle",
+        agent: reply?.agent,
+        agent_color: reply?.agent ? api.state.config.agent?.[reply.agent]?.color : undefined,
+        model: reply ? `${reply.providerID}/${reply.modelID}` : undefined,
+        model_name: model?.name,
+        provider_name: provider?.name,
+        variant: reply?.variant,
         context_tokens: contextTokens,
         context_limit: contextLimit,
         zellij_session: process.env.ZELLIJ_SESSION_NAME ?? "",

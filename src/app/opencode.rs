@@ -5,11 +5,15 @@ use tuicore::{Button, EventCtx, Flex, FlexItem, Notification};
 use super::{
     App, Msg, initial_focus,
     properties::Property,
-    rows::{Row, TEMPLATE_ICON, Tone, compact_duration},
+    rows::{
+        OpenCodeMetadata, Row, STOPPED_ICON, TEMPLATE_ICON, Tone, WORKSPACE_ICON, compact_duration,
+    },
 };
+use crate::store::opencode::resources::Owner;
 use crate::store::opencode::{Activity, Client, Counts, Pane, Session, Snapshot, workspace_owner};
 
 mod conversation;
+mod resources;
 
 const FINISHED_ICON: &str = "";
 const NEW_SESSION_ICON: &str = "";
@@ -82,7 +86,8 @@ impl Target {
     pub(super) fn attached(&self) -> bool {
         match self {
             Self::Session { pane, .. } => pane.is_some(),
-            Self::Workspace | Self::Client { .. } => false,
+            Self::Client { .. } => true,
+            Self::Workspace => false,
         }
     }
 
@@ -112,7 +117,13 @@ impl Target {
 pub(super) fn attached_rows(rows: Vec<Row>, snapshot: &Snapshot) -> Vec<Row> {
     let owners = rows
         .iter()
-        .filter_map(|row| Some((row.instance.clone()?, row.workspace.clone()?)))
+        .filter_map(|row| {
+            Some(Owner {
+                name: row.instance.clone()?,
+                workspace: row.workspace.clone()?,
+                template_directory: row.directory.clone(),
+            })
+        })
         .collect::<Vec<_>>();
     attached_rows_for_owners(rows, snapshot, &owners, false)
 }
@@ -120,7 +131,7 @@ pub(super) fn attached_rows(rows: Vec<Row>, snapshot: &Snapshot) -> Vec<Row> {
 pub(super) fn attached_rows_for_owners(
     mut rows: Vec<Row>,
     snapshot: &Snapshot,
-    owners: &[(String, String)],
+    owners: &[Owner],
     show_saved: bool,
 ) -> Vec<Row> {
     append_rows_for_owners(&mut rows, snapshot, show_saved, false, owners, false);
@@ -148,7 +159,6 @@ pub(super) fn attached_rows_for_owners(
                 row.parent = None;
                 row.template_capabilities = format!("· {TEMPLATE_ICON} {}", row.template);
                 row.status_detail = None;
-                row.hide_resources = true;
                 return Some(row);
             }
             let parent = row.parent.as_ref()?;
@@ -159,6 +169,7 @@ pub(super) fn attached_rows_for_owners(
         })
         .collect();
     append_external_rows(&mut grouped, snapshot, show_saved, false, owners);
+    resources::apply(&mut grouped, snapshot, owners);
     super::rows::assign_alternating_backgrounds(&mut grouped, "");
     grouped
 }
@@ -212,7 +223,13 @@ fn append_rows_with_grouping(
 ) {
     let owners: Vec<_> = rows
         .iter()
-        .filter_map(|row| Some((row.instance.clone()?, row.workspace.clone()?)))
+        .filter_map(|row| {
+            Some(Owner {
+                name: row.instance.clone()?,
+                workspace: row.workspace.clone()?,
+                template_directory: row.directory.clone(),
+            })
+        })
         .collect();
     append_rows_for_owners(rows, snapshot, show_saved, group_sessions, &owners, true);
 }
@@ -222,22 +239,27 @@ fn append_rows_for_owners(
     snapshot: &Snapshot,
     show_saved: bool,
     group_sessions: bool,
-    owners: &[(String, String)],
+    owners: &[Owner],
     include_external: bool,
 ) {
     let mut children_by_instance = Vec::new();
     for row in rows.iter_mut().filter(|row| row.instance.is_some()) {
         let instance = row.instance.as_deref().unwrap();
         let mut children = Vec::new();
+        let owned_sessions = snapshot.sessions.iter().filter(|session| {
+            workspace_owner(
+                &session.directory,
+                owners
+                    .iter()
+                    .map(|owner| (owner.name.as_str(), owner.workspace.as_str())),
+            ) == Some(instance)
+        });
+        let live_session = owned_sessions
+            .clone()
+            .any(|session| session.live() && !session.stale);
         let (mut sessions, sessions_truncated) =
-            recent_sessions_per_directory(snapshot.sessions.iter().filter(|session| {
-                workspace_owner(
-                    &session.directory,
-                    owners
-                        .iter()
-                        .map(|(name, workspace)| (name.as_str(), workspace.as_str())),
-                ) == Some(instance)
-                    && (!session.saved() || show_saved)
+            recent_sessions_per_directory(owned_sessions.filter(|session| {
+                (!session.saved() || show_saved)
                     && (group_sessions || show_saved || session.attached())
             }));
         let mut clients: Vec<_> = snapshot
@@ -248,10 +270,17 @@ fn append_rows_for_owners(
                     &client.directory,
                     owners
                         .iter()
-                        .map(|(name, workspace)| (name.as_str(), workspace.as_str())),
+                        .map(|owner| (owner.name.as_str(), owner.workspace.as_str())),
                 ) == Some(instance)
             })
             .collect();
+        if matches!(row.icon, WORKSPACE_ICON | STOPPED_ICON) && !row.loading {
+            row.tone = if live_session || clients.iter().any(|client| !client.stale) {
+                Tone::Success
+            } else {
+                row.tone
+            };
+        }
         if let Some(error) = &snapshot.error {
             row.details
                 .push(Property::new("OpenCode observation", error).tone(Tone::Warning));
@@ -320,6 +349,7 @@ fn append_rows_for_owners(
     }
     if include_external {
         append_external_rows(rows, snapshot, show_saved, group_sessions, owners);
+        resources::apply(rows, snapshot, owners);
     }
     super::rows::assign_alternating_backgrounds(rows, "");
 }
@@ -372,6 +402,15 @@ fn append_session_rows(
         Property::new("Server", &session.server),
         Property::new("Status", status),
     ]);
+    if let Some(model) = &session.model {
+        details.push(Property::new("Model", model));
+    }
+    if let Some(agent) = &session.agent {
+        details.push(Property::new("Agent", display_name(agent)));
+    }
+    if let Some(variant) = &session.variant {
+        details.push(Property::new("Variant", variant));
+    }
     for pane in &session.panes {
         details.push(Property::new(
             "Pane",
@@ -380,6 +419,7 @@ fn append_session_rows(
     }
     rows.push(Row {
         id: id.clone(),
+        opencode_activity: (!session.stale).then_some(session.activity),
         parent: Some(parent.to_owned()),
         label,
         icon: "󰚩",
@@ -407,6 +447,13 @@ fn append_session_rows(
             .into_iter()
             .flatten()
             .reduce(|detail, context| format!("{detail} · {context}")),
+        opencode_metadata: Some(OpenCodeMetadata {
+            agent: session.agent.as_deref().map(display_name),
+            agent_color: session.agent_color.clone(),
+            model: session.model_name.clone(),
+            provider: session.provider_name.clone(),
+            variant: session.variant.clone(),
+        }),
         detail_tone: if session.activity == Activity::Busy {
             Tone::Info
         } else {
@@ -444,26 +491,29 @@ fn context_detail(session: &Session) -> Option<String> {
     let tokens = session.context_tokens?;
     let limit = session.context_limit.filter(|limit| *limit > 0)?;
     let percent = (u128::from(tokens) * 100 + u128::from(limit) / 2) / u128::from(limit);
-    Some(format!(
-        "{}/{} ({percent}%)",
-        compact_tokens(tokens),
-        compact_tokens(limit)
-    ))
+    Some(format!("{} ({percent}%)", compact_tokens(tokens)))
 }
 
 fn compact_tokens(tokens: u64) -> String {
     if tokens >= 1_000_000 {
         let tenths = tokens.saturating_add(50_000) / 100_000;
         return if tenths.is_multiple_of(10) {
-            format!("{}m", tenths / 10)
+            format!("{}M", tenths / 10)
         } else {
-            format!("{}.{}m", tenths / 10, tenths % 10)
+            format!("{}.{}M", tenths / 10, tenths % 10)
         };
     }
     if tokens >= 1_000 {
-        return format!("{}k", tokens.saturating_add(500) / 1_000);
+        return format!("{}K", tokens.saturating_add(500) / 1_000);
     }
     tokens.to_string()
+}
+
+fn display_name(value: &str) -> String {
+    let mut characters = value.chars();
+    characters.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(characters).collect()
+    })
 }
 
 fn append_external_rows(
@@ -471,14 +521,14 @@ fn append_external_rows(
     snapshot: &Snapshot,
     show_saved: bool,
     overview: bool,
-    owners: &[(String, String)],
+    owners: &[Owner],
 ) {
     let outside_tandem = |directory: &str| {
         workspace_owner(
             directory,
             owners
                 .iter()
-                .map(|(name, workspace)| (name.as_str(), workspace.as_str())),
+                .map(|owner| (owner.name.as_str(), owner.workspace.as_str())),
         )
         .is_none()
     };
@@ -552,16 +602,12 @@ fn append_external_rows(
         }
         let (tone, loading) = group_tone(&children);
         let shown_directory = display_directory(&directory);
-        let label = if overview {
-            shown_directory
-        } else {
-            let name = Path::new(&directory)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .filter(|name| !name.is_empty())
-                .unwrap_or(&directory);
-            format!("{name}\n{shown_directory}")
-        };
+        let name = Path::new(&directory)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&directory);
+        let label = format!("{name}\n{shown_directory}");
         projected.push(Row {
             id: workspace_id.clone(),
             parent: overview.then(|| "opencode-workspaces".into()),
@@ -749,9 +795,18 @@ fn sessions_group(row: &Row, instance: &str, children: &[Row]) -> Row {
     }
 }
 
+fn client_row_id(scope: &str, client: &Client) -> String {
+    format!(
+        "opencode-client:{scope}:{}:{}",
+        client.pane.session, client.pane.id
+    )
+}
+
 fn client_row(parent: &str, scope: &str, client: &Client, external: bool) -> Row {
     let status = if client.stale {
         "observation stale"
+    } else if client.awaiting_presence_since.is_some() {
+        "starting · awaiting companion"
     } else {
         "attached · no conversation"
     };
@@ -761,10 +816,7 @@ fn client_row(parent: &str, scope: &str, client: &Client, external: bool) -> Row
         "(new session)"
     };
     Row {
-        id: format!(
-            "opencode-client:{scope}:{}:{}",
-            client.pane.session, client.pane.id
-        ),
+        id: client_row_id(scope, client),
         parent: Some(parent.to_owned()),
         label: format!("{}\n{secondary}", client.title),
         icon: "󰚩",
@@ -801,7 +853,7 @@ fn client_row(parent: &str, scope: &str, client: &Client, external: bool) -> Row
                 ),
             ])
             .collect(),
-        opencode: external.then(|| Target::Client {
+        opencode: Some(Target::Client {
             pane: client.pane.clone(),
         }),
         ..Default::default()
@@ -818,7 +870,11 @@ impl App {
         let owners = snapshot
             .instances
             .iter()
-            .map(|instance| (instance.name.clone(), instance.workspace.clone()))
+            .map(|instance| Owner {
+                name: instance.name.clone(),
+                workspace: instance.workspace.clone(),
+                template_directory: instance.template_directory.clone(),
+            })
             .collect::<Vec<_>>();
         if self.attached_sessions_only {
             attached_rows_for_owners(

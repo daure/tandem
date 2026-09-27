@@ -3,6 +3,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod conversation;
+pub(crate) mod resources;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,6 +31,12 @@ pub(crate) struct Session {
     pub activity: Activity,
     pub activity_started_at_milliseconds: Option<u64>,
     pub activity_elapsed_milliseconds: Option<u64>,
+    pub agent: Option<String>,
+    pub agent_color: Option<String>,
+    pub model: Option<String>,
+    pub model_name: Option<String>,
+    pub provider_name: Option<String>,
+    pub variant: Option<String>,
     pub context_tokens: Option<u64>,
     pub context_limit: Option<u64>,
     pub panes: Vec<Pane>,
@@ -71,12 +78,14 @@ pub(crate) struct Client {
     pub server: String,
     pub pane: Pane,
     pub stale: bool,
+    pub awaiting_presence_since: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Snapshot {
     pub sessions: Vec<Session>,
     pub clients: Vec<Client>,
+    pub resources: Vec<resources::ProcessResource>,
     pub error: Option<String>,
 }
 

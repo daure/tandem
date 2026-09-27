@@ -178,6 +178,9 @@ impl super::AppService {
             match result {
                 Ok(snapshot) => state.snapshot = snapshot,
                 Err(error) => {
+                    for resource in &mut state.snapshot.resources {
+                        resource.mark_stale(error.clone());
+                    }
                     for session in &mut state.snapshot.sessions {
                         session.stale = true;
                     }

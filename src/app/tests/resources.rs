@@ -192,13 +192,16 @@ fn resources_sum_services_and_active_setup_into_instances_and_templates() {
         row("template:/tmp/templates/website")
             .resource_text()
             .to_string(),
-        "0.3 GiB\n5%"
+        "0.3 GiB *\n5% *"
     );
     assert_eq!(
         row("instance:review").resource_text().to_string(),
-        "0.2 GiB\n3%"
+        "0.2 GiB *\n3% *"
     );
-    assert_eq!(row("service:review:db").resource_text().to_string(), "—\n—");
+    assert_eq!(
+        row("service:review:db").resource_text().to_string(),
+        "— *\n— *"
+    );
     snapshot.instances[0].services[1].status = "down (exit 0)".into();
     snapshot.templates.clear();
     let tree = rows::from_snapshot(&snapshot);
@@ -226,7 +229,7 @@ fn memory_stays_visible_while_cpu_baselines_are_pending() {
         .find(|row| row.id == "service:review:web")
         .unwrap();
     assert_eq!(web.resource_text().to_string(), "0.2 GiB\n— …");
-    assert_eq!(web.memory_text().to_string(), "");
+    assert_eq!(web.memory_text().to_string(), "0.2 GiB");
     assert_eq!(web.cpu_text_with_spinner("⠋").to_string(), "⠋");
     assert_eq!(
         web.resource_text().lines[1].spans[0].style.fg,
@@ -458,7 +461,7 @@ fn resource_rows_show_right_aligned_memory_and_cpu_columns() {
             .iter()
             .filter(|line| line.ends_with(" 0.2 GiB 2% "))
             .count(),
-        3
+        4
     );
     for line in lines.iter().filter(|line| line.contains("0.2 GiB")) {
         assert!(line.ends_with(" 0.2 GiB 2% "), "{lines:#?}");

@@ -104,6 +104,7 @@ fn external_sessions_allow_reading_navigation_and_closing_observed_panes() {
             server: "http://127.0.0.1:4199".into(),
             pane: client_pane.clone(),
             stale: false,
+            awaiting_presence_since: None,
         }],
         ..Default::default()
     });

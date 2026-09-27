@@ -29,6 +29,17 @@ pub(super) struct State {
 }
 
 impl State {
+    pub(super) fn from_snapshots(
+        snapshot: &EnvironmentSnapshot,
+        opencode: &crate::store::opencode::Snapshot,
+    ) -> Self {
+        let mut state = Self::from_snapshot(snapshot);
+        state
+            .totals
+            .merge(&crate::store::opencode::resources::Totals::new(opencode, &[]).overall);
+        state
+    }
+
     pub(super) fn from_snapshot(snapshot: &EnvironmentSnapshot) -> Self {
         Self {
             totals: UsageSummary::instances(snapshot.instances.iter()),
@@ -164,8 +175,7 @@ impl Toolbar {
         let state = self.state.borrow();
         let totals = &state.totals;
         let waiting = totals.memory_waiting || totals.cpu_waiting;
-        let complete = totals.memory_bytes.is_some() && totals.cpu_basis_points.is_some();
-        if waiting && !complete {
+        if waiting && totals.memory_bytes.is_none() && totals.cpu_basis_points.is_none() {
             return Line::from(Span::styled(
                 self.spinner.glyph().to_owned(),
                 Style::default().fg(tuicore::theme().muted_fg()),
@@ -175,7 +185,7 @@ impl Toolbar {
             rows::resource_text_with_single_spinner(totals, None, self.spinner.glyph()).lines;
         let mut cpu = resources.pop().unwrap_or_default();
         let memory = resources.pop().unwrap_or_default();
-        if totals.cpu_basis_points.is_none() {
+        if totals.cpu_basis_points.is_none() && !totals.cpu_partial {
             for span in &mut cpu.spans {
                 let content = span.content.trim_start_matches('—').trim_start();
                 let content = content

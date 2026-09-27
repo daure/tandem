@@ -12,10 +12,13 @@ use crate::{
 
 mod attached_sessions;
 mod bulk;
+mod completion;
 mod guidance;
 mod input_routing;
 mod labels;
 mod opencode;
+mod opencode_resources;
+mod opencode_selection;
 mod operations;
 mod properties;
 mod refresh;
@@ -227,7 +230,14 @@ fn setup_jobs_are_nested_under_setup_and_services_are_nested_under_services() {
             .iter()
             .find(|row| row.id == "service:review:repo-sync")
             .unwrap();
-        assert_eq!(setup.resource_text().to_string(), "");
+        assert_eq!(
+            setup.resource_text().to_string(),
+            if status == "up" {
+                "— …\n— …"
+            } else {
+                ""
+            }
+        );
         assert_eq!(setup.parent.as_deref(), Some("setup:review"));
         assert_eq!(
             rows.iter()

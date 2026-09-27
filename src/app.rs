@@ -196,13 +196,20 @@ pub(crate) fn root(service: AppService) -> App {
         let owners = snapshot
             .instances
             .iter()
-            .map(|instance| (instance.name.clone(), instance.workspace.clone()))
+            .map(|instance| crate::store::opencode::resources::Owner {
+                name: instance.name.clone(),
+                workspace: instance.workspace.clone(),
+                template_directory: instance.template_directory.clone(),
+            })
             .collect::<Vec<_>>();
         rows = opencode::attached_rows_for_owners(rows, &opencode_snapshot, &owners, false);
     }
     let instances = instances::state(rows);
     instances::set_attached_sessions_only(&instances, opencode_enabled);
-    let toolbar_state = Rc::new(RefCell::new(toolbar::State::from_snapshot(&snapshot)));
+    let toolbar_state = Rc::new(RefCell::new(toolbar::State::from_snapshots(
+        &snapshot,
+        &opencode_snapshot,
+    )));
     {
         let mut toolbar_state = toolbar_state.borrow_mut();
         toolbar_state.opencode_enabled = opencode_enabled;
@@ -322,17 +329,15 @@ impl App {
         };
         self.toolbar_state.borrow_mut().opencode_enabled = self.service.opencode_enabled();
         self.toolbar_state.borrow_mut().attached_sessions_only = self.attached_sessions_only;
-        if !snapshot_changed {
-            return rows_changed;
-        }
-        let mut toolbar_state = toolbar::State::from_snapshot(&snapshot);
+        let mut toolbar_state = toolbar::State::from_snapshots(&snapshot, &self.opencode_snapshot);
+        let totals_changed = toolbar_state.totals != self.toolbar_state.borrow().totals;
         toolbar_state.running_only = self.running_only;
         toolbar_state.opencode_enabled = self.service.opencode_enabled();
         toolbar_state.show_saved = self.opencode_history;
         toolbar_state.attached_sessions_only = self.attached_sessions_only;
         *self.toolbar_state.borrow_mut() = toolbar_state;
         self.snapshot = snapshot;
-        true
+        snapshot_changed || rows_changed || totals_changed
     }
 
     fn selected(&self) -> Option<Row> {

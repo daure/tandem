@@ -40,8 +40,10 @@ fn external_observation() -> Snapshot {
                 tab_name: "prototype".into(),
             },
             stale: false,
+            awaiting_presence_since: None,
         }],
         error: None,
+        ..Default::default()
     }
 }
 
@@ -62,7 +64,7 @@ fn overview_places_other_opencode_workspaces_before_templates() {
         .find(|row| row.id == "opencode-workspace:/work/ledger")
         .unwrap();
     assert_eq!(ledger.parent.as_deref(), Some("opencode-workspaces"));
-    assert_eq!(ledger.label, "/work/ledger");
+    assert_eq!(ledger.label, "ledger\n/work/ledger");
     assert_eq!(ledger.template_capabilities, " external");
     assert_eq!(
         ledger.text("⠋", None).lines[0]
@@ -438,6 +440,7 @@ fn disabling_integration_removes_rows_and_counts_and_clears_the_cached_observati
         }],
         clients: Vec::new(),
         error: None,
+        ..Default::default()
     });
     app.update_snapshot(snapshot());
     super::super::instances::set_highlighted(
@@ -576,6 +579,12 @@ fn session_timers_share_a_display_beat_across_refreshes_and_stop_when_idle() {
             activity: Activity::Busy,
             activity_started_at_milliseconds: Some(1_000),
             activity_elapsed_milliseconds: Some(320),
+            agent: Some("tracer".into()),
+            agent_color: Some("#FB923C".into()),
+            model: Some("openai/gpt-5.6-sol".into()),
+            model_name: Some("GPT-5.6 Sol".into()),
+            provider_name: Some("OpenAI".into()),
+            variant: Some("high".into()),
             context_tokens: Some(83_600),
             context_limit: Some(272_000),
             last_question: Some("Sleep for 30 seconds".into()),
@@ -594,6 +603,33 @@ fn session_timers_share_a_display_beat_across_refreshes_and_stop_when_idle() {
         super::super::opencode::append_rows(&mut rows, observation, true);
         rows
     };
+    let projected = make_rows(&observation);
+    let line = projected
+        .iter()
+        .find(|row| row.id == "opencode:review:ses_timer")
+        .unwrap()
+        .text("", None)
+        .lines
+        .remove(0);
+    let style = |content: &str| {
+        line.spans
+            .iter()
+            .find(|span| span.content == content)
+            .unwrap()
+            .style
+    };
+    assert_eq!(
+        style("Tracer").fg,
+        Some(ratatui::style::Color::Rgb(0xfb, 0x92, 0x3c))
+    );
+    assert_eq!(style("GPT-5.6 Sol").fg, Some(tuicore::theme().text_fg()));
+    assert_eq!(style(" OpenAI").fg, Some(tuicore::theme().muted_fg()));
+    assert_eq!(style("high").fg, Some(tuicore::theme().accent_fg()));
+    assert!(
+        style("high")
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
     let state = instances::state(make_rows(&observation));
     let mut tree = Instances::new(state.clone());
     tree.expand_for_tests("instance:review");
@@ -618,21 +654,29 @@ fn session_timers_share_a_display_beat_across_refreshes_and_stop_when_idle() {
     for second in 1..=4 {
         let text = render(&mut tree, &mut terminal);
         assert!(
-            text.contains(&format!("Quick ping · {second}s · 84k/272k (31%)")),
+            text.contains(&format!(
+                "Quick ping · {second}s · 84K (31%) · Tracer · GPT-5.6 Sol OpenAI · high"
+            )),
             "{text}"
         );
         assert!(
-            text.contains(&format!("Second ping · {second}s · 84k/272k (31%)")),
+            text.contains(&format!(
+                "Second ping · {second}s · 84K (31%) · Tracer · GPT-5.6 Sol OpenAI · high"
+            )),
             "{text}"
         );
         tree.tick(Duration::from_millis(420), AnimationSettings::default());
         let text = render(&mut tree, &mut terminal);
         assert!(
-            text.contains(&format!("Quick ping · {second}s · 84k/272k (31%)")),
+            text.contains(&format!(
+                "Quick ping · {second}s · 84K (31%) · Tracer · GPT-5.6 Sol OpenAI · high"
+            )),
             "{text}"
         );
         assert!(
-            text.contains(&format!("Second ping · {second}s · 84k/272k (31%)")),
+            text.contains(&format!(
+                "Second ping · {second}s · 84K (31%) · Tracer · GPT-5.6 Sol OpenAI · high"
+            )),
             "{text}"
         );
         observation.sessions[0].activity_elapsed_milliseconds = Some(second * 1_000 + 740);
@@ -640,11 +684,15 @@ fn session_timers_share_a_display_beat_across_refreshes_and_stop_when_idle() {
         instances::replace_rows(&state, make_rows(&observation));
         let text = render(&mut tree, &mut terminal);
         assert!(
-            text.contains(&format!("Quick ping · {second}s · 84k/272k (31%)")),
+            text.contains(&format!(
+                "Quick ping · {second}s · 84K (31%) · Tracer · GPT-5.6 Sol OpenAI · high"
+            )),
             "{text}"
         );
         assert!(
-            text.contains(&format!("Second ping · {second}s · 84k/272k (31%)")),
+            text.contains(&format!(
+                "Second ping · {second}s · 84K (31%) · Tracer · GPT-5.6 Sol OpenAI · high"
+            )),
             "{text}"
         );
         tree.tick(Duration::from_millis(580), AnimationSettings::default());
@@ -655,7 +703,10 @@ fn session_timers_share_a_display_beat_across_refreshes_and_stop_when_idle() {
     instances::replace_rows(&state, make_rows(&observation));
     tree.tick(Duration::from_secs(10), AnimationSettings::default());
     let text = render(&mut tree, &mut terminal);
-    assert!(text.contains("Quick ping · 5s · 84k/272k (31%)"), "{text}");
+    assert!(
+        text.contains("Quick ping · 5s · 84K (31%) · Tracer · GPT-5.6 Sol OpenAI · high"),
+        "{text}"
+    );
     assert!(text.contains(" Sleep for 30 seconds"), "{text}");
 }
 
@@ -673,6 +724,7 @@ fn attached_client_without_a_conversation_appears_in_the_sessions_group() {
                 tab_name: "review".into(),
             },
             stale: false,
+            awaiting_presence_since: None,
         }],
         ..Default::default()
     };
@@ -697,7 +749,59 @@ fn attached_client_without_a_conversation_appears_in_the_sessions_group() {
             .iter()
             .all(|span| span.style.fg == Some(tuicore::theme().subtle_fg()))
     );
-    assert!(client.opencode.is_none());
+    assert!(matches!(
+        client.opencode,
+        Some(super::super::opencode::Target::Client { .. })
+    ));
+}
+
+#[test]
+fn a_starting_client_is_green_while_saved_history_stays_hidden() {
+    for directory in ["/tmp/workspaces/review", "/work/ledger"] {
+        let mut observation = external_observation();
+        for session in &mut observation.sessions {
+            session.directory = directory.into();
+            session.activity = Activity::Idle;
+            session.panes.clear();
+        }
+        observation.clients[0].directory = directory.into();
+        observation.clients[0].awaiting_presence_since = Some(1);
+        for stale in [false, true] {
+            observation.clients[0].stale = stale;
+            let mut projected = rows::from_snapshot(&snapshot());
+            super::super::opencode::append_rows(&mut projected, &observation, false);
+            let clients = projected
+                .iter()
+                .filter(|row| {
+                    matches!(
+                        row.opencode,
+                        Some(super::super::opencode::Target::Client { .. })
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(clients.len(), 1);
+            assert_eq!(
+                clients[0].tone,
+                if stale { Tone::Warning } else { Tone::Success }
+            );
+            assert!(projected.iter().all(|row| !matches!(
+                row.opencode,
+                Some(super::super::opencode::Target::Session { .. })
+            )));
+            let mut history = rows::from_snapshot(&snapshot());
+            super::super::opencode::append_rows(&mut history, &observation, true);
+            assert_eq!(
+                history
+                    .iter()
+                    .filter(|row| matches!(
+                        row.opencode,
+                        Some(super::super::opencode::Target::Session { .. })
+                    ))
+                    .count(),
+                2
+            );
+        }
+    }
 }
 
 #[test]
@@ -1236,6 +1340,7 @@ fn enter_opens_a_bottom_conversation_dialog_without_jumping_to_the_pane() {
             }],
             clients: Vec::new(),
             error: None,
+            ..Default::default()
         });
         app.update_snapshot(snapshot());
         let area = Rect::new(0, 0, width, 40);

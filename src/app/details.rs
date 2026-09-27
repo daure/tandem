@@ -247,17 +247,21 @@ pub(super) fn usage_details(rows: &mut Vec<Property>, usage: &UsageSummary) {
         if row.name == "Memory" {
             let memory_bytes = usage.memory_bytes;
             row.value = memory_bytes.map_or_else(|| "—".into(), memory);
-            row.tone = memory_tone(
-                memory_bytes.map(|memory_bytes| ResourceUsage {
-                    memory_bytes,
-                    ..Default::default()
-                }),
-                usage.memory_limit_bytes,
-            );
+            row.tone = if usage.memory_partial || usage.memory_waiting {
+                Tone::Muted
+            } else {
+                memory_tone(
+                    memory_bytes.map(|memory_bytes| ResourceUsage {
+                        memory_bytes,
+                        ..Default::default()
+                    }),
+                    usage.memory_limit_bytes,
+                )
+            };
         } else if row.name == "CPU" {
             let cpu_basis_points = usage.cpu_basis_points;
             row.value = cpu_basis_points.map_or_else(|| "—".into(), cpu);
-            row.tone = if cpu_basis_points.is_some() {
+            row.tone = if cpu_basis_points.is_some() && !usage.cpu_partial && !usage.cpu_waiting {
                 Tone::Normal
             } else {
                 Tone::Muted
@@ -269,5 +273,11 @@ pub(super) fn usage_details(rows: &mut Vec<Property>, usage: &UsageSummary) {
     }
     if let Some(age) = usage.age_seconds {
         rows.push(Property::new("Resource sample age", format!("{age}s")));
+    }
+    if usage.memory_partial || usage.cpu_partial {
+        rows.push(
+            Property::new("Resource coverage", "* marks partial or stale readings")
+                .tone(Tone::Warning),
+        );
     }
 }

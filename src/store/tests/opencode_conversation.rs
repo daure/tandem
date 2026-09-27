@@ -30,13 +30,20 @@ fn full_transcript_keeps_all_turns_with_the_latest_reply_and_question_first() {
 fn latest_turn_keeps_the_newest_question_and_its_completion_timing() {
     let messages = json!([
         {"info":{"id":"msg_1","role":"user","time":{"created":1}},"parts":[{"type":"text","text":"First question"}]},
-        {"info":{"id":"msg_2","role":"user","time":{"created":3}},"parts":[{"type":"text","text":"Latest\nquestion"},{"type":"file","filename":"image.png"}]},
-        {"info":{"id":"msg_3","role":"assistant","parentID":"msg_2","time":{"created":4,"completed":9}},"parts":[{"type":"text","text":"Latest answer"}]}
+        {"info":{"id":"msg_2","role":"user","model":{"providerID":"openai","modelID":"gpt-5.6"},"time":{"created":3}},"parts":[{"type":"text","text":"Latest\nquestion"},{"type":"file","filename":"image.png"}]},
+        {"info":{"id":"msg_3","role":"assistant","parentID":"msg_2","agent":"tracer","providerID":"openai","modelID":"gpt-5.6-sol","variant":"high","time":{"created":4,"completed":9}},"parts":[{"type":"text","text":"Latest answer"}]}
     ]);
     assert_eq!(
         latest_turn(serde_json::from_value(messages).unwrap()),
         Some(LatestTurn {
             question: Some("Latest question".into()),
+            agent: Some("tracer".into()),
+            agent_color: None,
+            provider: Some("openai".into()),
+            provider_name: None,
+            model: Some("gpt-5.6-sol".into()),
+            model_name: None,
+            variant: Some("high".into()),
             started_at: 3,
             completed_at: Some(9),
         })

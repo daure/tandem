@@ -1,5 +1,6 @@
 mod conversation;
 mod navigation;
+mod resources;
 mod transport;
 
 pub(crate) use conversation::load as conversation;
@@ -18,6 +19,7 @@ use transport::{get, local_server, zellij};
 
 const QUESTION_REFRESH_LIMIT: usize = 16;
 const SESSION_DIRECTORY_WINDOW: usize = 21;
+const CLIENT_STARTUP_GRACE_MILLISECONDS: u64 = 10_000;
 
 #[derive(Clone)]
 pub(crate) struct Observer {
@@ -35,6 +37,12 @@ struct Presence {
     directory: String,
     server: String,
     activity: Activity,
+    agent: Option<String>,
+    agent_color: Option<String>,
+    model: Option<String>,
+    model_name: Option<String>,
+    provider_name: Option<String>,
+    variant: Option<String>,
     context_tokens: Option<u64>,
     context_limit: Option<u64>,
     zellij_session: String,
@@ -87,12 +95,12 @@ impl Observer {
         }
     }
 
-    fn inventory(&self) -> (Vec<Presence>, BTreeMap<String, BTreeSet<String>>) {
+    fn presences(&self) -> Vec<Presence> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        let presences = entries(&self.presence)
+        entries(&self.presence)
             .filter(|path| {
                 path.extension()
                     .is_some_and(|extension| extension == "json")
@@ -109,7 +117,11 @@ impl Observer {
                 }
                 Some(presence)
             })
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    fn inventory(&self) -> (Vec<Presence>, BTreeMap<String, BTreeSet<String>>) {
+        let presences = self.presences();
         let mut servers = BTreeMap::<String, BTreeSet<String>>::new();
         for presence in &presences {
             if let Some(server) = local_server(&presence.server) {
@@ -145,6 +157,7 @@ impl Observer {
             .unwrap_or_default()
             .as_millis() as u64;
         let observer = self.clone();
+        let previous_resources = previous.resources;
         let (presences, mut servers) = tokio::task::spawn_blocking(move || observer.inventory())
             .await
             .map_err(|error| error.to_string())?;
@@ -157,6 +170,12 @@ impl Observer {
             }
         }
         let client = transport::client()?;
+        let previously_attached: BTreeSet<_> = previous
+            .sessions
+            .iter()
+            .flat_map(|session| &session.panes)
+            .map(|pane| (pane.session.clone(), pane.id))
+            .collect();
         let mut sessions: BTreeMap<_, _> = previous
             .sessions
             .into_iter()
@@ -336,11 +355,16 @@ impl Observer {
                     || candidate.activity != current.activity
                     || candidate.updated > current.updated
                 {
-                    let last_question = current.last_question.take();
-                    let question_observed = current.question_observed;
-                    *current = candidate;
-                    current.last_question = last_question;
-                    current.question_observed = question_observed;
+                    // Status/history responses do not carry conversation metadata.
+                    current.title = candidate.title;
+                    current.directory = candidate.directory;
+                    current.server = candidate.server;
+                    current.activity = candidate.activity;
+                    current.stale = candidate.stale;
+                    current.updated = candidate.updated;
+                    current.activity_started_at_milliseconds =
+                        candidate.activity_started_at_milliseconds;
+                    current.activity_elapsed_milliseconds = candidate.activity_elapsed_milliseconds;
                 }
                 if refresh_question {
                     question_refresh.insert(id);
@@ -374,6 +398,16 @@ impl Observer {
                 session.stale = true;
             }
         }
+        // Server queries can outlast a route switch. Join attachment and resource
+        // identity from fresh receipts rather than the discovery-time home route.
+        let observer = self.clone();
+        let (presences, mut resources) = tokio::task::spawn_blocking(move || {
+            let presences = observer.presences();
+            let resources = resources::collect(&presences, previous_resources);
+            (presences, resources)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
         let mut tracked = BTreeSet::new();
         let mut clients = BTreeMap::new();
         for presence in presences {
@@ -401,6 +435,7 @@ impl Observer {
                                 server: local_server(&presence.server).unwrap_or_default(),
                                 pane,
                                 stale: false,
+                                awaiting_presence_since: None,
                             },
                         );
                     }
@@ -421,6 +456,24 @@ impl Observer {
                     ..Default::default()
                 });
             session.title = clean(&presence.title);
+            if presence.agent.is_some() {
+                session.agent = presence.agent.clone();
+            }
+            if presence.agent_color.is_some() {
+                session.agent_color = presence.agent_color.clone();
+            }
+            if presence.model.is_some() {
+                session.model = presence.model.clone();
+            }
+            if presence.model_name.is_some() {
+                session.model_name = presence.model_name.clone();
+            }
+            if presence.provider_name.is_some() {
+                session.provider_name = presence.provider_name.clone();
+            }
+            if presence.variant.is_some() {
+                session.variant = presence.variant.clone();
+            }
             session.context_tokens = presence.context_tokens;
             session.context_limit = presence.context_limit;
             session.stale = (!presence.zellij_session.is_empty()
@@ -464,15 +517,43 @@ impl Observer {
                 if pane.pane_command.as_ref().is_some_and(|command| {
                     command.contains("opencode") || command.contains("oc-pane")
                 }) && let Some(directory) = &pane.pane_cwd
-                    && belongs(directory, &known_directories)
+                    && (belongs(directory, &known_directories) || belongs(directory, roots))
                 {
-                    errors.insert("OpenCode panes need the Tandem TUI companion; run tandem opencode-setup and reopen those clients".into());
-                    for session in sessions
-                        .values_mut()
-                        .filter(|session| session.directory == *directory)
-                    {
-                        session.stale = true;
+                    // Pane discovery can precede the companion's first receipt. A known
+                    // client losing its receipt is a failure, not another startup.
+                    let since = previous
+                        .clients
+                        .iter()
+                        .find(|client| client.pane.session == name && client.pane.id == pane.id)
+                        .map(|client| client.awaiting_presence_since.unwrap_or(0))
+                        .unwrap_or_else(|| {
+                            if previously_attached.contains(&(name.clone(), pane.id)) {
+                                0
+                            } else {
+                                observed_at
+                            }
+                        });
+                    let stale =
+                        observed_at.saturating_sub(since) >= CLIENT_STARTUP_GRACE_MILLISECONDS;
+                    if stale {
+                        errors.insert("OpenCode panes need the Tandem TUI companion; run tandem opencode-setup and reopen those clients".into());
                     }
+                    clients.insert(
+                        (name.clone(), pane.id),
+                        Client {
+                            title: "OpenCode".into(),
+                            directory: directory.clone(),
+                            server: String::new(),
+                            pane: Pane {
+                                session: name.clone(),
+                                id: pane.id,
+                                tab_id: pane.tab_id,
+                                tab_name: clean(&pane.tab_name),
+                            },
+                            stale,
+                            awaiting_presence_since: Some(since),
+                        },
+                    );
                 }
             }
         }
@@ -507,13 +588,39 @@ impl Observer {
                 session.question_observed = true;
                 if let Some(turn) = turn {
                     session.last_question = turn.question.clone();
+                    if session.agent != turn.agent || turn.agent_color.is_some() {
+                        session.agent_color = turn.agent_color.clone();
+                    }
+                    session.agent = turn.agent.clone();
+                    let model = turn
+                        .provider
+                        .as_ref()
+                        .zip(turn.model.as_ref())
+                        .map(|(provider, model)| format!("{provider}/{model}"));
+                    if session.model != model || session.model_name.is_none() {
+                        session.model_name = turn.model_name.clone().or(turn.model.clone());
+                        session.provider_name =
+                            turn.provider_name.clone().or(turn.provider.clone());
+                    }
+                    session.model = model;
+                    session.variant = turn.variant.clone();
                     apply_turn_timing(session, &turn, observed_at);
                 }
             }
         }
+        resources.retain(|process| {
+            if process.session_id.is_empty() {
+                process.pane_id.is_some_and(|pane| {
+                    clients.contains_key(&(process.zellij_session.clone(), pane))
+                })
+            } else {
+                sessions.contains_key(&process.session_id)
+            }
+        });
         Ok(Snapshot {
             sessions: sessions.into_values().collect(),
             clients: clients.into_values().collect(),
+            resources,
             error: (!errors.is_empty()).then(|| errors.into_iter().collect::<Vec<_>>().join("\n")),
         })
     }

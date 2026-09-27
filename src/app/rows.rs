@@ -5,7 +5,7 @@ use crate::store::environments::{
     Severity, StartupKind, StartupTiming, Status, Template, UsageSummary,
 };
 use ratatui::{
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
 };
 
@@ -14,6 +14,8 @@ use super::{details, properties::Property};
 mod setup;
 
 pub(super) const TEMPLATE_ICON: &str = "󰠲";
+pub(super) const WORKSPACE_ICON: &str = "";
+pub(super) const STOPPED_ICON: &str = "";
 const GATEWAY_ICON: &str = "";
 const PORT_ICON: &str = "󰈀";
 const COLD_START_ICON: &str = "󰜗";
@@ -58,6 +60,86 @@ impl From<Severity> for Tone {
     }
 }
 
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(super) struct OpenCodeMetadata {
+    pub agent: Option<String>,
+    pub agent_color: Option<String>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub variant: Option<String>,
+}
+
+impl OpenCodeMetadata {
+    fn text(&self) -> String {
+        [
+            self.agent.as_deref(),
+            self.model.as_deref(),
+            self.provider.as_deref(),
+            self.variant.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ")
+    }
+
+    fn append_to(&self, line: &mut Vec<Span<'static>>) {
+        if let Some(agent) = &self.agent {
+            push_separator(line);
+            line.push(Span::styled(
+                agent.clone(),
+                Style::default().fg(self
+                    .agent_color
+                    .as_deref()
+                    .and_then(hex_color)
+                    .unwrap_or_else(|| tuicore::theme().accent_fg())),
+            ));
+        }
+        if let Some(model) = &self.model {
+            push_separator(line);
+            line.push(Span::styled(
+                model.clone(),
+                Style::default().fg(tuicore::theme().text_fg()),
+            ));
+            if let Some(provider) = &self.provider {
+                line.push(Span::styled(
+                    format!(" {provider}"),
+                    Style::default().fg(tuicore::theme().muted_fg()),
+                ));
+            }
+        }
+        if let Some(variant) = &self.variant {
+            push_separator(line);
+            line.push(Span::styled(
+                variant.clone(),
+                Style::default()
+                    .fg(tuicore::theme().accent_fg())
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+}
+
+fn push_separator(line: &mut Vec<Span<'static>>) {
+    line.push(Span::styled(
+        " · ",
+        Style::default().fg(tuicore::theme().muted_fg()),
+    ));
+}
+
+fn hex_color(value: &str) -> Option<Color> {
+    let value = value.strip_prefix('#')?;
+    if value.len() != 6 {
+        return None;
+    }
+    let value = u32::from_str_radix(value, 16).ok()?;
+    Some(Color::Rgb(
+        ((value >> 16) & 0xff) as u8,
+        ((value >> 8) & 0xff) as u8,
+        (value & 0xff) as u8,
+    ))
+}
+
 fn status_icon(status: Status) -> &'static str {
     match status {
         Status::NotStarted | Status::Waiting => "",
@@ -66,7 +148,7 @@ fn status_icon(status: Status) -> &'static str {
         Status::Completed => "",
         Status::Unhealthy => "",
         Status::Paused => "",
-        Status::Stopped => "",
+        Status::Stopped => STOPPED_ICON,
         Status::Restarting => "",
         Status::Interrupted => "",
         Status::Failed | Status::ContainerError => "",
@@ -109,7 +191,7 @@ fn instance_summary(instance: &Instance, startup: Option<&StartupTiming>) -> Ins
         },
         loading: summary.busy,
         icon: if workspace_ready {
-            ""
+            WORKSPACE_ICON
         } else {
             status_icon(summary.status)
         },
@@ -151,6 +233,7 @@ fn format_seconds(milliseconds: u64) -> String {
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(super) struct Row {
     pub opencode: Option<super::opencode::Target>,
+    pub opencode_activity: Option<crate::store::opencode::Activity>,
     pub id: String,
     pub parent: Option<String>,
     pub label: String,
@@ -185,6 +268,7 @@ pub(super) struct Row {
     pub gateway_url: Option<String>,
     pub details: Vec<Property>,
     pub status_detail: Option<String>,
+    pub opencode_metadata: Option<OpenCodeMetadata>,
     pub detail_tone: Tone,
     pub metrics: UsageSummary,
     pub hide_resources: bool,
@@ -201,7 +285,12 @@ impl Row {
     pub(super) fn height(&self) -> u16 {
         if self.instance.is_some() {
             2
-        } else if self.hide_resources {
+        } else if self.hide_resources
+            || ["services:", "setup:", "sessions:"]
+                .iter()
+                .any(|prefix| self.id.starts_with(prefix))
+            || self.id == "opencode-workspaces"
+        {
             self.label.lines().count().clamp(1, 2) as u16
         } else {
             2
@@ -210,10 +299,14 @@ impl Row {
 
     pub(super) fn search_text(&self) -> String {
         format!(
-            "{} {} {} {}",
+            "{} {} {} {} {}",
             self.label,
             self.template_capabilities,
             self.status_detail.as_deref().unwrap_or_default(),
+            self.opencode_metadata
+                .as_ref()
+                .map(OpenCodeMetadata::text)
+                .unwrap_or_default(),
             self.description,
         )
     }
@@ -270,6 +363,9 @@ impl Row {
                 detail.lines().next().unwrap_or_default().to_owned(),
                 Style::default().fg(self.detail_tone.color()),
             ));
+        }
+        if let Some(metadata) = &self.opencode_metadata {
+            metadata.append_to(&mut first_line);
         }
         let mut text = vec![Line::from(first_line)];
         if self.instance.is_some() {
@@ -337,10 +433,9 @@ impl Row {
     }
 
     pub(super) fn memory_text(&self) -> Line<'static> {
-        let waiting = self.metrics.memory_waiting || self.metrics.cpu_waiting;
-        let complete =
-            self.metrics.memory_bytes.is_some() && self.metrics.cpu_basis_points.is_some();
-        if self.hide_resources || self.metrics.memory_bytes.is_none() || waiting && !complete {
+        if self.hide_resources
+            || self.metrics.memory_bytes.is_none() && !self.metrics.memory_partial
+        {
             return Line::default();
         }
         resource_memory_text_with_spinner(&self.metrics, None, None)
@@ -359,7 +454,7 @@ impl Row {
                 Style::default().fg(Tone::Muted.color()),
             ));
         }
-        if self.metrics.cpu_basis_points.is_none() {
+        if self.metrics.cpu_basis_points.is_none() && !self.metrics.cpu_partial {
             return Line::default();
         }
         resource_cpu_text_with_spinner(&self.metrics, waiting.then_some(spinner))
@@ -436,10 +531,13 @@ fn resource_memory_text_with_spinner(
     let mut memory = available_memory_bytes.map_or(memory.clone(), |available| {
         format!("{memory} / {}", details::memory(available))
     });
+    if metrics.memory_partial {
+        memory.push_str(" *");
+    }
     if let Some(spinner) = spinner {
         memory.push_str(&format!(" {spinner}"));
     }
-    let tone = if metrics.memory_waiting {
+    let tone = if metrics.memory_waiting || metrics.memory_partial {
         Tone::Muted
     } else {
         details::memory_tone(
@@ -456,6 +554,9 @@ fn resource_memory_text_with_spinner(
 fn resource_cpu_text_with_spinner(metrics: &UsageSummary, spinner: Option<&str>) -> Line<'static> {
     let cpu = metrics.cpu_basis_points;
     let mut cpu_text = cpu.map_or_else(|| "—".into(), details::cpu);
+    if metrics.cpu_partial {
+        cpu_text.push_str(" *");
+    }
     if let Some(spinner) = spinner {
         cpu_text.push_str(&format!(" {spinner}"));
     }
@@ -465,12 +566,14 @@ fn resource_cpu_text_with_spinner(metrics: &UsageSummary, spinner: Option<&str>)
             cpu_text,
             if metrics.paused { " · paused" } else { "" }
         ),
-        Style::default().fg(if cpu.is_some() && !metrics.cpu_waiting {
-            Tone::Normal
-        } else {
-            Tone::Muted
-        }
-        .color()),
+        Style::default().fg(
+            if cpu.is_some() && !metrics.cpu_waiting && !metrics.cpu_partial {
+                Tone::Normal
+            } else {
+                Tone::Muted
+            }
+            .color(),
+        ),
     ))
 }
 
@@ -720,7 +823,7 @@ fn from_snapshot_with_operations_and_totals(
             gateway_url: None,
             details: details::template(template, visible_instance_count),
             metrics: UsageSummary::instances(
-                snapshot
+                totals_snapshot
                     .instances
                     .iter()
                     .filter(|instance| instance.template_directory == template.directory),
@@ -782,7 +885,7 @@ fn from_snapshot_with_operations_and_totals(
                     .tone(Tone::Warning),
                 ],
                 metrics: UsageSummary::instances(
-                    snapshot
+                    totals_snapshot
                         .instances
                         .iter()
                         .filter(|other| other.template_directory == instance.template_directory),
@@ -810,6 +913,7 @@ fn from_snapshot_with_operations_and_totals(
         rows.push(Row {
             id: instance_id.clone(),
             opencode: None,
+            opencode_activity: None,
             template_capabilities: String::new(),
             parent: Some(parent),
             label,
@@ -843,6 +947,7 @@ fn from_snapshot_with_operations_and_totals(
             gateway_url: None,
             details: details::instance(instance),
             status_detail: operation_progress.clone().or(summary.detail),
+            opencode_metadata: None,
             detail_tone: if operation_progress.is_some() {
                 Tone::Muted
             } else {
@@ -903,6 +1008,7 @@ fn from_snapshot_with_operations_and_totals(
             rows.push(Row {
                 id: service_id.clone(),
                 opencode: None,
+                opencode_activity: None,
                 template_capabilities: String::new(),
                 parent: Some(if service.one_shot {
                     setup_id.clone()
@@ -943,9 +1049,10 @@ fn from_snapshot_with_operations_and_totals(
                 gateway_url: service.url.clone(),
                 details: details::service(service),
                 status_detail: service_summary.detail,
+                opencode_metadata: None,
                 detail_tone: service_summary.detail_severity.into(),
                 metrics: UsageSummary::service(service),
-                hide_resources: service.one_shot,
+                hide_resources: service.one_shot && !service.consumes_resources(),
                 can_start: service.can_start(),
                 can_stop: service.can_stop(),
                 can_restart: service.can_restart(),

@@ -445,6 +445,21 @@ display their details and conversations, jump to an attached pane, and close an 
 Attaching or resuming a conversation requires Tandem ownership. Each directory shows its 20 most
 recent applicable conversations; a muted final row directs users to OpenCode when more are available.
 
+CPU and memory columns include observed client processes. Tandem reads each distinct client PID's
+Linux `/proc` counters in its background observer, at most once every two seconds. Memory is RSS;
+CPU averages the interval between readings, with 100% representing one fully occupied core.
+Memory appears on the first reading; CPU needs two readings for the same process lifetime.
+Shared servers and child processes are outside this scope, so detached conversations without a
+client have no attributable reading. Summed RSS can include shared pages in more than one process.
+
+Conversation rows sum their clients. Sessions, external-directory, and external-workspace groups
+sum their observed processes. Instance and template totals combine clients with container usage;
+the toolbar includes both owned and external clients. Services and Setup groups sum their own
+containers. Each PID contributes once to a total, regardless of pane nesting, collapse, view filters,
+or the session display limit. Agents view retains full instance totals, including services and clients
+hidden by that view. A `*` marks partial or stale coverage; details include sample age and client
+collection errors. Exited clients leave the totals on the next successful observation.
+
 Use the **Actions** tab to jump to a specific pane. The **`.`** menu offers **Goto panel** for an
 attached conversation or **Open panel** for a detached conversation. Both use `Ctrl+;`. Attached
 conversations also offer **Close session** (`c`), which closes the selected Zellij pane. Navigation
@@ -465,6 +480,11 @@ with history off, the view shows attached conversations. Running-only (`Shift+U`
 groups while retaining workspace-only instances and outside-Tandem groups. Both filter values carry
 across views. Clients without a conversation appear only in outside-Tandem directory groups.
 The toggles support mouse and keyboard activation; Agents and history appear when the integration is enabled.
+
+A freshly observed busy-to-idle conversation pulses twice over 600 ms at its sorted position.
+Each 300 ms pulse eases into and out of the semantic success tint while preserving selection
+and text colors. Initial, stale, and filter-only observations do not trigger a pulse; disabling
+animations suppresses the effect.
 
 Open panel creates a stacked pane in an observed tab for that instance, or creates a tab when
 there is no observed destination. It attaches to the conversation's running local server without

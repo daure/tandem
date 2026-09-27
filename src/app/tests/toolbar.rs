@@ -304,7 +304,7 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
     app.update_snapshot(inventory.clone());
     let line = toolbar_line(&mut app, 130);
     assert!(line.contains(&spinner), "{line}");
-    assert!(!line.contains("MiB") && !line.contains(''), "{line}");
+    assert!(line.contains(" 20 MiB"), "{line}");
 
     inventory.instances[0].services[0].status = "paused".into();
     app.update_snapshot(inventory);
@@ -536,6 +536,7 @@ fn history_toggle_beside_running_filter_controls_saved_sessions_across_instances
             .collect(),
         clients: Vec::new(),
         error: None,
+        ..Default::default()
     });
     app.update_snapshot(inventory.clone());
     for width in [40, 130] {

@@ -71,6 +71,12 @@ Unknown observations stay explicit, and disabling the integration discards its c
 its work without changing externally owned servers or panes. Companion installation is an
 explicit CLI operation; user-owned OpenCode configuration is preserved.
 
+The observer samples known client PIDs through Linux `/proc` on its blocking worker. CPU deltas
+require matching process start times; missing processes are evicted and failed readings retain
+stale provenance. Domain projections deduplicate PIDs and aggregate client usage by conversation,
+pane, workspace, instance, and template. TUI totals combine these summaries with container usage
+independently of the displayed tree. Shared-server and child-process costs are outside client scope.
+
 ## Template and workspace model
 
 A template may describe a Compose environment, a repository-backed workspace, a guidance-only setup, or a blank workspace identified by an empty `tandem.json` object. New templates contain only that manifest. Instance execution kind is fixed when prepared because container-backed and workspace-only instances have different ownership evidence and lifecycle behavior.

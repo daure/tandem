@@ -45,8 +45,10 @@ pub(super) fn observation() -> Snapshot {
             server: "http://127.0.0.1:4199".into(),
             pane,
             stale: false,
+            awaiting_presence_since: None,
         }],
         error: None,
+        ..Default::default()
     }
 }
 
@@ -93,6 +95,47 @@ fn app_starts_in_the_expanded_agent_view_with_the_first_item_selected() {
 }
 
 #[test]
+fn agents_view_shows_attached_clients_before_the_first_message() {
+    tuicore::init();
+    for (directory, parent, id) in [
+        (
+            "/tmp/workspaces/review",
+            "instance:review",
+            "opencode-client:review:main:7",
+        ),
+        (
+            "/tmp/external-new",
+            "opencode-workspace:/tmp/external-new",
+            "opencode-client:external:/tmp/external-new:main:7",
+        ),
+    ] {
+        let mut app = crate::app::root(AppService::for_tests());
+        let mut observation = observation();
+        observation.sessions.clear();
+        observation.clients[0].directory = directory.into();
+        app.service.set_opencode_snapshot_for_tests(observation);
+        app.update_snapshot(snapshot());
+        for history in [false, true] {
+            app.handle_message(
+                Msg::SetOpencodeHistory(history),
+                &mut EventCtx::new(AnimationSettings::default()),
+            );
+            let (_, lines) = render(&mut app, 130);
+            let text = lines.join("\n");
+            assert!(text.contains("Empty client"), "{text}");
+            assert!(text.contains("(new session)"), "{text}");
+            instances::set_highlighted(&app.instances, Some(id.into()));
+            let client = app.selected().unwrap();
+            assert_eq!(client.parent.as_deref(), Some(parent));
+            assert!(matches!(
+                client.opencode,
+                Some(projection::Target::Client { .. })
+            ));
+        }
+    }
+}
+
+#[test]
 fn attached_view_groups_two_line_sessions_under_two_line_instances() {
     tuicore::init();
     let mut inventory = snapshot();
@@ -107,18 +150,25 @@ fn attached_view_groups_two_line_sessions_under_two_line_instances() {
             .unwrap()
             .clone();
         let flat = projection::attached_rows(rows::from_snapshot(&inventory), &observation());
-        assert_eq!(flat.len(), 3);
+        assert_eq!(flat.len(), 4);
         let group = &flat[0];
         assert_eq!(group.parent, None);
         assert_eq!(group.instance.as_deref(), Some("review"));
         assert_eq!(group.label, owner.label);
         assert_eq!(group.icon, owner.icon);
-        assert_eq!(group.tone, owner.tone);
+        assert_eq!(
+            group.tone,
+            if status == "down (exit 0)" {
+                rows::Tone::Success
+            } else {
+                owner.tone
+            }
+        );
         assert_eq!(group.loading, owner.loading);
         assert_eq!(group.status, owner.status);
         assert_eq!(group.template_capabilities, "· 󰠲 website");
         assert_eq!(group.status_detail, None);
-        assert!(group.hide_resources);
+        assert_eq!(group.hide_resources, owner.hide_resources);
         assert_eq!(group.height(), 2);
         let group_text = group.text("⠋", Some(72));
         assert_eq!(
@@ -151,6 +201,11 @@ fn attached_view_groups_two_line_sessions_under_two_line_instances() {
             assert_eq!(row.height(), 2);
             assert!(row.hide_resources);
             let text = row.text("⠋", Some(72));
+            if matches!(row.opencode, Some(projection::Target::Client { .. })) {
+                assert_eq!(text.lines[0].to_string(), "󰚩 Empty client");
+                assert_eq!(text.lines[1].to_string(), " (new session)");
+                continue;
+            }
             assert!(text.lines[0].to_string().starts_with("󰚩 Conversation "));
             assert!(
                 text.lines[1].to_string().starts_with("⠋ Question ")
@@ -238,9 +293,8 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
         }
         assert!(text.contains(" review · Stopped · 󰠲 website"), "{text}");
         assert!(text.contains("(no description)"), "{text}");
-        for excluded in ["Empty client", "Services"] {
-            assert!(!text.contains(excluded), "{text}");
-        }
+        assert!(text.contains("Empty client"), "{text}");
+        assert!(!text.contains("Services"), "{text}");
     }
     app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('O'))), &mut ctx);
     assert!(!app.opencode_history);

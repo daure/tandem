@@ -11,9 +11,24 @@ pub(crate) struct Info {
     pub id: String,
     pub role: String,
     pub agent: Option<String>,
+    pub variant: Option<String>,
+    #[serde(rename = "modelID")]
+    pub model_id: Option<String>,
+    #[serde(rename = "providerID")]
+    pub provider_id: Option<String>,
+    pub model: Option<Model>,
     #[serde(rename = "parentID")]
     pub parent_id: Option<String>,
     pub time: MessageTime,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct Model {
+    #[serde(rename = "modelID")]
+    pub id: String,
+    #[serde(rename = "providerID")]
+    pub provider: String,
+    pub variant: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -25,6 +40,13 @@ pub(crate) struct MessageTime {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct LatestTurn {
     pub question: Option<String>,
+    pub agent: Option<String>,
+    pub agent_color: Option<String>,
+    pub provider: Option<String>,
+    pub provider_name: Option<String>,
+    pub model: Option<String>,
+    pub model_name: Option<String>,
+    pub variant: Option<String>,
     pub started_at: u64,
     pub completed_at: Option<u64>,
 }
@@ -116,6 +138,34 @@ pub(crate) fn latest_turn(messages: Vec<Message>) -> Option<LatestTurn> {
                 .cmp(&b.info.time.created)
                 .then_with(|| a.info.id.cmp(&b.info.id))
         })?;
+    let assistant = messages
+        .iter()
+        .filter(|candidate| {
+            candidate.info.role == "assistant"
+                && candidate.info.parent_id.as_deref() == Some(message.info.id.as_str())
+        })
+        .max_by(|a, b| {
+            a.info
+                .time
+                .created
+                .cmp(&b.info.time.created)
+                .then_with(|| a.info.id.cmp(&b.info.id))
+        })
+        .or_else(|| {
+            messages
+                .iter()
+                .filter(|candidate| {
+                    candidate.info.role == "assistant"
+                        && candidate.info.time.created >= message.info.time.created
+                })
+                .max_by(|a, b| {
+                    a.info
+                        .time
+                        .created
+                        .cmp(&b.info.time.created)
+                        .then_with(|| a.info.id.cmp(&b.info.id))
+                })
+        });
     let completed_at = messages
         .iter()
         .filter(|candidate| {
@@ -151,6 +201,33 @@ pub(crate) fn latest_turn(messages: Vec<Message>) -> Option<LatestTurn> {
         .collect();
     Some(LatestTurn {
         question: (!question.is_empty()).then_some(question),
+        agent: assistant
+            .and_then(|message| message.info.agent.clone())
+            .or_else(|| message.info.agent.clone()),
+        agent_color: None,
+        provider: assistant
+            .and_then(|message| message.info.provider_id.clone())
+            .or_else(|| {
+                message
+                    .info
+                    .model
+                    .as_ref()
+                    .map(|model| model.provider.clone())
+            }),
+        provider_name: None,
+        model: assistant
+            .and_then(|message| message.info.model_id.clone())
+            .or_else(|| message.info.model.as_ref().map(|model| model.id.clone())),
+        model_name: None,
+        variant: assistant
+            .and_then(|message| message.info.variant.clone())
+            .or_else(|| {
+                message
+                    .info
+                    .model
+                    .as_ref()
+                    .and_then(|model| model.variant.clone())
+            }),
         started_at: message.info.time.created,
         completed_at,
     })

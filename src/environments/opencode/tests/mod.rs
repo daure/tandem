@@ -1,4 +1,5 @@
 use super::*;
+mod startup;
 use serde_json::json;
 use std::{
     io::{BufRead, BufReader, Write},
@@ -20,6 +21,7 @@ struct Server {
     full_history: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
     failed_status_directories: Arc<std::sync::Mutex<BTreeSet<String>>>,
+    receipt_update: Arc<std::sync::Mutex<Option<(PathBuf, String)>>>,
 }
 
 impl Server {
@@ -39,6 +41,8 @@ impl Server {
         let active = busy.clone();
         let failed_status_directories = Arc::new(std::sync::Mutex::new(BTreeSet::new()));
         let failed = failed_status_directories.clone();
+        let receipt_update = Arc::new(std::sync::Mutex::new(None::<(PathBuf, String)>));
+        let update = receipt_update.clone();
         let thread = thread::spawn(move || {
             while !stopping.load(Ordering::Relaxed) {
                 let Ok((mut stream, _)) = listener.accept() else {
@@ -73,6 +77,9 @@ impl Server {
                 } else if request.contains("/session/status") {
                     json!({})
                 } else if request.contains("/experimental/session") {
+                    if let Some((path, receipt)) = update.lock().unwrap().take() {
+                        fs::write(path, receipt).unwrap();
+                    }
                     let mut history = json!([
                         {"id":"ses_busy","title":"Same title","directory":"/work/review/repo","time":{"updated":4}},
                         {"id":"ses_idle","title":"Same title","directory":"/work/review/repo","time":{"updated":3}},
@@ -99,7 +106,7 @@ impl Server {
                         {"info":{"id":"msg_1","role":"user","time":{"created":1}},"parts":[{"type":"text","text":"Earlier question"}]},
                         {"info":{"id":"msg_2","role":"assistant","time":{"created":2}},"parts":[{"type":"text","text":"Earlier answer"}]},
                         {"info":{"id":"msg_3","role":"user","time":{"created":3}},"parts":[{"type":"text","text":"Latest question"}]},
-                        {"info":{"id":"msg_4","role":"assistant","time":{"created":4}},"parts":[{"type":"text","text":"Latest answer"}]}
+                        {"info":{"id":"msg_4","role":"assistant","agent":"tracer","providerID":"openai","modelID":"gpt-5.6-sol","variant":"high","time":{"created":4}},"parts":[{"type":"text","text":"Latest answer"}]}
                     ])
                 } else if request.contains("GET /session/") {
                     status = "404 Not Found";
@@ -124,6 +131,7 @@ impl Server {
             full_history,
             busy,
             failed_status_directories,
+            receipt_update,
         }
     }
 }
@@ -185,7 +193,10 @@ fn presence_in(
     fs::write(observer.presence.join(file), json!({
         "pid":std::process::id(), "observed_at":SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
         "id":id, "title":"Same title", "directory":directory, "server":server,
-        "activity":"idle", "context_tokens":83_600, "context_limit":272_000,
+        "activity":"idle", "agent":"tracer", "agent_color":"#FB923C",
+        "model":"openai/gpt-5.6-sol", "model_name":"GPT-5.6 Sol",
+        "provider_name":"OpenAI", "variant":"high",
+        "context_tokens":83_600, "context_limit":272_000,
         "zellij_session":"main", "pane_id":pane
     }).to_string()).unwrap();
 }
@@ -261,9 +272,23 @@ fn shared_server_observations_join_exact_ids_and_track_conversation_switches() {
         .find(|session| session.id == "ses_busy")
         .unwrap();
     assert_eq!(busy.panes.len(), 2);
+    assert_eq!(busy.model.as_deref(), Some("openai/gpt-5.6-sol"));
+    assert_eq!(busy.agent.as_deref(), Some("tracer"));
+    assert_eq!(busy.agent_color.as_deref(), Some("#FB923C"));
+    assert_eq!(busy.model_name.as_deref(), Some("GPT-5.6 Sol"));
+    assert_eq!(busy.provider_name.as_deref(), Some("OpenAI"));
+    assert_eq!(busy.variant.as_deref(), Some("high"));
     assert_eq!(busy.context_tokens, Some(83_600));
     assert_eq!(busy.context_limit, Some(272_000));
     assert_eq!(busy.last_question.as_deref(), Some("Latest question"));
+    assert!(
+        !server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| request.contains("/provider?"))
+    );
     assert!(busy.question_observed);
     runtime
         .block_on(observer.jump("ses_busy", &busy.panes[0], "main"))
@@ -320,6 +345,86 @@ fn shared_server_observations_join_exact_ids_and_track_conversation_switches() {
         .unwrap();
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
     assert!(calls.contains("switch-session main --pane-id terminal_"));
+}
+
+#[test]
+fn conversation_metadata_survives_status_refreshes_without_message_refetches() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::start();
+    let observer = observer(root.path());
+    presence(&observer, "legacy.json", "ses_busy", 7, &server.url);
+    presence(&observer, "rich.json", "ses_idle", 8, &server.url);
+    let receipt = observer.presence.join("legacy.json");
+    let mut legacy: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&receipt).unwrap()).unwrap();
+    for field in [
+        "agent",
+        "agent_color",
+        "model",
+        "model_name",
+        "provider_name",
+        "variant",
+    ] {
+        legacy.as_object_mut().unwrap().remove(field);
+    }
+    fs::write(receipt, legacy.to_string()).unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let roots = ["/work/review".into()];
+    let mut snapshot = runtime
+        .block_on(observer.observe(&roots, Snapshot::default()))
+        .unwrap();
+    let metadata = |snapshot: &Snapshot| {
+        snapshot
+            .sessions
+            .iter()
+            .map(|session| {
+                (
+                    session.id.clone(),
+                    (
+                        session.agent.clone(),
+                        session.agent_color.clone(),
+                        session.model.clone(),
+                        session.model_name.clone(),
+                        session.provider_name.clone(),
+                        session.variant.clone(),
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    assert!(
+        snapshot
+            .sessions
+            .iter()
+            .all(|session| session.agent.as_deref() == Some("tracer"))
+    );
+    let expected = metadata(&snapshot);
+    server.requests.lock().unwrap().clear();
+    for busy in [true, false, false, true] {
+        server.busy.store(busy, Ordering::Relaxed);
+        snapshot = runtime
+            .block_on(observer.observe(&roots, snapshot))
+            .unwrap();
+        assert_eq!(snapshot.error, None);
+        assert_eq!(metadata(&snapshot), expected);
+        assert_eq!(
+            snapshot
+                .sessions
+                .iter()
+                .find(|session| session.id == "ses_busy")
+                .unwrap()
+                .activity,
+            if busy { Activity::Busy } else { Activity::Idle },
+        );
+    }
+    assert!(
+        !server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|request| request.contains("/message?") || request.contains("/provider?"))
+    );
 }
 
 #[test]
@@ -407,6 +512,13 @@ fn activity_timing_counts_up_and_freezes_when_the_session_becomes_idle() {
 fn latest_turn_reconstructs_activity_timing_without_a_previous_snapshot() {
     let turn = crate::store::opencode::conversation::LatestTurn {
         question: Some("Run the checks".into()),
+        agent: Some("tracer".into()),
+        agent_color: Some("#FB923C".into()),
+        provider: Some("openai".into()),
+        provider_name: Some("OpenAI".into()),
+        model: Some("gpt-5.6-sol".into()),
+        model_name: Some("GPT-5.6 Sol".into()),
+        variant: Some("high".into()),
         started_at: 70_000,
         completed_at: None,
     };
@@ -784,4 +896,36 @@ fn conversation_reader_fetches_all_user_and_agent_turns_from_the_server() {
         assert!(text.contains(part));
     }
     assert!(text.find("Latest answer").unwrap() < text.find("Latest question").unwrap());
+}
+
+#[test]
+fn observations_sample_clients_across_route_switches_and_remove_closed_clients() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::start();
+    let observer = observer(root.path());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let roots = ["/work/review".into()];
+    presence(&observer, "one.json", "ses_idle", 7, &server.url);
+    let first = runtime
+        .block_on(observer.observe(&roots, Snapshot::default()))
+        .unwrap();
+    assert_eq!(first.resources.len(), 1);
+    assert_eq!(first.resources[0].pid, std::process::id());
+    assert!(first.resources[0].usage.memory_bytes.unwrap() > 0);
+    assert_eq!(first.resources[0].usage.cpu_basis_points, None);
+    presence(&observer, "one.json", "ses_busy", 7, &server.url);
+    let switched = runtime.block_on(observer.observe(&roots, first)).unwrap();
+    assert_eq!(switched.resources.len(), 1);
+    assert_eq!(switched.resources[0].session_id, "ses_busy");
+    assert!(switched.resources[0].usage.cpu_basis_points.is_some());
+    presence(&observer, "one.json", "", 7, &server.url);
+    let home = runtime
+        .block_on(observer.observe(&roots, switched))
+        .unwrap();
+    assert_eq!(home.clients.len(), 1);
+    assert_eq!(home.resources.len(), 1);
+    assert_eq!(home.resources[0].session_id, "");
+    fs::remove_file(observer.presence.join("one.json")).unwrap();
+    let closed = runtime.block_on(observer.observe(&roots, home)).unwrap();
+    assert!(closed.resources.is_empty());
 }

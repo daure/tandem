@@ -113,6 +113,95 @@ fn workspace_rows_append_the_empty_state_to_a_childless_services_group() {
 }
 
 #[test]
+fn inactive_instance_icons_are_green_for_live_opencode_sessions() {
+    use crate::store::opencode::{Activity, Pane, Session, Snapshot};
+
+    tuicore::init();
+    let mut inventory = snapshot();
+    let instance = &mut inventory.instances[0];
+    instance.services.clear();
+    instance.workspace_only = true;
+    instance.runtime.workspace_ready = true;
+    let workspace = instance.workspace.clone();
+    for (activity, attached, stale, owned, green) in [
+        (Activity::Idle, true, false, true, true),
+        (Activity::Busy, false, false, true, true),
+        (Activity::Idle, false, false, true, false),
+        (Activity::Unknown, false, false, true, false),
+        (Activity::Busy, true, true, true, false),
+        (Activity::Busy, true, false, false, false),
+    ] {
+        let observation = Snapshot {
+            sessions: vec![Session {
+                id: "ses_workspace".into(),
+                directory: if owned {
+                    format!("{workspace}/repo")
+                } else {
+                    "/outside/workspace".into()
+                },
+                activity,
+                stale,
+                panes: if attached {
+                    vec![Pane {
+                        session: "main".into(),
+                        id: 17,
+                        tab_id: 4,
+                        tab_name: "review".into(),
+                    }]
+                } else {
+                    Vec::new()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for (show_saved, workspace_only) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            inventory.instances[0].workspace_only = workspace_only;
+            inventory.instances[0].services = if workspace_only {
+                Vec::new()
+            } else {
+                vec![InstanceService {
+                    status: "exited 0".into(),
+                    ..Default::default()
+                }]
+            };
+            let mut projected = rows::from_snapshot(&inventory);
+            let inactive_tone = projected
+                .iter()
+                .find(|row| row.id == "instance:review")
+                .unwrap()
+                .tone;
+            super::super::opencode::append_rows(&mut projected, &observation, show_saved);
+            let row = projected
+                .iter()
+                .find(|row| row.id == "instance:review")
+                .unwrap();
+            let text = row.text("", None);
+            assert_eq!(
+                text.lines[0].to_string(),
+                if workspace_only {
+                    " review"
+                } else {
+                    " review · Stopped"
+                }
+            );
+            assert_eq!(
+                text.lines[0].spans[0].style.fg,
+                Some(if green {
+                    tuicore::theme().success_fg()
+                } else {
+                    inactive_tone.color()
+                }),
+                "activity={activity:?}, attached={attached}, stale={stale}, owned={owned}, show_saved={show_saved}, workspace_only={workspace_only}"
+            );
+            assert_eq!(text.lines[0].spans[1].style.fg, None);
+        }
+    }
+}
+
+#[test]
 fn completed_setup_icon_is_muted_when_the_instance_is_stopped() {
     tuicore::init();
     let mut inventory = snapshot();

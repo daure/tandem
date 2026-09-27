@@ -22,6 +22,9 @@ use super::{
     rows::{self, Row},
 };
 
+mod completion;
+mod selection;
+
 #[derive(Default)]
 pub(super) struct State {
     rows: Vec<Row>,
@@ -126,6 +129,7 @@ pub(super) struct Instances {
     stripe_query: String,
     session_timers: HashMap<String, SessionTimer>,
     timer_display_phase: Duration,
+    completion: Rc<RefCell<completion::Pulses>>,
 }
 
 struct SessionTimer {
@@ -148,6 +152,8 @@ impl Instances {
         let spinner = Rc::new(RefCell::new(Spinner::new()));
         let cell_spinner = Rc::clone(&spinner);
         let cpu_spinner = Rc::clone(&spinner);
+        let completion = Rc::new(RefCell::new(completion::Pulses::default()));
+        let row_completion = Rc::clone(&completion);
         let tree = DataView::new(rows, |row: &Row| row.id.clone())
             .focus_id(TREE_FOCUS)
             .columns(vec![
@@ -194,6 +200,7 @@ impl Instances {
                 row.alternate_background
                     .then(|| Style::default().bg(tuicore::theme().surface_bg()))
             })
+            .row_style_transform(move |row, style| row_completion.borrow().style(row, style))
             .expanded(expanded);
         let mut instances = Self {
             tree,
@@ -202,6 +209,7 @@ impl Instances {
             stripe_query: String::new(),
             session_timers: HashMap::new(),
             timer_display_phase: Duration::ZERO,
+            completion,
         };
         instances.tick_session_timers(Duration::ZERO);
         instances.record_highlighted();
@@ -305,6 +313,7 @@ impl Instances {
             .tree
             .highlighted_id()
             .filter(|_| self.state.borrow().center_highlighted)
+            .filter(|highlighted| rows.iter().any(|row| &row.id == highlighted))
             .filter(|highlighted| {
                 !(mode_changed
                     && !agent_view
@@ -313,7 +322,17 @@ impl Instances {
                         .find(|row| &row.id == highlighted)
                         .and_then(|row| row.parent.as_deref())
                         .is_some_and(|parent| parent.starts_with("opencode-workspace:")))
+            })
+            .or_else(|| {
+                selection::pane_replacement(
+                    self.tree.rows(),
+                    &rows,
+                    self.tree.highlighted_id().as_deref(),
+                )
             });
+        self.completion
+            .borrow_mut()
+            .observe(self.tree.rows(), &rows, select_first || mode_changed);
         self.tree.set_rows(rows);
         self.tick_session_timers(Duration::ZERO);
         self.stripe_query = query;
@@ -620,6 +639,7 @@ impl TuiNode<Msg> for Instances {
         let timer_changed = self.tick_session_timers(dt);
         let mut result =
             <DataView<Row, String> as TuiNode<Msg>>::tick(&mut self.tree, dt, settings);
+        result = result.merge(self.completion.borrow_mut().tick(dt, settings));
         if self.state.borrow().rows.iter().any(|row| {
             row.loading
                 || row.secondary_loading

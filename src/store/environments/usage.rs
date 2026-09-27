@@ -17,8 +17,43 @@ pub(crate) struct UsageSummary {
 }
 
 impl UsageSummary {
+    pub fn merge(&mut self, other: &Self) {
+        if *other == Self::default() {
+            return;
+        }
+        if *self == Self::default() {
+            *self = other.clone();
+            return;
+        }
+        let sum = |left: Option<u64>, right: Option<u64>| match (left, right) {
+            (Some(left), Some(right)) => left.checked_add(right),
+            (left, right) => left.or(right),
+        };
+        let memory = sum(self.memory_bytes, other.memory_bytes);
+        let cpu = sum(self.cpu_basis_points, other.cpu_basis_points);
+        self.memory_partial |= other.memory_partial
+            || self.memory_bytes.is_some() && other.memory_bytes.is_some() && memory.is_none();
+        self.cpu_partial |= other.cpu_partial
+            || self.cpu_basis_points.is_some() && other.cpu_basis_points.is_some() && cpu.is_none();
+        self.memory_bytes = memory;
+        self.cpu_basis_points = cpu;
+        self.memory_waiting |= other.memory_waiting;
+        self.cpu_waiting |= other.cpu_waiting;
+        self.memory_limit_bytes = self
+            .memory_limit_bytes
+            .zip(other.memory_limit_bytes)
+            .and_then(|(left, right)| left.checked_add(right))
+            .filter(|_| !self.memory_partial && !self.memory_waiting);
+        self.age_seconds = self.age_seconds.max(other.age_seconds);
+        self.paused &= other.paused;
+    }
+
     pub fn service(service: &InstanceService) -> Self {
         Self::total(std::iter::once(service), false)
+    }
+
+    pub fn services<'a>(services: impl Iterator<Item = &'a InstanceService>) -> Self {
+        Self::total(services, false)
     }
 
     pub fn instance(instance: &Instance) -> Self {
@@ -104,8 +139,8 @@ impl UsageSummary {
         }
         result.memory_bytes = (memory_samples > 0).then_some(memory);
         result.cpu_basis_points = (cpu_samples > 0).then_some(cpu);
-        result.memory_partial = memory_missing && memory_samples > 0;
-        result.cpu_partial = cpu_missing && cpu_samples > 0;
+        result.memory_partial = memory_missing;
+        result.cpu_partial = cpu_missing;
         result.memory_limit_bytes = (memory_count > 0
             && !uncapped
             && !result.memory_partial

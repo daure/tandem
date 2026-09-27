@@ -23,6 +23,12 @@ pub(super) fn append(rows: &mut Vec<Row>, instance: &Instance, starting: bool) {
     };
     if total > 0 {
         let mut group = child(&parent, format!("setup:{}", instance.name));
+        group.metrics = if instance.suppress_resources() {
+            UsageSummary::instance(instance)
+        } else {
+            UsageSummary::services(instance.services.iter().filter(|service| service.one_shot))
+        };
+        group.hide_resources = group.metrics == UsageSummary::default();
         group.label = "Setup".into();
         group.status_detail = Some(if completed == total {
             format!("{completed} completed")
@@ -75,6 +81,12 @@ pub(super) fn services(parent: &Row, instance: &Instance, count: usize, starting
         .iter()
         .map(|service| service.status_summary())
         .collect::<Vec<_>>();
+    group.metrics = if instance.suppress_resources() {
+        UsageSummary::instance(instance)
+    } else {
+        UsageSummary::services(services.iter().copied())
+    };
+    group.hide_resources = group.metrics == UsageSummary::default();
     let running = services.iter().filter(|service| service.ready()).count();
     group.status_detail = Some(if count == 0 {
         "(no services configured)".into()
