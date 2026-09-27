@@ -201,6 +201,7 @@ impl Observer {
                 session.panes.clear();
                 session.stale = true;
                 session.activity = Activity::Unknown;
+                session.approval_pending = None;
                 (session.id.clone(), session)
             })
             .collect();
@@ -217,6 +218,8 @@ impl Observer {
         for (server, directories) in servers {
             let mut statuses = BTreeMap::new();
             let mut pending_questions = BTreeSet::new();
+            let mut pending_approvals = BTreeSet::new();
+            let mut approval_directories = BTreeSet::new();
             let mut status_tasks = tokio::task::JoinSet::new();
             for directory in &directories {
                 let mut path = reqwest::Url::parse("http://localhost/session/status")
@@ -224,20 +227,36 @@ impl Observer {
                 path.query_pairs_mut().append_pair("directory", directory);
                 let target = format!("{}?{}", path.path(), path.query().unwrap_or_default());
                 let questions_target = format!("/question?{}", path.query().unwrap_or_default());
+                let permissions_target =
+                    format!("/permission?{}", path.query().unwrap_or_default());
                 let client = client.clone();
                 let server = server.clone();
                 let directory = directory.clone();
                 status_tasks.spawn(async move {
-                    let result = tokio::try_join!(
-                        get::<BTreeMap<String, RemoteStatus>>(&client, &server, &target),
-                        get::<Vec<RemoteQuestion>>(&client, &server, &questions_target),
+                    let (result, permissions) = tokio::join!(
+                        async {
+                            tokio::try_join!(
+                                get::<BTreeMap<String, RemoteStatus>>(&client, &server, &target),
+                                get::<Vec<RemoteQuestion>>(&client, &server, &questions_target),
+                            )
+                        },
+                        transport::get_optional::<Vec<RemoteQuestion>>(
+                            &client,
+                            &server,
+                            &permissions_target
+                        ),
                     );
-                    (directory, result)
+                    (directory, result, permissions)
                 });
             }
             let failed_status = failed_status_directories.entry(server.clone()).or_default();
             while let Some(result) = status_tasks.join_next().await {
-                let (directory, result) = result.map_err(|error| error.to_string())?;
+                let (directory, result, permissions) = result.map_err(|error| error.to_string())?;
+                if let Ok(Some(permissions)) = permissions {
+                    approval_directories.insert(directory.clone());
+                    pending_approvals
+                        .extend(permissions.into_iter().map(|request| request.session_id));
+                }
                 match result {
                     Ok((found, questions)) => {
                         statuses.extend(found);
@@ -308,6 +327,7 @@ impl Observer {
                 .keys()
                 .cloned()
                 .chain(pending_questions.iter().cloned())
+                .chain(pending_approvals.iter().cloned())
                 .chain(
                     presences
                         .iter()
@@ -366,6 +386,9 @@ impl Observer {
                 let mut candidate = Session {
                     id: item.id.clone(),
                     title: clean(&item.title),
+                    approval_pending: approval_directories
+                        .contains(&item.directory)
+                        .then(|| pending_approvals.contains(&item.id)),
                     directory: item.directory,
                     server: server.clone(),
                     activity,
@@ -380,6 +403,7 @@ impl Observer {
                     .or_insert_with(|| candidate.clone());
                 let refresh_question =
                     !current.question_observed || candidate.updated > current.updated;
+                current.approval_pending = candidate.approval_pending;
                 if current.stale
                     || candidate.activity == Activity::Busy
                     || candidate.activity != current.activity

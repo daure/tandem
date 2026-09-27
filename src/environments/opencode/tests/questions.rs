@@ -9,6 +9,48 @@ fn session<'a>(snapshot: &'a Snapshot, id: &str) -> &'a Session {
 }
 
 #[test]
+fn permission_observation_is_explicit_and_keeps_completion_feedback_independent() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::start();
+    let observer = observer(root.path());
+    presence(&observer, "one.json", "ses_busy", 7, &server.url);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let roots = ["/work/review".into()];
+    let busy = runtime
+        .block_on(observer.observe(&roots, Snapshot::default()))
+        .unwrap();
+    assert_eq!(session(&busy, "ses_busy").approval_pending, Some(false));
+    server
+        .pending_approvals
+        .lock()
+        .unwrap()
+        .push("ses_busy".into());
+    let approval = runtime
+        .block_on(observer.observe(&roots, busy.clone()))
+        .unwrap();
+    assert_eq!(session(&approval, "ses_busy").approval_pending, Some(true));
+    assert_eq!(session(&approval, "ses_busy").activity, Activity::Busy);
+    assert!(!approval.completed_since(&busy));
+    server
+        .pending_questions
+        .lock()
+        .unwrap()
+        .insert("/work/review/repo".into(), vec!["ses_busy".into()]);
+    let both = runtime
+        .block_on(observer.observe(&roots, approval.clone()))
+        .unwrap();
+    assert_eq!(session(&both, "ses_busy").approval_pending, Some(true));
+    assert_eq!(
+        session(&both, "ses_busy").activity,
+        Activity::AwaitingAnswer
+    );
+    assert!(both.completed_since(&approval));
+    server.pending_approvals.lock().unwrap().clear();
+    let answered = runtime.block_on(observer.observe(&roots, both)).unwrap();
+    assert_eq!(session(&answered, "ses_busy").approval_pending, Some(false));
+}
+
+#[test]
 fn pending_questions_pause_busy_sessions_until_answered_or_dismissed() {
     let root = tempfile::tempdir().unwrap();
     let server = Server::start();

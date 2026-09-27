@@ -13,6 +13,7 @@ use crate::{
 mod attached_sessions;
 mod bulk;
 mod completion;
+mod completion_navigation;
 mod guidance;
 mod history_settings;
 mod input_routing;
@@ -614,6 +615,10 @@ fn copy_hotkeys_are_registered_on_the_instances_tab() {
 fn startup_waits_for_complete_inventory_before_showing_and_selecting_rows() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
+    app.handle_message(
+        Msg::SetRunningOnly(false),
+        &mut EventCtx::new(AnimationSettings::default()),
+    );
     let mut inventory = snapshot();
     let mut empty_template = inventory.templates[0].clone();
     empty_template.name = "aardvark".into();

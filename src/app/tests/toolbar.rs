@@ -149,7 +149,7 @@ fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_en
             let header = rendered_lines(&toolbar_terminal(&mut app, width), area)[0].clone();
             assert!(header.contains("Instances"), "{header}");
             assert!(!header.contains("Sessions"), "{header}");
-            for key in ['[', ']', 'A'] {
+            for key in ['[', ']'] {
                 app.dispatch_event(
                     &route,
                     &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
@@ -163,7 +163,7 @@ fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_en
                 &mut EventCtx::new(settings),
             );
             assert!(!app.attached_sessions_only);
-            app.handle_message(Msg::SetRunningOnly(true), &mut EventCtx::new(settings));
+            app.handle_message(Msg::SetRunningOnly(false), &mut EventCtx::new(settings));
             let overview = layout
                 .focus_targets()
                 .iter()
@@ -175,7 +175,7 @@ fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_en
                 &mut EventCtx::new(settings),
             );
             assert!(!app.attached_sessions_only);
-            assert!(!app.running_only);
+            assert!(app.running_only);
             assert_eq!(app.tabs_mut().selected_index(), 0);
             let text = rendered_lines(&toolbar_terminal(&mut app, width), area).join("\n");
             assert!(text.contains("review"), "{text}");
@@ -276,7 +276,7 @@ fn bracket_navigation_keeps_control_focus_and_the_tab_header_active() {
 }
 
 #[test]
-fn running_filter_keeps_only_templates_with_running_services_or_opencode_sessions() {
+fn visibility_toggle_starts_off_and_reveals_all_instances() {
     tuicore::init();
     let mut inventory = snapshot();
     let mut other = inventory.instances[0].clone();
@@ -360,7 +360,7 @@ fn running_filter_keeps_only_templates_with_running_services_or_opencode_session
         }
         assert_eq!(history.area.right() + 1, running.area.x);
         let line = toolbar_line(&mut app, width);
-        assert!(line.contains("󰑮") && line.contains("|U|"), "{line}");
+        assert!(line.contains("󰈈") && line.contains("|A|"), "{line}");
         let template_icon = if width < super::super::MOBILE_TABS_WIDTH {
             "󰠲"
         } else {
@@ -373,9 +373,24 @@ fn running_filter_keeps_only_templates_with_running_services_or_opencode_session
         if width >= 50 {
             assert!(line.find("󰕾").unwrap() < line.find("󰋚").unwrap(), "{line}");
         }
-        assert!(line.find("󰋚").unwrap() < line.find("󰑮").unwrap(), "{line}");
+        assert!(line.find("󰋚").unwrap() < line.find("󰈈").unwrap(), "{line}");
     }
 
+    assert!(app.running_only);
+    let running =
+        rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30)).join("\n");
+    assert!(running.contains("review"), "{running}");
+    assert!(running.contains("other"), "{running}");
+    assert!(running.contains("agent-only"), "{running}");
+    assert!(!running.contains("stopped"), "{running}");
+    assert!(!running.contains("guidance-only"), "{running}");
+    assert!(!running.contains("new"), "{running}");
+    assert!(running.contains(" 2/3"), "{running}");
+
+    let mut toggle = EventCtx::new(AnimationSettings::default());
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('A'))), &mut toggle);
+    assert!(toggle.messages().is_empty());
+    assert!(!app.running_only);
     let all = rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30)).join("\n");
     assert!(
         all.contains("review")
@@ -388,20 +403,6 @@ fn running_filter_keeps_only_templates_with_running_services_or_opencode_session
     );
     assert!(all.contains(" 2/3"), "{all}");
 
-    let mut toggle = EventCtx::new(AnimationSettings::default());
-    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('U'))), &mut toggle);
-    assert!(toggle.messages().is_empty());
-    assert!(app.running_only);
-    let running =
-        rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30)).join("\n");
-    assert!(running.contains("review"), "{running}");
-    assert!(running.contains("other"), "{running}");
-    assert!(running.contains("agent-only"), "{running}");
-    assert!(!running.contains("stopped"), "{running}");
-    assert!(!running.contains("guidance-only"), "{running}");
-    assert!(!running.contains("new"), "{running}");
-    assert!(running.contains(" 2/3"), "{running}");
-
     inventory
         .instances
         .iter_mut()
@@ -410,14 +411,13 @@ fn running_filter_keeps_only_templates_with_running_services_or_opencode_session
         .services[0]
         .status = "up".into();
     app.update_snapshot(inventory.clone());
-    let running =
-        rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30)).join("\n");
-    assert!(running.contains(" 3/3"), "{running}");
+    let all = rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30)).join("\n");
+    assert!(all.contains(" 3/3"), "{all}");
 
     let mut toggle = EventCtx::new(AnimationSettings::default());
-    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('U'))), &mut toggle);
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('A'))), &mut toggle);
     assert!(toggle.messages().is_empty());
-    assert!(!app.running_only);
+    assert!(app.running_only);
     inventory
         .instances
         .iter_mut()
@@ -426,12 +426,14 @@ fn running_filter_keeps_only_templates_with_running_services_or_opencode_session
         .services[0]
         .status = "down (exit 0)".into();
     app.update_snapshot(inventory);
-    let all = rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30)).join("\n");
-    assert!(all.contains(" 2/3"), "{all}");
+    let running =
+        rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30)).join("\n");
+    assert!(running.contains(" 2/3"), "{running}");
+    assert!(!running.contains("stopped"), "{running}");
 }
 
 #[test]
-fn global_h_opens_the_expanded_agent_view_and_clears_other_filters() {
+fn global_h_opens_the_expanded_agent_view_and_restores_default_filters() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     app.service
@@ -439,7 +441,7 @@ fn global_h_opens_the_expanded_agent_view_and_clears_other_filters() {
     app.update_snapshot(snapshot());
     let settings = AnimationSettings::default();
     let mut ctx = EventCtx::new(settings);
-    app.handle_message(Msg::SetRunningOnly(true), &mut ctx);
+    app.handle_message(Msg::SetRunningOnly(false), &mut ctx);
     app.handle_message(Msg::SetOpencodeHistory(true), &mut ctx);
     let area = Rect::new(0, 0, 130, 30);
     let mut layout = LayoutEngine::new();
@@ -462,14 +464,14 @@ fn global_h_opens_the_expanded_agent_view_and_clears_other_filters() {
         &mut EventCtx::new(settings),
     );
 
-    assert!(!app.running_only);
+    assert!(app.running_only);
     assert!(!app.opencode_history);
     assert!(app.attached_sessions_only);
     assert_eq!(app.selected().unwrap().id, "instance:review");
     let terminal = toolbar_terminal(&mut app, 130);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 130, 30));
     assert!(
-        lines[1].contains("○── 󰕾 |N| ○── 󰋚 |O| ○── 󰑮 |U|"),
+        lines[1].contains("○── 󰕾 |N| ○── 󰋚 |O| ○── 󰈈 |A|"),
         "{}",
         lines[1]
     );

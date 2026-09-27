@@ -2,10 +2,12 @@ use std::{collections::HashMap, time::Duration};
 
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
-use tuicore::{AnimationSettings, Easing, TickResult, lerp_color};
+use tuicore::{
+    AnimationSettings, Easing, EventCtx, EventOutcome, KeySpec, TickResult, TuiEvent, lerp_color,
+};
 
 use crate::{
-    app::{opencode::Target, rows::Row},
+    app::{Msg, opencode::Target, rows::Row},
     store::opencode::Activity,
 };
 
@@ -77,6 +79,36 @@ impl Markers {
         }
     }
 
+    fn next(&self, rows: &[Row], highlighted: Option<&str>, backwards: bool) -> Option<String> {
+        if self.elapsed.is_empty() {
+            return None;
+        }
+        let mut children: HashMap<Option<&str>, Vec<&Row>> = HashMap::new();
+        for row in rows {
+            children.entry(row.parent.as_deref()).or_default().push(row);
+        }
+        let mut pending = children.remove(&None).unwrap_or_default();
+        pending.reverse();
+        let mut ordered = Vec::with_capacity(rows.len());
+        while let Some(row) = pending.pop() {
+            ordered.push(row);
+            if let Some(children) = children.remove(&Some(row.id.as_str())) {
+                pending.extend(children.into_iter().rev());
+            }
+        }
+        if backwards {
+            ordered.reverse();
+        }
+        let start = ordered
+            .iter()
+            .position(|row| Some(row.id.as_str()) == highlighted)
+            .map_or(0, |index| index + 1);
+        ordered.into_iter().skip(start).find_map(|row| {
+            let (id, activity) = session(row)?;
+            (activity.completed() && self.elapsed.contains_key(id)).then(|| row.id.clone())
+        })
+    }
+
     pub(super) fn marker(&self, row: &Row, base: Style) -> Option<Span<'static>> {
         let Some((id, Activity::Idle | Activity::AwaitingAnswer)) = session(row) else {
             return None;
@@ -120,6 +152,54 @@ impl Markers {
             tuicore::theme().success_fg(),
             strength,
         ))
+    }
+}
+
+impl super::Instances {
+    pub(super) fn navigate_completion(
+        &mut self,
+        event: &TuiEvent,
+        ctx: &mut EventCtx<Msg>,
+    ) -> Option<EventOutcome> {
+        if self.tree.is_searching() {
+            return None;
+        }
+        let TuiEvent::Key(key) = event else {
+            return None;
+        };
+        let backwards = if KeySpec::shifted('j').matches(*key) {
+            false
+        } else if KeySpec::shifted('k').matches(*key) {
+            true
+        } else {
+            return None;
+        };
+        let target = self.completion.borrow().next(
+            self.tree.rows(),
+            self.tree.highlighted_id().as_deref(),
+            backwards,
+        );
+        if let Some(id) = target {
+            self.tree.clear_search();
+            let mut current = id.clone();
+            while let Some(parent) = self
+                .tree
+                .rows()
+                .iter()
+                .find(|row| row.id == current)
+                .and_then(|row| row.parent.clone())
+            {
+                self.tree.expand(&parent);
+                current = parent;
+            }
+            self.tree.highlight_id(&id);
+            self.tree.reveal_highlighted();
+            self.after_event();
+            ctx.request_layout();
+            ctx.request_redraw();
+        }
+        ctx.stop_propagation();
+        Some(EventOutcome::Handled)
     }
 }
 

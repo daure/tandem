@@ -57,6 +57,8 @@ pub(crate) struct Session {
     pub updated: u64,
     pub last_question: Option<String>,
     pub question_observed: bool,
+    #[serde(skip)]
+    pub approval_pending: Option<bool>,
     pub stale: bool,
 }
 

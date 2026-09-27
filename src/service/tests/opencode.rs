@@ -5,12 +5,20 @@ use crate::store::opencode::{Client, CloseScope, Pane, Session, Snapshot};
 fn history_cleanup_defaults_on_and_persists_independently_of_integration() {
     let service = AppService::for_tests();
     assert!(service.clear_opencode_history());
-    service.runtime.block_on(service.set_clear_opencode_history(false).unwrap()).unwrap().unwrap();
+    service
+        .runtime
+        .block_on(service.set_clear_opencode_history(false).unwrap())
+        .unwrap()
+        .unwrap();
     assert!(!service.clear_opencode_history());
     assert!(service.opencode_enabled());
     let reader = AppService::from_config(service.environments.config.clone()).unwrap();
     assert!(!reader.clear_opencode_history());
-    service.runtime.block_on(service.set_clear_opencode_history(true).unwrap()).unwrap().unwrap();
+    service
+        .runtime
+        .block_on(service.set_clear_opencode_history(true).unwrap())
+        .unwrap()
+        .unwrap();
     reader.settings.refresh().unwrap();
     assert!(reader.clear_opencode_history());
 }
@@ -18,9 +26,15 @@ fn history_cleanup_defaults_on_and_persists_independently_of_integration() {
 #[test]
 fn failed_history_setting_writes_preserve_the_saved_value() {
     let service = AppService::for_tests();
-    let connection = rusqlite::Connection::open(service.environments.config.home.join("settings.sqlite3")).unwrap();
+    let connection =
+        rusqlite::Connection::open(service.environments.config.home.join("settings.sqlite3"))
+            .unwrap();
     connection.execute_batch("CREATE TRIGGER reject_history BEFORE INSERT ON app_settings BEGIN SELECT RAISE(FAIL, 'read only settings'); END;").unwrap();
-    let error = service.runtime.block_on(service.set_clear_opencode_history(false).unwrap()).unwrap().unwrap_err();
+    let error = service
+        .runtime
+        .block_on(service.set_clear_opencode_history(false).unwrap())
+        .unwrap()
+        .unwrap_err();
     assert!(error.contains("read only settings"));
     assert!(service.clear_opencode_history());
 }

@@ -59,7 +59,7 @@ impl State {
                 .iter()
                 .map(|instance| instance.name.clone())
                 .collect(),
-            running_only: false,
+            running_only: true,
             opencode_enabled: false,
             show_saved: false,
             completion_sound: false,
@@ -118,7 +118,7 @@ impl Toolbar {
     ) -> Self {
         let stop_disabled = state.borrow().stop_targets.is_empty();
         let purge_disabled = state.borrow().purge_targets.is_empty();
-        let running_key = KeySpec::shifted('u');
+        let running_key = KeySpec::shifted('a');
         let history_key = KeySpec::shifted('o');
         let sound_key = KeySpec::shifted('n');
         let history_visible = state.borrow().opencode_enabled;
@@ -130,10 +130,10 @@ impl Toolbar {
             refresh: Button::new("󰑓 Refresh")
                 .hotkey(hotkey(refresh_key))
                 .on_press(|| Msg::Refresh),
-            running: Toggle::new("󰑮")
+            running: Toggle::new("󰈈")
                 .hotkey(hotkey(running_key))
                 .preserve_focus_on_hotkey(true)
-                .on_change(Msg::SetRunningOnly),
+                .on_change(|show_all| Msg::SetRunningOnly(!show_all)),
             history: Toggle::new("󰋚")
                 .hotkey(hotkey(history_key))
                 .preserve_focus_on_hotkey(true)
@@ -238,12 +238,12 @@ impl Toolbar {
         let state = self.state.borrow();
         let stop_disabled = state.stop_targets.is_empty();
         let purge_disabled = state.purge_targets.is_empty();
-        let running_only = state.running_only;
+        let show_all = !state.running_only;
         let show_saved = state.show_saved;
         let completion_sound = state.completion_sound;
         let changed = self.stop.is_disabled() != stop_disabled
             || self.purge.is_disabled() != purge_disabled
-            || self.running.is_checked() != running_only
+            || self.running.is_checked() != show_all
             || self.history.is_checked() != show_saved
             || self.sound.is_checked() != completion_sound
             || self.history_visible != state.opencode_enabled;
@@ -256,8 +256,8 @@ impl Toolbar {
         }
         self.stop.set_disabled(stop_disabled);
         self.purge.set_disabled(purge_disabled);
-        if self.running.is_checked() != running_only {
-            self.running.set_value(running_only);
+        if self.running.is_checked() != show_all {
+            self.running.set_value(show_all);
         }
         changed
     }
@@ -287,7 +287,7 @@ impl Toolbar {
         if self.running_key.matches(*key) {
             let outcome = self.running.toggle();
             if outcome.changed {
-                ctx.emit(Msg::SetRunningOnly(outcome.value));
+                ctx.emit(Msg::SetRunningOnly(!outcome.value));
                 ctx.request_redraw();
             }
             ctx.stop_propagation();

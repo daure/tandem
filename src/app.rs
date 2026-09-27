@@ -226,7 +226,7 @@ pub(crate) fn root(service: AppService) -> App {
     let snapshot = service.environment_snapshot();
     let opencode_enabled = service.opencode_enabled();
     let opencode_snapshot = service.opencode_snapshot();
-    let mut rows = visible_rows(&snapshot, &[], &opencode_snapshot, false);
+    let mut rows = visible_rows(&snapshot, &[], &opencode_snapshot, true);
     if opencode_enabled {
         let owners = snapshot
             .instances
@@ -237,7 +237,7 @@ pub(crate) fn root(service: AppService) -> App {
                 template_directory: instance.template_directory.clone(),
             })
             .collect::<Vec<_>>();
-        rows = opencode::attached_rows_for_owners(rows, &opencode_snapshot, &owners, false, false);
+        rows = opencode::attached_rows_for_owners(rows, &opencode_snapshot, &owners, false, true);
     }
     let instances = instances::state(rows);
     instances::set_completion_fade(&instances, service.completion_fade_seconds());
@@ -311,7 +311,7 @@ pub(crate) fn root(service: AppService) -> App {
         view,
         instances,
         toolbar_state,
-        running_only: false,
+        running_only: true,
         keys,
         refresh_schedule: refresh::RefreshSchedule::default(),
         manual_refresh: None,
@@ -1245,14 +1245,14 @@ impl App {
         {
             return;
         }
-        self.running_only = false;
+        self.running_only = true;
         self.opencode_history = false;
         self.attached_sessions_only = self.service.opencode_enabled();
         self.tabs_mut()
             .select_index_with_settings(0, ctx.animation());
         {
             let mut toolbar = self.toolbar_state.borrow_mut();
-            toolbar.running_only = false;
+            toolbar.running_only = true;
             toolbar.show_saved = false;
         }
         instances::set_attached_sessions_only(&self.instances, self.attached_sessions_only);
@@ -1320,17 +1320,6 @@ impl App {
         }
         if let TuiEvent::Key(key) = event
             && KeySpec::shifted('a').matches(*key)
-            && self.service.opencode_enabled()
-        {
-            self.handle_message(
-                Msg::SetAttachedSessionsOnly(!self.attached_sessions_only),
-                ctx,
-            );
-            ctx.stop_propagation();
-            return true;
-        }
-        if let TuiEvent::Key(key) = event
-            && KeySpec::shifted('u').matches(*key)
         {
             self.set_running_only(!self.running_only, ctx);
             ctx.stop_propagation();

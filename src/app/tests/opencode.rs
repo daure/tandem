@@ -2,6 +2,34 @@ use super::super::rows::Tone;
 use super::*;
 use crate::store::opencode::{Activity, Client, Pane, Session, Snapshot};
 
+#[test]
+fn conversation_details_show_fresh_pending_approvals() {
+    tuicore::init();
+    let mut observation = external_observation();
+    for (pending, stale, expected) in [
+        (Some(true), false, Some("Pending")),
+        (Some(false), false, None),
+        (None, false, None),
+        (Some(true), true, None),
+    ] {
+        observation.sessions[0].approval_pending = pending;
+        observation.sessions[0].stale = stale;
+        let mut projected = rows::from_snapshot(&snapshot());
+        super::super::opencode::append_rows(&mut projected, &observation, false);
+        let row = projected
+            .iter()
+            .find(|row| row.id.ends_with(":ses_external"))
+            .unwrap();
+        assert_eq!(
+            row.details
+                .iter()
+                .find(|property| property.name == "Approval")
+                .map(|property| property.value.as_str()),
+            expected
+        );
+    }
+}
+
 fn external_observation() -> Snapshot {
     let pane = Pane {
         session: "main".into(),

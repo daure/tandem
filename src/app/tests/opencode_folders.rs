@@ -197,6 +197,7 @@ fn empty_known_external_folders_can_launch_a_new_session() {
     app.update_snapshot(snapshot());
     let mut ctx = EventCtx::new(AnimationSettings::default());
     app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut ctx);
+    app.handle_message(Msg::SetRunningOnly(false), &mut ctx);
     instances::set_highlighted(
         &app.instances,
         Some("opencode-workspace:/work/b-empty".into()),

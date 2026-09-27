@@ -26,6 +26,7 @@ struct Server {
     full_history: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
     pending_questions: Arc<std::sync::Mutex<BTreeMap<String, Vec<String>>>>,
+    pending_approvals: Arc<std::sync::Mutex<Vec<String>>>,
     failed_question_directories: Arc<std::sync::Mutex<BTreeSet<String>>>,
     failed_status_directories: Arc<std::sync::Mutex<BTreeSet<String>>>,
     receipt_update: Arc<std::sync::Mutex<Option<(PathBuf, String)>>>,
@@ -49,6 +50,8 @@ impl Server {
         let pending_questions =
             Arc::new(std::sync::Mutex::new(BTreeMap::<String, Vec<String>>::new()));
         let pending = pending_questions.clone();
+        let pending_approvals = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let approvals = pending_approvals.clone();
         let failed_question_directories = Arc::new(std::sync::Mutex::new(BTreeSet::new()));
         let failed_questions = failed_question_directories.clone();
         let failed_status_directories = Arc::new(std::sync::Mutex::new(BTreeSet::new()));
@@ -106,6 +109,15 @@ impl Server {
                             .map(|id| json!({"id":format!("que_{id}"),"sessionID":id,"questions":[]}))
                             .collect::<Vec<_>>())
                     }
+                } else if request.contains("/permission?directory=") {
+                    json!(
+                        approvals
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .map(|id| json!({"id":format!("per_{id}"),"sessionID":id}))
+                            .collect::<Vec<_>>()
+                    )
                 } else if request.contains("/session/status") {
                     json!({})
                 } else if request.contains("/experimental/session") {
@@ -163,6 +175,7 @@ impl Server {
             full_history,
             busy,
             pending_questions,
+            pending_approvals,
             failed_question_directories,
             failed_status_directories,
             receipt_update,
@@ -843,12 +856,17 @@ fn attach_uses_the_instance_tab_or_creates_an_instance_named_tab_with_literal_ar
         .block_on(observer.attach(&session, "review", "main", None))
         .unwrap();
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
-    assert!(calls.contains(
-        "new-pane --stacked --name  --tab-id 4 --cwd /work/space ' ; $(touch injected)"
-    ));
+    assert!(
+        calls.contains(
+            "new-pane --stacked --name  --tab-id 4 --cwd /work/space ' ; $(touch injected)"
+        )
+    );
     assert!(calls.contains("new-tab --name review"));
     assert!(calls.contains("--session ses_saved"));
-    assert!(calls.contains("rename-pane --pane-id terminal_100 \n"), "{calls}");
+    assert!(
+        calls.contains("rename-pane --pane-id terminal_100 \n"),
+        "{calls}"
+    );
     assert!(!root.path().join("injected").exists());
 }
 

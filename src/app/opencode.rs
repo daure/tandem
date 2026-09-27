@@ -444,6 +444,9 @@ fn append_session_rows(
         |secondary| format!("{}\n{secondary}", session.title),
     );
     let mut details = vec![Property::new("Session", &session.id)];
+    if !session.stale && session.approval_pending == Some(true) {
+        details.push(Property::new("Approval", "Pending"));
+    }
     if !owned {
         details.push(Property::new("Ownership", "Outside Tandem"));
     }

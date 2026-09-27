@@ -321,7 +321,9 @@ impl AppService {
             startup.before_creation = Some(Box::new(move |workspace, deadline| {
                 settings.refresh()?;
                 if settings.opencode_enabled() && settings.clear_opencode_history() {
-                    runtime.block_on(crate::environments::opencode::clear_history(workspace, deadline))?;
+                    runtime.block_on(crate::environments::opencode::clear_history(
+                        workspace, deadline,
+                    ))?;
                 }
                 Ok(())
             }));

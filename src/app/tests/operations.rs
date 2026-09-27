@@ -132,8 +132,9 @@ fn instances_from_one_template_can_start_concurrently() {
     service.queue_instance_for_tests("review", "website");
     let mut app = root(service);
     app.update_snapshot(inventory);
-    instances::set_highlighted(&app.instances, Some("instance:other".into()));
     let mut ctx = EventCtx::new(AnimationSettings::default());
+    app.handle_message(Msg::SetRunningOnly(false), &mut ctx);
+    instances::set_highlighted(&app.instances, Some("instance:other".into()));
 
     app.action(3, &mut ctx);
 

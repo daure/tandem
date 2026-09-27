@@ -435,6 +435,9 @@ summaries are displayed in a wrapped, scrollable, searchable Markdown viewer. Re
 to refresh its read-only snapshot. Responses are bounded to 8 MiB; oversized histories produce an
 explicit error rather than a silently truncated transcript. Closing the dialog cancels a pending read.
 
+Observed OpenCode permission requests appear as **Approval: Pending** in conversation details.
+Pending questions use the **awaiting answer** activity state.
+
 Sessions and clients whose directories do not belong to a Tandem instance appear under **Other
 OpenCode workspaces** at the top of the instance tree, grouped by their exact directory. Tandem can
 display their details and conversations, create a session, open or jump to a conversation, and close
@@ -492,8 +495,8 @@ The top **Sessions** tab groups conversations beneath instance rows and outside-
 directory groups. The **Instances** tab shows the template and instance tree. Click either tab
 or press `[` / `]` from any main-view control to switch left / right while retaining control focus.
 The tab header stays visually active; dialogs and action menus own their keyboard input.
-`Shift+A` also switches views when the integration is enabled.
-All known OpenCode folders remain visible in Sessions, including folders without open clients.
+The **󰈈 show-all toggle** (`Shift+A`) reveals inactive instances, empty templates, and known
+OpenCode folders without open clients. It is off at startup and resets to off with `Shift+H`.
 Folders with attached clients (idle or busy) come first; inactive folders follow, preserving the
 instance/external ordering within each section. Known folders come from conversations, clients, and
 local server directory receipts; the observer remembers them while the integration remains enabled.
@@ -502,8 +505,7 @@ name, with the description on the second line. Conversation children show their 
 timer, then the latest question with its activity indicator. Search includes template and instance names.
 History (`Shift+O`) controls saved and detached conversation children independently of folder
 visibility; with history off, only attached children appear. Select an inactive folder and press `n`
-to launch a new client. Running-only (`Shift+U`) filters instance
-groups while retaining workspace-only instances and outside-Tandem groups. The toolbar actions,
+to launch a new client. With show-all off, the running-only filter applies. The toolbar actions,
 filter values, search, and completion-sound setting are shared across both tabs.
 Clients without a conversation appear beneath their instance or external directory.
 The first toolbar toggle, **󰕾 completion sound** (`Shift+N`), plays the desktop completion sound when a freshly observed
@@ -517,6 +519,11 @@ over 600 ms. The marker then rises to full success color over 150 ms and fades i
 background over the configured fade duration (20 seconds by default) before disappearing.
 Text positions, selection, and text colors stay intact. Initial, stale, and filter-only observations do not trigger these effects;
 disabling animations suppresses them.
+With the tree focused in Sessions or Instances, `Shift+J` / `Shift+K` selects the next / previous
+conversation with an active completion marker in tree order, expanding its ancestors and scrolling
+it into view. A successful jump clears a committed search; typing in search keeps these keys as text.
+Navigation stops at either end and leaves the tree unchanged when no eligible target exists.
+Active markers retain their remaining lifetime when switching tabs.
 
 New session and Open panel create a stacked pane in an observed tab for the instance or external
 directory, or create a named tab when there is no observed destination. Open panel attaches to the

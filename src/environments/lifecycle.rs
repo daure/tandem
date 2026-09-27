@@ -66,7 +66,10 @@ pub(crate) fn start(
             let workspace = config.workspaces.join(name);
             fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
             super::removal::validate_workspace(config, name)?;
-            before_creation(workspace.to_str().ok_or("invalid workspace path")?, deadline)?;
+            before_creation(
+                workspace.to_str().ok_or("invalid workspace path")?,
+                deadline,
+            )?;
         }
         journal::prepare(config, &template, name, startup.description.as_deref())?;
         let description = journal::recorded(config, name)?

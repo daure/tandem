@@ -88,7 +88,7 @@ fn app_starts_in_the_expanded_agent_view_with_the_first_item_selected() {
     let text = lines.join("\n");
     assert!(app.attached_sessions_only);
     assert!(!app.opencode_history);
-    assert!(!app.running_only);
+    assert!(app.running_only);
     assert_eq!(app.selected().unwrap().id, "instance:review");
     assert!(text.contains("Conversation busy"), "{text}");
     assert!(text.contains("Conversation idle"), "{text}");
@@ -238,10 +238,10 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
     app.service.set_opencode_snapshot_for_tests(observation());
     app.update_snapshot(inventory.clone());
     let mut ctx = EventCtx::new(AnimationSettings::default());
-    for key in ['O', 'A'] {
+    for key in ['O', '['] {
         app.event(&TuiEvent::Key(KeyEvent::from(Key::Char(key))), &mut ctx);
     }
-    assert!(app.attached_sessions_only && !app.running_only && app.opencode_history);
+    assert!(app.attached_sessions_only && app.running_only && app.opencode_history);
     for width in [40, 80, 130] {
         let (layout, lines) = render(&mut app, width);
         let text = lines.join("\n");
@@ -277,7 +277,10 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
             &TuiEvent::Key(KeyEvent::from(Key::Char(' '))),
             &mut activation,
         );
-        assert!(matches!(activation.messages(), [Msg::SetRunningOnly(true)]));
+        assert!(matches!(
+            activation.messages(),
+            [Msg::SetRunningOnly(false)]
+        ));
         for id in ["busy", "idle", "saved"] {
             let index = lines
                 .iter()
@@ -310,13 +313,13 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
         app.selected().unwrap().parent.as_deref(),
         Some("instance:review")
     );
-    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('U'))), &mut ctx);
-    assert!(app.running_only);
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('A'))), &mut ctx);
+    assert!(!app.running_only);
     let filtered = render(&mut app, 130).1.join("\n");
     assert!(filtered.contains("Conversation busy"), "{filtered}");
     assert!(filtered.contains("Conversation saved"), "{filtered}");
-    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('U'))), &mut ctx);
-    assert!(!app.running_only);
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('A'))), &mut ctx);
+    assert!(app.running_only);
     assert!(
         render(&mut app, 130)
             .1
@@ -372,7 +375,7 @@ fn filter_and_view_toggles_center_the_selected_row() {
             "Conversation instance-15-true",
         ),
     ] {
-        for key in ['O', 'U', 'A'] {
+        for key in ['O', 'A', '['] {
             let mut app = root(AppService::for_tests());
             let mut inventory = snapshot();
             let instance = inventory.instances[0].clone();
@@ -478,6 +481,7 @@ fn agents_history_controls_conversations_while_preserving_workspace_groups() {
     app.update_snapshot(snapshot());
     let mut ctx = EventCtx::new(AnimationSettings::default());
     app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut ctx);
+    app.handle_message(Msg::SetRunningOnly(false), &mut ctx);
     for enabled in [true, false, true] {
         app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('O'))), &mut ctx);
         assert_eq!(app.opencode_history, enabled);

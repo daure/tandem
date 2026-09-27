@@ -367,9 +367,15 @@ impl Instances {
                     && !agent_view
                     && Self::external_workspace_descendant(&rows, highlighted))
             });
-        self.completion
-            .borrow_mut()
-            .observe(self.tree.rows(), &rows, select_first || mode_changed);
+        self.completion.borrow_mut().observe(
+            if mode_changed {
+                &rows
+            } else {
+                self.tree.rows()
+            },
+            &rows,
+            select_first,
+        );
         self.tree.set_rows(rows);
         self.tick_session_timers(Duration::ZERO);
         self.stripe_query = query;
@@ -684,6 +690,9 @@ impl TuiNode<Msg> for Instances {
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
         self.sync_rows();
+        if let Some(outcome) = self.navigate_completion(event, ctx) {
+            return outcome;
+        }
         if matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "shift+h")
         {
             self.focus_expanded_overview(ctx);
@@ -705,6 +714,9 @@ impl TuiNode<Msg> for Instances {
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
         self.sync_rows();
+        if let Some(outcome) = self.navigate_completion(event, ctx) {
+            return outcome;
+        }
         if matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "shift+h")
         {
             self.focus_expanded_overview(ctx);
