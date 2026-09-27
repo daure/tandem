@@ -339,8 +339,9 @@ fn shared_server_observations_join_exact_ids_and_track_conversation_switches() {
             .any(|request| request.contains("/provider?"))
     );
     assert!(busy.question_observed);
+    let pane = busy.panes.iter().find(|pane| pane.id == 7).unwrap();
     runtime
-        .block_on(observer.jump("ses_busy", &busy.panes[0], "main"))
+        .block_on(observer.jump("ses_busy", pane, "main"))
         .unwrap();
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
     assert!(calls.contains("go-to-tab-by-id 4"));
@@ -349,7 +350,7 @@ fn shared_server_observations_join_exact_ids_and_track_conversation_switches() {
     presence(&observer, "one.json", "ses_idle", 7, &server.url);
     assert!(
         runtime
-            .block_on(observer.jump("ses_busy", &busy.panes[0], "main"))
+            .block_on(observer.jump("ses_busy", pane, "main"))
             .unwrap_err()
             .contains("changed conversation")
     );
