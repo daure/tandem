@@ -9,6 +9,7 @@ mod environments;
 mod opencode;
 mod refresh;
 mod settings;
+mod startup;
 
 pub(crate) use creation::NewInstanceOutcome;
 pub(crate) use environments::CreateInstanceOutcome;

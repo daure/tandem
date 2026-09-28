@@ -280,7 +280,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Prepare an instance from a trusted template after user approval. New instances permanently clear exact-workspace OpenCode history when integration and creation cleanup are enabled (default on); active clients or cleanup failures block creation. Workspace-only templates prepare guidance and declared repositories without Docker; blank and guidance-only templates require no Git. Service templates start Compose and the gateway and verify readiness. With wait=false, poll get_operation in this process."
+        description = "Prepare an instance from a trusted template after user approval. New instances permanently clear exact-workspace OpenCode history when integration and creation cleanup are enabled (default on); active clients or cleanup failures block creation. Workspace-only templates prepare guidance and declared repositories without Docker; blank and guidance-only templates require no Git. Service templates start Compose and the gateway and verify readiness. Startup survives client disconnection. With wait=false, poll get_operation; the latest startup attempt remains available after reconnecting."
     )]
     async fn create_instance(
         &self,
@@ -301,13 +301,13 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Read bounded progress and outcome for an operation in this MCP process. After reconnecting, inspect list_instances instead."
+        description = "Read bounded progress and outcome. The latest startup attempt per instance survives reconnection until another startup or deletion. Other operations belong to this MCP process; inspect list_instances after reconnecting."
     )]
     async fn get_operation(
         &self,
         Parameters(input): Parameters<OperationInput>,
     ) -> Result<Json<Operation>, String> {
-        self.service.get_operation(&input.id).map(Json)
+        self.service.get_operation_fresh(input.id).await.map(Json)
     }
 
     #[tool(

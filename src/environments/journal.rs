@@ -47,7 +47,7 @@ pub(super) fn now() -> u64 {
     chrono::Utc::now().timestamp().max(0) as u64
 }
 
-fn directory(config: &Config) -> Result<PathBuf, String> {
+pub(super) fn directory(config: &Config) -> Result<PathBuf, String> {
     let directory = config.home.join("runtime").join(&config.namespace);
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     if !fs::canonicalize(&directory)
@@ -99,7 +99,7 @@ fn write(config: &Config, name: &str, record: &Record) -> Result<(), String> {
     Ok(())
 }
 
-fn publish(config: &Config) {
+pub(super) fn publish(config: &Config) {
     let result = (|| -> rusqlite::Result<()> {
         let connection = rusqlite::Connection::open(config.home.join("settings.sqlite3"))?;
         connection.busy_timeout(Duration::from_secs(2))?;
@@ -163,6 +163,7 @@ impl<'a> ActivityGuard<'a> {
             activity.finished = true;
             activity.error = result.as_ref().err().cloned();
             if activity.action == "delete_instance" && result.is_ok() {
+                super::startup::forget(self.config, &self.name)?;
                 fs::remove_file(path(self.config, &self.name)?)
                     .map_err(|error| error.to_string())?;
                 publish(self.config);
@@ -274,6 +275,13 @@ pub(super) fn enrich(config: &Config, instances: &mut [Instance]) -> Result<Vec<
     let mut records = BTreeMap::new();
     for entry in fs::read_dir(directory(config)?).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".startup.json")
+        {
+            continue;
+        }
         if entry
             .path()
             .extension()

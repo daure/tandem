@@ -12,6 +12,7 @@ pub(crate) struct Startup {
     pub workspace_ready: Option<tokio::sync::oneshot::Sender<String>>,
     pub instance_lock: Option<gateway::Lock>,
     pub before_creation: Option<BeforeCreation>,
+    pub writer: Option<std::sync::Arc<super::startup::Writer>>,
 }
 
 impl Environments {

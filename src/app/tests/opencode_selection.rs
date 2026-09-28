@@ -216,7 +216,10 @@ fn creation_selects_the_exact_observed_pane_and_reveals_its_ancestors() {
             app.update_snapshot(snapshot());
             app.layout(area, &mut tuicore::LayoutCtx::new());
             let (sender, reply) = tokio::sync::oneshot::channel();
-            app.opencode_action = Some(projection::PendingAction::creation(reply));
+            app.opencode_action = Some(projection::PendingAction::creation(
+                reply,
+                app.instances.clone(),
+            ));
             if observed_first {
                 app.service.set_opencode_snapshot_for_tests(home());
                 app.update_snapshot(snapshot());

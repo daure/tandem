@@ -230,45 +230,6 @@ fn agent_view_startup_and_shift_h_expand_external_workspaces() {
 }
 
 #[test]
-fn switching_from_agents_to_templates_collapses_external_workspaces() {
-    use crate::app::instances::{self, Instances};
-
-    tuicore::init();
-    let state = instances::state(super::super::opencode::attached_rows(
-        rows::from_snapshot(&snapshot()),
-        &external_observation(),
-    ));
-    instances::set_attached_sessions_only(&state, true);
-    let mut tree = Instances::new(state.clone());
-    let area = Rect::new(0, 0, 130, 40);
-    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
-    let render = |tree: &mut Instances, terminal: &mut Terminal<TestBackend>| {
-        tree.layout(area, &mut tuicore::LayoutCtx::new());
-        terminal
-            .draw(|frame| {
-                let mut ctx = RenderCtx::new();
-                tree.render(frame, area, &mut ctx);
-                ctx.flush(frame);
-            })
-            .unwrap();
-        rendered_lines(terminal, area).join("\n")
-    };
-    assert!(render(&mut tree, &mut terminal).contains("Add CSV export"));
-    tree.highlight_for_tests("opencode-workspace:/work/ledger");
-
-    let mut templates = rows::from_snapshot(&snapshot());
-    super::super::opencode::append_rows(&mut templates, &external_observation(), false);
-    instances::set_attached_sessions_only(&state, false);
-    instances::replace_rows(&state, templates);
-    instances::request_center_highlighted(&state);
-    let switched = render(&mut tree, &mut terminal);
-
-    assert!(switched.contains("Other OpenCode workspaces"), "{switched}");
-    assert!(!switched.contains("/work/ledger"), "{switched}");
-    assert!(!switched.contains("Add CSV export"), "{switched}");
-}
-
-#[test]
 fn attached_view_promotes_external_directories_to_workspace_rows() {
     tuicore::init();
     let projected = super::super::opencode::attached_rows(

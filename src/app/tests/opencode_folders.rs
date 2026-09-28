@@ -49,7 +49,8 @@ fn observation() -> Snapshot {
 }
 
 fn project(observation: &Snapshot, history: bool) -> Vec<rows::Row> {
-    let inventory = snapshot();
+    let mut inventory = snapshot();
+    inventory.instances[0].services[0].status = "down (exit 0)".into();
     let owners = inventory
         .instances
         .iter()
@@ -186,7 +187,7 @@ fn closing_a_folders_last_client_moves_it_below_active_folders_without_losing_se
         tab_id: 1,
         tab_name: "review".into(),
     });
-    assert_eq!(roots(&project(&observation, false))[0], "instance:review");
+    assert_eq!(roots(&project(&observation, false))[2], "instance:review");
 }
 
 #[test]
@@ -208,40 +209,58 @@ fn empty_known_external_folders_can_launch_a_new_session() {
 }
 
 #[test]
-fn sessions_running_filter_hides_empty_instance_parents() {
+fn sessions_show_clientless_running_instances_only_with_show_all_in_group_order() {
     tuicore::init();
-    let inventory = snapshot();
     let mut observation = observation();
-    observation.sessions.retain(|session| session.id != "owned");
-    observation
-        .directories
-        .push(inventory.instances[0].workspace.clone());
+    observation.sessions.retain(Session::attached);
+    let mut owned = observation.sessions[0].clone();
+    owned.id = "owned".into();
+    owned.directory = "/tmp/workspaces/with-session/repo".into();
+    observation.sessions.push(owned);
     let mut app = root(AppService::for_tests());
-    app.service.set_opencode_snapshot_for_tests(observation);
-    app.update_snapshot(inventory.clone());
     let mut ctx = EventCtx::new(AnimationSettings::default());
-
-    for history in [false, true] {
-        app.handle_message(Msg::SetOpencodeHistory(history), &mut ctx);
-        app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut ctx);
-        app.handle_message(Msg::SetRunningOnly(false), &mut ctx);
-        assert!(roots(&app.project_rows(&inventory, &[])).contains(&"instance:review"));
-
-        app.handle_message(Msg::SetRunningOnly(true), &mut ctx);
-        let rows = app.project_rows(&inventory, &[]);
-        assert!(!roots(&rows).contains(&"instance:review"));
-        for parent in rows.iter().filter(|row| row.parent.is_none()) {
-            assert!(rows.iter().any(|row| {
-                row.parent.as_deref() == Some(parent.id.as_str()) && row.opencode.is_some()
-            }));
+    app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut ctx);
+    for known in [false, true] {
+        let mut inventory = snapshot();
+        let mut attached = inventory.instances[0].clone();
+        attached.name = "with-session".into();
+        attached.workspace = "/tmp/workspaces/with-session".into();
+        inventory.instances.push(attached);
+        if known {
+            observation
+                .directories
+                .push(inventory.instances[0].workspace.clone());
         }
-
-        app.handle_message(Msg::SetAttachedSessionsOnly(false), &mut ctx);
-        assert!(
-            app.project_rows(&inventory, &[])
-                .iter()
-                .any(|row| row.id == "instance:review")
-        );
+        app.service
+            .set_opencode_snapshot_for_tests(observation.clone());
+        app.update_snapshot(inventory.clone());
+        for history in [false, true] {
+            app.handle_message(Msg::SetOpencodeHistory(history), &mut ctx);
+            for _ in 0..2 {
+                app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('A'))), &mut ctx);
+                let rows = app.project_rows(&inventory, &[]);
+                let mut expected = vec![
+                    "opencode-workspace:/work/a-idle",
+                    "opencode-workspace:/work/y-new",
+                    "opencode-workspace:/work/z-busy",
+                    "instance:with-session",
+                ];
+                if !app.running_only {
+                    expected.extend(["instance:review", "opencode-workspace:/work/b-empty"]);
+                }
+                assert_eq!(roots(&rows), expected, "known={known}, history={history}");
+                assert!(
+                    !rows
+                        .iter()
+                        .any(|row| row.parent.as_deref() == Some("instance:review"))
+                );
+                instances::set_highlighted(&app.instances, Some("instance:review".into()));
+                assert_eq!(app.selected().is_some(), !app.running_only);
+            }
+        }
+        inventory.instances[0].services[0].status = "down (exit 0)".into();
+        app.update_snapshot(inventory.clone());
+        assert!(!roots(&app.project_rows(&inventory, &[])).contains(&"instance:review"));
     }
 }
 

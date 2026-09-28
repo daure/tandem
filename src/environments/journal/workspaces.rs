@@ -100,6 +100,12 @@ pub(in crate::environments) fn workspaces(config: &Config) -> Result<Vec<Instanc
     let mut instances = Vec::new();
     for entry in std::fs::read_dir(super::directory(config)?).map_err(|error| error.to_string())? {
         let path = entry.map_err(|error| error.to_string())?.path();
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with(".startup.json"))
+        {
+            continue;
+        }
         if path.extension().is_none_or(|extension| extension != "json") {
             continue;
         }
@@ -122,6 +128,7 @@ pub(in crate::environments) fn workspaces(config: &Config) -> Result<Vec<Instanc
 }
 
 pub(in crate::environments) fn forget(config: &Config, name: &str) -> Result<(), String> {
+    crate::environments::startup::forget(config, name)?;
     match std::fs::remove_file(super::path(config, name)?) {
         Ok(()) => super::publish(config),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

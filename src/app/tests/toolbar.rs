@@ -19,7 +19,7 @@ fn toolbar_line(app: &mut super::super::App, width: u16) -> String {
 }
 
 #[test]
-fn tabs_switch_projections_and_share_toolbar_controls_and_search() {
+fn tabs_share_toolbar_controls_and_retain_separate_searches() {
     tuicore::init();
     for width in [40, 80, 130] {
         let service = AppService::for_tests();
@@ -95,8 +95,16 @@ fn tabs_switch_projections_and_share_toolbar_controls_and_search() {
             assert!(app.running_only && app.opencode_history && app.completion_sound);
             let lines = rendered_lines(&toolbar_terminal(&mut app, width), area);
             assert_eq!(lines[1], toolbar);
-            assert!(lines[2].contains("missing-workspace"), "{}", lines[2]);
-            assert!(!lines[3..].iter().any(|line| line.contains("review")));
+            assert_eq!(
+                lines[2].contains("missing-workspace"),
+                sessions,
+                "{}",
+                lines[2]
+            );
+            assert_eq!(
+                lines[3..].iter().any(|line| line.contains("review")),
+                !sessions
+            );
             layout.layout(&mut app, area);
             for action in ["new-template", "stop-all", "purge-all", "refresh"] {
                 assert!(layout.focus_targets().iter().any(|target| target.enabled
@@ -227,19 +235,33 @@ fn bracket_navigation_keeps_control_focus_and_the_tab_header_active() {
     assert_eq!(header(&mut app), active_header);
 
     for target in targets.iter().filter(|target| target.enabled) {
+        let mut current = target.clone();
         app.dispatch_focus(target, true, &mut tuicore::FocusCtx::new(settings));
         for (key, sessions) in [(']', false), ('[', true), ('[', false), (']', true)] {
             let mut ctx = EventCtx::new(settings);
             let outcome = app.dispatch_event(
-                &EventRoute::new(target.path.clone()),
+                &EventRoute::new(current.path.clone()),
                 &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
                 &mut ctx,
             );
             assert_eq!(outcome, tuicore::EventOutcome::Handled);
             assert_eq!(app.attached_sessions_only, sessions, "{:?}", target.path);
-            assert!(ctx.focus_request().is_none(), "{:?}", target.path);
+            let path = match ctx.focus_request() {
+                Some(tuicore::FocusRequest::Path(path)) => path.clone(),
+                None => current.path.clone(),
+                request => panic!("Unexpected focus request: {request:?}"),
+            };
+            layout.layout(&mut app, Rect::new(0, 0, 130, 30));
+            let next = layout
+                .focus_targets()
+                .iter()
+                .find(|candidate| candidate.path == path && candidate.id == target.id)
+                .unwrap();
+            app.dispatch_focus(&current, false, &mut tuicore::FocusCtx::new(settings));
+            app.dispatch_focus(next, true, &mut tuicore::FocusCtx::new(settings));
+            current = next.clone();
         }
-        app.dispatch_focus(target, false, &mut tuicore::FocusCtx::new(settings));
+        app.dispatch_focus(&current, false, &mut tuicore::FocusCtx::new(settings));
         assert_eq!(header(&mut app), active_header);
     }
     for key in [']', '['] {

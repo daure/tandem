@@ -97,7 +97,7 @@ A template is a shared development recipe; an instance has its own name and work
   Their lifecycle requires no Docker.
   Stop preserves them without work, and container restart/service actions do not apply. Retry failed
   preparation with instance creation after correcting the cause. A listing with `runtime_error` contains
-  workspace-only inventory while Docker inventory is unavailable; it is not a complete container listing.
+  workspace-only inventory and retained startup evidence while Docker inventory is unavailable; it is not a complete container listing.
 - Restart and service start/stop require approval and use existing containers with their current
   configuration and data; they exclude setup jobs and the gateway. Service actions affect only the
   named service, leaving dependencies untouched. These actions do not build or apply template edits.
@@ -106,5 +106,8 @@ A template is a shared development recipe; an instance has its own name and work
   only as running. Unpause selected containers before starting or restarting.
 - Template mutation tools are blocked while instances start from that template.
 - Verify readiness before handing over URLs. On failure, inspect operation output, containers,
-  and logs before retrying; setup jobs may rerun. After reconnecting, inspect runtime inventory
-  because operation history is process-local.
+  and logs before retrying; setup jobs may rerun. Startup continues after the initiating client closes.
+  Reconnect using the same Tandem home and namespace: `list_instances` shows current runtime and startup
+  failures, and `get_operation` retains the latest startup attempt per instance until another startup or
+  deletion. Other operation history is process-local. Interrupted startups require an explicit retry;
+  reconnecting only observes their state.

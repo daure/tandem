@@ -60,7 +60,9 @@ impl App {
             _ => None,
         };
         match self.service.new_opencode_session(directory, pane) {
-            Ok(reply) => self.opencode_action = Some(PendingAction::creation(reply)),
+            Ok(reply) => {
+                self.opencode_action = Some(PendingAction::creation(reply, self.instances.clone()));
+            }
             Err(error) => ctx.notify(Notification::error("Cannot create OpenCode session", error)),
         }
         true

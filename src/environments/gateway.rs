@@ -14,12 +14,39 @@ use super::{
 };
 
 #[derive(Debug)]
-pub(crate) struct Lock(File);
+pub(crate) struct Lock(File, bool);
+
+impl Lock {
+    #[cfg(unix)]
+    pub(super) fn descriptor(&self) -> std::os::fd::RawFd {
+        use std::os::fd::AsRawFd;
+        self.0.as_raw_fd()
+    }
+
+    pub(super) fn handoff(mut self) {
+        // The worker shares the open file description; unlocking here would release its lock.
+        self.1 = false;
+    }
+
+    pub(crate) fn borrowed(&self) -> Result<Self, String> {
+        self.0
+            .try_clone()
+            .map(|file| Self(file, false))
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(unix)]
+    pub(super) fn inherited(file: File) -> Self {
+        Self(file, true)
+    }
+}
 
 impl Drop for Lock {
     fn drop(&mut self) {
         // A concurrently forked child can briefly retain the open file description.
-        if let Err(error) = self.0.unlock() {
+        if self.1
+            && let Err(error) = self.0.unlock()
+        {
             crate::diagnostics::record_error("cannot release operation lock", &error);
         }
     }
@@ -29,14 +56,14 @@ pub(crate) fn lock(config: &Config, resource: &str) -> Result<Lock, String> {
     let file = open_lock(config, resource)?;
     file.try_lock()
         .map_err(|error| lock_error(resource, error))?;
-    Ok(Lock(file))
+    Ok(Lock(file, true))
 }
 
 pub(super) fn is_locked(config: &Config, resource: &str) -> Result<bool, String> {
     let file = open_lock(config, resource)?;
     match file.try_lock_shared() {
         Ok(()) => {
-            drop(Lock(file));
+            drop(Lock(file, true));
             Ok(false)
         }
         Err(TryLockError::WouldBlock) => Ok(true),
@@ -48,7 +75,7 @@ pub(super) fn shared_lock(config: &Config, resource: &str) -> Result<Lock, Strin
     let file = open_lock(config, resource)?;
     file.try_lock_shared()
         .map_err(|error| lock_error(resource, error))?;
-    Ok(Lock(file))
+    Ok(Lock(file, true))
 }
 
 pub(super) fn lock_until(
@@ -63,7 +90,7 @@ pub(super) fn lock_until(
         let budget =
             remaining(deadline).map_err(|_| format!("timed out waiting for {resource} lock"))?;
         match file.try_lock() {
-            Ok(()) => return Ok(Lock(file)),
+            Ok(()) => return Ok(Lock(file, true)),
             Err(TryLockError::WouldBlock) => {
                 if !waiting {
                     progress(format!("Waiting for {resource} lock"));

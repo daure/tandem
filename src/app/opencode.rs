@@ -57,7 +57,10 @@ pub(super) struct PendingAction {
 
 enum PendingReply {
     Existing(tokio::sync::oneshot::Receiver<Result<(), String>>),
-    Created(tokio::sync::oneshot::Receiver<Result<Pane, String>>),
+    Created {
+        reply: tokio::sync::oneshot::Receiver<Result<Pane, String>>,
+        state: super::instances::SharedState,
+    },
 }
 
 impl PendingAction {
@@ -73,9 +76,12 @@ impl PendingAction {
         }
     }
 
-    pub(super) fn creation(reply: tokio::sync::oneshot::Receiver<Result<Pane, String>>) -> Self {
+    pub(super) fn creation(
+        reply: tokio::sync::oneshot::Receiver<Result<Pane, String>>,
+        state: super::instances::SharedState,
+    ) -> Self {
         Self {
-            reply: PendingReply::Created(reply),
+            reply: PendingReply::Created { reply, state },
             error_title: "Cannot create OpenCode session",
             closing: Vec::new(),
         }
@@ -164,7 +170,7 @@ pub(super) fn attached_rows_for_owners(
         .filter(|row| {
             row.instance
                 .as_deref()
-                .is_some_and(|name| row.starting || known_instances.contains(name))
+                .is_some_and(|name| row.running || row.starting || known_instances.contains(name))
         })
         .map(|row| row.id.clone())
         .collect();
@@ -956,46 +962,47 @@ fn client_row(parent: &str, scope: &str, client: &Client, external: bool) -> Row
     }
 }
 
+pub(super) fn project_rows(
+    snapshot: &crate::store::environments::EnvironmentSnapshot,
+    operations: &[crate::store::environments::Operation],
+    opencode: &Snapshot,
+    running_only: bool,
+    show_saved: bool,
+    sessions: bool,
+) -> Vec<Row> {
+    let mut rows = super::visible_rows(snapshot, operations, opencode, running_only);
+    let owners = snapshot
+        .instances
+        .iter()
+        .map(|instance| Owner {
+            name: instance.name.clone(),
+            workspace: instance.workspace.clone(),
+            template_directory: instance.template_directory.clone(),
+        })
+        .collect::<Vec<_>>();
+    if sessions {
+        attached_rows_for_owners(rows, opencode, &owners, show_saved, running_only)
+    } else {
+        append_rows_for_owners(&mut rows, opencode, show_saved, true, &owners, true);
+        rows
+    }
+}
+
 impl App {
+    #[cfg(test)]
     pub(super) fn project_rows(
         &self,
         snapshot: &crate::store::environments::EnvironmentSnapshot,
         operations: &[crate::store::environments::Operation],
     ) -> Vec<Row> {
-        let mut rows = super::visible_rows(
+        project_rows(
             snapshot,
             operations,
             &self.opencode_snapshot,
             self.running_only,
-        );
-        let owners = snapshot
-            .instances
-            .iter()
-            .map(|instance| Owner {
-                name: instance.name.clone(),
-                workspace: instance.workspace.clone(),
-                template_directory: instance.template_directory.clone(),
-            })
-            .collect::<Vec<_>>();
-        if self.attached_sessions_only {
-            attached_rows_for_owners(
-                rows,
-                &self.opencode_snapshot,
-                &owners,
-                self.opencode_history,
-                self.running_only,
-            )
-        } else {
-            append_rows_for_owners(
-                &mut rows,
-                &self.opencode_snapshot,
-                self.opencode_history,
-                true,
-                &owners,
-                true,
-            );
-            rows
-        }
+            self.opencode_history,
+            self.attached_sessions_only,
+        )
     }
 
     pub(super) fn open_opencode_dialog(&mut self, row: &Row, ctx: &mut EventCtx<Msg>) -> bool {
@@ -1209,7 +1216,9 @@ impl App {
         let closing = action.closing.clone();
         let reply = match &mut action.reply {
             PendingReply::Existing(reply) => reply.try_recv().map(|result| result.map(|()| None)),
-            PendingReply::Created(reply) => reply.try_recv().map(|result| result.map(Some)),
+            PendingReply::Created { reply, state } => reply
+                .try_recv()
+                .map(|result| result.map(|pane| Some((pane, state.clone())))),
         };
         let result = match reply {
             Ok(result) => result,
@@ -1219,10 +1228,10 @@ impl App {
             }
         };
         self.opencode_action = None;
-        if let Ok(Some(pane)) = &result
+        if let Ok(Some((pane, state))) = &result
             && self.service.opencode_enabled()
         {
-            super::instances::select_opencode_pane(&self.instances, pane.clone());
+            super::instances::select_opencode_pane(state, pane.clone());
         }
         if let Err(error) = result {
             if !closing.is_empty() {

@@ -43,7 +43,8 @@ Presentation layers adapt input and output. `AppService` is the sole application
 - Runtime journals own workspace-only identity, preparation outcomes, launch topology, and recoverable activity evidence.
 - The filesystem owns templates, generated configuration, repositories, and workspaces.
 - SQLite owns settings, startup history, and cross-process refresh revisions.
-- Operation history, resource samples, and transient UI state are process-local caches.
+- The latest startup request, bounded progress, and outcome per instance are durable runtime records.
+- Other operation history, resource samples, and transient UI state are process-local caches.
 
 An empty or failed Docker observation never proves that an instance is workspace-only. Recovery and cleanup require positive ownership evidence from the appropriate source.
 
@@ -52,6 +53,14 @@ An empty or failed Docker observation never proves that an instance is workspace
 A serial refresh worker coalesces inventory requests and uses persisted revision counters to observe changes from other Tandem processes. Resource collection augments inventory snapshots but does not determine lifecycle or health. Sampling failures retain valid prior readings with error provenance.
 
 Long-running mutations publish progress through operation records. Completion is based on fresh observations of the targeted resources, not command exit alone. External commands run with bounded lifetimes and keep their output away from terminal and MCP protocol streams.
+
+Instance startup runs through `AppService` in a detached invocation of the same executable, with its
+own terminal session and disconnected standard streams. The initiating process persists the request
+and transfers its instance lock and operation-specific lease through inherited descriptors. The worker
+holds both through readiness and final outcome publication; its external commands cannot inherit them.
+Readers combine durable startup records with fresh runtime observations, including before containers
+exist. Losing the lease or exceeding the deadline surfaces interruption; observing state performs no
+automatic retry. Other lifecycle actions retain their existing execution scope.
 
 ## OpenCode observation
 

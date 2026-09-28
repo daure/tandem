@@ -84,6 +84,11 @@ An empty template list or unavailable Docker daemon is displayed without prevent
 Starting an existing instance name reapplies the same template directory. It refuses names owned by
 another template or unmanaged containers.
 
+Instance startup continues when its TUI or CLI closes or its MCP connection ends. Reopening Tandem
+with the same home and namespace shows current startup progress or its retained outcome, including
+before containers exist. An interrupted startup requires an explicit retry; reopening only observes
+state. Service start and restart keep their documented scope.
+
 ## CLI instance lifecycle
 
 ```bash
@@ -518,9 +523,10 @@ or press `[` / `]` from any main-view control to switch left / right while retai
 The tab header stays visually active; dialogs and action menus own their keyboard input.
 The **󰈈 show-all toggle** (`Shift+A`) reveals inactive instances, empty templates, and known
 OpenCode folders without open clients. It is off at startup and resets to off with `Shift+H`.
-Folders with attached clients (idle or busy) come first; inactive folders follow, preserving the
-instance/external ordering within each section. Known folders come from conversations, clients, and
-local server directory receipts; the observer remembers them while the integration remains enabled.
+The Sessions tab orders groups as externals with attached clients, instances with attached clients,
+instances without attached clients, then externals without attached clients. Running instances
+without OpenCode sessions appear when show-all is enabled. Known folders come from conversations,
+clients, and local server directory receipts; the observer remembers them while the integration remains enabled.
 Instance rows show the name, health/status, and a muted template
 name, with the description on the second line. Conversation children show their title and activity
 timer, then the latest question with its activity indicator. Search includes template and instance names.
@@ -528,7 +534,9 @@ History (`Shift+O`) controls saved and detached conversation children independen
 visibility; with history off, only attached children appear. Select an inactive folder and press `n`
 to launch a new client. Both tabs retain creating and starting instances even before containers or
 OpenCode clients are observed; with show-all off, inactive instances stay hidden. The toolbar actions,
-filter values, search, and completion-sound setting are shared across both tabs.
+filter values, and completion-sound setting are shared across both tabs. Each tab retains its own
+expansion, selection, scroll position, and search. Inventory changes update both tabs; a removed
+selection moves to a surviving row in that tab when one is available.
 Clients without a conversation appear beneath their instance or external directory.
 The first toolbar toggle, **󰕾 completion sound** (`Shift+N`), plays the desktop completion sound when a freshly observed
 conversation changes from busy to idle. It is off by default and appears when the integration is

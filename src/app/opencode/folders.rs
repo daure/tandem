@@ -36,12 +36,18 @@ pub(super) fn active_first(rows: &mut [Row], snapshot: &Snapshot, owners: &[Owne
                 .as_deref()
                 .is_some_and(|directory| active_directories.contains(directory))
         };
+        let group = match (active, row.instance.is_some()) {
+            (true, false) => 0,
+            (true, true) => 1,
+            (false, true) => 2,
+            (false, false) => 3,
+        };
         let rank = row
             .parent
             .as_ref()
             .and_then(|parent| ranks.get(parent))
             .copied()
-            .unwrap_or((!active, index));
+            .unwrap_or((group, index));
         ranks.insert(row.id.clone(), rank);
     }
     rows.sort_by_key(|row| ranks[&row.id]);

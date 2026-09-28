@@ -19,6 +19,13 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[command(hide = true)]
+    StartupWorker {
+        name: String,
+        id: String,
+        instance_fd: i32,
+        lease_fd: i32,
+    },
     #[command(about = "Install the OpenCode TUI companion and print its tui.json plugin entry")]
     OpencodeSetup,
     #[command(about = "Create an instance if absent; leave existing instances unchanged")]
@@ -78,6 +85,13 @@ fn parse_loopback(value: &str) -> Result<SocketAddr, String> {
 pub fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::try_parse_from(std::env::args_os()).unwrap_or_else(|error| error.exit());
     match cli.command {
+        Some(Commands::StartupWorker {
+            name,
+            id,
+            instance_fd,
+            lease_fd,
+        }) => crate::service::AppService::run_startup_worker(&name, &id, instance_fd, lease_fd)
+            .map_err(Into::into),
         Some(Commands::OpencodeSetup) => {
             let service = crate::service::AppService::initialize()?;
             println!("{}", service.setup_opencode()?);

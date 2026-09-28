@@ -99,6 +99,9 @@ pub(crate) fn start(
                 journal::workspace_instance(config, name)?.ok_or("workspace record missing")?;
             workspace_agents::generate(config, &instance, &template.manifest.repositories)?;
             journal::workspace_ready(config, name)?;
+            if let Some(writer) = &startup.writer {
+                writer.workspace_ready();
+            }
             if let Some(sender) = startup.workspace_ready {
                 let _ = sender.send(workspace.display().to_string());
             }
@@ -135,6 +138,9 @@ pub(crate) fn start(
             },
             &template.manifest.repositories,
         )?;
+        if let Some(writer) = &startup.writer {
+            writer.workspace_ready();
+        }
         if let Some(sender) = startup.workspace_ready {
             let _ = sender.send(workspace.display().to_string());
         }

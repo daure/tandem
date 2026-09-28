@@ -14,6 +14,7 @@ mod removal;
 mod repositories;
 mod resources;
 pub(crate) mod sound;
+pub(crate) mod startup;
 mod stats;
 mod templates;
 mod workspace_agents;
@@ -58,6 +59,8 @@ struct Job {
     timeout_seconds: u64,
     startup_kind: Option<StartupKind>,
     completion_generation: Option<u64>,
+    external: bool,
+    owner_pid: u32,
 }
 
 impl Job {
@@ -225,6 +228,15 @@ impl Environments {
     }
 
     pub fn refresh_instances(&self) {
+        if let Err(error) = self.refresh_startups() {
+            let mut snapshot = self
+                .snapshot
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            self.set_inventory_error(&mut snapshot, 1, Some(error));
+            snapshot.loading = false;
+            return;
+        }
         let revision = self.instance_revision.load(Ordering::SeqCst);
         let mut system = sysinfo::System::new();
         system.refresh_memory();
@@ -305,6 +317,16 @@ impl Environments {
             }
         }
         merge_pending_instances(&mut snapshot.instances, &pending);
+        let snapshot_ref = &mut *snapshot;
+        if let Err(issue) = startup::enrich(
+            &self.config,
+            &mut snapshot_ref.instances,
+            &mut snapshot_ref.activities,
+        ) {
+            self.set_inventory_error(&mut snapshot, 1, Some(issue));
+            snapshot.loading = false;
+            return;
+        }
         snapshot.runtime_error = error.clone();
         let inventory_observed = error.is_none();
         self.set_inventory_error(&mut snapshot, 1, error);
@@ -338,7 +360,9 @@ impl Environments {
         let workspaces = journal::workspaces(&self.config)?;
         let (mut instances, runtime_error) = match docker::inspect(&self.config) {
             Ok(instances) => (instances, None),
-            Err(error) if !workspaces.is_empty() => (Vec::new(), Some(error)),
+            Err(error) if !workspaces.is_empty() || !startup::records(&self.config)?.is_empty() => {
+                (Vec::new(), Some(error))
+            }
             Err(error) => return Err(error),
         };
         for workspace in workspaces {
@@ -350,13 +374,14 @@ impl Environments {
             }
             instances.push(workspace);
         }
-        let activities = journal::enrich(&self.config, &mut instances)?;
+        let mut activities = journal::enrich(&self.config, &mut instances)?;
+        startup::enrich(&self.config, &mut instances, &mut activities)?;
         self.resources
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .apply(&mut instances);
         for instance in &mut instances {
-            project_instance(instance, false, journal::now());
+            project_instance(instance, runtime_error.is_some(), journal::now());
         }
         Ok(crate::store::environments::RuntimeInventory {
             instances,
@@ -572,6 +597,8 @@ impl Environments {
                 timeout_seconds: 900,
                 startup_kind,
                 completion_generation: None,
+                external: false,
+                owner_pid: std::process::id(),
             },
         );
         drop(operations);
@@ -584,8 +611,16 @@ impl Environments {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .values()
-            .filter(|job| job.running() && job.operation.action == "create_instance")
-            .filter_map(|job| self.pending_instance(&job.operation, &job.pending_services))
+            .filter(|job| {
+                (job.running() || job.external && job.operation.state == OperationState::Failed)
+                    && job.operation.action == "create_instance"
+            })
+            .filter_map(|job| {
+                let mut instance = self.pending_instance(&job.operation, &job.pending_services)?;
+                instance.pending = job.running();
+                instance.runtime.issue = job.operation.error.clone();
+                Some(instance)
+            })
             .collect()
     }
 
@@ -714,7 +749,7 @@ impl Environments {
             .into_iter()
             .find(|operation| operation.id == id)
             .ok_or_else(|| {
-                "operation not found in this process; use list_instances after reconnecting".into()
+                "operation not found in this process or retained startup records; use list_instances after reconnecting".into()
             })
     }
 
@@ -737,7 +772,12 @@ impl Environments {
         }
         let environment = Arc::clone(self);
         let id = operation.id.clone();
+        let writer = startup.writer.clone();
+        let progress_writer = writer.clone();
         let progress: Progress = Arc::new(move |line| {
+            if let Some(writer) = &progress_writer {
+                writer.progress(line.clone());
+            }
             let mut jobs = environment
                 .operations
                 .lock()
@@ -758,7 +798,12 @@ impl Environments {
                     startup,
                     timeout,
                     progress,
-                    |services| self.set_pending_services(&operation.id, services),
+                    |services| {
+                        if let Some(writer) = &writer {
+                            writer.services(services.clone());
+                        }
+                        self.set_pending_services(&operation.id, services);
+                    },
                 )
                 .map(Some),
                 "stop_instance" => {
@@ -808,7 +853,7 @@ impl Environments {
         self.finish_operation(id, Ok(Some(instance)));
     }
 
-    fn finish_operation(&self, id: &str, result: Result<Option<Instance>, String>) {
+    pub(crate) fn finish_operation(&self, id: &str, result: Result<Option<Instance>, String>) {
         let mut snapshot = self
             .snapshot
             .lock()
@@ -920,7 +965,7 @@ fn activity_from_job(job: &Job, active: bool) -> crate::store::environments::Act
         }),
         service: operation.service.clone(),
         action: operation.action.clone(),
-        owner_pid: std::process::id(),
+        owner_pid: job.owner_pid,
         started_at: job.started_at,
         deadline: job
             .started_at

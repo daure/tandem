@@ -377,7 +377,7 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
 }
 
 #[test]
-fn filter_and_view_toggles_center_the_selected_row() {
+fn filter_toggles_center_the_selected_row() {
     tuicore::init();
     let settings = AnimationSettings {
         enabled: false,
@@ -392,7 +392,7 @@ fn filter_and_view_toggles_center_the_selected_row() {
             "Conversation instance-15-true",
         ),
     ] {
-        for key in ['O', 'A', '['] {
+        for key in ['O', 'A'] {
             let mut app = root(AppService::for_tests());
             let mut inventory = snapshot();
             let instance = inventory.instances[0].clone();
@@ -549,12 +549,9 @@ fn attached_mode_updates_on_detach_and_leaves_the_view_when_integration_is_disab
     app.service
         .set_opencode_snapshot_for_tests(Snapshot::default());
     app.update_snapshot(snapshot());
-    assert!(
-        render(&mut app, 130)
-            .1
-            .join("\n")
-            .contains("No attached OpenCode sessions")
-    );
+    let text = render(&mut app, 130).1.join("\n");
+    assert!(text.contains("No attached OpenCode sessions"), "{text}");
+    assert!(!text.contains("Conversation busy"), "{text}");
     tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(app.service.set_opencode_enabled(false).unwrap())

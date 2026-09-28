@@ -313,6 +313,10 @@ impl AppService {
         mut startup: Startup,
     ) -> Operation {
         let action = operation.action.as_str();
+        if action == "create_instance" && startup.writer.is_none() {
+            startup.branch_instances = self.branch_instances();
+            return self.schedule_startup(operation, timeout, startup);
+        }
         let operation_id = operation.id.clone();
         let environments = Arc::clone(&self.environments);
         let worker_operation = operation.clone();
@@ -326,7 +330,6 @@ impl AppService {
             .flatten();
         let notifier = self.refresh.notifier.clone();
         let refresh = Refresh::for_operation(action);
-        startup.branch_instances = action == "create_instance" && self.branch_instances();
         if action == "create_instance" {
             let settings = Arc::clone(&self.settings);
             let runtime = self.runtime.handle().clone();
@@ -376,12 +379,20 @@ impl AppService {
 
     pub(crate) async fn wait_operation(&self, id: &str) -> Result<Operation, String> {
         loop {
-            let operation = self.get_operation(id)?;
+            let operation = self.get_operation_fresh(id.to_owned()).await?;
             if operation.state != OperationState::Running {
                 return Ok(operation);
             }
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
+    }
+
+    pub(crate) async fn get_operation_fresh(&self, id: String) -> Result<Operation, String> {
+        self.environment_call(move |environments| {
+            environments.refresh_startups()?;
+            environments.operation(&id)
+        })
+        .await
     }
 
     async fn environment_call<T: Send + 'static>(

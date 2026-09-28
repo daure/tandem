@@ -15,6 +15,7 @@ mod cleanup;
 mod existing;
 mod history;
 mod opencode;
+mod startup;
 mod workspaces;
 
 struct Fixture {

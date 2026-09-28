@@ -219,7 +219,9 @@ pub(crate) struct EnvironmentSnapshot {
     pub activities: Vec<Activity>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord,
+)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum StartupKind {
     #[default]
@@ -234,7 +236,7 @@ pub(crate) struct StartupTiming {
     pub kind: StartupKind,
 }
 
-#[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum OperationState {
     Running,
@@ -242,7 +244,7 @@ pub(crate) enum OperationState {
     Failed,
 }
 
-#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub(crate) struct Operation {
     pub id: String,
     pub action: String,

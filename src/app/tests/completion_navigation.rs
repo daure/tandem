@@ -108,11 +108,7 @@ fn completion_navigation_expands_ancestors_and_reveals_targets_in_both_tabs() {
         press(&mut view, Key::Char('z').into(), false);
         assert!(!render(&mut view).contains("Conversation"));
 
-        let [top, middle, bottom] = if sessions_only {
-            ["first", "second", "external"]
-        } else {
-            ["external", "first", "second"]
-        };
+        let [top, middle, bottom] = ["external", "first", "second"];
         for (key, expected) in [
             ('J', top),
             ('J', middle),
@@ -213,7 +209,7 @@ fn completion_navigation_preserves_search_input_and_reveals_a_filtered_target() 
     assert_eq!(view.search_query(), "JK");
     press(&mut view, Key::Enter.into(), true);
     press(&mut view, Key::Char('J').into(), true);
-    assert_eq!(selected_session(&state), "first");
+    assert_eq!(selected_session(&state), "external");
     assert!(view.search_query().is_empty());
-    assert!(render(&mut view).contains("Conversation first"));
+    assert!(render(&mut view).contains("Conversation external"));
 }
