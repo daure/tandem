@@ -14,6 +14,7 @@ mod creation_history;
 mod guidance;
 mod manifest_updates;
 mod restart;
+mod service_preview;
 mod template_removal;
 mod template_removal_live;
 mod workspaces;
@@ -576,7 +577,9 @@ fn operation_admission_rejects_duplicates_and_locks_release_on_drop() {
             .begin("create_template", "website", None)
             .is_err()
     );
-    environment.execute(operation.clone(), 60, super::Startup::default());
+    environment.execute(operation.clone(), 60, super::Startup::default(), &|_, _| {
+        Ok(())
+    });
     assert_eq!(
         environment.operation(&operation.id).unwrap().state,
         OperationState::Succeeded

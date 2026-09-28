@@ -14,6 +14,7 @@ mod attached_sessions;
 mod bulk;
 mod completion;
 mod completion_navigation;
+mod creation;
 mod guidance;
 mod history_settings;
 mod input_routing;
@@ -24,6 +25,7 @@ mod opencode_folders;
 mod opencode_resources;
 mod opencode_selection;
 mod operations;
+mod optimistic_purge;
 mod properties;
 mod refresh;
 mod resources;
@@ -921,12 +923,13 @@ fn new_instance_dialog_validates_input_without_losing_the_dialog() {
 }
 
 #[test]
-fn new_instance_description_uses_a_text_input() {
+fn new_instance_dialog_has_multiline_description_and_prompt_fields() {
     tuicore::init();
     let mut dialog = super::dialogs::instance_entry(
         "New instance",
         "review",
         "Review environment",
+        &super::creation::Creation::default(),
         "Instance name",
         None,
     );
@@ -939,12 +942,14 @@ fn new_instance_description_uses_a_text_input() {
             .iter()
             .filter(|target| target.id.as_str() == "input")
             .count(),
-        2
+        1
     );
-    assert!(
+    assert_eq!(
         targets
             .iter()
-            .all(|target| target.id.as_str() != "textarea")
+            .filter(|target| target.id.as_str() == "textarea")
+            .count(),
+        2
     );
 }
 
@@ -983,7 +988,7 @@ fn description_hotkey_opens_an_unpadded_text_editor_in_insert_mode() {
     let input = layout
         .focus_targets()
         .iter()
-        .find(|target| target.id.as_str() == "input")
+        .find(|target| target.id.as_str() == "textarea")
         .unwrap()
         .clone();
     app.dispatch_focus(&input, true, &mut tuicore::FocusCtx::default());
@@ -1024,6 +1029,16 @@ fn description_hotkey_opens_an_unpadded_text_editor_in_insert_mode() {
             modifiers: KeyModifiers::CONTROL,
         }),
         &mut submit,
+    );
+    assert!(app.view.is_active());
+    assert!(app.description_save.is_none());
+    app.dispatch_event(
+        &route,
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Enter,
+            modifiers: KeyModifiers::CONTROL,
+        }),
+        &mut EventCtx::new(AnimationSettings::default()),
     );
     assert!(!app.view.is_active());
     assert!(app.description_save.is_some());

@@ -26,6 +26,35 @@ pub(crate) struct Rendered {
     pub services: Vec<InstanceService>,
 }
 
+pub(crate) fn preview_services(
+    config: &Config,
+    template: &Template,
+    instance: &str,
+) -> Vec<InstanceService> {
+    if template.workspace_only() {
+        return Vec::new();
+    }
+    let mut services = serde_json::Map::new();
+    // Preview names only; Compose owns includes, interpolation, replicas, and validation.
+    if let Ok(mut model) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&template.compose_source)
+        && model.apply_merge().is_ok()
+        && let Some(declared) = model["services"].as_mapping()
+    {
+        for name in declared.keys().filter_map(serde_yaml_ng::Value::as_str) {
+            services.insert(name.into(), json!({}));
+        }
+    }
+    for name in template
+        .manifest
+        .routes
+        .keys()
+        .chain(&template.manifest.one_shots)
+    {
+        services.insert(name.clone(), json!({}));
+    }
+    expected_services(config, template, instance, &json!({"services": services}))
+}
+
 pub(crate) fn command(
     config: &Config,
     directory: &Path,

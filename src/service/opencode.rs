@@ -10,9 +10,11 @@ use crate::{
 
 mod actions;
 
+pub(super) use actions::launch_instance_opencode;
+
 pub(super) struct Integration {
     state: Mutex<State>,
-    observer: Observer,
+    pub(super) observer: Observer,
     current_zellij: String,
 }
 
@@ -431,7 +433,10 @@ impl super::AppService {
             panes
                 .into_iter()
                 .fold(Vec::new(), |mut unique: Vec<(String, Pane)>, target| {
-                    if !unique.iter().any(|(_, pane)| *pane == target.1) {
+                    if !unique
+                        .iter()
+                        .any(|(_, pane)| pane.session == target.1.session && pane.id == target.1.id)
+                    {
                         unique.push(target);
                     }
                     unique
@@ -454,17 +459,9 @@ impl super::AppService {
         }
         state.navigation = Some(self.runtime.spawn(async move {
             let result = if settings.opencode_enabled() {
-                let mut errors = Vec::new();
-                for (directory, pane) in panes {
-                    if let Err(error) = observer.close_in_directory(&directory, &pane).await {
-                        errors.push(format!("{} / pane {}: {error}", pane.session, pane.id));
-                    }
-                }
-                if errors.is_empty() {
-                    Ok(())
-                } else {
-                    Err(errors.join("\n"))
-                }
+                observer
+                    .close_panes(panes, Instant::now() + Duration::from_secs(60))
+                    .await
             } else {
                 Err("OpenCode integration is disabled".into())
             };

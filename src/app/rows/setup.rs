@@ -88,16 +88,8 @@ pub(super) fn services(parent: &Row, instance: &Instance, count: usize, starting
     };
     group.hide_resources = group.metrics == UsageSummary::default();
     let running = services.iter().filter(|service| service.ready()).count();
-    group.status_detail = Some(if count == 0 {
-        "(no services configured)".into()
-    } else {
-        format!("{running}/{count} running")
-    });
-    group.detail_tone = if count == 0 {
-        Tone::Subtle
-    } else {
-        Tone::Muted
-    };
+    group.status_detail = (count > 0).then(|| format!("{running}/{count} running"));
+    group.detail_tone = Tone::Muted;
     group.tone = if summaries.is_empty() {
         Tone::Muted
     } else if summaries.iter().any(|summary| {

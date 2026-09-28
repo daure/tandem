@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use tuicore::{
     CrossSize, Dialog, DialogAction, Dropdown, DropdownCommitMode, Flex, FlexItem, FormField,
     KeySpec, Language, Padding, Paragraph, SyntaxHighlighter, Tab, Tabs, TabsVariant, TextInput,
-    Toggle,
+    TextareaInput, Toggle,
 };
 
 use super::{Modal, Msg, properties::Properties, rows::Row};
@@ -109,6 +109,7 @@ pub(super) fn instance_entry(
     title: &str,
     value: &str,
     description: &str,
+    creation: &super::creation::Creation,
     placeholder: &str,
     allowed_chars: Option<&str>,
 ) -> Modal {
@@ -126,11 +127,24 @@ pub(super) fn instance_entry(
     name.set_value(value);
     name.set_insert_mode(true);
     name.move_cursor_to_end();
-    let mut description_input = TextInput::new()
+    let mut description_input = TextareaInput::new()
         .placeholder("Description")
         .panel("Description")
+        .min_rows(2)
+        .max_rows(8)
+        .value(description)
         .on_change(Msg::DescriptionChanged);
-    description_input.set_value(description);
+    description_input.set_insert_mode(true);
+    description_input.move_cursor_to_end();
+    let mut prompt = TextareaInput::new()
+        .placeholder("Optional; a prompt opens OpenCode automatically")
+        .panel("Initial prompt")
+        .min_rows(2)
+        .max_rows(8)
+        .value(&creation.prompt)
+        .on_change(Msg::InitialPromptChanged);
+    prompt.set_insert_mode(true);
+    prompt.move_cursor_to_end();
     Box::new(
         Dialog::new()
             .top_left(title)
@@ -147,14 +161,22 @@ pub(super) fn instance_entry(
                         "description",
                         description_input,
                         FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
+                    )
+                    .child(
+                        "initial-prompt",
+                        prompt,
+                        FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
                     ),
             ),
     )
 }
 
 pub(super) fn description_entry(value: &str) -> Modal {
-    let mut input = TextInput::new()
+    let mut input = TextareaInput::new()
         .placeholder("Description")
+        .panel("Description")
+        .min_rows(2)
+        .max_rows(8)
         .on_change(Msg::DescriptionChanged);
     input.set_value(value);
     input.set_insert_mode(true);
@@ -315,7 +337,9 @@ pub(super) fn confirm_purge(name: &str) -> Modal {
         "Purge instance",
         "Purge",
         KeySpec::plain('p'),
-        format!("Purge {name}? This permanently removes its data."),
+        format!(
+            "Purge {name}? This permanently removes its data.\nWith OpenCode integration enabled, associated clients close first."
+        ),
     )
 }
 
@@ -333,7 +357,9 @@ pub(super) fn confirm_delete_template(name: &str) -> Modal {
         "Purge all instances",
         "Purge all",
         KeySpec::plain('p'),
-        format!("Purge every {name} instance? This permanently removes their data."),
+        format!(
+            "Purge every {name} instance? This permanently removes their data.\nWith OpenCode integration enabled, associated clients close first."
+        ),
     )
 }
 
@@ -368,7 +394,7 @@ pub(super) fn confirm_purge_all(count: usize, hotkey: KeySpec) -> Modal {
         "Purge all",
         hotkey,
         format!(
-            "Permanently purge {count} instances across all templates?\nThis removes their containers, workspaces, volumes, and networks.\nTemplates and the gateway stay. This cannot be undone."
+            "Permanently purge {count} instances across all templates?\nWith OpenCode integration enabled, associated clients close first.\nThis removes their containers, workspaces, volumes, and networks.\nTemplates and the gateway stay. This cannot be undone."
         ),
     )
 }

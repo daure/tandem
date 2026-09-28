@@ -77,6 +77,25 @@ fn click(area: Rect) -> TuiEvent {
 }
 
 #[test]
+fn sessions_tab_instance_purge_targets_only_the_selected_instance() {
+    tuicore::init();
+    let service = AppService::for_tests();
+    service.set_opencode_snapshot_for_tests(observation());
+    let mut app = crate::app::root(service);
+    app.update_snapshot(snapshot());
+    instances::set_highlighted(&app.instances, Some("instance:review".into()));
+    assert!(app.selected().unwrap().parent.is_none());
+    app.event(
+        &TuiEvent::Key(KeyEvent::from(Key::Char('p'))),
+        &mut EventCtx::new(AnimationSettings::default()),
+    );
+    assert!(matches!(app.intent, Some(crate::app::Intent::Purge(ref name)) if name == "review"));
+    let (_, lines) = render(&mut app, 130);
+    assert!(lines.iter().any(|line| line.contains("Purge instance")));
+    assert!(app.service.operations().is_empty());
+}
+
+#[test]
 fn app_starts_in_the_expanded_agent_view_with_the_first_item_selected() {
     tuicore::init();
     let service = AppService::for_tests();

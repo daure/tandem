@@ -66,6 +66,42 @@ fn deletion_recovers_owned_workspaces_when_the_runtime_kind_is_missing() {
 }
 
 #[test]
+fn purge_closes_clients_before_docker_discovery_even_when_docker_is_unavailable() {
+    let fixture = damaged_workspace();
+    fs::write(fixture.bin.join("docker"), "#!/bin/sh\nexit 99\n").unwrap();
+    let presence = fixture.home.join("state/tandem/opencode");
+    fs::create_dir_all(&presence).unwrap();
+    fs::write(presence.join("client.json"), json!({
+        "pid": std::process::id(),
+        "observed_at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+        "id": "ses_one", "title": "Review", "directory": fixture.home.join("workspaces/review"),
+        "server": "", "activity": "idle", "zellij_session": "main", "pane_id": 7
+    }).to_string()).unwrap();
+    fs::write(
+        fixture.bin.join("zellij"),
+        r#"#!/bin/sh
+case "$*" in
+  list-sessions*) printf 'main\n' ;;
+  *list-panes*)
+    if [ -f "$TANDEM_HOME/closed" ]; then printf '[]'; else
+      printf '[{"id":7,"is_plugin":false,"exited":false,"tab_id":4,"tab_name":"Review"}]'
+    fi ;;
+  *close-pane*) touch "$TANDEM_HOME/closed" ;;
+esac
+"#,
+    )
+    .unwrap();
+    let output = fixture.run(&["delete-instance", "review"]);
+    assert!(!output.status.success());
+    assert!(
+        fixture.home.join("closed").exists(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(fixture.home.join("workspaces/review/notes.md").exists());
+}
+
+#[test]
 fn cleanup_recovery_preserves_work_when_ownership_or_docker_evidence_is_unavailable() {
     for failure in [
         "missing-receipt",

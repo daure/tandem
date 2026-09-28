@@ -91,11 +91,11 @@ impl ClosingPane {
     }
 
     fn matches_session(&self, session_id: &str, pane: &Pane) -> bool {
-        self.session_id.as_deref() == Some(session_id) && pane == &self.pane
+        self.session_id.as_deref().is_none_or(|id| id == session_id) && self.matches_client(pane)
     }
 
     fn matches_client(&self, pane: &Pane) -> bool {
-        self.session_id.is_none() && pane == &self.pane
+        pane.session == self.pane.session && pane.id == self.pane.id
     }
 }
 
@@ -164,7 +164,7 @@ pub(super) fn attached_rows_for_owners(
         .filter(|row| {
             row.instance
                 .as_deref()
-                .is_some_and(|name| known_instances.contains(name))
+                .is_some_and(|name| row.starting || known_instances.contains(name))
         })
         .map(|row| row.id.clone())
         .collect();
@@ -198,7 +198,9 @@ pub(super) fn attached_rows_for_owners(
             .filter(|row| visible_session(row))
             .filter_map(|row| row.parent.clone())
             .collect::<std::collections::HashSet<_>>();
-        grouped.retain(|row| row.parent.is_some() || session_parents.contains(&row.id));
+        grouped.retain(|row| {
+            row.starting || row.parent.is_some() || session_parents.contains(&row.id)
+        });
     }
     folders::active_first(&mut grouped, snapshot, owners);
     resources::apply(&mut grouped, snapshot, owners);
@@ -208,32 +210,27 @@ pub(super) fn attached_rows_for_owners(
 
 pub(super) fn hide_closing_panes(snapshot: &mut Snapshot, closing: &mut Vec<ClosingPane>) {
     closing.retain(|target| {
-        target.session_id.as_deref().map_or_else(
-            || {
-                snapshot
-                    .clients
+        snapshot
+            .clients
+            .iter()
+            .any(|client| target.matches_client(&client.pane))
+            || snapshot.sessions.iter().any(|session| {
+                session
+                    .panes
                     .iter()
-                    .any(|client| target.matches_client(&client.pane))
-            },
-            |id| {
-                snapshot.sessions.iter().any(|session| {
-                    session.id == id
-                        && session
-                            .panes
-                            .iter()
-                            .any(|pane| target.matches_session(id, pane))
-                })
-            },
-        )
+                    .any(|pane| target.matches_session(&session.id, pane))
+            })
     });
-    for session in &mut snapshot.sessions {
+    snapshot.sessions.retain_mut(|session| {
+        let was_attached = session.attached();
         let id = &session.id;
         session.panes.retain(|pane| {
             !closing
                 .iter()
                 .any(|target| target.matches_session(id, pane))
         });
-    }
+        !was_attached || session.attached()
+    });
     snapshot.clients.retain(|client| {
         !closing
             .iter()

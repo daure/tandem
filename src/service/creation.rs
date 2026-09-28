@@ -8,6 +8,37 @@ pub(crate) enum NewInstanceOutcome {
 }
 
 impl AppService {
+    pub(super) fn schedule_instance_opencode(
+        &self,
+        ready: tokio::sync::oneshot::Receiver<String>,
+        name: String,
+        prompt: Option<String>,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), String>> {
+        let environments = std::sync::Arc::clone(&self.environments);
+        let settings = std::sync::Arc::clone(&self.settings);
+        let integration = std::sync::Arc::clone(&self.opencode);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.runtime.spawn(async move {
+            let result = match ready.await {
+                Ok(workspace) => {
+                    super::opencode::launch_instance_opencode(
+                        environments,
+                        &settings,
+                        &integration,
+                        &workspace,
+                        &name,
+                        prompt.as_deref(),
+                    )
+                    .await
+                }
+                // The creation operation reports preparation failures.
+                Err(_) => Ok(()),
+            };
+            let _ = sender.send(result);
+        });
+        receiver
+    }
+
     pub(crate) fn new_instance(
         &self,
         name: &str,

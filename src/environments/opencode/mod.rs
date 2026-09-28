@@ -1,6 +1,7 @@
 mod conversation;
 mod history;
 mod navigation;
+mod purge;
 mod resources;
 mod transport;
 

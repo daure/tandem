@@ -371,7 +371,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Permanently remove an instance's containers, networks, volumes, workspace, and rendered Compose file. Requires confirmed=true. Returns a background operation."
+        description = "Permanently remove an instance's containers, networks, volumes, workspace, and rendered Compose file. With OpenCode integration enabled, first close associated observed clients; closure failures block deletion. Conversation history is preserved. Requires confirmed=true. Returns a background operation."
     )]
     async fn delete_instance(
         &self,

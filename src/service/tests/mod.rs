@@ -2,8 +2,10 @@ use super::super::AppService;
 use crate::store::environments::Instance;
 
 mod completion_settings;
+mod creation;
 mod instance_batch;
 mod opencode;
+mod purge;
 
 #[test]
 fn mutations_require_confirmation_before_admission() {
@@ -91,12 +93,17 @@ fn new_instance_description_is_visible_while_creation_is_pending() {
     let service = AppService::for_tests();
 
     let outcome = service
-        .submit_new_instance("review", "website".into(), "Review environment".into())
+        .submit_new_instance(
+            "review",
+            "website".into(),
+            "Review environment".into(),
+            None,
+        )
         .unwrap();
 
     assert!(matches!(
         outcome,
-        crate::service::CreateInstanceOutcome::Started(_)
+        crate::service::CreateInstanceOutcome::Started { opencode: None, .. }
     ));
     let snapshot = service.environment_snapshot();
     let instance = snapshot

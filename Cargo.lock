@@ -9039,6 +9039,7 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
  "sysinfo",
  "tempfile",
  "tokio",
@@ -10435,7 +10436,7 @@ dependencies = [
 
 [[package]]
 name = "tuicore"
-version = "0.40.15"
+version = "0.40.16"
 dependencies = [
  "ansi-to-tui",
  "base64 0.22.1",

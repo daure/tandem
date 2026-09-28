@@ -25,7 +25,7 @@ pub(crate) fn start(
     startup: Startup,
     timeout: u64,
     progress: Progress,
-    pending_services: impl FnOnce(Vec<crate::store::environments::InstanceService>),
+    mut pending_services: impl FnMut(Vec<crate::store::environments::InstanceService>),
 ) -> Result<Instance, String> {
     validate_instance_name(name)?;
     validate_name(template_name)?;
@@ -39,6 +39,7 @@ pub(crate) fn start(
         journal::activity_template(config, name, template_name)?;
         let _template_lock = gateway::shared_lock(config, &format!("template-{template_name}"))?;
         let template = templates::get(config, template_name)?;
+        pending_services(compose::preview_services(config, &template, name));
         let existing_ids = if template.workspace_only() {
             Vec::new()
         } else {
@@ -302,14 +303,28 @@ pub(crate) fn stop(config: &Config, name: &str, progress: Progress) -> Result<()
     activity.finish(result)
 }
 
-pub(super) fn delete(config: &Config, name: &str, progress: Progress) -> Result<(), String> {
+pub(super) fn delete(
+    config: &Config,
+    name: &str,
+    progress: Progress,
+    before_deletion: &super::BeforeDeletion<'_>,
+) -> Result<(), String> {
     validate_instance_name(name)?;
     let deadline = Instant::now() + Duration::from_secs(60);
     let _lock = gateway::lock(config, &format!("instance-{name}"))?;
     let activity = journal::ActivityGuard::begin(config, name, "delete_instance", None, 60)?;
     let result = (|| {
+        let workspace = cleanup::recorded_workspace(config, name)?;
+        if let Some(workspace) = &workspace {
+            progress("Closing associated OpenCode clients before inspecting containers".into());
+            before_deletion(workspace, deadline)?;
+        }
         let (instance, ids) = cleanup::target(config, name, deadline, &progress)?;
         journal::activity_template(config, name, &instance.template)?;
+        if workspace.is_none() {
+            progress("Closing associated OpenCode clients before deleting instance data".into());
+            before_deletion(&instance.workspace, deadline)?;
+        }
         if !instance.workspace_only {
             if !ids.is_empty() {
                 progress("Removing instance containers".into());
@@ -352,13 +367,14 @@ pub(super) fn delete_template(
     config: &Config,
     template_name: &str,
     progress: Progress,
+    before_deletion: &super::BeforeDeletion<'_>,
 ) -> Result<(), String> {
     let instances = template_instances(config, template_name)?;
     if instances.is_empty() {
         return Err("template has no instances".into());
     }
     for instance in instances {
-        delete(config, &instance.name, progress.clone())?;
+        delete(config, &instance.name, progress.clone(), before_deletion)?;
     }
     Ok(())
 }

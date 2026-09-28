@@ -24,6 +24,7 @@ use crate::{
 
 mod action_menu;
 mod bulk;
+mod creation;
 mod details;
 mod dialogs;
 mod instances;
@@ -85,7 +86,9 @@ fn visible_rows(
         .collect::<HashSet<_>>();
     let mut visible = snapshot.clone();
     visible.instances.retain(|instance| {
-        instance.is_running() || opencode_instances.contains(instance.name.as_str())
+        instance.is_running()
+            || instance.is_starting()
+            || opencode_instances.contains(instance.name.as_str())
     });
     let directories = visible
         .instances
@@ -123,6 +126,7 @@ pub(crate) enum Msg {
     Close,
     NameChanged(String),
     DescriptionChanged(String),
+    InitialPromptChanged(String),
     OpenSettings,
     CompletionFadeChanged(String),
     CompletionSoundSelected(String),
@@ -208,6 +212,7 @@ pub(crate) struct App {
     intent: Option<Intent>,
     name: String,
     description: String,
+    creation: creation::Creation,
     settings_sound_choice: Rc<RefCell<Option<String>>>,
     settings_save: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
     description_save: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
@@ -321,6 +326,7 @@ pub(crate) fn root(service: AppService) -> App {
         intent: None,
         name: String::new(),
         description: String::new(),
+        creation: creation::Creation::default(),
         settings_sound_choice: Rc::new(RefCell::new(None)),
         settings_save: None,
         description_save: None,
@@ -353,6 +359,9 @@ impl App {
         let operations = self.service.operations();
         let snapshot_changed = snapshot != self.snapshot;
         let mut opencode_snapshot = self.service.opencode_snapshot();
+        for deletion in &self.deletions {
+            deletion.hide_opencode(&mut opencode_snapshot);
+        }
         opencode::hide_closing_panes(&mut opencode_snapshot, &mut self.closing_opencode_panes);
         if self.completion_sound && opencode_snapshot.completed_since(&self.opencode_snapshot) {
             self.service.play_completion_sound();
@@ -502,6 +511,7 @@ impl App {
             }
             Msg::NameChanged(name) => self.name = name,
             Msg::DescriptionChanged(description) => self.description = description,
+            Msg::InitialPromptChanged(prompt) => self.creation.prompt = prompt,
             Msg::OpenSettings => self.open_settings(ctx),
             Msg::CompletionFadeChanged(value) => {
                 match self.service.set_completion_fade_seconds(value) {
@@ -578,6 +588,7 @@ impl App {
                             &self.name,
                             template.clone(),
                             self.description.clone(),
+                            self.creation.opencode(),
                         ) {
                             Ok(crate::service::CreateInstanceOutcome::Existing) => {
                                 self.sync_environment();
@@ -590,7 +601,13 @@ impl App {
                                 ctx.request_layout();
                                 return;
                             }
-                            Ok(crate::service::CreateInstanceOutcome::Started(operation)) => {
+                            Ok(crate::service::CreateInstanceOutcome::Started {
+                                operation,
+                                opencode,
+                            }) => {
+                                if let Some(reply) = opencode {
+                                    self.creation.launches.push((self.name.clone(), reply));
+                                }
                                 Ok(*operation)
                             }
                             Err(error) => Err(error),
@@ -750,6 +767,7 @@ impl App {
                     "New instance",
                     &self.name,
                     &self.description,
+                    &self.creation,
                     if branch_instances {
                         "branch-name"
                     } else {
@@ -1065,6 +1083,7 @@ impl App {
             .filter(|row| index == 0 || row.opencode.is_none());
         self.name.clear();
         self.description.clear();
+        self.creation.reset_form();
         match index {
             0 => {
                 if let Some(row) = row.filter(|row| !row.informational) {
@@ -1504,7 +1523,13 @@ impl TuiNode<Msg> for App {
         if toolbar_route {
             return self.view.dispatch_event(route, event, ctx);
         }
-        if self.handle_key(event, ctx) {
+        let textarea_route = self.view.is_active()
+            && route
+                .path
+                .keys()
+                .iter()
+                .any(|key| matches!(key.as_str(), "description" | "initial-prompt"));
+        if !textarea_route && self.handle_key(event, ctx) {
             return EventOutcome::Handled;
         }
         let outcome = if self.transient_menu_active() {
@@ -1513,6 +1538,13 @@ impl TuiNode<Msg> for App {
             self.view.dispatch_event(route, event, ctx)
         };
         self.after_event(ctx);
+        // Textareas consume Ctrl+Enter to leave insert mode before the dialog can submit.
+        if textarea_route
+            && ctx.propagation() != tuicore::Propagation::Stopped
+            && self.handle_key(event, ctx)
+        {
+            return EventOutcome::Handled;
+        }
         if Self::returns_to_data_view(event) && data_view_route && outcome == EventOutcome::Ignored
         {
             ctx.focus(initial_focus());
@@ -1531,6 +1563,7 @@ impl TuiNode<Msg> for App {
         let opencode_enabled = self.toolbar_state.borrow().opencode_enabled;
         let mut changed = self.sync_environment();
         changed |= self.poll_description_save();
+        changed |= self.poll_creation_launches();
         if let Some(reply) = &mut self.settings_save {
             let result = match reply.try_recv() {
                 Ok(result) => Some(result),

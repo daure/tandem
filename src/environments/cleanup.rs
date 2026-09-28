@@ -3,6 +3,17 @@ use std::time::Instant;
 use super::{command::Progress, config::Config, docker, journal, lifecycle, ownership, removal};
 use crate::store::environments::Instance;
 
+pub(super) fn recorded_workspace(config: &Config, name: &str) -> Result<Option<String>, String> {
+    let Some(instance) = journal::recorded(config, name)? else {
+        return Ok(None);
+    };
+    if !instance.workspace_only {
+        ownership::verify(config, &instance)?;
+    }
+    removal::validate_workspace(config, name)?;
+    Ok(Some(instance.workspace))
+}
+
 pub(super) fn target(
     config: &Config,
     name: &str,

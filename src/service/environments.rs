@@ -15,7 +15,10 @@ use crate::{
 
 pub(crate) enum CreateInstanceOutcome {
     Existing,
-    Started(Box<Operation>),
+    Started {
+        operation: Box<Operation>,
+        opencode: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -129,6 +132,7 @@ impl AppService {
         name: &str,
         template: String,
         description: String,
+        opencode: Option<Option<String>>,
     ) -> Result<CreateInstanceOutcome, String> {
         if let Some(instance) = self
             .environments
@@ -151,19 +155,27 @@ impl AppService {
                 return Err("instance name belongs to another template".into());
             }
         }
+        if opencode.is_some() {
+            self.validate_opencode_launch()?;
+        }
         let operation = self
             .environments
             .begin_instance(name, template, Some(&description))?;
-        Ok(CreateInstanceOutcome::Started(Box::new(
-            self.schedule_operation(
-                operation,
-                600,
-                Startup {
-                    description: Some(description),
-                    ..Default::default()
-                },
-            ),
-        )))
+        let (sender, ready) = tokio::sync::oneshot::channel();
+        let operation = self.schedule_operation(
+            operation,
+            600,
+            Startup {
+                description: Some(description),
+                workspace_ready: opencode.is_some().then_some(sender),
+                ..Default::default()
+            },
+        );
+        Ok(CreateInstanceOutcome::Started {
+            operation: Box::new(operation),
+            opencode: opencode
+                .map(|prompt| self.schedule_instance_opencode(ready, name.to_owned(), prompt)),
+        })
     }
 
     pub(crate) fn delete_instance(&self, name: &str) -> Result<Vec<String>, String> {
@@ -329,9 +341,22 @@ impl AppService {
             }));
         }
         let settings = Arc::clone(&self.settings);
+        let observer = self.opencode.observer.clone();
+        let runtime = self.runtime.handle().clone();
         self.runtime.spawn_blocking(move || {
             notifier.publish(refresh);
-            environments.execute(worker_operation, timeout, startup);
+            environments.execute(
+                worker_operation,
+                timeout,
+                startup,
+                &|workspace, deadline| {
+                    settings.refresh()?;
+                    if settings.opencode_enabled() {
+                        runtime.block_on(observer.close_workspace(workspace, deadline))?;
+                    }
+                    Ok(())
+                },
+            );
             if let Some((template, kind)) = startup_timing
                 && let Ok(operation) = environments.operation(&operation_id)
                 && operation.state == OperationState::Succeeded

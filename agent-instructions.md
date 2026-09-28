@@ -82,6 +82,10 @@ A template is a shared development recipe; an instance has its own name and work
   Docker execution grants local privileges.
   Keep environments local; gateway routes share a browser origin.
 - Stop preserves instance data; deletion permanently removes its workspace and owned resources.
+  With OpenCode integration enabled, instance purge first closes associated observed clients in the
+  workspace and its subdirectories. Closure failures block that instance's deletion; clients outside
+  Zellij require manual closure. Include client closure in purge approval. Conversation history and
+  shared OpenCode servers are preserved. Clients can close even when later resource deletion fails.
   Preserve Tandem-generated `.tandem-*` files for ownership checks and cleanup.
   Failed deletion can be retried when containers are absent: cleanup validates the retained instance
   record and template ownership receipt, then checks project membership. Missing execution-kind metadata

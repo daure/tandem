@@ -155,6 +155,7 @@ fn new_instance_dialog_has_a_fixed_wider_width() {
         "New instance",
         "review",
         "Short",
+        &crate::app::creation::Creation::default(),
         "Instance name",
         None,
     )
@@ -165,6 +166,7 @@ fn new_instance_dialog_has_a_fixed_wider_width() {
         "New instance",
         "review",
         &"A long description ".repeat(20),
+        &crate::app::creation::Creation::default(),
         "Instance name",
         None,
     )

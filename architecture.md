@@ -70,7 +70,11 @@ can be resumed in their recorded directory on their loopback server, including e
 New clients target an instance workspace or an observed directory; instance workspaces receive
 validated guidance preparation, while external directories remain outside Tandem provisioning.
 Bulk closure selects observed panes by instance ownership or exact external directory and excludes
-owned panes from the external aggregate. Directory-scoped server status and pending question requests
+owned panes from the external aggregate. With integration enabled, instance purge closes associated
+clients under the instance lock after ownership validation and before resource deletion. Verified local
+ownership records allow client closure before Docker inspection. Group pane closures run concurrently;
+fresh receipts authorize exact-pane closure and live pane inventory verifies completion. Closure
+failures preserve that instance's resources. Directory-scoped server status and pending question requests
 establish activity. Awaiting an answer pauses busy timing and triggers completion feedback once on
 the transition from busy. Titles are presentation data.
 Unknown observations stay explicit, and disabling the integration discards its cache and cancels

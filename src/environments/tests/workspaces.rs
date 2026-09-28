@@ -140,7 +140,11 @@ fn workspace_template_removal_and_purges_release_identity_without_docker() {
     let template = workspace_template(&config);
     ready_workspace(&config, &template, "one");
     ready_workspace(&config, &template, "two");
-    lifecycle::delete_template(&config, "local", Arc::new(|_| {})).unwrap();
+    lifecycle::delete_template(&config, "local", Arc::new(|_| {}), &|workspace, _| {
+        assert!(std::path::Path::new(workspace).is_dir());
+        Ok(())
+    })
+    .unwrap();
     assert!(journal::workspaces(&config).unwrap().is_empty());
     assert!(std::path::Path::new(&template.directory).exists());
     ready_workspace(&config, &template, "three");
@@ -151,6 +155,35 @@ fn workspace_template_removal_and_purges_release_identity_without_docker() {
     assert!(journal::workspaces(&config).unwrap().is_empty());
     assert!(!std::path::Path::new(&template.directory).exists());
     assert!(!config.workspaces.join("three").exists());
+}
+
+#[test]
+fn failed_client_closure_preserves_instance_data_and_allows_purge_retry() {
+    let (_directory, config) = fixture();
+    let template = workspace_template(&config);
+    ready_workspace(&config, &template, "review");
+    let workspace = config.workspaces.join("review");
+    let error = lifecycle::delete(&config, "review", Arc::new(|_| {}), &|path, _| {
+        assert_eq!(std::path::Path::new(path), workspace);
+        assert!(workspace.join("app").is_dir());
+        assert!(gateway::lock(&config, "instance-review").is_err());
+        Err("client closure failed".into())
+    })
+    .unwrap_err();
+    assert_eq!(error, "client closure failed");
+    assert!(workspace.join("app").is_dir());
+    assert!(
+        journal::workspace_instance(&config, "review")
+            .unwrap()
+            .is_some()
+    );
+    lifecycle::delete(&config, "review", Arc::new(|_| {}), &|_, _| Ok(())).unwrap();
+    assert!(!workspace.exists());
+    assert!(
+        journal::workspace_instance(&config, "review")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -175,5 +208,10 @@ fn launch_kind_changes_and_forged_workspace_ownership_are_rejected() {
     record["expected"]["workspace"] = "/outside".into();
     fs::write(record_path, record.to_string()).unwrap();
     assert!(journal::workspace_instance(&config, "review").is_err());
-    assert!(lifecycle::delete(&config, "review", Arc::new(|_| {})).is_err());
+    assert!(
+        lifecycle::delete(&config, "review", Arc::new(|_| {}), &|_, _| {
+            panic!("unverified ownership must not close clients")
+        })
+        .is_err()
+    );
 }

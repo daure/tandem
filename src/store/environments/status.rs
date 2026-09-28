@@ -423,6 +423,13 @@ impl InstanceService {
 }
 
 impl Instance {
+    pub fn is_starting(&self) -> bool {
+        matches!(
+            self.status_summary().status,
+            Status::Creating | Status::Starting
+        )
+    }
+
     pub fn is_running(&self) -> bool {
         self.services
             .iter()

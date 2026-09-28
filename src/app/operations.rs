@@ -7,6 +7,7 @@ use super::instances;
 pub(super) struct Deletion {
     operation: Operation,
     succeeded: bool,
+    workspaces: Vec<String>,
 }
 
 impl Deletion {
@@ -18,7 +19,21 @@ impl Deletion {
         .then_some(Self {
             operation,
             succeeded: false,
+            workspaces: Vec::new(),
         })
+    }
+
+    fn remember_workspaces(&mut self, snapshot: &EnvironmentSnapshot) {
+        for instance in &snapshot.instances {
+            let targeted = if self.operation.action == "delete_instance" {
+                instance.name == self.operation.name
+            } else {
+                instance.template == self.operation.name
+            };
+            if targeted && !self.workspaces.contains(&instance.workspace) {
+                self.workspaces.push(instance.workspace.clone());
+            }
+        }
     }
 
     pub(super) fn project(
@@ -27,9 +42,10 @@ impl Deletion {
         lookup: impl FnOnce(&str) -> Result<Operation, String>,
         notifications: &mut Vec<Notification>,
     ) -> bool {
+        self.remember_workspaces(snapshot);
         if !self.succeeded {
             match lookup(&self.operation.id) {
-                Ok(operation) if operation.state == OperationState::Running => return true,
+                Ok(operation) if operation.state == OperationState::Running => {}
                 Ok(operation) if operation.state == OperationState::Succeeded => {
                     self.succeeded = true;
                     let title = match operation.action.as_str() {
@@ -96,6 +112,43 @@ impl Deletion {
                     snapshot.activities.len(),
                 )
     }
+
+    fn contains_directory(&self, directory: &str) -> bool {
+        crate::store::opencode::workspace_owner(
+            directory,
+            self.workspaces
+                .iter()
+                .map(|path| (path.as_str(), path.as_str())),
+        )
+        .is_some()
+    }
+
+    fn awaiting_clients(&self, snapshot: &crate::store::opencode::Snapshot) -> bool {
+        self.succeeded
+            && (snapshot
+                .sessions
+                .iter()
+                .any(|session| session.attached() && self.contains_directory(&session.directory))
+                || snapshot
+                    .clients
+                    .iter()
+                    .any(|client| self.contains_directory(&client.directory)))
+    }
+
+    pub(super) fn hide_opencode(&self, snapshot: &mut crate::store::opencode::Snapshot) {
+        snapshot
+            .directories
+            .retain(|directory| !self.contains_directory(directory));
+        snapshot
+            .sessions
+            .retain(|session| !self.contains_directory(&session.directory));
+        snapshot
+            .clients
+            .retain(|client| !self.contains_directory(&client.directory));
+        snapshot
+            .resources
+            .retain(|process| !self.contains_directory(&process.directory));
+    }
 }
 
 impl super::App {
@@ -114,7 +167,8 @@ impl super::App {
             }
             _ => {}
         }
-        if let Some(deletion) = Deletion::new(operation) {
+        if let Some(mut deletion) = Deletion::new(operation) {
+            deletion.remember_workspaces(&self.snapshot);
             self.deletions.push(deletion);
         }
         self.sync_environment();
@@ -154,12 +208,13 @@ impl super::App {
             notifications.push(notification);
             false
         });
+        let opencode = self.service.opencode_snapshot();
         self.deletions.retain_mut(|deletion| {
             deletion.project(
                 &mut snapshot,
                 |id| self.service.get_operation(id),
                 &mut notifications,
-            )
+            ) || deletion.awaiting_clients(&opencode)
         });
         for notification in notifications {
             self.notify(notification);

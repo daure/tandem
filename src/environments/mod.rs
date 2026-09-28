@@ -37,6 +37,8 @@ use command::Progress;
 use config::Config;
 pub(crate) use creation::Startup;
 
+pub(crate) type BeforeDeletion<'a> = dyn Fn(&str, Instant) -> Result<(), String> + 'a;
+
 pub(crate) struct Environments {
     pub config: Config,
     snapshot: Mutex<EnvironmentSnapshot>,
@@ -631,28 +633,37 @@ impl Environments {
     }
 
     fn set_pending_services(&self, operation_id: &str, services: Vec<InstanceService>) {
-        let operation = {
-            let mut jobs = self
-                .operations
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            let Some(job) = jobs.get_mut(operation_id) else {
-                return;
-            };
-            job.pending_services = services.clone();
-            job.operation.clone()
-        };
         let mut snapshot = self
             .snapshot
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        let mut jobs = self
+            .operations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(job) = jobs.get_mut(operation_id) else {
+            return;
+        };
+        job.pending_services = services.clone();
         if let Some(instance) = snapshot
             .instances
             .iter_mut()
-            .find(|instance| instance.pending && instance.name == operation.name)
+            .find(|instance| instance.name == job.operation.name)
         {
-            instance.services = services;
+            instance
+                .services
+                .retain(|service| !service.container_id.is_empty());
+            for service in services {
+                if !instance.services.iter().any(|current| {
+                    current.name == service.name
+                        && current.runtime.replica.max(1) == service.runtime.replica.max(1)
+                }) {
+                    instance.services.push(service);
+                }
+            }
         }
+        // An older inspection must not restore provisional slots after reconciliation.
+        self.instance_revision.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn operations(&self) -> Vec<Operation> {
@@ -707,7 +718,13 @@ impl Environments {
             })
     }
 
-    pub fn execute(self: &Arc<Self>, operation: Operation, timeout: u64, startup: Startup) {
+    pub fn execute(
+        self: &Arc<Self>,
+        operation: Operation,
+        timeout: u64,
+        startup: Startup,
+        before_deletion: &BeforeDeletion<'_>,
+    ) {
         let mut config = self.config.clone();
         config.operation_id = Some(operation.id.clone());
         if let Some(job) = self
@@ -763,13 +780,15 @@ impl Environments {
                     .map(|()| None)
                 }
                 "delete_instance" => {
-                    lifecycle::delete(&config, &operation.name, progress).map(|()| None)
+                    lifecycle::delete(&config, &operation.name, progress, before_deletion)
+                        .map(|()| None)
                 }
                 "stop_template" => {
                     lifecycle::stop_template(&config, &operation.name, progress).map(|()| None)
                 }
                 "delete_template" => {
-                    lifecycle::delete_template(&config, &operation.name, progress).map(|()| None)
+                    lifecycle::delete_template(&config, &operation.name, progress, before_deletion)
+                        .map(|()| None)
                 }
                 "create_template" => self.create_template(&operation.name).map(|_| None),
                 "remove_template" => {

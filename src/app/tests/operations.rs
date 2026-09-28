@@ -4,7 +4,7 @@ use super::*;
 use crate::app::{Instances, instances, operations::Deletion};
 use crate::store::environments::{Operation, OperationState};
 
-fn operation(action: &str, name: &str) -> Operation {
+pub(super) fn operation(action: &str, name: &str) -> Operation {
     Operation {
         id: "test-operation".into(),
         action: action.into(),
@@ -237,7 +237,7 @@ fn pending_container_operations_keep_notifications_silent() {
 }
 
 #[test]
-fn deletes_remain_visible_until_completion_and_notify_once() {
+fn accepted_deletes_hide_targets_immediately_and_notify_once_on_completion() {
     tuicore::init();
     for (action, name, title, template_count) in [
         ("delete_instance", "review", "Instance purged", 1),
@@ -250,8 +250,8 @@ fn deletes_remain_visible_until_completion_and_notify_once() {
         for _ in 0..2 {
             let mut inventory = snapshot();
             assert!(deletion.project(&mut inventory, |_| Ok(op.clone()), &mut notifications));
-            assert_eq!(inventory.instances.len(), 1);
-            assert_eq!(inventory.templates.len(), 1);
+            assert!(inventory.instances.is_empty());
+            assert_eq!(inventory.templates.len(), template_count);
             assert!(notifications.is_empty());
         }
         op.state = OperationState::Succeeded;
@@ -371,7 +371,7 @@ fn created_items_are_selected_on_arrival_without_reselecting_on_refresh() {
 }
 
 #[test]
-fn completed_instance_deletion_moves_to_the_next_visible_row_then_the_previous() {
+fn accepted_instance_deletion_moves_to_the_next_visible_row_then_the_previous() {
     tuicore::init();
     let mut inventory = snapshot();
     for name in ["alpha", "zulu"] {
@@ -389,8 +389,7 @@ fn completed_instance_deletion_moves_to_the_next_visible_row_then_the_previous()
         ("zulu", "instance:alpha"),
         ("alpha", "template:/tmp/templates/website"),
     ] {
-        let mut op = operation("delete_instance", name);
-        op.state = OperationState::Succeeded;
+        let op = operation("delete_instance", name);
         let mut deletion = Deletion::new(op.clone()).unwrap();
         deletion.project(&mut inventory, |_| Ok(op), &mut Vec::new());
         instances::replace_rows(&state, rows::from_snapshot(&inventory));
@@ -411,11 +410,16 @@ fn duplicate_new_instance_focuses_existing_and_notifies_without_another_operatio
         app.intent = Some(crate::app::Intent::CreateInstance(template.into()));
         app.open_name_entry(&mut ctx);
         app.handle_message(Msg::NameChanged("review".into()), &mut ctx);
+        app.handle_message(
+            Msg::InitialPromptChanged("Explain this project".into()),
+            &mut ctx,
+        );
         app.handle_message(Msg::Submit, &mut ctx);
         app.layout(Rect::new(0, 0, 130, 40), &mut tuicore::LayoutCtx::new());
         assert_eq!(app.selected().unwrap().id, "instance:review");
         assert!(!app.view.is_active());
         assert!(app.intent.is_none());
+        assert!(app.creation.launches.is_empty());
         let operations = app.service.operations();
         assert_eq!(operations.len(), 1);
         assert_eq!(operations[0].id, existing.id);

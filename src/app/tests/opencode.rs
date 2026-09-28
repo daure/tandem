@@ -1374,13 +1374,14 @@ fn closing_a_pane_hides_it_across_stale_observations_and_restores_it_on_failure(
             id: "ses_review".into(),
             title: "Review".into(),
             directory: "/tmp/workspaces/review".into(),
-            activity: Activity::Idle,
+            activity: Activity::Busy,
             panes: vec![pane.clone()],
             ..Default::default()
         }],
         ..Default::default()
     };
     let mut app = root(AppService::for_tests());
+    app.opencode_history = true;
     app.service
         .set_opencode_snapshot_for_tests(observation.clone());
     app.update_snapshot(snapshot());

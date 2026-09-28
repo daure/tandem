@@ -33,7 +33,22 @@ fn new_sessions_attach_without_resuming_and_stack_in_the_observed_tab() {
         ))
         .unwrap();
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
-    assert!(calls.contains(&format!("new-pane --stacked --name  --tab-id 4 --cwd {directory} -- env TANDEM_INITIAL_PROMPT=Explain 'this'; $(touch injected)\nsecond line opencode attach {} --dir {directory}\n", server.url)), "{calls}");
+    let command = navigation::client_command(&[
+        "env".into(),
+        "TANDEM_INITIAL_PROMPT=Explain 'this'; $(touch injected)\nsecond line".into(),
+        "opencode".into(),
+        "attach".into(),
+        server.url.clone(),
+        "--dir".into(),
+        directory.into(),
+    ])
+    .join(" ");
+    assert!(
+        calls.contains(&format!(
+            "new-pane --stacked --name  --tab-id 4 --cwd {directory} -- {command}\n"
+        )),
+        "{calls}"
+    );
     assert!(!calls.contains("rename-pane"), "{calls}");
     assert!(
         calls.contains("--session other action switch-session main --pane-id terminal_99"),
@@ -64,9 +79,16 @@ fn new_sessions_start_opencode_in_a_named_tab_without_a_known_server() {
         ("main", 100, 9)
     );
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
+    let command = navigation::client_command(&[
+        "env".into(),
+        "TANDEM_INITIAL_PROMPT=".into(),
+        "opencode".into(),
+        directory.into(),
+    ])
+    .join(" ");
     assert!(
         calls.contains(&format!(
-            "new-tab --name workspace --cwd {directory} -- env TANDEM_INITIAL_PROMPT= opencode {directory}\n"
+            "new-tab --name workspace --cwd {directory} -- {command}\n"
         )),
         "{calls}"
     );
@@ -90,9 +112,16 @@ fn new_tab_returns_the_command_pane_with_an_application_owned_title_in_a_multi_p
     let root = tempfile::tempdir().unwrap();
     let observer = observer(root.path());
     let directory = root.path().to_str().unwrap();
+    let command = navigation::client_command(&[
+        "env".into(),
+        "TANDEM_INITIAL_PROMPT=".into(),
+        "opencode".into(),
+        directory.into(),
+    ])
+    .join(" ");
     fs::write(root.path().join("panes.json"), json!([
         {"id":100,"is_plugin":false,"exited":false,"tab_id":9,"tab_name":"workspace","terminal_command":"sleep 60"},
-        {"id":101,"is_plugin":false,"exited":false,"tab_id":9,"tab_name":"workspace","terminal_command":format!("env TANDEM_INITIAL_PROMPT= opencode {directory}")}
+        {"id":101,"is_plugin":false,"exited":false,"tab_id":9,"tab_name":"workspace","terminal_command":command}
     ]).to_string()).unwrap();
     let pane = tokio::runtime::Runtime::new()
         .unwrap()

@@ -15,13 +15,7 @@ pub(super) fn directory_name(directory: &str) -> String {
 
 impl AppService {
     pub(in crate::service) fn validate_opencode_launch(&self) -> Result<(), String> {
-        if !self.opencode_enabled() {
-            return Err("OpenCode integration is disabled".into());
-        }
-        if self.opencode.current_zellij.is_empty() {
-            return Err("Run Tandem inside Zellij to create an OpenCode session".into());
-        }
-        Ok(())
+        validate_launch(&self.settings, &self.opencode)
     }
 
     pub(in crate::service) async fn launch_instance_opencode(
@@ -30,40 +24,15 @@ impl AppService {
         name: &str,
         initial_prompt: Option<&str>,
     ) -> Result<(), String> {
-        self.validate_opencode_launch()?;
-        let environments = Arc::clone(&self.environments);
-        let target = workspace.to_owned();
-        let instance = name.to_owned();
-        tokio::task::spawn_blocking(move || {
-            environments.prepare_workspace_open(&target, &instance)
-        })
-        .await
-        .map_err(|error| error.to_string())??;
-        // A short-lived CLI has no TUI observation cache yet.
-        let snapshot = tokio::time::timeout(
-            Duration::from_secs(15),
-            self.opencode
-                .observer
-                .observe(&[workspace.to_owned()], Snapshot::default()),
+        launch_instance_opencode(
+            Arc::clone(&self.environments),
+            &self.settings,
+            &self.opencode,
+            workspace,
+            name,
+            initial_prompt,
         )
         .await
-        .map_err(|_| "OpenCode observation timed out")??;
-        let current = &self.opencode.current_zellij;
-        let destination = session_destination(&snapshot, current, None, |directory| {
-            Path::new(directory).starts_with(workspace)
-        })?;
-        self.validate_opencode_launch()?;
-        self.opencode
-            .observer
-            .new_session(
-                workspace,
-                name,
-                current,
-                destination.as_ref(),
-                initial_prompt,
-            )
-            .await
-            .map(|_| ())
     }
 
     pub(crate) fn new_opencode_session(
@@ -144,6 +113,60 @@ impl AppService {
         }));
         Ok(receiver)
     }
+}
+
+fn validate_launch(
+    settings: &crate::service::settings::Settings,
+    integration: &super::Integration,
+) -> Result<(), String> {
+    if !settings.opencode_enabled() {
+        return Err("OpenCode integration is disabled".into());
+    }
+    if integration.current_zellij.is_empty() {
+        return Err("Run Tandem inside Zellij to create an OpenCode session".into());
+    }
+    Ok(())
+}
+
+pub(in crate::service) async fn launch_instance_opencode(
+    environments: Arc<crate::environments::Environments>,
+    settings: &crate::service::settings::Settings,
+    integration: &super::Integration,
+    workspace: &str,
+    name: &str,
+    initial_prompt: Option<&str>,
+) -> Result<(), String> {
+    validate_launch(settings, integration)?;
+    let target = workspace.to_owned();
+    let instance = name.to_owned();
+    tokio::task::spawn_blocking(move || environments.prepare_workspace_open(&target, &instance))
+        .await
+        .map_err(|error| error.to_string())??;
+    // A short-lived CLI has no TUI observation cache yet.
+    let snapshot = tokio::time::timeout(
+        Duration::from_secs(15),
+        integration
+            .observer
+            .observe(&[workspace.to_owned()], Snapshot::default()),
+    )
+    .await
+    .map_err(|_| "OpenCode observation timed out")??;
+    let current = &integration.current_zellij;
+    let destination = session_destination(&snapshot, current, None, |directory| {
+        Path::new(directory).starts_with(workspace)
+    })?;
+    validate_launch(settings, integration)?;
+    integration
+        .observer
+        .new_session(
+            workspace,
+            name,
+            current,
+            destination.as_ref(),
+            initial_prompt,
+        )
+        .await
+        .map(|_| ())
 }
 
 fn session_destination(

@@ -56,6 +56,10 @@ Stop all preserves data and is disabled when no instance can be stopped. Purge a
 instance containers, workspaces, volumes and networks and is disabled when there are no instances.
 Both preserve templates and the shared gateway. Each instance reports its own outcome; a failure does
 not prevent the other instances from being attempted.
+Accepted purges immediately hide their rows while cleanup runs. Selection moves to the next surviving
+row in the original order, or the previous row at the end. Failed purges restore their rows and report
+the error without taking selection back. With OpenCode integration enabled, verified client panes close
+before resource deletion; recorded workspace ownership lets this start before Docker inspection.
 Manual refresh shows a completion notification after all requested checks and fresh resource samples
 finish; failures appear as a warning. Automatic refreshes stay silent, and repeated manual
 requests while one is pending share its completion notification.
@@ -108,6 +112,11 @@ OpenCode launches require Tandem to run inside Zellij with the OpenCode integrat
 The TUI's **New OpenCode session** and CLI use the same pane placement and launch logic: an observed
 instance pane supplies a tab for a stacked pane, otherwise Tandem creates an instance-named tab.
 A known workspace server is reused; otherwise OpenCode starts in the workspace.
+Client launches run through `direnv exec .` when `direnv` is on the pane's `PATH`, loading the
+workspace's approved environment, including inherited station configuration. Without direnv,
+OpenCode launches directly. A direnv failure stops the client launch and appears in the pane;
+Tandem never automatically approves `.envrc` files. Attaching to a shared server keeps that server's
+existing configuration.
 
 For a new instance, OpenCode launches after declared repositories have been cloned or validated,
 Compose configuration has been rendered when applicable, and workspace `AGENTS.md` has been written.
@@ -360,6 +369,13 @@ Shared navigation, focus, and component keys use tuicore configuration. The TUI 
 
 ### Workspace actions
 
+The **New instance** dialog accepts a name, a multiline description, and an optional initial prompt.
+Description and prompt content grow from 2 to 8 rows, then scroll. A nonblank prompt opens OpenCode
+and submits the text when the workspace is prepared; empty or whitespace-only prompts leave OpenCode
+closed. Launching requires the OpenCode integration and a Zellij session. `Ctrl+Enter` submits the
+dialog, except while editing a textarea: the first press returns it to focus mode, and a second
+press submits. An existing name selects that instance and leaves its sessions unchanged.
+
 Press `y`, or choose **Yank** from the `.` Actions menu, to open the copy menu for the selected
 instance or routed service. For an instance, `i` copies its name and `w` copies its absolute workspace path;
 for a routed service, `u` copies its URL.
@@ -476,6 +492,8 @@ action because it spans directories. New sessions open a blank OpenCode client w
 prompt: they attach to a known local server after checking its health, or start OpenCode in the
 directory when no server is known. Created panes have the fixed Zellij title **OpenCode**. Creation
 immediately selects the new client, including when its destination is another tab or Zellij session.
+If the destination pane or its Zellij session has closed, creation opens a fresh tab in the current
+Zellij session. Live destinations keep their stacking behavior.
 The DataView selects that client's row when observation arrives and reveals its parent groups;
 conversation titles in the DataView remain independent of the pane title.
 
@@ -484,6 +502,9 @@ Use **Enter → Actions** to jump to a specific pane or resume a conversation. *
 saved conversation history. Group closure includes observed panes hidden by filters or display
 limits; external-directory groups match their exact directory, and instance groups use workspace
 ownership. The external aggregate closes only outside-Tandem panes.
+Close and Close all hide the targeted rows immediately while pane closure runs; failures restore them
+without stealing selection. Closing all panes in a group runs concurrently. Zellij removes tabs when
+their last selectable pane closes; unrelated panes in shared tabs stay open.
 Stacked targets become active and expanded. Navigation hides floating panes for tiled targets and
 shows them for floating targets; selecting an already-focused pane succeeds. The **󰋚 history toggle**
 in the toolbar shows or hides saved conversations across all instances; history is hidden by default.
@@ -505,7 +526,8 @@ name, with the description on the second line. Conversation children show their 
 timer, then the latest question with its activity indicator. Search includes template and instance names.
 History (`Shift+O`) controls saved and detached conversation children independently of folder
 visibility; with history off, only attached children appear. Select an inactive folder and press `n`
-to launch a new client. With show-all off, the running-only filter applies. The toolbar actions,
+to launch a new client. Both tabs retain creating and starting instances even before containers or
+OpenCode clients are observed; with show-all off, inactive instances stay hidden. The toolbar actions,
 filter values, search, and completion-sound setting are shared across both tabs.
 Clients without a conversation appear beneath their instance or external directory.
 The first toolbar toggle, **󰕾 completion sound** (`Shift+N`), plays the desktop completion sound when a freshly observed

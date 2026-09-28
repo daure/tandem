@@ -132,6 +132,13 @@ pub(super) async fn zellij(program: &Path, args: &[String]) -> Result<String, St
             async { child.wait().await.map_err(|error| error.to_string()) },
         )?;
         let stderr = String::from_utf8_lossy(&stderr);
+        if action == "list-sessions"
+            && status.code() == Some(1)
+            && output.is_empty()
+            && stderr.trim() == "No active zellij sessions found."
+        {
+            return Ok(String::new());
+        }
         let succeeded =
             status.success() || status.code() == Some(2) && focus_unchanged(action, args, &stderr);
         if !succeeded {

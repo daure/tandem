@@ -67,6 +67,70 @@ fn select(tree: &mut Instances, state: &instances::SharedState, id: &str) {
 }
 
 #[test]
+fn closing_a_session_selects_its_original_neighbor_and_failure_does_not_steal_focus() {
+    tuicore::init();
+    for agents in [false, true] {
+        let mut observation = conversation();
+        observation.sessions = ["alpha", "middle", "zulu"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| Session {
+                id: format!("ses_{name}"),
+                panes: vec![pane(index as u32 + 7)],
+                ..observation.sessions[0].clone()
+            })
+            .collect();
+        let mut app = root(AppService::for_tests());
+        app.opencode_history = true;
+        app.service
+            .set_opencode_snapshot_for_tests(observation.clone());
+        app.handle_message(
+            Msg::SetAttachedSessionsOnly(agents),
+            &mut EventCtx::new(AnimationSettings::default()),
+        );
+        app.update_snapshot(snapshot());
+        let state = app.instances.clone();
+        let mut tree = Instances::new(state.clone());
+        tree.tick(std::time::Duration::ZERO, AnimationSettings::default());
+        tree.expand_for_tests("sessions:review");
+        select(&mut tree, &state, "opencode:review:ses_middle");
+        let closing = app.optimistically_close_opencode_pane("ses_middle", &pane(8));
+        tree.tick(std::time::Duration::ZERO, AnimationSettings::default());
+        assert_eq!(
+            instances::selected(&state).unwrap().id,
+            "opencode:review:ses_zulu"
+        );
+        observation.sessions[1].panes[0].tab_name = "renamed".into();
+        app.service.set_opencode_snapshot_for_tests(observation);
+        app.update_snapshot(snapshot());
+        tree.tick(std::time::Duration::ZERO, AnimationSettings::default());
+        assert_eq!(
+            instances::selected(&state).unwrap().id,
+            "opencode:review:ses_zulu"
+        );
+        let (sender, reply) = tokio::sync::oneshot::channel();
+        sender.send(Err("closure failed".into())).unwrap();
+        app.opencode_action = Some(projection::PendingAction::new(
+            reply,
+            "Cannot close OpenCode session",
+            vec![closing],
+        ));
+        app.poll_opencode_action();
+        tree.tick(std::time::Duration::ZERO, AnimationSettings::default());
+        assert_eq!(
+            instances::selected(&state).unwrap().id,
+            "opencode:review:ses_zulu"
+        );
+        assert!(
+            app.opencode_snapshot
+                .sessions
+                .iter()
+                .any(|session| session.id == "ses_middle")
+        );
+    }
+}
+
+#[test]
 fn selection_follows_the_pane_between_home_and_its_first_conversation() {
     tuicore::init();
     for agents in [false, true] {

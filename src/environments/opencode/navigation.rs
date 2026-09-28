@@ -1,5 +1,21 @@
 use super::*;
 
+pub(super) fn client_command(command: &[String]) -> Vec<String> {
+    // Check inside the pane: Zellij's PATH can differ from Tandem's environment.
+    let mut launch = vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "if command -v direnv >/dev/null 2>&1; then exec direnv exec . \"$@\"; else exec \"$@\"; fi".into(),
+        "tandem-opencode".into(),
+    ];
+    launch.extend_from_slice(command);
+    launch
+}
+
+#[cfg(test)]
+#[path = "tests/direnv.rs"]
+mod direnv_tests;
+
 impl Observer {
     pub(super) async fn list_panes(&self, name: &str) -> Result<Vec<RemotePane>, String> {
         let output = zellij(
@@ -179,7 +195,7 @@ impl Observer {
         let directory = directory.map(str::to_owned);
         let target = pane.clone();
         let still_attached = tokio::task::spawn_blocking(move || {
-            observer.inventory().0.iter().any(|presence| {
+            observer.presences().iter().any(|presence| {
                 id.as_ref().is_none_or(|id| presence.id == *id)
                     && directory
                         .as_ref()
@@ -297,6 +313,36 @@ impl Observer {
             .await
     }
 
+    async fn live_destination(&self, destination: &Pane) -> Result<Option<Pane>, String> {
+        let panes = match self.list_panes(&destination.session).await {
+            Ok(panes) => panes,
+            Err(error) => {
+                let sessions = zellij(
+                    &self.zellij,
+                    &[
+                        "list-sessions".into(),
+                        "--short".into(),
+                        "--no-formatting".into(),
+                    ],
+                )
+                .await?;
+                if sessions.lines().any(|name| name == destination.session) {
+                    return Err(error);
+                }
+                return Ok(None);
+            }
+        };
+        Ok(panes
+            .into_iter()
+            .find(|pane| pane.id == destination.id && !pane.is_plugin && !pane.exited)
+            .map(|pane| Pane {
+                session: destination.session.clone(),
+                id: pane.id,
+                tab_id: pane.tab_id,
+                tab_name: pane.tab_name,
+            }))
+    }
+
     async fn launch_panel(
         &self,
         directory: &str,
@@ -305,15 +351,17 @@ impl Observer {
         destination: Option<&Pane>,
         command: &[String],
     ) -> Result<Pane, String> {
-        let target_session = destination.map_or(current, |pane| pane.session.as_str());
+        let destination = match destination {
+            Some(pane) => self.live_destination(pane).await?,
+            None => None,
+        };
+        let target_session = destination
+            .as_ref()
+            .map_or(current, |pane| pane.session.as_str());
+        let command = client_command(command);
         // An empty name lets OpenCode own the title; omitting it pins the command in Zellij.
         let mut args = vec!["--session".into(), target_session.into(), "action".into()];
-        let tab_id = if let Some(destination) = destination {
-            let panes = self.list_panes(target_session).await?;
-            let pane = panes
-                .iter()
-                .find(|pane| pane.id == destination.id && !pane.is_plugin && !pane.exited)
-                .ok_or("Destination pane closed; refresh and try again")?;
+        let tab_id = if let Some(pane) = &destination {
             args.extend([
                 "new-pane".into(),
                 "--stacked".into(),
@@ -328,7 +376,7 @@ impl Observer {
             None
         };
         args.extend(["--cwd".into(), directory.into(), "--".into()]);
-        args.extend_from_slice(command);
+        args.extend_from_slice(&command);
         let created = zellij(&self.zellij, &args).await?;
         if let Some(tab_id) = tab_id {
             let id = created

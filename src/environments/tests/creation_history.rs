@@ -38,7 +38,7 @@ fn creation_cleanup_runs_once_per_instance_identity_and_before_readiness() {
     let existing = start(&config, &calls, false).unwrap();
     assert!(existing.runtime.workspace_ready);
     assert_eq!(calls.load(Ordering::Relaxed), 1);
-    lifecycle::delete(&config, "review", Arc::new(|_| {})).unwrap();
+    lifecycle::delete(&config, "review", Arc::new(|_| {}), &|_, _| Ok(())).unwrap();
     let recreated = start(&config, &calls, false).unwrap();
     assert!(recreated.runtime.workspace_ready);
     assert_eq!(calls.load(Ordering::Relaxed), 2);

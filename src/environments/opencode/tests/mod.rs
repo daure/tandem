@@ -1,8 +1,10 @@
 use super::*;
 mod actions;
+mod destinations;
 mod folders;
 mod history;
 mod history_server;
+mod purge;
 mod questions;
 mod startup;
 use serde_json::json;

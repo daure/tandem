@@ -242,6 +242,7 @@ pub(super) struct Row {
     pub icon: &'static str,
     pub tone: Tone,
     pub loading: bool,
+    pub starting: bool,
     pub secondary_icon: &'static str,
     pub secondary_tone: Tone,
     pub secondary_text_tone: Option<Tone>,
@@ -279,7 +280,7 @@ pub(super) struct Row {
 
 impl Row {
     pub(super) fn is_template(&self) -> bool {
-        self.parent.is_none() && self.opencode.is_none()
+        self.parent.is_none() && self.instance.is_none() && self.opencode.is_none()
     }
 
     pub(super) fn height(&self) -> u16 {
@@ -921,6 +922,7 @@ fn from_snapshot_with_operations_and_totals(
             icon: summary.icon,
             tone: summary.tone,
             loading: summary.loading,
+            starting: instance.is_starting(),
             secondary_icon: "",
             secondary_tone: Tone::default(),
             secondary_text_tone: None,
@@ -1023,6 +1025,7 @@ fn from_snapshot_with_operations_and_totals(
                 icon: status_icon(service_summary.status),
                 tone,
                 loading: service_summary.busy,
+                starting: false,
                 secondary_icon: "",
                 secondary_tone: Tone::default(),
                 secondary_text_tone: None,
