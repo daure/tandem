@@ -34,7 +34,12 @@ fn resource_values_use_compact_units_and_preserve_tiny_nonzero_samples() {
         (100, 1000 * 1048576, "1%", "1.0 GiB"),
         (100, 1073741824, "1%", "1.0 GiB"),
         (100, 1610612736, "1%", "1.5 GiB"),
-        (u64::MAX, u64::MAX, "184467440737095516%", "17179869184.0 GiB"),
+        (
+            u64::MAX,
+            u64::MAX,
+            "184467440737095516%",
+            "17179869184.0 GiB",
+        ),
     ] {
         let mut snapshot = snapshot();
         snapshot.instances[0].services[0].usage = Some(ResourceUsage {
@@ -519,7 +524,9 @@ fn resource_rows_reserve_one_loading_spinner_before_memory() {
     let template = lines.iter().find(|line| line.contains("website")).unwrap();
     assert!(template.ends_with("  0.2 GiB 2% "), "{template}");
     assert_eq!(
-        template[..template.find("0.2 GiB").unwrap()].chars().count(),
+        template[..template.find("0.2 GiB").unwrap()]
+            .chars()
+            .count(),
         memory_x
     );
     assert_eq!(
@@ -615,7 +622,10 @@ fn incomplete_resource_pairs_show_only_the_loader_in_the_cpu_column() {
         let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
         let service = lines.iter().find(|line| line.contains("web ·")).unwrap();
         assert!(service.ends_with(" ⠋ "), "{service}");
-        assert!(!service.contains("MiB") && !service.contains("GiB"), "{service}");
+        assert!(
+            !service.contains("MiB") && !service.contains("GiB"),
+            "{service}"
+        );
         assert!(!service.contains('%'), "{service}");
     }
 }
