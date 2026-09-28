@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) mod conversation;
 pub(crate) mod resources;
+pub(crate) mod retention;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]

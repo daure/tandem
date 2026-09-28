@@ -3,6 +3,7 @@ mod history;
 mod navigation;
 mod purge;
 mod resources;
+mod server;
 mod transport;
 
 pub(crate) use conversation::load as conversation;
@@ -216,152 +217,52 @@ impl Observer {
         let mut observed_sessions = BTreeSet::new();
         let mut deleted = BTreeSet::new();
         let mut question_refresh = BTreeSet::new();
+        let mut server_tasks = tokio::task::JoinSet::new();
         for (server, directories) in servers {
-            let mut statuses = BTreeMap::new();
-            let mut pending_questions = BTreeSet::new();
-            let mut pending_approvals = BTreeSet::new();
-            let mut approval_directories = BTreeSet::new();
-            let mut status_tasks = tokio::task::JoinSet::new();
-            for directory in &directories {
-                let mut path = reqwest::Url::parse("http://localhost/session/status")
-                    .map_err(|error| error.to_string())?;
-                path.query_pairs_mut().append_pair("directory", directory);
-                let target = format!("{}?{}", path.path(), path.query().unwrap_or_default());
-                let questions_target = format!("/question?{}", path.query().unwrap_or_default());
-                let permissions_target =
-                    format!("/permission?{}", path.query().unwrap_or_default());
-                let client = client.clone();
-                let server = server.clone();
-                let directory = directory.clone();
-                status_tasks.spawn(async move {
-                    let (result, permissions) = tokio::join!(
-                        async {
-                            tokio::try_join!(
-                                get::<BTreeMap<String, RemoteStatus>>(&client, &server, &target),
-                                get::<Vec<RemoteQuestion>>(&client, &server, &questions_target),
-                            )
-                        },
-                        transport::get_optional::<Vec<RemoteQuestion>>(
-                            &client,
-                            &server,
-                            &permissions_target
-                        ),
-                    );
-                    (directory, result, permissions)
-                });
-            }
+            let candidates = presences
+                .iter()
+                .filter(|presence| local_server(&presence.server).as_ref() == Some(&server))
+                .map(|presence| presence.id.clone())
+                .collect();
+            let client = client.clone();
+            // Unfinished servers stay stale even if their worker fails.
+            failed_status_directories.insert(server.clone(), directories.clone());
+            server_tasks.spawn(async move {
+                let result = server::observe(client, &server, &directories, candidates).await;
+                (server, directories, result)
+            });
+        }
+        let mut observations = BTreeMap::new();
+        while let Some(result) = server_tasks.join_next().await {
+            let (server, directories, observation) = match result {
+                Ok(result) => result,
+                Err(error) => {
+                    errors.insert(error.to_string());
+                    continue;
+                }
+            };
+            observations.insert(server, (directories, observation));
+        }
+        for (server, (directories, observation)) in observations {
             let failed_status = failed_status_directories.entry(server.clone()).or_default();
-            while let Some(result) = status_tasks.join_next().await {
-                let (directory, result, permissions) = result.map_err(|error| error.to_string())?;
-                if let Ok(Some(permissions)) = permissions {
-                    approval_directories.insert(directory.clone());
-                    pending_approvals
-                        .extend(permissions.into_iter().map(|request| request.session_id));
-                }
-                match result {
-                    Ok((found, questions)) => {
-                        statuses.extend(found);
-                        pending_questions
-                            .extend(questions.into_iter().map(|question| question.session_id));
-                    }
-                    Err(error) => {
-                        // Directory initialization can fail independently on a shared server.
-                        failed_status.insert(directory.clone());
-                        // Port receipts outlive servers; stopped daemons need no notification.
-                        if sessions.values().any(|session| session.server == server) {
-                            errors.insert(format!(
-                                "{directory}: OpenCode observation unavailable ({error})"
-                            ));
-                        }
-                    }
-                }
+            *failed_status = observation.failed_status;
+            if failed_status.len() < directories.len()
+                || sessions.values().any(|session| session.server == server)
+            {
+                errors.extend(observation.errors);
             }
-            if failed_status.len() == directories.len() {
-                continue;
-            }
-            let mut history_tasks = tokio::task::JoinSet::new();
-            for directory in &directories {
-                let mut path = reqwest::Url::parse("http://localhost/experimental/session")
-                    .map_err(|error| error.to_string())?;
-                path.query_pairs_mut()
-                    .append_pair("roots", "true")
-                    .append_pair("limit", &SESSION_DIRECTORY_WINDOW.to_string())
-                    .append_pair("directory", directory);
-                let target = format!("{}?{}", path.path(), path.query().unwrap_or_default());
-                let client = client.clone();
-                let server = server.clone();
-                let directory = directory.clone();
-                history_tasks.spawn(async move {
-                    let result = get::<Vec<RemoteSession>>(&client, &server, &target).await;
-                    (directory, result)
-                });
-            }
-            let mut remote = BTreeMap::new();
-            let mut failed_directories = BTreeSet::new();
-            let mut history_task_failed = false;
-            while let Some(result) = history_tasks.join_next().await {
-                match result {
-                    Ok((_directory, Ok(found))) => {
-                        for session in found {
-                            remote.insert(session.id.clone(), session);
-                        }
-                    }
-                    Ok((directory, Err(error))) => {
-                        failed_directories.insert(directory);
-                        errors.insert(error);
-                    }
-                    Err(error) => {
-                        history_task_failed = true;
-                        errors.insert(error.to_string());
-                    }
-                }
-            }
-            let present = remote.keys().cloned().collect::<BTreeSet<_>>();
             sessions.retain(|id, session| {
                 session.server != server
-                    || history_task_failed
-                    || failed_directories.contains(&session.directory)
-                    || present.contains(id)
+                    || observation.failed_history.contains(&session.directory)
+                    || observation.sessions.contains_key(id)
             });
-            // Page absence is ambiguous; direct 404s establish deletion even with old receipts.
-            let candidates: BTreeSet<_> = statuses
-                .keys()
-                .cloned()
-                .chain(pending_questions.iter().cloned())
-                .chain(pending_approvals.iter().cloned())
-                .chain(
-                    presences
-                        .iter()
-                        .filter(|presence| local_server(&presence.server).as_ref() == Some(&server))
-                        .map(|presence| presence.id.clone()),
-                )
-                .filter(|id| valid_id(id))
-                .collect();
-            for id in &candidates {
-                if !remote.contains_key(id) {
-                    match transport::get_optional::<RemoteSession>(
-                        &client,
-                        &server,
-                        &format!("/session/{id}"),
-                    )
-                    .await
-                    {
-                        Ok(Some(session)) => {
-                            remote.insert(session.id.clone(), session);
-                        }
-                        Ok(None) => {
-                            if !observed_sessions.contains(id) {
-                                sessions.remove(id);
-                            }
-                            deleted.insert(id.clone());
-                        }
-                        Err(error) => {
-                            errors.insert(error);
-                        }
-                    }
+            for id in observation.deleted {
+                if !observed_sessions.contains(&id) {
+                    sessions.remove(&id);
                 }
+                deleted.insert(id);
             }
-            for (_, item) in remote {
+            for (_, item) in observation.sessions {
                 if item.parent_id.is_some()
                     || !valid_id(&item.id)
                     || !directories.iter().any(|directory| {
@@ -374,10 +275,10 @@ impl Observer {
                 let status_failed = failed_status.contains(&item.directory);
                 let activity = if status_failed {
                     Activity::Unknown
-                } else if pending_questions.contains(&item.id) {
+                } else if observation.questions.contains(&item.id) {
                     Activity::AwaitingAnswer
                 } else {
-                    match statuses.get(&item.id).map(|s| s.kind.as_str()) {
+                    match observation.statuses.get(&item.id).map(|s| s.kind.as_str()) {
                         Some("busy" | "retry") => Activity::Busy,
                         None | Some("idle") => Activity::Idle,
                         _ => Activity::Unknown,
@@ -387,9 +288,10 @@ impl Observer {
                 let mut candidate = Session {
                     id: item.id.clone(),
                     title: clean(&item.title),
-                    approval_pending: approval_directories
+                    approval_pending: observation
+                        .approval_directories
                         .contains(&item.directory)
-                        .then(|| pending_approvals.contains(&item.id)),
+                        .then(|| observation.approvals.contains(&item.id)),
                     directory: item.directory,
                     server: server.clone(),
                     activity,
@@ -437,13 +339,25 @@ impl Observer {
         )
         .await;
         if let Ok(names) = names {
+            let mut pane_tasks = tokio::task::JoinSet::new();
             for name in names.lines().filter(|name| !name.is_empty()).take(64) {
-                match self.list_panes(name).await {
-                    Ok(found) => {
-                        panes.insert(name.to_owned(), found);
+                let observer = self.clone();
+                let name = name.to_owned();
+                pane_tasks.spawn(async move {
+                    let result = observer.list_panes(&name).await;
+                    (name, result)
+                });
+            }
+            while let Some(result) = pane_tasks.join_next().await {
+                match result {
+                    Ok((name, Ok(found))) => {
+                        panes.insert(name, found);
+                    }
+                    Ok((_, Err(error))) => {
+                        errors.insert(error);
                     }
                     Err(error) => {
-                        errors.insert(error);
+                        errors.insert(error.to_string());
                     }
                 }
             }
@@ -651,7 +565,12 @@ impl Observer {
             let session = sessions.get(&id).expect("question session exists").clone();
             let client = client.clone();
             question_tasks.spawn(async move {
-                let turn = conversation::latest_turn(&client, &session).await;
+                let turn = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    conversation::latest_turn(&client, &session),
+                )
+                .await
+                .unwrap_or_else(|_| Err("OpenCode question observation timed out".into()));
                 (id, turn)
             });
         }

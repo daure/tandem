@@ -80,7 +80,10 @@ fn workspace_rows_keep_a_childless_services_group() {
     assert_eq!(instance.icon, "");
     assert_eq!(instance.tone, crate::app::rows::Tone::Normal);
     let instance_text = instance.text("", None);
-    assert_eq!(instance_text.lines[0].to_string(), " review");
+    assert_eq!(
+        instance_text.lines[0].to_string(),
+        " review · (no description)"
+    );
     assert_eq!(
         instance_text.lines[0].spans[0].style.fg,
         Some(tuicore::theme().text_fg())
@@ -175,9 +178,9 @@ fn inactive_instance_icons_are_green_for_live_opencode_sessions() {
             assert_eq!(
                 text.lines[0].to_string(),
                 if workspace_only {
-                    " review"
+                    " review · (no description)"
                 } else {
-                    " review · Stopped"
+                    " review · Stopped · (no description)"
                 }
             );
             assert_eq!(

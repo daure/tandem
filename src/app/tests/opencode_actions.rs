@@ -47,10 +47,21 @@ fn observation() -> Snapshot {
 }
 
 #[test]
-fn n_creates_in_the_workspace_of_instances_groups_sessions_and_clients() {
+fn n_creates_in_the_workspace_of_instance_subtrees_sessions_and_clients() {
     tuicore::init();
+    let mut inventory = snapshot();
+    inventory.instances[0].services.push(InstanceService {
+        name: "migrate".into(),
+        status: "exited 0".into(),
+        one_shot: true,
+        ..Default::default()
+    });
     for (id, directory) in [
         ("instance:review", "/tmp/workspaces/review"),
+        ("setup:review", "/tmp/workspaces/review"),
+        ("service:review:migrate", "/tmp/workspaces/review"),
+        ("services:review", "/tmp/workspaces/review"),
+        ("service:review:web", "/tmp/workspaces/review"),
         ("sessions:review", "/tmp/workspaces/review"),
         ("opencode:review:ses_review", "/tmp/workspaces/review"),
         ("opencode-workspace:/work/external", "/work/external"),
@@ -69,7 +80,7 @@ fn n_creates_in_the_workspace_of_instances_groups_sessions_and_clients() {
     ] {
         let mut app = root(AppService::for_tests());
         app.service.set_opencode_snapshot_for_tests(observation());
-        app.update_snapshot(snapshot());
+        app.update_snapshot(inventory.clone());
         super::super::instances::set_highlighted(&app.instances, Some(id.into()));
         assert_eq!(
             super::super::opencode::new_session_directory(&app.selected().unwrap()),

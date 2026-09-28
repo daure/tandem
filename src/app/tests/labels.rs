@@ -78,7 +78,7 @@ fn service_group_detail_separator_uses_the_normal_text_color() {
 }
 
 #[test]
-fn active_startup_rows_show_the_latest_progress_beneath_the_status() {
+fn active_startup_rows_show_the_latest_progress_inline() {
     let progress = "Waiting for service health and gateway content assertions";
     let operation = Operation {
         id: "operation-id".into(),
@@ -106,8 +106,11 @@ fn active_startup_rows_show_the_latest_progress_beneath_the_status() {
     assert_eq!(instance.label, "review · Creating");
     assert_eq!(instance.status_detail.as_deref(), Some(progress));
     let text = instance.text("⠋", None);
-    assert!(text.lines[0].to_string().contains(progress));
-    assert_eq!(text.lines[1].to_string(), "Review environment");
+    assert_eq!(instance.height(), 1);
+    assert_eq!(
+        text.to_string(),
+        format!("⠋ review · Creating · {progress} · Review environment")
+    );
 
     let mut activity = snapshot();
     activity.instances.clear();
@@ -129,6 +132,11 @@ fn active_startup_rows_show_the_latest_progress_beneath_the_status() {
         .unwrap();
     assert_eq!(operation.label, format!("review · Starting\n{progress}"));
     assert!(operation.hide_resources);
+    assert_eq!(operation.height(), 1);
+    assert_eq!(
+        operation.text("⠋", None).to_string(),
+        format!("⠋ review · Starting 󰡨 · {progress}")
+    );
 
     let fallback = rows::from_snapshot_with_operations(&activity, &[])
         .into_iter()
@@ -154,22 +162,27 @@ fn instance_status_label_uses_its_semantic_color() {
 }
 
 #[test]
-fn instance_description_always_uses_the_muted_second_line() {
+fn instance_description_uses_muted_inline_text_and_a_subtle_placeholder() {
     tuicore::init();
     let mut row = rows::from_snapshot(&snapshot())[1].clone();
-    row.description = "A long description for this environment".into();
+    row.description = "A long description\nfor this environment".into();
     let text = row.text("⠋", Some(70));
-    assert_eq!(text.lines[1].to_string(), row.description);
+    assert_eq!(text.lines.len(), 1);
+    assert_eq!(row.height(), 1);
     assert_eq!(
-        text.lines[1].spans[0].style.fg,
+        text.to_string(),
+        " review · Running · A long description for this environment"
+    );
+    assert_eq!(
+        text.lines[0].spans.last().unwrap().style.fg,
         Some(tuicore::theme().muted_fg())
     );
 
     row.description.clear();
     let text = row.text("⠋", Some(70));
-    assert_eq!(text.lines[1].to_string(), "(no description)");
+    assert_eq!(text.to_string(), " review · Running · (no description)");
     assert_eq!(
-        text.lines[1].spans[0].style.fg,
+        text.lines[0].spans.last().unwrap().style.fg,
         Some(tuicore::theme().subtle_fg())
     );
 }
@@ -189,7 +202,7 @@ fn instance_rows_sort_by_name_before_rendering() {
 }
 
 #[test]
-fn tree_secondary_lines_use_semantic_colors_and_align_with_the_row_icon() {
+fn tree_details_share_one_line_with_the_label_and_keep_semantic_colors() {
     tuicore::init();
     for routed in [true, false] {
         let mut snapshot = snapshot();
@@ -240,16 +253,15 @@ fn tree_secondary_lines_use_semantic_colors_and_align_with_the_row_icon() {
                 .iter()
                 .position(|line| line.contains(row.label.lines().next().unwrap()))
                 .unwrap();
-            let x = lines[y][..lines[y].find(row.icon).unwrap()].chars().count();
-            let secondary_x = lines[y + 1][..lines[y + 1].find(detail).unwrap()]
-                .chars()
-                .count();
-            assert_eq!(secondary_x, x, "{}: {lines:#?}", row.id);
+            assert_eq!(row.height(), 1);
+            assert_eq!(row.text("⠋", None).lines.len(), 1);
+            assert!(lines[y].contains(&format!(" · {detail}")), "{lines:#?}");
+            let detail_x = lines[y][..lines[y].find(detail).unwrap()].chars().count();
             assert_eq!(
                 terminal
                     .backend()
                     .buffer()
-                    .cell((x as u16, y as u16 + 1))
+                    .cell((detail_x as u16, y as u16))
                     .unwrap()
                     .fg,
                 color
@@ -330,6 +342,14 @@ fn template_capabilities_follow_compose_repositories_routes_guidance_order() {
         template.guidance_source = guidance.then(String::new);
         let tree = rows::from_snapshot(&snapshot);
         assert_eq!(tree[0].template_capabilities, expected);
+        assert_eq!(
+            tree[0].text("⠋", None).to_string(),
+            if expected.is_empty() {
+                "󰠲 website ·  1/1".to_owned()
+            } else {
+                format!("󰠲 website · {expected} ·  1/1")
+            }
+        );
         assert!(
             tree.iter()
                 .skip(1)

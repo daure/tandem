@@ -30,11 +30,11 @@ fn resource_values_use_compact_units_and_preserve_tiny_nonzero_samples() {
         (100, 100 * 1048576, "1%", "100 MiB"),
         (100, 101 * 1048576, "1%", "0.1 GiB"),
         (100, 180 * 1048576, "1%", "0.2 GiB"),
-        (100, 999 * 1048576, "1%", "1 GiB"),
-        (100, 1000 * 1048576, "1%", "1 GiB"),
-        (100, 1073741824, "1%", "1 GiB"),
+        (100, 999 * 1048576, "1%", "1.0 GiB"),
+        (100, 1000 * 1048576, "1%", "1.0 GiB"),
+        (100, 1073741824, "1%", "1.0 GiB"),
         (100, 1610612736, "1%", "1.5 GiB"),
-        (u64::MAX, u64::MAX, "184467440737095516%", "17179869184 GiB"),
+        (u64::MAX, u64::MAX, "184467440737095516%", "17179869184.0 GiB"),
     ] {
         let mut snapshot = snapshot();
         snapshot.instances[0].services[0].usage = Some(ResourceUsage {
@@ -209,7 +209,7 @@ fn resources_sum_services_and_active_setup_into_instances_and_templates() {
 }
 
 #[test]
-fn memory_stays_visible_while_cpu_baselines_are_pending() {
+fn resource_columns_wait_for_cpu_baselines_before_showing_memory() {
     tuicore::init();
     let mut snapshot = snapshot();
     snapshot.instances[0].services[0].usage = Some(ResourceUsage {
@@ -229,7 +229,7 @@ fn memory_stays_visible_while_cpu_baselines_are_pending() {
         .find(|row| row.id == "service:review:web")
         .unwrap();
     assert_eq!(web.resource_text().to_string(), "0.2 GiB\n— …");
-    assert_eq!(web.memory_text().to_string(), "0.2 GiB");
+    assert_eq!(web.memory_text_with_spinner("⠋").to_string(), "");
     assert_eq!(web.cpu_text_with_spinner("⠋").to_string(), "⠋");
     assert_eq!(
         web.resource_text().lines[1].spans[0].style.fg,
@@ -336,7 +336,7 @@ fn instance_summaries_use_the_most_actionable_service_state() {
             assert_eq!(text.lines[0].spans[0].style.fg, Some(service_tone.color()));
             assert_eq!(text.lines[0].spans[1].content, "web · ");
             assert_eq!(
-                text.lines[1].spans[0].style.fg,
+                text.lines[0].spans.last().unwrap().style.fg,
                 Some(tuicore::theme().muted_fg())
             );
         }
@@ -434,8 +434,8 @@ fn resource_rows_show_right_aligned_memory_and_cpu_columns() {
         .position(|line| line.contains(" web"))
         .expect("routed service");
     assert!(lines[service_line].contains(" 0.2 GiB 2% "), "{lines:#?}");
-    assert!(lines[service_line + 1].contains("http://localhost:9876/review/web/ · 󰈀 8080"));
-    for offset in [0, 3, 5] {
+    assert!(lines[service_line].contains("http://localhost:9876/review/web/ · 󰈀 8080"));
+    for offset in [0, 1, 2, 3] {
         let row_line = service_line - offset;
         assert!(lines[row_line].ends_with(" 0.2 GiB 2% "), "{lines:#?}");
     }
@@ -479,13 +479,13 @@ fn resource_rows_show_right_aligned_memory_and_cpu_columns() {
         .iter()
         .position(|line| line.contains(" web"))
         .unwrap();
-    for offset in [0, 2, 4] {
+    for offset in [0, 1, 2, 3] {
         assert!(!lines[service_line - offset].contains('—'));
     }
 }
 
 #[test]
-fn resource_rows_show_one_loading_spinner_after_cpu() {
+fn resource_rows_reserve_one_loading_spinner_before_memory() {
     tuicore::init();
     let mut inventory = snapshot();
     inventory.instances[0].services[0].usage = Some(usage(240, 180));
@@ -494,18 +494,38 @@ fn resource_rows_show_one_loading_spinner_after_cpu() {
     starting.pending = true;
     inventory.instances.push(starting);
     let rows = rows::from_snapshot(&inventory);
-    let memory = rows[0].memory_text();
+    let memory = rows[0].memory_text_with_spinner("⠋");
     let cpu = rows[0].cpu_text_with_spinner("⠋");
     assert_eq!(memory.spans[0].style.fg, Some(Tone::Muted.color()));
     assert_eq!(cpu.spans[0].style.fg, Some(Tone::Muted.color()));
-    let mut tree = Instances::new(instances::state(rows));
+    let state = instances::state(rows);
+    let mut tree = Instances::new(state.clone());
 
     let terminal = render(&mut tree, 110);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
     let template = lines.iter().find(|line| line.contains("website")).unwrap();
 
-    assert!(template.contains("0.2 GiB 2% ⠋"), "{template}");
-    assert!(!template.contains("GiB ⠋"), "{template}");
+    assert!(template.ends_with("⠋ 0.2 GiB 2% "), "{template}");
+    let memory_x = template.find("0.2 GiB").unwrap();
+    let memory_x = template[..memory_x].chars().count();
+    let cpu_x = template.find("2%").unwrap();
+    let cpu_x = template[..cpu_x].chars().count();
+
+    inventory.instances.pop();
+    instances::replace_rows(&state, rows::from_snapshot(&inventory));
+    tree.tick(Duration::ZERO, AnimationSettings::default());
+    let terminal = render(&mut tree, 110);
+    let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
+    let template = lines.iter().find(|line| line.contains("website")).unwrap();
+    assert!(template.ends_with("  0.2 GiB 2% "), "{template}");
+    assert_eq!(
+        template[..template.find("0.2 GiB").unwrap()].chars().count(),
+        memory_x
+    );
+    assert_eq!(
+        template[..template.find("2%").unwrap()].chars().count(),
+        cpu_x
+    );
 }
 
 #[test]
@@ -543,16 +563,22 @@ fn template_capabilities_follow_each_name_while_resources_stay_right_aligned() {
             .position(|line| line.contains("website"))
             .unwrap();
         let template = &lines[template_y];
-        let guidance = &lines[template_y + 2];
+        let guidance = &lines[template_y + 1];
         let icons = "󰡨 󰳐 󰈀 󱓷";
         let capability_x = template[..template.find(icons).unwrap()].chars().count();
-        assert!(template.contains("website 󰡨 󰳐 󰈀 󱓷"), "{template}");
+        assert!(template.contains("website · 󰡨 󰳐 󰈀 󱓷"), "{template}");
         assert!(
-            guidance.contains("a-long-guidance-template-name 󱓷"),
+            guidance.contains("a-long-guidance-template-name"),
             "{guidance}"
         );
+        if width >= 60 {
+            assert!(
+                guidance.contains("a-long-guidance-template-name · 󱓷 ·  0/0"),
+                "{guidance}"
+            );
+        }
         assert!(template.ends_with(" 0.2 GiB 2% "), "{template}");
-        assert!(lines[template_y + 1].contains(" 1/1"));
+        assert!(template.contains(" ·  1/1"));
         assert_eq!(
             terminal
                 .backend()
@@ -566,15 +592,32 @@ fn template_capabilities_follow_each_name_while_resources_stay_right_aligned() {
 }
 
 #[test]
-fn cpu_column_shows_only_the_loader_before_the_first_sample() {
+fn incomplete_resource_pairs_show_only_the_loader_in_the_cpu_column() {
     tuicore::init();
-    let tree = rows::from_snapshot(&snapshot());
-    let service = tree
-        .iter()
-        .find(|row| row.id == "service:review:web")
-        .unwrap();
+    let mut inventory = snapshot();
+    inventory.instances[0].services[0].usage = Some(usage(240, 180));
+    for (memory, cpu) in [(None, None), (Some(0), None), (None, Some(0))] {
+        let mut rows = rows::from_snapshot(&inventory);
+        let service = rows
+            .iter_mut()
+            .find(|row| row.id == "service:review:web")
+            .unwrap();
+        service.metrics.memory_bytes = memory;
+        service.metrics.cpu_basis_points = cpu;
+        service.metrics.memory_waiting = memory.is_none();
+        service.metrics.cpu_waiting = cpu.is_none();
 
-    assert_eq!(service.cpu_text_with_spinner("⠋").to_string(), "⠋");
+        assert_eq!(service.memory_text_with_spinner("⠋").to_string(), "");
+        assert_eq!(service.cpu_text_with_spinner("⠋").to_string(), "⠋");
+        let mut tree = Instances::new(instances::state(rows));
+        expand_first_instance(&mut tree);
+        let terminal = render(&mut tree, 110);
+        let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
+        let service = lines.iter().find(|line| line.contains("web ·")).unwrap();
+        assert!(service.ends_with(" ⠋ "), "{service}");
+        assert!(!service.contains("MiB") && !service.contains("GiB"), "{service}");
+        assert!(!service.contains('%'), "{service}");
+    }
 }
 
 #[test]
@@ -610,13 +653,15 @@ fn setup_group_uses_one_line_and_its_children_show_only_labels() {
         tree.focus(None, false, &mut tuicore::FocusCtx::default());
         let terminal = render(&mut tree, 110);
         let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
+        let expected = image.map_or_else(
+            || "migrate · Completed".to_owned(),
+            |image| format!("migrate · Completed · {image}"),
+        );
         assert!(
-            lines[group + 1].trim_end().ends_with("migrate · Completed"),
+            lines[group + 1].trim_end().ends_with(&expected),
             "{lines:#?}"
         );
-        if let Some(image) = image {
-            assert!(lines[group + 2].trim_end().ends_with(image), "{lines:#?}");
-        }
+        assert!(lines[group + 2].contains("Service"), "{lines:#?}");
         assert!(
             lines.iter().any(|line| line.contains("web · Running")),
             "{lines:#?}"

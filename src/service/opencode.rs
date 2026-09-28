@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     environments::opencode::{self, Observer},
-    store::opencode::{CloseScope, Pane, Session, Snapshot},
+    store::opencode::{CloseScope, Pane, Session, Snapshot, retention::Retention},
 };
 
 mod actions;
@@ -19,7 +19,9 @@ pub(super) struct Integration {
 }
 
 struct State {
+    // Keep retry evidence when rows expire, including each client's startup grace period.
     snapshot: Snapshot,
+    retention: Retention,
     task: Option<tokio::task::JoinHandle<()>>,
     navigation: Option<tokio::task::JoinHandle<()>>,
     conversation: Option<tokio::task::JoinHandle<()>>,
@@ -40,6 +42,7 @@ impl Integration {
             current_zellij: std::env::var("ZELLIJ_SESSION_NAME").unwrap_or_default(),
             state: Mutex::new(State {
                 snapshot: Snapshot::default(),
+                retention: Retention::default(),
                 task: None,
                 navigation: None,
                 conversation: None,
@@ -62,6 +65,7 @@ impl Integration {
         }
         state.generation += 1;
         state.snapshot = Snapshot::default();
+        state.retention = Retention::default();
         state.next = Instant::now();
     }
 }
@@ -128,12 +132,12 @@ impl super::AppService {
         if !self.opencode_enabled() {
             return Snapshot::default();
         }
-        self.opencode
+        let state = self
+            .opencode
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .snapshot
-            .clone()
+            .unwrap_or_else(|error| error.into_inner());
+        state.retention.visible_snapshot(&state.snapshot)
     }
 
     pub(crate) fn poll_opencode(&self) {
@@ -194,6 +198,12 @@ impl super::AppService {
                     state.snapshot.error = Some(error);
                 }
             }
+            let State {
+                snapshot,
+                retention,
+                ..
+            } = &mut *state;
+            retention.observe(snapshot);
         }));
     }
 

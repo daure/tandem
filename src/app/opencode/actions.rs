@@ -7,12 +7,10 @@ use crate::{
 };
 
 pub(in crate::app) fn new_session_directory(row: &Row) -> Option<&str> {
-    if row.informational || row.service.is_some() {
+    if row.informational {
         return None;
     }
-    (row.instance.is_some() || row.id.starts_with("sessions:") || row.opencode.is_some())
-        .then_some(row.workspace.as_deref())
-        .flatten()
+    row.workspace.as_deref()
 }
 
 pub(in crate::app) fn close_scope(row: &Row) -> Option<CloseScope> {

@@ -501,9 +501,12 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
     inventory.instances.push(second);
     app.update_snapshot(inventory.clone());
 
-    for width in [80, 130] {
+    for width in [90, 130] {
         let line = toolbar_line(&mut app, width);
-        assert!(line.trim_end().ends_with(" 8 GiB · 1 GiB 500%"), "{line}");
+        assert!(
+            line.trim_end().ends_with(" 8.0 GiB · 1.0 GiB 500%"),
+            "{line}"
+        );
         for label in ["used", "available", "CPU"] {
             assert!(!line.contains(label), "{line}");
         }
@@ -526,7 +529,7 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
             &mut EventCtx::new(AnimationSettings::default()),
         );
     }
-    assert!(toolbar_line(&mut app, 130).contains(" 8 GiB · 1 GiB 500%"));
+    assert!(toolbar_line(&mut app, 130).contains(" 8.0 GiB · 1.0 GiB 500%"));
 
     inventory.instances.pop();
     app.update_snapshot(inventory);
@@ -535,7 +538,7 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
             .tick(std::time::Duration::ZERO, AnimationSettings::default())
             .layout
     );
-    assert!(toolbar_line(&mut app, 130).contains(" 8 GiB · 0.5 GiB 250%"));
+    assert!(toolbar_line(&mut app, 130).contains(" 8.0 GiB · 0.5 GiB 250%"));
 }
 
 #[test]
@@ -581,6 +584,54 @@ fn toolbar_totals_align_with_resource_columns_when_the_scrollbar_appears_and_dis
 }
 
 #[test]
+fn memory_units_align_with_totals_across_cpu_digit_boundaries() {
+    tuicore::init();
+    let mut app = root(AppService::for_tests());
+    let mut inventory = snapshot();
+    inventory.available_memory_bytes = Some(8 * 1073741824);
+    let mut template = inventory.templates[0].clone();
+    template.name = "other".into();
+    template.directory = "/tmp/templates/other".into();
+    let mut instance = inventory.instances[0].clone();
+    instance.name = "other".into();
+    instance.template = template.name.clone();
+    instance.template_directory = template.directory.clone();
+    inventory.templates.push(template);
+    inventory.instances.push(instance);
+
+    for cpu in [4950, 5000, 5250, 50_000, 4950] {
+        for instance in &mut inventory.instances {
+            instance.services[0].usage = Some(crate::store::environments::ResourceUsage {
+                memory_bytes: 180 * 1048576,
+                cpu_basis_points: Some(cpu),
+                sampled_at_unix_seconds: 42,
+            });
+        }
+        app.update_snapshot(inventory.clone());
+        for width in [90, 130] {
+            let terminal = toolbar_terminal(&mut app, width);
+            let lines = rendered_lines(&terminal, Rect::new(0, 0, width, 30));
+            let total = &lines[1];
+            let memory_x = total[..total.rfind('B').unwrap()].chars().count();
+            let cpu_x = total[..total.rfind('%').unwrap()].chars().count();
+            let rows = lines[3..]
+                .iter()
+                .filter(|line| line.contains("0.2 GiB"))
+                .collect::<Vec<_>>();
+            assert!(!rows.is_empty(), "{lines:#?}");
+            for row in rows {
+                assert_eq!(
+                    row[..row.rfind('B').unwrap()].chars().count(),
+                    memory_x,
+                    "memory alignment at {cpu} basis points: {lines:#?}"
+                );
+                assert_eq!(row[..row.rfind('%').unwrap()].chars().count(), cpu_x);
+            }
+        }
+    }
+}
+
+#[test]
 fn toolbar_totals_show_unavailable_and_paused_states() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
@@ -617,7 +668,7 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
     app.update_snapshot(inventory.clone());
     let line = toolbar_line(&mut app, 130);
     assert!(
-        line.contains(&format!(" — · 20 MiB 500% {spinner}")),
+        line.contains(&format!(" — {spinner} 20 MiB 500%")),
         "{line}"
     );
     let terminal = toolbar_terminal(&mut app, 130);
@@ -634,6 +685,16 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
     );
 
     inventory.instances.pop();
+    app.update_snapshot(inventory.clone());
+    let ready = toolbar_line(&mut app, 130);
+    assert!(ready.contains(" — · 20 MiB 500%"), "{ready}");
+    for value in ["", "20 MiB", "500%"] {
+        assert_eq!(
+            line[..line.find(value).unwrap()].chars().count(),
+            ready[..ready.find(value).unwrap()].chars().count(),
+            "{value} must stay aligned while loading changes"
+        );
+    }
     inventory.instances[0].services[0]
         .usage
         .as_mut()
@@ -641,8 +702,8 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
         .cpu_basis_points = None;
     app.update_snapshot(inventory.clone());
     let line = toolbar_line(&mut app, 130);
-    assert!(line.contains(&spinner), "{line}");
-    assert!(line.contains("20 MiB"), "{line}");
+    assert!(line.trim_end().ends_with(&spinner), "{line}");
+    assert!(!line.contains("MiB") && !line.contains("GiB"), "{line}");
 
     inventory.instances[0].services[0].status = "paused".into();
     app.update_snapshot(inventory);

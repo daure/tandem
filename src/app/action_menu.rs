@@ -17,7 +17,7 @@ use super::{Msg, open_panel_key, open_route_key};
 
 const MENU_FIELD_WIDTH: u16 = 42;
 const MENU_CONTENT_WIDTH: u16 = MENU_FIELD_WIDTH;
-pub(super) const MENU_HEIGHT: u16 = 12;
+pub(super) const MENU_HEIGHT: u16 = 13;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum Action {

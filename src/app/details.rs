@@ -42,11 +42,7 @@ pub(super) fn memory(bytes: u64) -> String {
 
     if bytes > GIB_DISPLAY_THRESHOLD {
         let tenths = (u128::from(bytes) * 10 + u128::from(GIB / 2)) / u128::from(GIB);
-        if tenths % 10 == 0 {
-            format!("{} GiB", tenths / 10)
-        } else {
-            format!("{}.{:01} GiB", tenths / 10, tenths % 10)
-        }
+        format!("{}.{:01} GiB", tenths / 10, tenths % 10)
     } else {
         format!("{} MiB", rounded_units(bytes, MIB))
     }

@@ -283,15 +283,17 @@ impl Row {
         self.parent.is_none() && self.instance.is_none() && self.opencode.is_none()
     }
 
+    fn is_session_row(&self) -> bool {
+        matches!(
+            self.opencode,
+            Some(super::opencode::Target::Session { .. } | super::opencode::Target::Client { .. })
+        )
+    }
+
     pub(super) fn height(&self) -> u16 {
-        if self.instance.is_some() {
-            2
-        } else if self.hide_resources
-            || ["services:", "setup:", "sessions:"]
-                .iter()
-                .any(|prefix| self.id.starts_with(prefix))
-            || self.id == "opencode-workspaces"
-        {
+        if !self.is_session_row() {
+            1
+        } else if self.hide_resources {
             self.label.lines().count().clamp(1, 2) as u16
         } else {
             2
@@ -339,13 +341,16 @@ impl Row {
             first_line.push(Span::raw(first.to_owned()));
         }
         if !self.template_capabilities.is_empty() {
-            if let Some(capabilities) = self.template_capabilities.strip_prefix("· ") {
+            let capabilities = self.template_capabilities.strip_prefix("· ");
+            if self.is_template() || capabilities.is_some() {
                 first_line.push(Span::styled(
                     " · ",
                     Style::default().fg(Tone::Normal.color()),
                 ));
                 first_line.push(Span::styled(
-                    capabilities.to_owned(),
+                    capabilities
+                        .unwrap_or(&self.template_capabilities)
+                        .to_owned(),
                     Style::default().fg(tuicore::theme().muted_fg()),
                 ));
             } else {
@@ -380,7 +385,11 @@ impl Row {
                 if description.is_empty() {
                     "(no description)".to_owned()
                 } else {
-                    description.to_owned()
+                    description
+                        .lines()
+                        .map(str::trim)
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 },
                 Style::default().fg(description_tone),
             )));
@@ -419,7 +428,18 @@ impl Row {
                 }
             }));
         }
-        Text::from(text)
+        if self.is_session_row() {
+            Text::from(text)
+        } else {
+            let mut spans = Vec::new();
+            for (index, line) in text.into_iter().enumerate() {
+                if index > 0 {
+                    push_separator(&mut spans);
+                }
+                spans.extend(line.spans);
+            }
+            Text::from(Line::from(spans))
+        }
     }
 
     pub(super) fn resource_text(&self) -> Text<'static> {
@@ -433,32 +453,27 @@ impl Row {
         resource_text_with_spinner(&self.metrics, None, spinner)
     }
 
-    pub(super) fn memory_text(&self) -> Line<'static> {
-        if self.hide_resources
-            || self.metrics.memory_bytes.is_none() && !self.metrics.memory_partial
-        {
+    pub(super) fn memory_text_with_spinner(&self, spinner: &str) -> Line<'static> {
+        if self.hide_resources {
             return Line::default();
         }
-        resource_memory_text_with_spinner(&self.metrics, None, None)
+        resource_memory_text_with_loading(&self.metrics, None, spinner, " ")
     }
 
     pub(super) fn cpu_text_with_spinner(&self, spinner: &str) -> Line<'static> {
         if self.hide_resources {
             return Line::default();
         }
-        let waiting = self.metrics.memory_waiting || self.metrics.cpu_waiting;
-        let complete =
-            self.metrics.memory_bytes.is_some() && self.metrics.cpu_basis_points.is_some();
-        if waiting && !complete {
-            return Line::from(Span::styled(
-                spinner.to_owned(),
-                Style::default().fg(Tone::Muted.color()),
-            ));
-        }
-        if self.metrics.cpu_basis_points.is_none() && !self.metrics.cpu_partial {
+        if self.metrics.memory_bytes.is_none() || self.metrics.cpu_basis_points.is_none() {
+            if self.metrics.memory_waiting || self.metrics.cpu_waiting {
+                return Line::from(Span::styled(
+                    spinner.to_owned(),
+                    Style::default().fg(Tone::Muted.color()),
+                ));
+            }
             return Line::default();
         }
-        resource_cpu_text_with_spinner(&self.metrics, waiting.then_some(spinner))
+        resource_cpu_text_with_spinner(&self.metrics, None)
     }
 
     pub(super) fn name_value(&self) -> Option<String> {
@@ -514,12 +529,30 @@ pub(super) fn resource_text_with_single_spinner(
     spinner: &str,
 ) -> Text<'static> {
     Text::from(vec![
-        resource_memory_text_with_spinner(metrics, available_memory_bytes, None),
-        resource_cpu_text_with_spinner(
-            metrics,
-            (metrics.memory_waiting || metrics.cpu_waiting).then_some(spinner),
-        ),
+        resource_memory_text_with_loading(metrics, available_memory_bytes, spinner, "·"),
+        resource_cpu_text_with_spinner(metrics, None),
     ])
+}
+
+fn resource_memory_text_with_loading(
+    metrics: &UsageSummary,
+    available_memory_bytes: Option<u64>,
+    spinner: &str,
+    idle_marker: &str,
+) -> Line<'static> {
+    if metrics.memory_bytes.is_none() || metrics.cpu_basis_points.is_none() {
+        return Line::default();
+    }
+    let waiting = metrics.memory_waiting || metrics.cpu_waiting;
+    let mut memory = resource_memory_text_with_spinner(metrics, available_memory_bytes, None);
+    memory.spans.insert(
+        0,
+        Span::styled(
+            format!("{} ", if waiting { spinner } else { idle_marker }),
+            Style::default().fg(Tone::Muted.color()),
+        ),
+    );
+    memory
 }
 
 fn resource_memory_text_with_spinner(
@@ -1047,7 +1080,7 @@ fn from_snapshot_with_operations_and_totals(
                 service: (!service.one_shot).then(|| (instance.name.clone(), service.name.clone())),
                 service_name: Some(service.name.clone()),
                 description: String::new(),
-                workspace: None,
+                workspace: Some(instance.workspace.clone()),
                 alternate_background: false,
                 gateway_url: service.url.clone(),
                 details: details::service(service),

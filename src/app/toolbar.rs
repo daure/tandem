@@ -184,7 +184,7 @@ impl Toolbar {
         let state = self.state.borrow();
         let totals = &state.totals;
         let waiting = totals.memory_waiting || totals.cpu_waiting;
-        if waiting && totals.memory_bytes.is_none() && totals.cpu_basis_points.is_none() {
+        if waiting && (totals.memory_bytes.is_none() || totals.cpu_basis_points.is_none()) {
             return Line::from(Span::styled(
                 self.spinner.glyph().to_owned(),
                 Style::default().fg(tuicore::theme().muted_fg()),
@@ -215,7 +215,7 @@ impl Toolbar {
             ),
         ];
         if state.has_running_instances && totals.memory_bytes.is_some() {
-            spans.push(Span::raw(" · "));
+            spans.push(Span::raw(" "));
             spans.extend(memory.spans);
         }
         if !cpu.spans.is_empty() {
@@ -336,6 +336,15 @@ impl TuiNode<Msg> for Toolbar {
 
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.sync_disabled();
+        if let Some(instances) = &self.instances {
+            let cpu_width = self
+                .state
+                .borrow()
+                .totals
+                .cpu_basis_points
+                .map_or(0, |cpu| details::cpu(cpu).len());
+            super::instances::set_cpu_column_min_width(instances, cpu_width);
+        }
         let compact = area.width < MOBILE_TABS_WIDTH;
         self.sound_visible = self.history_visible && area.width >= 50;
         let spacing = u16::from(area.width >= 50);

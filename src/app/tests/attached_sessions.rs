@@ -155,7 +155,7 @@ fn agents_view_shows_attached_clients_before_the_first_message() {
 }
 
 #[test]
-fn attached_view_groups_two_line_sessions_under_two_line_instances() {
+fn attached_view_groups_two_line_sessions_under_single_line_instances() {
     tuicore::init();
     let mut inventory = snapshot();
     inventory.instances[0].description =
@@ -188,27 +188,25 @@ fn attached_view_groups_two_line_sessions_under_two_line_instances() {
         assert_eq!(group.template_capabilities, "· 󰠲 website");
         assert_eq!(group.status_detail, None);
         assert_eq!(group.hide_resources, owner.hide_resources);
-        assert_eq!(group.height(), 2);
+        assert_eq!(group.height(), 1);
         let group_text = group.text("⠋", Some(72));
+        assert_eq!(group_text.lines.len(), 1);
         assert_eq!(
             group_text.lines[0].to_string(),
             format!(
-                "{} {} · 󰠲 website",
+                "{} {} · 󰠲 website · {}",
                 if owner.loading { "⠋" } else { owner.icon },
-                owner.label
+                owner.label,
+                owner.description
             )
         );
         assert_eq!(
             group_text.lines[0].spans.last().unwrap().style.fg,
             Some(tuicore::theme().muted_fg())
         );
-        let separator = &group_text.lines[0].spans[group_text.lines[0].spans.len() - 2];
+        let separator = &group_text.lines[0].spans[3];
         assert_eq!(separator.content, " · ");
         assert_eq!(separator.style.fg, Some(tuicore::theme().text_fg()));
-        assert_eq!(
-            group_text.lines[1].to_string(),
-            "A deliberately long instance description that should be truncated"
-        );
         let search = group.search_text();
         assert!(search.contains("website"));
         assert!(
@@ -234,12 +232,10 @@ fn attached_view_groups_two_line_sessions_under_two_line_instances() {
     }
     inventory.instances[0].description.clear();
     let flat = projection::attached_rows(rows::from_snapshot(&inventory), &observation());
-    let description = &flat[0].text("⠋", None).lines[1];
-    assert_eq!(description.to_string(), "(no description)");
-    assert_eq!(
-        description.spans[0].style.fg,
-        Some(tuicore::theme().subtle_fg())
-    );
+    let text = flat[0].text("⠋", None);
+    let description = text.lines[0].spans.last().unwrap();
+    assert_eq!(description.content, "(no description)");
+    assert_eq!(description.style.fg, Some(tuicore::theme().subtle_fg()));
     let mut unknown = observation();
     unknown.sessions[0].last_question = None;
     unknown.sessions[0].question_observed = false;
@@ -313,7 +309,9 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
             }
         }
         assert!(text.contains(" review · Stopped · 󰠲 website"), "{text}");
-        assert!(text.contains("(no description)"), "{text}");
+        if width >= 80 {
+            assert!(text.contains("website · (no description)"), "{text}");
+        }
         assert!(text.contains("Empty client"), "{text}");
         assert!(!text.contains("Services"), "{text}");
     }

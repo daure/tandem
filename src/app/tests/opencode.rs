@@ -94,6 +94,11 @@ fn overview_places_other_opencode_workspaces_before_templates() {
     assert_eq!(ledger.parent.as_deref(), Some("opencode-workspaces"));
     assert_eq!(ledger.label, "ledger\n/work/ledger");
     assert_eq!(ledger.template_capabilities, " external");
+    assert_eq!(ledger.height(), 1);
+    assert_eq!(
+        ledger.text("⠋", None).to_string(),
+        "⠋ ledger  external · /work/ledger"
+    );
     assert_eq!(
         ledger.text("⠋", None).lines[0]
             .spans

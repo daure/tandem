@@ -40,6 +40,7 @@ pub(super) struct State {
     attached_sessions_only: bool,
     mode_changed: bool,
     pub(super) resource_right_gutter: u16,
+    cpu_column_min_width: usize,
     completion_fade: Duration,
 }
 
@@ -65,6 +66,14 @@ pub(super) fn selected(state: &SharedState) -> Option<Row> {
 
 pub(super) fn set_completion_fade(state: &SharedState, seconds: u64) {
     state.borrow_mut().completion_fade = Duration::from_secs(seconds);
+}
+
+pub(super) fn set_cpu_column_min_width(state: &SharedState, width: usize) {
+    let mut state = state.borrow_mut();
+    if state.cpu_column_min_width != width {
+        state.cpu_column_min_width = width;
+        state.rows_changed = true;
+    }
 }
 
 pub(super) fn is_searching(state: &SharedState) -> bool {
@@ -170,7 +179,9 @@ impl Instances {
         };
         let spinner = Rc::new(RefCell::new(Spinner::new()));
         let cell_spinner = Rc::clone(&spinner);
+        let memory_spinner = Rc::clone(&spinner);
         let cpu_spinner = Rc::clone(&spinner);
+        let cpu_state = Rc::clone(&state);
         let completion = Rc::new(RefCell::new(completion::Markers::new(
             state.borrow().completion_fade,
         )));
@@ -194,7 +205,8 @@ impl Instances {
                     "Memory",
                     Constraint::Min(0),
                     move |row: &Row, _| {
-                        let mut memory = row.memory_text();
+                        let mut memory =
+                            row.memory_text_with_spinner(memory_spinner.borrow().glyph());
                         memory.spans.insert(0, Span::raw(" "));
                         memory.alignment = Some(Alignment::Right);
                         memory
@@ -204,6 +216,13 @@ impl Instances {
                 .fit_content(),
                 Column::multiline("cpu", "CPU", Constraint::Min(0), move |row: &Row, _| {
                     let mut cpu = row.cpu_text_with_spinner(cpu_spinner.borrow().glyph());
+                    let padding = cpu_state
+                        .borrow()
+                        .cpu_column_min_width
+                        .saturating_sub(cpu.width());
+                    if padding > 0 {
+                        cpu.spans.insert(0, Span::raw(" ".repeat(padding)));
+                    }
                     cpu.spans.push(Span::raw(" "));
                     cpu.alignment = Some(Alignment::Right);
                     cpu

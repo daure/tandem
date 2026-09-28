@@ -124,6 +124,7 @@ fn child(parent: &Row, id: String) -> Row {
         compose_file: parent.compose_file.clone(),
         compose_source: parent.compose_source.clone(),
         template_available: parent.template_available,
+        workspace: parent.workspace.clone(),
         metrics: UsageSummary::default(),
         hide_resources: true,
         ..Default::default()
