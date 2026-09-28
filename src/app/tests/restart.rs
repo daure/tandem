@@ -63,6 +63,7 @@ fn restart_key_and_menu_confirm_the_selected_instance_or_service() {
             assert!(app.service.operations().is_empty());
             let text = render(&mut app);
             assert!(text.contains(title), "{text}");
+            assert!(text.contains("Ok (o) · Cancel (c)"), "{text}");
             assert!(
                 text.contains(&service.map_or_else(
                     || "Restart review?".into(),
@@ -79,7 +80,17 @@ fn restart_key_and_menu_confirm_the_selected_instance_or_service() {
                 &TuiEvent::Key(KeyEvent::from(Key::Char('r'))),
                 &mut ctx,
             );
-            assert!(matches!(ctx.messages(), [Msg::Submit]));
+            assert!(ctx.messages().is_empty());
+            for (key, submit) in [('o', true), ('c', false)] {
+                let mut ctx = EventCtx::new(AnimationSettings::default());
+                app.dispatch_event(
+                    &route,
+                    &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
+                    &mut ctx,
+                );
+                assert_eq!(matches!(ctx.messages(), [Msg::Submit]), submit);
+                assert_eq!(matches!(ctx.messages(), [Msg::Close]), !submit);
+            }
             app.handle_message(Msg::Close, &mut EventCtx::new(AnimationSettings::default()));
             assert!(app.service.operations().is_empty());
         }

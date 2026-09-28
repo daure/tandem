@@ -91,6 +91,7 @@ fn visible_rows(
     visible.instances.retain(|instance| {
         instance.is_running()
             || instance.is_starting()
+            || instance.status_summary().status == crate::store::environments::Status::Stopping
             || opencode_instances.contains(instance.name.as_str())
     });
     let directories = visible
@@ -231,6 +232,7 @@ pub(crate) struct App {
 }
 
 pub(crate) fn root(service: AppService) -> App {
+    tuicore::set_keybindings(tuicore::keybindings().with_tabs_close([KeySpec::plain('c')]));
     let keys = service.environment_keys();
     let snapshot = service.environment_snapshot();
     let opencode_enabled = service.opencode_enabled();
@@ -968,10 +970,7 @@ impl App {
                             service: service.clone(),
                             running: true,
                         });
-                        self.open(
-                            dialogs::confirm_service_state(&name, &service, true, self.keys[3]),
-                            ctx,
-                        );
+                        self.open(dialogs::confirm_service_state(&name, &service, true), ctx);
                     } else if let Some(name) = row.instance {
                         self.intent = Some(Intent::Resume {
                             name: name.clone(),
@@ -1096,6 +1095,13 @@ impl App {
     fn action(&mut self, index: usize, ctx: &mut EventCtx<Msg>) {
         let row = self
             .selected()
+            .map(|row| {
+                if index == 6 || matches!(index, 3 | 7) && row.service_name.is_none() {
+                    instances::selected_instance(&self.instances).unwrap_or(row)
+                } else {
+                    row
+                }
+            })
             .filter(|row| index == 0 || row.opencode.is_none());
         self.name.clear();
         self.description.clear();
@@ -1138,8 +1144,7 @@ impl App {
                 {
                     let (name, service) = row.service.clone().expect("service row has a target");
                     let running = !row.can_stop;
-                    let modal =
-                        dialogs::confirm_service_state(&name, &service, running, self.keys[3]);
+                    let modal = dialogs::confirm_service_state(&name, &service, running);
                     self.intent = Some(Intent::ServiceState {
                         name,
                         service,
@@ -1189,8 +1194,7 @@ impl App {
                         .map(|(name, service)| (name, Some(service)))
                         .or_else(|| row.instance.map(|name| (name, None)));
                     if let Some((name, service)) = target {
-                        let modal =
-                            dialogs::confirm_restart(&name, service.as_deref(), self.keys[7]);
+                        let modal = dialogs::confirm_restart(&name, service.as_deref());
                         self.intent = Some(Intent::Restart { name, service });
                         self.open(modal, ctx);
                     }

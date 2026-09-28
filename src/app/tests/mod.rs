@@ -19,6 +19,7 @@ mod guidance;
 mod history_settings;
 mod input_routing;
 mod labels;
+mod lifecycle_hotkeys;
 mod opencode;
 mod opencode_actions;
 mod opencode_folders;
@@ -809,7 +810,7 @@ fn details_hotkey_opens_the_selected_template_in_bottom_tabs() {
         })
         .unwrap();
     let text = rendered_lines(&terminal, area).join("");
-    assert!(text.contains("Metadata"));
+    assert!(text.contains("Template details"));
     assert!(text.contains("Compose"));
     assert!(text.contains("Manifest"));
     assert!(text.contains("website"));
@@ -852,7 +853,11 @@ fn details_hotkey_opens_the_selected_template_in_bottom_tabs() {
     );
     assert!(text.contains("\"routes\": {}"), "{text}");
     let mut close = EventCtx::new(AnimationSettings::default());
-    app.dispatch_event(&route, &TuiEvent::Key(KeyEvent::from(Key::Esc)), &mut close);
+    app.dispatch_event(
+        &route,
+        &TuiEvent::Key(KeyEvent::from(Key::Char('c'))),
+        &mut close,
+    );
     assert!(matches!(close.messages(), [Msg::Close]));
     app.handle_message(Msg::Close, &mut events);
     assert!(!app.view.is_active());
@@ -861,10 +866,11 @@ fn details_hotkey_opens_the_selected_template_in_bottom_tabs() {
 #[test]
 fn detail_tabs_keep_the_header_and_close_control_above_the_content() {
     tuicore::init();
+    let _app = root(AppService::for_tests());
     let rows = rows::from_snapshot(&snapshot());
     for width in [56, 130] {
         for (row, title, content, value) in [
-            (&rows[0], "Metadata", "Template", "website"),
+            (&rows[0], "Template details", "Template", "website"),
             (&rows[1], "Details", "Instance", "review"),
             (
                 rows.iter()
@@ -892,7 +898,7 @@ fn detail_tabs_keep_the_header_and_close_control_above_the_content() {
                 "{} at {width}: {lines:#?}",
                 row.id
             );
-            assert!(lines[0].contains("┤x├"), "{lines:#?}");
+            assert!(lines[0].contains("┤c├"), "{lines:#?}");
             assert!(lines[1].contains("Search"), "{lines:#?}");
             assert!(lines[2].contains(content), "{lines:#?}");
             assert!(lines[2].contains(value), "{lines:#?}");
@@ -1003,8 +1009,8 @@ fn description_hotkey_opens_an_unpadded_text_editor_in_insert_mode() {
         })
         .unwrap();
     let rendered = rendered_lines(&terminal, area).join("\n");
-    assert!(rendered.contains("Update description"), "{rendered}");
-    assert!(rendered.contains("Save"), "{rendered}");
+    assert!(rendered.contains("Edit description"), "{rendered}");
+    assert!(rendered.contains("Ok (o)"), "{rendered}");
     assert!(rendered.contains("Cancel"), "{rendered}");
 
     let mut edit = EventCtx::new(AnimationSettings::default());
@@ -1106,7 +1112,7 @@ fn details_hotkey_uses_full_width_on_mobile_and_seventy_five_percent_on_desktop(
         let lines = rendered_lines(&terminal, area);
         let header = lines
             .iter()
-            .position(|line| line.contains("Metadata"))
+            .position(|line| line.contains("Template details"))
             .unwrap();
         let panel_width = width * super::details_width_percent(width) / 100;
         let left = (width - panel_width) / 2;

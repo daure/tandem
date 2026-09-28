@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn both_tabs_show_starting_instances_before_containers_or_sessions_are_observed() {
+fn starting_instances_without_sessions_follow_each_tabs_active_filter() {
     tuicore::init();
     let mut app = root(AppService::for_tests());
     for sessions in [false, true] {
@@ -27,9 +27,12 @@ fn both_tabs_show_starting_instances_before_containers_or_sessions_are_observed(
                         finished: false,
                     });
                 let rows = app.project_rows(&inventory, &[]);
-                let row = rows.iter().find(|row| row.id == "instance:review").unwrap();
-                assert!(row.starting && row.loading);
-                assert_eq!(row.parent.is_none(), sessions);
+                let row = rows.iter().find(|row| row.id == "instance:review");
+                assert_eq!(row.is_some(), !sessions || !active_only);
+                if let Some(row) = row {
+                    assert!(row.starting && row.loading);
+                    assert_eq!(row.parent.is_none(), sessions);
+                }
 
                 inventory.instances[0].pending = false;
                 inventory.instances[0].runtime.activity = None;

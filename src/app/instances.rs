@@ -64,6 +64,18 @@ pub(super) fn selected(state: &SharedState) -> Option<Row> {
         .cloned()
 }
 
+pub(super) fn selected_instance(state: &SharedState) -> Option<Row> {
+    let state = state.borrow();
+    let mut id = state.highlighted.as_ref()?;
+    loop {
+        let row = state.rows.iter().find(|row| &row.id == id)?;
+        if row.instance.is_some() {
+            return Some(row.clone());
+        }
+        id = row.parent.as_ref()?;
+    }
+}
+
 pub(super) fn set_completion_fade(state: &SharedState, seconds: u64) {
     state.borrow_mut().completion_fade = Duration::from_secs(seconds);
 }

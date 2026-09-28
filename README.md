@@ -41,6 +41,10 @@ cargo run -- serve          # HTTP MCP at http://127.0.0.1:7345/mcp
    Routed services require their current template readiness configuration. Applying template or image
    changes requires startup.
 
+Within an instance subtree, `s` and `r` target the selected service on service rows and the instance
+on other nested rows, including the Services parent. Setup jobs do not support service start, stop,
+or restart. Press `p` anywhere in the subtree to confirm purging the instance.
+
 The TUI refreshes runtime inventory asynchronously every ten seconds while its terminal is focused,
 every five minutes while unfocused, and immediately on regaining focus. Idle means terminal focus loss,
 not time since the last keypress; terminals or multiplexers without focus reporting keep the ten-second
@@ -371,6 +375,8 @@ guidance files are user-owned; update them explicitly when adopting this workflo
 
 Application hotkey overrides accept distinct ASCII letters; `TANDEM_KEY_INFO` also accepts `Enter`.
 Shared navigation, focus, and component keys use tuicore configuration. The TUI displays resolved key labels.
+Dialog actions use **Ok** (`o`) and **Cancel** (`c`); settings and detail views close with `c`.
+While editing text or searching, letters belong to the active input.
 
 ### Workspace actions
 

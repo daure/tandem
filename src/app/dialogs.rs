@@ -1,22 +1,25 @@
 use ratatui::widgets::Borders;
 use std::{cell::RefCell, rc::Rc};
 use tuicore::{
-    CrossSize, Dialog, DialogAction, Dropdown, DropdownCommitMode, Flex, FlexItem, FormField,
-    KeySpec, Language, Padding, Paragraph, SyntaxHighlighter, Tab, Tabs, TabsVariant, TextInput,
-    TextareaInput, Toggle,
+    CrossSize, Dialog, DialogAction, DialogKeyBindings, Dropdown, DropdownCommitMode, Flex,
+    FlexItem, FormField, KeySpec, Language, Padding, Paragraph, SyntaxHighlighter, Tab, Tabs,
+    TabsVariant, TextInput, TextareaInput, Toggle,
 };
 
 use super::{Modal, Msg, properties::Properties, rows::Row};
 
-fn create_new() -> DialogAction<Msg> {
-    DialogAction::new("Create new")
-        .hotkey(KeySpec::plain('n'))
-        .on_trigger(|| Msg::Submit)
+fn dialog(title: &str) -> Dialog<Msg> {
+    Dialog::new()
+        .top_left(title)
+        .keybindings(DialogKeyBindings {
+            close: vec![KeySpec::plain('c')],
+        })
+        .on_close(|_| Msg::Close)
 }
 
-fn confirm(label: &str, hotkey: KeySpec) -> DialogAction<Msg> {
-    DialogAction::new(label)
-        .hotkey(hotkey)
+fn confirm() -> DialogAction<Msg> {
+    DialogAction::new("Ok")
+        .hotkey(KeySpec::plain('o'))
         .on_trigger(|| Msg::Submit)
 }
 
@@ -28,7 +31,7 @@ fn cancel() -> DialogAction<Msg> {
 
 pub(super) fn details(row: &Row) -> Modal {
     let title = if row.is_template() {
-        "Metadata"
+        "Template details"
     } else {
         "Details"
     };
@@ -93,10 +96,8 @@ pub(super) fn name_entry(
     input.set_insert_mode(true);
     input.move_cursor_to_end();
     Box::new(
-        Dialog::new()
-            .top_left(title)
-            .on_close(|_| Msg::Close)
-            .actions([create_new(), cancel()])
+        dialog(title)
+            .actions([confirm(), cancel()])
             .host(Flex::column().child(
                 "name",
                 input,
@@ -146,28 +147,24 @@ pub(super) fn instance_entry(
     prompt.set_insert_mode(true);
     prompt.move_cursor_to_end();
     Box::new(
-        Dialog::new()
-            .top_left(title)
-            .on_close(|_| Msg::Close)
-            .actions([create_new(), cancel()])
-            .host(
-                Flex::column()
-                    .child(
-                        "name",
-                        name,
-                        FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
-                    )
-                    .child(
-                        "description",
-                        description_input,
-                        FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
-                    )
-                    .child(
-                        "initial-prompt",
-                        prompt,
-                        FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
-                    ),
-            ),
+        dialog(title).actions([confirm(), cancel()]).host(
+            Flex::column()
+                .child(
+                    "name",
+                    name,
+                    FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
+                )
+                .child(
+                    "description",
+                    description_input,
+                    FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
+                )
+                .child(
+                    "initial-prompt",
+                    prompt,
+                    FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
+                ),
+        ),
     )
 }
 
@@ -182,11 +179,9 @@ pub(super) fn description_entry(value: &str) -> Modal {
     input.set_insert_mode(true);
     input.move_cursor_to_end();
     Box::new(
-        Dialog::new()
-            .top_left("Update description")
+        dialog("Edit description")
             .content_padding(Padding::default())
-            .on_close(|_| Msg::Close)
-            .actions([confirm("Save", KeySpec::plain('s')), cancel()])
+            .actions([confirm(), cancel()])
             .host(Flex::column().child(
                 "description",
                 input,
@@ -229,9 +224,7 @@ pub(super) fn settings(
     .max_popup_height(12)
     .on_select(move |selected| *sound_choice.borrow_mut() = selected.into_iter().next());
     Box::new(
-        Dialog::new()
-            .top_left("Settings")
-            .on_close(|_| Msg::Close)
+        dialog("Settings")
             .actions([DialogAction::new("Close")
                 .hotkey(KeySpec::plain('c'))
                 .on_trigger(|| Msg::Close)])
@@ -274,101 +267,61 @@ pub(super) fn settings(
 }
 
 pub(super) fn confirm_stop(name: &str) -> Modal {
-    confirmation(
-        "Stop instance",
-        "Stop",
-        KeySpec::plain('s'),
-        format!("Stop {name}? Data stays for restart."),
-    )
+    confirmation("Stop instance", format!("Stop {name}?"))
 }
 
 pub(super) fn confirm_start(name: &str) -> Modal {
-    confirmation(
-        "Start instance",
-        "Start",
-        KeySpec::plain('s'),
-        format!("Start {name}?"),
-    )
+    confirmation("Start instance", format!("Start {name}?"))
 }
 
 pub(super) fn confirm_close_opencode_sessions(name: &str) -> Modal {
     confirmation(
-        "Close all OpenCode sessions",
-        "Ok",
-        KeySpec::plain('o'),
-        format!("Close every OpenCode Zellij pane for {name}?"),
+        "Close OpenCode sessions",
+        format!("Close all panes for {name}?"),
     )
 }
 
-pub(super) fn confirm_service_state(
-    name: &str,
-    service: &str,
-    running: bool,
-    hotkey: KeySpec,
-) -> Modal {
+pub(super) fn confirm_service_state(name: &str, service: &str, running: bool) -> Modal {
     let action = if running { "Start" } else { "Stop" };
     confirmation(
         &format!("{action} service"),
-        action,
-        hotkey,
-        format!(
-            "{action} {name}/{service}?\nData and container configuration stay; other services are untouched."
-        ),
+        format!("{action} {name}/{service}?"),
     )
 }
 
-pub(super) fn confirm_restart(name: &str, service: Option<&str>, hotkey: KeySpec) -> Modal {
+pub(super) fn confirm_restart(name: &str, service: Option<&str>) -> Modal {
     let (title, target) = match service {
         Some(service) => ("Restart service", format!("{name}/{service}")),
         None => ("Restart instance", name.to_owned()),
     };
-    confirmation(
-        title,
-        "Restart",
-        hotkey,
-        format!(
-            "Restart {target}? This briefly interrupts service.\nData and container configuration stay; one-shot setup jobs are skipped."
-        ),
-    )
+    confirmation(title, format!("Restart {target}?"))
 }
 
 pub(super) fn confirm_purge(name: &str) -> Modal {
     confirmation(
         "Purge instance",
-        "Purge",
-        KeySpec::plain('p'),
-        format!(
-            "Purge {name}? This permanently removes its data.\nWith OpenCode integration enabled, associated clients close first."
-        ),
+        format!("Permanently delete {name} and its data?"),
     )
 }
 
 pub(super) fn confirm_stop_template(name: &str) -> Modal {
     confirmation(
         "Stop all instances",
-        "Stop all",
-        KeySpec::plain('s'),
-        format!("Stop every {name} instance? Data stays for restart."),
+        format!("Stop all instances of {name}?"),
     )
 }
 
 pub(super) fn confirm_delete_template(name: &str) -> Modal {
     confirmation(
         "Purge all instances",
-        "Purge all",
-        KeySpec::plain('p'),
-        format!(
-            "Purge every {name} instance? This permanently removes their data.\nWith OpenCode integration enabled, associated clients close first."
-        ),
+        format!("Permanently delete all instances of {name} and their data?"),
     )
 }
 
-fn confirmation(title: &str, action: &str, hotkey: KeySpec, description: String) -> Modal {
+fn confirmation(title: &str, description: String) -> Modal {
     Box::new(
-        Dialog::new()
-            .top_left(title)
-            .on_close(|_| Msg::Close)
-            .actions([confirm(action, hotkey), cancel()])
+        dialog(title)
+            .actions([confirm(), cancel()])
             .host(Flex::column().child(
                 "warning",
                 Paragraph::new(description),
@@ -377,35 +330,23 @@ fn confirmation(title: &str, action: &str, hotkey: KeySpec, description: String)
     )
 }
 
-pub(super) fn confirm_stop_all(count: usize, hotkey: KeySpec) -> Modal {
+pub(super) fn confirm_stop_all(count: usize) -> Modal {
     confirmation(
         "Stop all instances",
-        "Stop all",
-        hotkey,
-        format!(
-            "Stop {count} stoppable instances across all templates?\nWorkspaces and data stay for restart. Templates and the gateway stay."
-        ),
+        format!("Stop {count} stoppable instances across all templates?"),
     )
 }
 
-pub(super) fn confirm_purge_all(count: usize, hotkey: KeySpec) -> Modal {
+pub(super) fn confirm_purge_all(count: usize) -> Modal {
     confirmation(
         "Purge all instances",
-        "Purge all",
-        hotkey,
-        format!(
-            "Permanently purge {count} instances across all templates?\nWith OpenCode integration enabled, associated clients close first.\nThis removes their containers, workspaces, volumes, and networks.\nTemplates and the gateway stay. This cannot be undone."
-        ),
+        format!("Permanently delete {count} instances across all templates and their data?"),
     )
 }
 
 pub(super) fn confirm_remove_template(name: &str, directory: &str) -> Modal {
     confirmation(
         "Delete template",
-        "Delete",
-        KeySpec::plain('d'),
-        format!(
-            "Permanently delete template {name}:\n{directory}\n\nStop and remove all its instances, delete their workspace folders,\nvolumes and networks, then delete the template and all its files.\nThis cannot be undone."
-        ),
+        format!("Permanently delete {name}, its files, instances, and data?\n{directory}"),
     )
 }

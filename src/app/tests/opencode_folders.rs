@@ -209,7 +209,7 @@ fn empty_known_external_folders_can_launch_a_new_session() {
 }
 
 #[test]
-fn sessions_show_clientless_running_instances_only_with_show_all_in_group_order() {
+fn sessions_show_clientless_active_instances_only_with_show_all_in_group_order() {
     tuicore::init();
     let mut observation = observation();
     observation.sessions.retain(Session::attached);
@@ -220,8 +220,10 @@ fn sessions_show_clientless_running_instances_only_with_show_all_in_group_order(
     let mut app = root(AppService::for_tests());
     let mut ctx = EventCtx::new(AnimationSettings::default());
     app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut ctx);
-    for known in [false, true] {
+    for (known, starting) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut observation = observation.clone();
         let mut inventory = snapshot();
+        inventory.instances[0].pending = starting;
         let mut attached = inventory.instances[0].clone();
         attached.name = "with-session".into();
         attached.workspace = "/tmp/workspaces/with-session".into();
@@ -248,7 +250,11 @@ fn sessions_show_clientless_running_instances_only_with_show_all_in_group_order(
                 if !app.running_only {
                     expected.extend(["instance:review", "opencode-workspace:/work/b-empty"]);
                 }
-                assert_eq!(roots(&rows), expected, "known={known}, history={history}");
+                assert_eq!(
+                    roots(&rows),
+                    expected,
+                    "known={known}, starting={starting}, history={history}"
+                );
                 assert!(
                     !rows
                         .iter()
@@ -258,6 +264,7 @@ fn sessions_show_clientless_running_instances_only_with_show_all_in_group_order(
                 assert_eq!(app.selected().is_some(), !app.running_only);
             }
         }
+        inventory.instances[0].pending = false;
         inventory.instances[0].services[0].status = "down (exit 0)".into();
         app.update_snapshot(inventory.clone());
         assert!(!roots(&app.project_rows(&inventory, &[])).contains(&"instance:review"));

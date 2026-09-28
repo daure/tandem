@@ -1275,7 +1275,7 @@ fn c_on_an_instance_confirms_closing_all_opencode_sessions() {
         })
         .unwrap();
     let text = rendered_lines(&terminal, area).join("\n");
-    assert!(text.contains("Close all OpenCode sessions"), "{text}");
+    assert!(text.contains("Close OpenCode sessions"), "{text}");
     assert!(text.contains("Ok (o) · Cancel (c)"), "{text}");
 
     let route = EventRoute::new(tuicore::TreePath::from_keys([tuicore::ChildKey::second()]));
@@ -1448,6 +1448,14 @@ fn enter_opens_a_bottom_conversation_dialog_without_jumping_to_the_pane() {
             text.contains("Details") && text.contains("Actions"),
             "{text}"
         );
+        let route = EventRoute::new(tuicore::TreePath::from_keys([tuicore::ChildKey::second()]));
+        let mut close = EventCtx::new(AnimationSettings::default());
+        app.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Char('c'))),
+            &mut close,
+        );
+        assert!(matches!(close.messages(), [Msg::Close]));
         app.handle_message(Msg::Close, &mut ctx);
         assert!(!app.view.is_active());
     }

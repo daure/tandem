@@ -541,10 +541,24 @@ fn attached_mode_updates_on_detach_and_leaves_the_view_when_integration_is_disab
             .unwrap()
             .attached()
     );
-    for index in [1, 3, 5, 6, 7] {
+    for index in [1, 5] {
         app.action(index, &mut EventCtx::new(AnimationSettings::default()));
         assert!(app.intent.is_none());
         assert!(!app.view.is_active());
+    }
+    for index in [3, 6, 7] {
+        let mut ctx = EventCtx::new(AnimationSettings::default());
+        app.action(index, &mut ctx);
+        assert!(match &app.intent {
+            Some(crate::app::Intent::Stop(name)) => index == 3 && name == "review",
+            Some(crate::app::Intent::Purge(name)) => index == 6 && name == "review",
+            Some(crate::app::Intent::Restart { name, service }) => {
+                index == 7 && name == "review" && service.is_none()
+            }
+            _ => false,
+        });
+        assert!(app.view.is_active());
+        app.handle_message(Msg::Close, &mut ctx);
     }
     app.service
         .set_opencode_snapshot_for_tests(Snapshot::default());

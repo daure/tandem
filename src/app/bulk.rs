@@ -8,7 +8,7 @@ impl App {
         if targets.is_empty() {
             return;
         }
-        let modal = dialogs::confirm_stop_all(targets.len(), self.keys[8]);
+        let modal = dialogs::confirm_stop_all(targets.len());
         self.intent = Some(Intent::StopAll(targets));
         self.open(modal, ctx);
     }
@@ -18,7 +18,7 @@ impl App {
         if targets.is_empty() {
             return;
         }
-        let modal = dialogs::confirm_purge_all(targets.len(), self.keys[9]);
+        let modal = dialogs::confirm_purge_all(targets.len());
         self.intent = Some(Intent::PurgeAll(targets));
         self.open(modal, ctx);
     }

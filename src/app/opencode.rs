@@ -204,9 +204,7 @@ pub(super) fn attached_rows_for_owners(
             .filter(|row| visible_session(row))
             .filter_map(|row| row.parent.clone())
             .collect::<std::collections::HashSet<_>>();
-        grouped.retain(|row| {
-            row.starting || row.parent.is_some() || session_parents.contains(&row.id)
-        });
+        grouped.retain(|row| row.parent.is_some() || session_parents.contains(&row.id));
     }
     folders::active_first(&mut grouped, snapshot, owners);
     resources::apply(&mut grouped, snapshot, owners);

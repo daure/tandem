@@ -253,17 +253,22 @@ fn bulk_actions_confirm_captured_targets_across_all_templates_before_submission(
                 .collect::<Vec<_>>()
                 .join(" ");
             assert!(text.contains("all templates"), "{text}");
-            assert!(text.contains("gateway"), "{text}");
-            assert!(
-                text.contains(if key == "stop-all" {
-                    "Stop all (S)"
-                } else {
-                    "Purge all (P)"
-                }),
-                "{text}"
-            );
+            assert!(text.contains("Ok (o) · Cancel (c)"), "{text}");
             if key == "purge-all" {
-                assert!(text.contains("cannot be undone"), "{text}");
+                assert!(text.contains("Permanently delete"), "{text}");
+                assert!(text.contains("their data?"), "{text}");
+            }
+            let route =
+                EventRoute::new(tuicore::TreePath::from_keys([tuicore::ChildKey::second()]));
+            for (key, submit) in [('o', true), ('c', false)] {
+                let mut action = EventCtx::new(AnimationSettings::default());
+                app.dispatch_event(
+                    &route,
+                    &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
+                    &mut action,
+                );
+                assert_eq!(matches!(action.messages(), [Msg::Submit]), submit);
+                assert_eq!(matches!(action.messages(), [Msg::Close]), !submit);
             }
             app.handle_message(Msg::Close, &mut ctx);
             assert!(app.service.operations().is_empty());

@@ -236,20 +236,14 @@ fn only_branch_mode_restricts_new_instance_input() {
 #[test]
 fn row_purge_and_bulk_purge_keys_open_distinct_confirmations() {
     tuicore::init();
-    for (selected, key, confirm_key, title) in [
+    for (selected, key, title) in [
         (
             "template:/tmp/templates/website",
-            'p',
             'p',
             "Purge all instances",
         ),
-        ("instance:review", 'p', 'p', "Purge instance"),
-        (
-            "template:/tmp/templates/website",
-            'x',
-            'd',
-            "Delete template",
-        ),
+        ("instance:review", 'p', "Purge instance"),
+        ("template:/tmp/templates/website", 'x', "Delete template"),
     ] {
         let hotkey = KeyEvent {
             code: Key::Char(key),
@@ -279,7 +273,7 @@ fn row_purge_and_bulk_purge_keys_open_distinct_confirmations() {
         let mut confirm = EventCtx::new(AnimationSettings::default());
         app.dispatch_event(
             &route,
-            &TuiEvent::Key(KeyEvent::from(Key::Char(confirm_key))),
+            &TuiEvent::Key(KeyEvent::from(Key::Char('o'))),
             &mut confirm,
         );
         assert!(matches!(confirm.messages(), [Msg::Submit]));
@@ -321,13 +315,12 @@ fn template_menu_deletion_requires_confirmation_and_is_unavailable_for_missing_r
             assert!(
                 lines
                     .iter()
-                    .any(|line| line.contains("Stop and remove all its instances"))
+                    .any(|line| line.contains("Permanently delete website"))
             );
-            assert!(lines.iter().any(|line| line.contains("workspace folders")));
             assert!(
                 lines
                     .iter()
-                    .any(|line| line.contains("This cannot be undone"))
+                    .any(|line| line.contains("its files, instances, and data?"))
             );
             assert!(
                 lines

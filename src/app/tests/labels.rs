@@ -188,17 +188,59 @@ fn instance_description_uses_muted_inline_text_and_a_subtle_placeholder() {
 }
 
 #[test]
-fn instance_rows_sort_by_name_before_rendering() {
+fn instance_rows_sort_running_then_transitioning_then_down_with_names_breaking_ties() {
+    use crate::store::environments::Activity;
+
     let mut snapshot = snapshot();
-    let mut alpha = snapshot.instances[0].clone();
-    alpha.name = "alpha".into();
-    snapshot.instances.push(alpha);
+    let instance = snapshot.instances[0].clone();
+    snapshot.instances = [
+        ("a-down", "down (exit 0)", None),
+        ("z-running", "up", None),
+        ("c-stopping", "up", Some("stop_instance")),
+        ("d-stopping", "down (exit 0)", Some("stop_instance")),
+        ("b-starting", "up", Some("create_instance")),
+        ("a-starting", "down (exit 0)", Some("create_instance")),
+        ("b-down", "down (exit 0)", None),
+        ("y-running", "healthy", None),
+    ]
+    .into_iter()
+    .map(|(name, status, action)| {
+        let mut instance = instance.clone();
+        instance.name = name.into();
+        instance.services[0].status = status.into();
+        instance.runtime.activity = action.map(|action| Activity {
+            id: name.into(),
+            name: name.into(),
+            template: Some("website".into()),
+            service: None,
+            action: action.into(),
+            owner_pid: std::process::id(),
+            started_at: 1,
+            deadline: u64::MAX,
+            error: None,
+            finished: false,
+        });
+        instance
+    })
+    .collect();
     let instance_ids = rows::from_snapshot(&snapshot)
         .into_iter()
         .filter(|row| row.instance.is_some())
         .map(|row| row.id)
         .collect::<Vec<_>>();
-    assert_eq!(instance_ids, ["instance:alpha", "instance:review"]);
+    assert_eq!(
+        instance_ids,
+        [
+            "instance:y-running",
+            "instance:z-running",
+            "instance:a-starting",
+            "instance:b-starting",
+            "instance:c-stopping",
+            "instance:d-stopping",
+            "instance:a-down",
+            "instance:b-down",
+        ]
+    );
 }
 
 #[test]

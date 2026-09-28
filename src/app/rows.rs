@@ -784,6 +784,16 @@ pub(super) fn from_filtered_snapshot_with_operations(
     from_snapshot_with_operations_and_totals(snapshot, operations, Some(full_snapshot))
 }
 
+fn instance_sort_rank(instance: &Instance) -> u8 {
+    if instance.status_summary().busy {
+        1
+    } else if instance.is_running() {
+        0
+    } else {
+        2
+    }
+}
+
 fn from_snapshot_with_operations_and_totals(
     snapshot: &EnvironmentSnapshot,
     operations: &[Operation],
@@ -795,6 +805,7 @@ fn from_snapshot_with_operations_and_totals(
     instances.sort_by(|left, right| {
         left.template_directory
             .cmp(&right.template_directory)
+            .then_with(|| instance_sort_rank(left).cmp(&instance_sort_rank(right)))
             .then_with(|| left.name.cmp(&right.name))
     });
     for template in &snapshot.templates {
