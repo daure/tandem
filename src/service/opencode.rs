@@ -251,32 +251,21 @@ impl super::AppService {
             .min_by_key(|pane| pane.session != current)
             .cloned();
         let name = instance.unwrap_or_else(|| actions::directory_name(&session.directory));
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        let mut state = self
-            .opencode
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if state
-            .navigation
-            .as_ref()
-            .is_some_and(|task| !task.is_finished())
-        {
-            return Err("OpenCode navigation is already in progress".into());
-        }
-        state.navigation = Some(self.runtime.spawn(async move {
-            let result = if !settings.opencode_enabled() {
-                Err("OpenCode integration is disabled".into())
-            } else if let Some(pane) = pane {
-                observer.jump(&session.id, &pane, &current).await
-            } else {
-                observer
-                    .attach(&session, &name, &current, destination.as_ref())
-                    .await
-            };
-            let _ = sender.send(result);
-        }));
-        Ok(receiver)
+        self.opencode.spawn_navigation(
+            &self.runtime,
+            "OpenCode navigation is already in progress",
+            async move {
+                if !settings.opencode_enabled() {
+                    Err("OpenCode integration is disabled".into())
+                } else if let Some(pane) = pane {
+                    observer.jump(&session.id, &pane, &current).await
+                } else {
+                    observer
+                        .attach(&session, &name, &current, destination.as_ref())
+                        .await
+                }
+            },
+        )
     }
 
     pub(crate) fn open_opencode_client(
@@ -297,28 +286,17 @@ impl super::AppService {
         let settings = Arc::clone(&self.settings);
         let current = self.opencode.current_zellij.clone();
         let observer = self.opencode.observer.clone();
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        let mut state = self
-            .opencode
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if state
-            .navigation
-            .as_ref()
-            .is_some_and(|task| !task.is_finished())
-        {
-            return Err("OpenCode navigation is already in progress".into());
-        }
-        state.navigation = Some(self.runtime.spawn(async move {
-            let result = if settings.opencode_enabled() {
-                observer.jump_pane(&pane, &current).await
-            } else {
-                Err("OpenCode integration is disabled".into())
-            };
-            let _ = sender.send(result);
-        }));
-        Ok(receiver)
+        self.opencode.spawn_navigation(
+            &self.runtime,
+            "OpenCode navigation is already in progress",
+            async move {
+                if settings.opencode_enabled() {
+                    observer.jump_pane(&pane, &current).await
+                } else {
+                    Err("OpenCode integration is disabled".into())
+                }
+            },
+        )
     }
 
     pub(crate) fn close_opencode(
@@ -366,32 +344,21 @@ impl super::AppService {
     ) -> Result<tokio::sync::oneshot::Receiver<Result<(), String>>, String> {
         let settings = Arc::clone(&self.settings);
         let observer = self.opencode.observer.clone();
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        let mut state = self
-            .opencode
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if state
-            .navigation
-            .as_ref()
-            .is_some_and(|task| !task.is_finished())
-        {
-            return Err("OpenCode action is already in progress".into());
-        }
-        state.navigation = Some(self.runtime.spawn(async move {
-            let result = if settings.opencode_enabled() {
-                if let Some(session_id) = session_id {
-                    observer.close(&session_id, &pane).await
+        self.opencode.spawn_navigation(
+            &self.runtime,
+            "OpenCode action is already in progress",
+            async move {
+                if settings.opencode_enabled() {
+                    if let Some(session_id) = session_id {
+                        observer.close(&session_id, &pane).await
+                    } else {
+                        observer.close_pane(&pane).await
+                    }
                 } else {
-                    observer.close_pane(&pane).await
+                    Err("OpenCode integration is disabled".into())
                 }
-            } else {
-                Err("OpenCode integration is disabled".into())
-            };
-            let _ = sender.send(result);
-        }));
-        Ok(receiver)
+            },
+        )
     }
 
     pub(crate) fn close_opencode_scope(
@@ -454,29 +421,19 @@ impl super::AppService {
         let targets = panes.iter().map(|(_, pane)| pane.clone()).collect();
         let settings = Arc::clone(&self.settings);
         let observer = self.opencode.observer.clone();
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        let mut state = self
-            .opencode
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if state
-            .navigation
-            .as_ref()
-            .is_some_and(|task| !task.is_finished())
-        {
-            return Err("OpenCode action is already in progress".into());
-        }
-        state.navigation = Some(self.runtime.spawn(async move {
-            let result = if settings.opencode_enabled() {
-                observer
-                    .close_panes(panes, Instant::now() + Duration::from_secs(60))
-                    .await
-            } else {
-                Err("OpenCode integration is disabled".into())
-            };
-            let _ = sender.send(result);
-        }));
+        let receiver = self.opencode.spawn_navigation(
+            &self.runtime,
+            "OpenCode action is already in progress",
+            async move {
+                if settings.opencode_enabled() {
+                    observer
+                        .close_panes(panes, Instant::now() + Duration::from_secs(60))
+                        .await
+                } else {
+                    Err("OpenCode integration is disabled".into())
+                }
+            },
+        )?;
         Ok(CloseOpencodeOutcome {
             reply: receiver,
             panes: targets,
@@ -492,3 +449,7 @@ impl super::AppService {
         self.opencode.state.lock().unwrap().snapshot = snapshot;
     }
 }
+
+#[cfg(test)]
+#[path = "tests/opencode_completion.rs"]
+mod tests;

@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{future::Future, path::Path, sync::Arc, time::Duration};
 
 use crate::{
     service::AppService,
@@ -11,6 +11,46 @@ pub(super) fn directory_name(directory: &str) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or(directory)
         .to_owned()
+}
+
+impl super::Integration {
+    pub(super) fn spawn_navigation<T: Send + 'static>(
+        self: &Arc<Self>,
+        runtime: &tokio::runtime::Runtime,
+        busy_message: &str,
+        action: impl Future<Output = Result<T, String>> + Send + 'static,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<T, String>>, String> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state
+            .navigation
+            .as_ref()
+            .is_some_and(|task| !task.is_finished())
+        {
+            return Err(busy_message.into());
+        }
+        let generation = state.generation;
+        let integration = Arc::downgrade(self);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        state.navigation = Some(runtime.spawn(async move {
+            let result = action.await;
+            let Some(integration) = integration.upgrade() else {
+                return;
+            };
+            {
+                let mut state = integration
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if state.generation != generation {
+                    return;
+                }
+                // The reply can immediately wake a caller that submits another action.
+                state.navigation.take();
+            }
+            let _ = sender.send(result);
+        }));
+        Ok(receiver)
+    }
 }
 
 impl AppService {
@@ -78,21 +118,10 @@ impl AppService {
         let environments = Arc::clone(&self.environments);
         let observer = self.opencode.observer.clone();
         let settings = Arc::clone(&self.settings);
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        let mut state = self
-            .opencode
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if state
-            .navigation
-            .as_ref()
-            .is_some_and(|task| !task.is_finished())
-        {
-            return Err("OpenCode action is already in progress".into());
-        }
-        state.navigation = Some(self.runtime.spawn(async move {
-            let result = async {
+        self.opencode.spawn_navigation(
+            &self.runtime,
+            "OpenCode action is already in progress",
+            async move {
                 if !settings.opencode_enabled() {
                     return Err("OpenCode integration is disabled".into());
                 }
@@ -107,11 +136,8 @@ impl AppService {
                 observer
                     .new_session(&directory, &name, &current, destination.as_ref(), None)
                     .await
-            }
-            .await;
-            let _ = sender.send(result);
-        }));
-        Ok(receiver)
+            },
+        )
     }
 }
 
