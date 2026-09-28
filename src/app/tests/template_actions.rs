@@ -27,7 +27,7 @@ fn name_input_route(app: &mut crate::app::App) -> tuicore::EventRoute {
 
 #[test]
 fn template_button_and_uppercase_hotkey_open_template_creation() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let lines = render_app(&mut app);
@@ -89,7 +89,7 @@ fn template_button_and_uppercase_hotkey_open_template_creation() {
 
 #[test]
 fn new_instance_uses_a_mode_specific_placeholder() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.handle_message(
         Msg::SetBranchInstances(false),
@@ -150,7 +150,7 @@ fn new_instance_uses_a_mode_specific_placeholder() {
 
 #[test]
 fn new_instance_dialog_has_a_fixed_wider_width() {
-    tuicore::init();
+    init_ui();
     let short = crate::app::dialogs::instance_entry(
         "New instance",
         "review",
@@ -180,7 +180,7 @@ fn new_instance_dialog_has_a_fixed_wider_width() {
 
 #[test]
 fn only_branch_mode_restricts_new_instance_input() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     crate::app::instances::set_highlighted(
@@ -235,7 +235,7 @@ fn only_branch_mode_restricts_new_instance_input() {
 
 #[test]
 fn row_purge_and_bulk_purge_keys_open_distinct_confirmations() {
-    tuicore::init();
+    init_ui();
     for (selected, key, title) in [
         (
             "template:/tmp/templates/website",
@@ -286,7 +286,7 @@ fn row_purge_and_bulk_purge_keys_open_distinct_confirmations() {
 
 #[test]
 fn template_menu_deletion_requires_confirmation_and_is_unavailable_for_missing_recipes() {
-    tuicore::init();
+    init_ui();
     for available in [true, false] {
         let mut snapshot = snapshot();
         if !available {

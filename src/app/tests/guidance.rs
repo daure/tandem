@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn template_guidance_is_an_optional_fourth_tab() {
-    tuicore::init();
+    init_ui();
     for source in [
         None,
         Some(""),

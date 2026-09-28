@@ -100,7 +100,7 @@ fn selected_session(state: &instances::SharedState) -> String {
 
 #[test]
 fn completion_navigation_expands_ancestors_and_reveals_targets_in_both_tabs() {
-    tuicore::init();
+    init_ui();
     for sessions_only in [false, true] {
         let (mut view, state) = view(sessions_only, Activity::Busy);
         instances::replace_rows(&state, project(sessions_only, Activity::Idle));
@@ -148,7 +148,7 @@ fn completion_navigation_expands_ancestors_and_reveals_targets_in_both_tabs() {
 
 #[test]
 fn completion_navigation_is_inert_without_an_active_marker() {
-    tuicore::init();
+    init_ui();
     for sessions_only in [false, true] {
         for (initial, current, elapsed) in [
             (Activity::Idle, Activity::Idle, 0),
@@ -174,7 +174,7 @@ fn completion_navigation_is_inert_without_an_active_marker() {
 
 #[test]
 fn completion_navigation_retains_the_remaining_window_across_tab_changes() {
-    tuicore::init();
+    init_ui();
     let (mut view, state) = view(true, Activity::Busy);
     instances::replace_rows(&state, project(true, Activity::AwaitingAnswer));
     render(&mut view);
@@ -199,7 +199,7 @@ fn completion_navigation_retains_the_remaining_window_across_tab_changes() {
 
 #[test]
 fn completion_navigation_preserves_search_input_and_reveals_a_filtered_target() {
-    tuicore::init();
+    init_ui();
     let (mut view, state) = view(true, Activity::Busy);
     instances::replace_rows(&state, project(true, Activity::Idle));
     render(&mut view);

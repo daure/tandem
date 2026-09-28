@@ -66,7 +66,7 @@ fn starting_instances_show_a_bounded_countdown_then_an_overrun() {
 
 #[test]
 fn service_group_detail_separator_uses_the_normal_text_color() {
-    tuicore::init();
+    init_ui();
     let rows = rows::from_snapshot(&snapshot());
     let services = rows.iter().find(|row| row.id == "services:review").unwrap();
     let text = services.text("⠋", None);
@@ -150,7 +150,7 @@ fn active_startup_rows_show_the_latest_progress_inline() {
 
 #[test]
 fn instance_status_label_uses_its_semantic_color() {
-    tuicore::init();
+    init_ui();
     let row = rows::from_snapshot(&snapshot())[1].clone();
     let text = row.text("⠋", None);
     assert_eq!(text.lines[0].spans[1].content, "review · ");
@@ -163,7 +163,7 @@ fn instance_status_label_uses_its_semantic_color() {
 
 #[test]
 fn instance_description_uses_muted_inline_text_and_a_subtle_placeholder() {
-    tuicore::init();
+    init_ui();
     let mut row = rows::from_snapshot(&snapshot())[1].clone();
     row.description = "A long description\nfor this environment".into();
     let text = row.text("⠋", Some(70));
@@ -245,7 +245,7 @@ fn instance_rows_sort_running_then_transitioning_then_down_with_names_breaking_t
 
 #[test]
 fn tree_details_share_one_line_with_the_label_and_keep_semantic_colors() {
-    tuicore::init();
+    init_ui();
     for routed in [true, false] {
         let mut snapshot = snapshot();
         snapshot.home_directory = Some("/home/test".into());
@@ -314,7 +314,7 @@ fn tree_details_share_one_line_with_the_label_and_keep_semantic_colors() {
 
 #[test]
 fn template_rows_show_running_counts_and_color_the_icon_when_any_instance_is_up() {
-    tuicore::init();
+    init_ui();
     let mut snapshot = snapshot();
     let mut second = snapshot.instances[0].clone();
     second.name = "second".into();

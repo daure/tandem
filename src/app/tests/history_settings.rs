@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn creation_history_setting_is_visible_checked_and_keyboard_toggleable() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     let settings = AnimationSettings {
         enabled: false,

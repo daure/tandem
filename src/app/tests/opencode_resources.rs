@@ -124,7 +124,7 @@ fn assert_usage(rows: &[rows::Row], id: &str, memory_mib: u64) {
 
 #[test]
 fn every_resource_parent_sums_its_scope_without_counting_panes_or_pids_twice() {
-    tuicore::init();
+    init_ui();
     let (inventory, observation) = observations();
     let mut rows = rows::from_snapshot(&inventory);
     projection::append_rows(&mut rows, &observation, false);
@@ -166,7 +166,7 @@ fn every_resource_parent_sums_its_scope_without_counting_panes_or_pids_twice() {
 
 #[test]
 fn totals_refresh_when_only_client_usage_changes_and_survive_view_filters() {
-    tuicore::init();
+    init_ui();
     let (inventory, mut observation) = observations();
     let service = AppService::for_tests();
     service.set_opencode_snapshot_for_tests(observation.clone());
@@ -217,7 +217,7 @@ fn totals_refresh_when_only_client_usage_changes_and_survive_view_filters() {
 
 #[test]
 fn session_display_limits_do_not_limit_parent_resource_totals() {
-    tuicore::init();
+    init_ui();
     let (inventory, mut observation) = observations();
     for id in 100..125 {
         observation.sessions.push(Session {
@@ -244,7 +244,7 @@ fn session_display_limits_do_not_limit_parent_resource_totals() {
 
 #[test]
 fn client_failures_preserve_partial_coverage_and_uncapped_totals() {
-    tuicore::init();
+    init_ui();
     let (mut inventory, mut observation) = observations();
     inventory.instances[0].services[0].memory_limit_bytes = Some(20 * 1_048_576);
     observation.resources[0].mark_stale("permission denied".into());
@@ -269,7 +269,7 @@ fn client_failures_preserve_partial_coverage_and_uncapped_totals() {
 
 #[test]
 fn agent_view_renders_client_and_instance_usage_in_the_right_columns() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     inventory.instances[0].services[0].usage = Some(ResourceUsage {
         memory_bytes: 10 * 1_048_576,

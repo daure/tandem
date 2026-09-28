@@ -3,7 +3,7 @@ use crate::app::{instances, opencode::PendingAction, operations::Deletion};
 use std::time::Duration;
 
 fn app() -> App {
-    tuicore::init();
+    init_ui();
     let service = AppService::for_tests();
     service.set_opencode_snapshot_for_tests(super::attached_sessions::observation());
     let mut app = crate::app::root(service);

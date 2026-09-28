@@ -16,7 +16,7 @@ fn usage(cpu: u64, memory_mib: u64) -> ResourceUsage {
 
 #[test]
 fn resource_values_use_compact_units_and_preserve_tiny_nonzero_samples() {
-    tuicore::init();
+    init_ui();
     for (cpu, memory, cpu_text, memory_text) in [
         (0, 0, "0%", "0 MiB"),
         (1, 1, "<1%", "<1 MiB"),
@@ -81,7 +81,7 @@ fn resource_values_use_compact_units_and_preserve_tiny_nonzero_samples() {
 
 #[test]
 fn memory_color_tracks_explicit_limits_in_tree_and_details() {
-    tuicore::init();
+    init_ui();
     for (used, limit, expected) in [
         (69, Some(100), Tone::Normal),
         (70, Some(100), Tone::Warning),
@@ -215,7 +215,7 @@ fn resources_sum_services_and_active_setup_into_instances_and_templates() {
 
 #[test]
 fn resource_columns_wait_for_cpu_baselines_before_showing_memory() {
-    tuicore::init();
+    init_ui();
     let mut snapshot = snapshot();
     snapshot.instances[0].services[0].usage = Some(ResourceUsage {
         cpu_basis_points: None,
@@ -244,7 +244,7 @@ fn resource_columns_wait_for_cpu_baselines_before_showing_memory() {
 
 #[test]
 fn instance_summaries_use_the_most_actionable_service_state() {
-    tuicore::init();
+    init_ui();
     for (status, service_tone, summary, icon, instance_tone, loading) in [
         (
             "healthy",
@@ -350,7 +350,7 @@ fn instance_summaries_use_the_most_actionable_service_state() {
 
 #[test]
 fn service_group_icon_summarizes_runtime_service_health() {
-    tuicore::init();
+    init_ui();
     for (statuses, expected) in [
         (["healthy", "up"], Tone::Success),
         (["down (exit 0)", "down (exit 0)"], Tone::Muted),
@@ -391,7 +391,7 @@ fn render(tree: &mut Instances, width: u16) -> Terminal<TestBackend> {
 
 #[test]
 fn search_results_restripe_the_visible_tree_rows() {
-    tuicore::init();
+    init_ui();
     let mut snapshot = snapshot();
     let mut database = snapshot.instances[0].services[0].clone();
     database.name = "db".into();
@@ -425,7 +425,7 @@ fn search_results_restripe_the_visible_tree_rows() {
 
 #[test]
 fn resource_rows_show_right_aligned_memory_and_cpu_columns() {
-    tuicore::init();
+    init_ui();
     let mut snapshot = snapshot();
     snapshot.instances[0].services[0].status = "healthy".into();
     snapshot.instances[0].services[0].usage = Some(usage(240, 180));
@@ -491,7 +491,7 @@ fn resource_rows_show_right_aligned_memory_and_cpu_columns() {
 
 #[test]
 fn resource_rows_reserve_one_loading_spinner_before_memory() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     inventory.instances[0].services[0].usage = Some(usage(240, 180));
     let mut starting = inventory.instances[0].clone();
@@ -537,7 +537,7 @@ fn resource_rows_reserve_one_loading_spinner_before_memory() {
 
 #[test]
 fn template_capabilities_follow_each_name_while_resources_stay_right_aligned() {
-    tuicore::init();
+    init_ui();
     let mut snapshot = snapshot();
     snapshot.instances[0].services[0].usage = Some(usage(240, 180));
     snapshot.templates[0].manifest = serde_json::from_value(serde_json::json!({
@@ -600,7 +600,7 @@ fn template_capabilities_follow_each_name_while_resources_stay_right_aligned() {
 
 #[test]
 fn incomplete_resource_pairs_show_only_the_loader_in_the_cpu_column() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     inventory.instances[0].services[0].usage = Some(usage(240, 180));
     for (memory, cpu) in [(None, None), (Some(0), None), (None, Some(0))] {
@@ -632,7 +632,7 @@ fn incomplete_resource_pairs_show_only_the_loader_in_the_cpu_column() {
 
 #[test]
 fn setup_group_uses_one_line_and_its_children_show_only_labels() {
-    tuicore::init();
+    init_ui();
     for image in [Some("setup-image"), None] {
         let mut snapshot = snapshot();
         let mut setup = snapshot.instances[0].services[0].clone();
@@ -681,7 +681,7 @@ fn setup_group_uses_one_line_and_its_children_show_only_labels() {
 
 #[test]
 fn health_check_loader_animates_on_the_service_until_ready() {
-    tuicore::init();
+    init_ui();
     let mut snapshot = snapshot();
     snapshot.instances[0].services[0].status = "boot".into();
     let state = instances::state(rows::from_snapshot(&snapshot));
@@ -721,7 +721,7 @@ fn health_check_loader_animates_on_the_service_until_ready() {
 
 #[test]
 fn failed_setup_is_visible_while_dependent_services_are_waiting() {
-    tuicore::init();
+    init_ui();
     let mut snapshot = snapshot();
     let mut setup = snapshot.instances[0].services[0].clone();
     setup.name = "repo-sync".into();
@@ -764,7 +764,7 @@ fn failed_setup_is_visible_while_dependent_services_are_waiting() {
 
 #[test]
 fn pending_instance_rows_are_visible_and_animate_before_container_discovery() {
-    tuicore::init();
+    init_ui();
     let mut snapshot = snapshot();
     snapshot.instances[0].pending = true;
     snapshot.instances[0].services.clear();
@@ -784,7 +784,7 @@ fn pending_instance_rows_are_visible_and_animate_before_container_discovery() {
 
 #[test]
 fn new_instance_expands_when_it_appears_without_expanding_its_services() {
-    tuicore::init();
+    init_ui();
     let mut empty = snapshot();
     empty.instances.clear();
     let state = instances::state(rows::from_snapshot(&empty));
@@ -817,7 +817,7 @@ fn new_instance_expands_when_it_appears_without_expanding_its_services() {
 
 #[test]
 fn startup_expands_instances_when_they_arrive_after_the_template_listing() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     let mut second_template = inventory.templates[0].clone();
     second_template.name = "other".into();

@@ -20,7 +20,7 @@ fn toolbar_line(app: &mut super::super::App, width: u16) -> String {
 
 #[test]
 fn tabs_share_toolbar_controls_and_retain_separate_searches() {
-    tuicore::init();
+    init_ui();
     for width in [40, 80, 130] {
         let service = AppService::for_tests();
         service.set_opencode_snapshot_for_tests(super::attached_sessions::observation());
@@ -116,7 +116,7 @@ fn tabs_share_toolbar_controls_and_retain_separate_searches() {
 
 #[test]
 fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_enabled() {
-    tuicore::init();
+    init_ui();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let settings = AnimationSettings {
         enabled: false,
@@ -210,7 +210,7 @@ fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_en
 
 #[test]
 fn bracket_navigation_keeps_control_focus_and_the_tab_header_active() {
-    tuicore::init();
+    init_ui();
     let mut app = crate::app::root(AppService::for_tests());
     app.update_snapshot(snapshot());
     let settings = AnimationSettings {
@@ -299,7 +299,7 @@ fn bracket_navigation_keeps_control_focus_and_the_tab_header_active() {
 
 #[test]
 fn visibility_toggle_starts_off_and_reveals_all_instances() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     let mut other = inventory.instances[0].clone();
     other.name = "other".into();
@@ -456,7 +456,7 @@ fn visibility_toggle_starts_off_and_reveals_all_instances() {
 
 #[test]
 fn global_h_opens_the_expanded_agent_view_and_restores_default_filters() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.service
         .set_opencode_snapshot_for_tests(super::attached_sessions::observation());
@@ -507,7 +507,7 @@ fn global_h_opens_the_expanded_agent_view_and_restores_default_filters() {
 
 #[test]
 fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     let mut inventory = snapshot();
     inventory.available_memory_bytes = Some(8 * 1073741824);
@@ -565,7 +565,7 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
 
 #[test]
 fn toolbar_totals_align_with_resource_columns_when_the_scrollbar_appears_and_disappears() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     let mut inventory = snapshot();
     inventory.instances[0].services[0].usage = Some(crate::store::environments::ResourceUsage {
@@ -607,7 +607,7 @@ fn toolbar_totals_align_with_resource_columns_when_the_scrollbar_appears_and_dis
 
 #[test]
 fn memory_units_align_with_totals_across_cpu_digit_boundaries() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     let mut inventory = snapshot();
     inventory.available_memory_bytes = Some(8 * 1073741824);
@@ -655,7 +655,7 @@ fn memory_units_align_with_totals_across_cpu_digit_boundaries() {
 
 #[test]
 fn toolbar_totals_show_unavailable_and_paused_states() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.update_snapshot(Default::default());
     let line = toolbar_line(&mut app, 130);
@@ -735,7 +735,7 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
 
 #[test]
 fn refresh_button_precedes_right_aligned_totals_and_shows_its_hotkey_at_both_sizes() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     for width in [130, 99, 40, 100, 150] {
         let area = Rect::new(0, 0, width, 30);
@@ -802,7 +802,7 @@ fn refresh_button_precedes_right_aligned_totals_and_shows_its_hotkey_at_both_siz
 
 #[test]
 fn toolbar_refresh_activation_and_capital_r_request_manual_refresh_at_both_sizes() {
-    tuicore::init();
+    init_ui();
     for width in [130, 40] {
         let mut app = root(AppService::for_tests());
         let mut layout = tuicore::LayoutCtx::new();
@@ -842,7 +842,7 @@ fn toolbar_refresh_activation_and_capital_r_request_manual_refresh_at_both_sizes
 
 #[test]
 fn escape_from_toolbar_returns_focus_to_the_data_view() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     let area = Rect::new(0, 0, 130, 30);
     let mut layout = tuicore::LayoutCtx::new();
@@ -882,7 +882,7 @@ fn escape_from_toolbar_returns_focus_to_the_data_view() {
 
 #[test]
 fn escape_in_the_data_view_keeps_its_focus() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     let area = Rect::new(0, 0, 130, 30);
     let mut layout = tuicore::LayoutCtx::new();
@@ -914,7 +914,7 @@ fn escape_in_the_data_view_keeps_its_focus() {
 
 #[test]
 fn compact_refresh_button_honors_a_configured_hotkey() {
-    tuicore::init();
+    init_ui();
     let mut toolbar = crate::app::toolbar::Toolbar::new(
         tuicore::KeySpec::shifted('t'),
         tuicore::KeySpec::shifted('g'),
@@ -941,7 +941,7 @@ fn compact_refresh_button_honors_a_configured_hotkey() {
 #[test]
 fn history_toggle_beside_running_filter_controls_saved_sessions_across_instances() {
     use crate::store::opencode::{Activity, Session, Snapshot};
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     let mut inventory = snapshot();
     let mut other = inventory.instances[0].clone();

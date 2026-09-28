@@ -5,7 +5,7 @@ use crate::app::refresh::RefreshSchedule;
 
 #[test]
 fn manual_refresh_notifies_once_after_completion_and_keeps_automatic_refreshes_quiet() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.tick(Duration::ZERO, AnimationSettings::default());
     assert_eq!(app.notifications.center().history().len(), 0);
@@ -25,7 +25,7 @@ fn manual_refresh_notifies_once_after_completion_and_keeps_automatic_refreshes_q
 
 #[test]
 fn manual_refresh_reports_partial_failures_and_worker_shutdown() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     for failure in [Some("Docker unavailable"), None] {
         let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -73,7 +73,7 @@ fn unfocused_inventory_refreshes_every_five_minutes_and_focus_refreshes_immediat
 
 #[test]
 fn changing_widget_focus_does_not_change_terminal_idle_schedule() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     let mut events = EventCtx::new(AnimationSettings::default());
     app.event(&TuiEvent::FocusLost, &mut events);

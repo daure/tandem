@@ -48,7 +48,7 @@ fn observation() -> Snapshot {
 
 #[test]
 fn n_creates_in_the_workspace_of_instance_subtrees_sessions_and_clients() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     inventory.instances[0].services.push(InstanceService {
         name: "migrate".into(),
@@ -97,7 +97,7 @@ fn n_creates_in_the_workspace_of_instance_subtrees_sessions_and_clients() {
 
 #[test]
 fn close_all_hides_busy_saved_and_empty_clients_immediately_and_restores_failures() {
-    tuicore::init();
+    init_ui();
     let mut observation = observation();
     observation.sessions[1].activity = Activity::Busy;
     let mut app = root(AppService::for_tests());
@@ -138,7 +138,7 @@ fn close_all_hides_busy_saved_and_empty_clients_immediately_and_restores_failure
 
 #[test]
 fn external_aggregate_has_no_creation_directory_and_parents_confirm_bulk_close() {
-    tuicore::init();
+    init_ui();
     for (id, scope) in [
         ("opencode-workspaces", CloseScope::ExternalWorkspaces),
         (

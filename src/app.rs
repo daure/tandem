@@ -232,6 +232,8 @@ pub(crate) struct App {
 }
 
 pub(crate) fn root(service: AppService) -> App {
+    #[cfg(test)]
+    tests::init_ui();
     tuicore::set_keybindings(tuicore::keybindings().with_tabs_close([KeySpec::plain('c')]));
     let keys = service.environment_keys();
     let snapshot = service.environment_snapshot();

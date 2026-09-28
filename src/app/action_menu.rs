@@ -180,7 +180,7 @@ impl ActionMenu {
             }
         } else if target.close_opencode {
             vec![Action::GotoPanel, Action::CloseSession]
-        } else if target.external_opencode || (target.new_opencode && !target.instance) {
+        } else if target.external_opencode {
             vec![Action::Details]
         } else if target.cleanup {
             vec![
@@ -224,6 +224,8 @@ impl ActionMenu {
                 Action::RestartInstance,
                 Action::Purge,
             ]
+        } else if target.new_opencode && !target.service {
+            vec![Action::Details]
         } else {
             let mut actions = vec![
                 Action::Details,
@@ -447,7 +449,7 @@ mod tests {
 
     #[test]
     fn action_menu_dims_the_full_content_bounds() {
-        tuicore::init();
+        crate::app::tests::init_ui();
         let mut app = crate::app::root(AppService::for_tests());
         app.set_rows_for_tests(vec![Row {
             id: "template:website".into(),

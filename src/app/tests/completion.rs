@@ -64,7 +64,7 @@ fn advance(view: &mut Instances, milliseconds: u64) {
 
 #[test]
 fn completion_gutter_pulses_twice_then_rises_and_fades_over_20_seconds() {
-    tuicore::init();
+    init_ui();
     for (focused, activity) in [false, true].into_iter().flat_map(|focused| {
         [Activity::Idle, Activity::AwaitingAnswer].map(|activity| (focused, activity))
     }) {
@@ -206,7 +206,7 @@ fn completion_gutter_pulses_twice_then_rises_and_fades_over_20_seconds() {
 
 #[test]
 fn configured_duration_controls_the_final_gutter_fade() {
-    tuicore::init();
+    init_ui();
     let state = instances::state(rows(Activity::Busy, false));
     instances::set_attached_sessions_only(&state, true);
     instances::set_completion_fade(&state, 2);
@@ -236,7 +236,7 @@ fn configured_duration_controls_the_final_gutter_fade() {
 
 #[test]
 fn disabling_animations_clears_the_marker_without_replaying_on_reenable() {
-    tuicore::init();
+    init_ui();
     let state = instances::state(rows(Activity::Busy, false));
     instances::set_attached_sessions_only(&state, true);
     let mut view = Instances::new(state.clone());
@@ -256,7 +256,7 @@ fn disabling_animations_clears_the_marker_without_replaying_on_reenable() {
 
 #[test]
 fn completion_markers_require_a_fresh_busy_transition_in_the_same_view() {
-    tuicore::init();
+    init_ui();
     for (previous, current, switch) in [
         (Vec::new(), rows(Activity::Idle, false), false),
         (
@@ -307,7 +307,7 @@ fn completion_markers_require_a_fresh_busy_transition_in_the_same_view() {
 
 #[test]
 fn a_session_reappearing_after_filtering_does_not_replay_completion() {
-    tuicore::init();
+    init_ui();
     let state = instances::state(rows(Activity::Busy, false));
     instances::set_attached_sessions_only(&state, true);
     let mut view = Instances::new(state.clone());
@@ -329,7 +329,7 @@ fn a_session_reappearing_after_filtering_does_not_replay_completion() {
 
 #[test]
 fn completion_markers_clear_on_new_work_and_expire_after_elapsed_time() {
-    tuicore::init();
+    init_ui();
     let state = instances::state(rows(Activity::Busy, false));
     instances::set_attached_sessions_only(&state, true);
     let mut view = Instances::new(state.clone());
@@ -359,7 +359,7 @@ fn completion_markers_clear_on_new_work_and_expire_after_elapsed_time() {
 
 #[test]
 fn completion_sound_is_opt_in_and_plays_once_per_busy_to_idle_transition() {
-    tuicore::init();
+    init_ui();
     let service = AppService::for_tests();
     service.set_opencode_snapshot_for_tests(observation(Activity::Busy, false));
     let mut app = root(service);
@@ -401,7 +401,7 @@ fn completion_sound_is_opt_in_and_plays_once_per_busy_to_idle_transition() {
 
 #[test]
 fn question_waits_notify_once_and_resume_normal_completion_feedback() {
-    tuicore::init();
+    init_ui();
     let service = AppService::for_tests();
     service.set_opencode_snapshot_for_tests(observation(Activity::Busy, false));
     let mut app = root(service);

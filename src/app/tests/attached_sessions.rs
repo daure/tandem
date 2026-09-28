@@ -78,7 +78,7 @@ fn click(area: Rect) -> TuiEvent {
 
 #[test]
 fn sessions_tab_instance_purge_targets_only_the_selected_instance() {
-    tuicore::init();
+    init_ui();
     let service = AppService::for_tests();
     service.set_opencode_snapshot_for_tests(observation());
     let mut app = crate::app::root(service);
@@ -97,7 +97,7 @@ fn sessions_tab_instance_purge_targets_only_the_selected_instance() {
 
 #[test]
 fn app_starts_in_the_expanded_agent_view_with_the_first_item_selected() {
-    tuicore::init();
+    init_ui();
     let service = AppService::for_tests();
     service.set_opencode_snapshot_for_tests(observation());
     let mut app = crate::app::root(service);
@@ -115,7 +115,7 @@ fn app_starts_in_the_expanded_agent_view_with_the_first_item_selected() {
 
 #[test]
 fn agents_view_shows_attached_clients_before_the_first_message() {
-    tuicore::init();
+    init_ui();
     for (directory, parent, id) in [
         (
             "/tmp/workspaces/review",
@@ -156,7 +156,7 @@ fn agents_view_shows_attached_clients_before_the_first_message() {
 
 #[test]
 fn attached_view_groups_two_line_sessions_under_single_line_instances() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     inventory.instances[0].description =
         "A deliberately long instance description that should be truncated".into();
@@ -246,7 +246,7 @@ fn attached_view_groups_two_line_sessions_under_single_line_instances() {
 
 #[test]
 fn attached_mode_keeps_history_and_running_filters_enabled() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     let mut inventory = snapshot();
     inventory.instances[0].services[0].status = "down (exit 0)".into();
@@ -378,7 +378,7 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
 
 #[test]
 fn filter_toggles_center_the_selected_row() {
-    tuicore::init();
+    init_ui();
     let settings = AnimationSettings {
         enabled: false,
         ..AnimationSettings::default()
@@ -485,7 +485,7 @@ fn filter_toggles_center_the_selected_row() {
 
 #[test]
 fn agents_history_controls_conversations_while_preserving_workspace_groups() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     let mut history = observation();
     history.sessions.retain(Session::saved);
@@ -523,7 +523,7 @@ fn agents_history_controls_conversations_while_preserving_workspace_groups() {
 
 #[test]
 fn attached_mode_updates_on_detach_and_leaves_the_view_when_integration_is_disabled() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.service.set_opencode_snapshot_for_tests(observation());
     app.update_snapshot(snapshot());

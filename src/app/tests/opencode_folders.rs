@@ -78,7 +78,7 @@ fn roots(rows: &[rows::Row]) -> Vec<&str> {
 
 #[test]
 fn agents_keep_all_known_folders_and_put_open_clients_first_independently_of_history() {
-    tuicore::init();
+    init_ui();
     for history in [false, true] {
         let rows = project(&observation(), history);
         assert_eq!(
@@ -106,7 +106,7 @@ fn agents_keep_all_known_folders_and_put_open_clients_first_independently_of_his
 
 #[test]
 fn folder_activity_uses_clients_outside_the_conversation_display_window() {
-    tuicore::init();
+    init_ui();
     let mut observation = observation();
     observation.sessions.extend((1..=21).map(|index| Session {
         id: format!("saved-{index}"),
@@ -151,7 +151,7 @@ fn folder_activity_uses_clients_outside_the_conversation_display_window() {
 
 #[test]
 fn closing_a_folders_last_client_moves_it_below_active_folders_without_losing_selection() {
-    tuicore::init();
+    init_ui();
     let mut observation = observation();
     let state = instances::state(project(&observation, false));
     instances::set_attached_sessions_only(&state, true);
@@ -192,7 +192,7 @@ fn closing_a_folders_last_client_moves_it_below_active_folders_without_losing_se
 
 #[test]
 fn empty_known_external_folders_can_launch_a_new_session() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.service.set_opencode_snapshot_for_tests(observation());
     app.update_snapshot(snapshot());
@@ -210,7 +210,7 @@ fn empty_known_external_folders_can_launch_a_new_session() {
 
 #[test]
 fn sessions_show_clientless_active_instances_only_with_show_all_in_group_order() {
-    tuicore::init();
+    init_ui();
     let mut observation = observation();
     observation.sessions.retain(Session::attached);
     let mut owned = observation.sessions[0].clone();
@@ -273,7 +273,7 @@ fn sessions_show_clientless_active_instances_only_with_show_all_in_group_order()
 
 #[test]
 fn running_filter_keeps_live_external_folders_and_preserves_workspace_ownership() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     inventory.instances[0].services[0].status = "down (exit 0)".into();
     let mut app = root(AppService::for_tests());

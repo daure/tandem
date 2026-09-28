@@ -37,6 +37,12 @@ mod template_actions;
 mod toolbar;
 mod workspaces;
 
+pub(super) fn init_ui() {
+    // Tuicore settings are process-wide; resetting them races with parallel dialog tests.
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(tuicore::init);
+}
+
 fn root(service: AppService) -> App {
     let mut app = super::root(service);
     app.handle_message(
@@ -287,7 +293,7 @@ fn setup_jobs_are_nested_under_setup_and_services_are_nested_under_services() {
 
 #[test]
 fn unassigned_keys_leave_selected_instance_actions_idle() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
@@ -308,7 +314,7 @@ fn unassigned_keys_leave_selected_instance_actions_idle() {
 
 #[test]
 fn routed_service_action_menu_opens_the_gateway_in_the_browser() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     super::instances::set_highlighted(&app.instances, Some("service:review:web".into()));
@@ -370,7 +376,7 @@ fn routed_service_action_menu_opens_the_gateway_in_the_browser() {
 
 #[test]
 fn action_menu_dims_the_status_bar_background() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let area = Rect::new(0, 0, 130, 40);
@@ -419,7 +425,7 @@ fn action_menu_dims_the_status_bar_background() {
 
 #[test]
 fn instance_control_enter_opens_its_only_service_route_without_a_menu() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.update_snapshot(snapshot());
     super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
@@ -441,7 +447,7 @@ fn instance_control_enter_opens_its_only_service_route_without_a_menu() {
 
 #[test]
 fn instance_control_enter_chooses_a_service_route_to_open() {
-    tuicore::init();
+    init_ui();
     let mut snapshot = snapshot();
     snapshot.instances[0].services.push(InstanceService {
         name: "api".into(),
@@ -519,7 +525,7 @@ fn instance_control_enter_chooses_a_service_route_to_open() {
 
 #[test]
 fn instance_yank_menu_copies_the_name_description_or_full_workspace_path() {
-    tuicore::init();
+    init_ui();
     for (hotkey, value) in [
         ('i', "review"),
         ('d', "Review environment"),
@@ -546,7 +552,7 @@ fn instance_yank_menu_copies_the_name_description_or_full_workspace_path() {
 
 #[test]
 fn routed_service_yank_menu_only_copies_its_url() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     super::instances::set_highlighted(&app.instances, Some("service:review:web".into()));
@@ -578,7 +584,7 @@ fn routed_service_yank_menu_only_copies_its_url() {
 
 #[test]
 fn copy_hotkeys_are_registered_on_the_instances_tab() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let area = Rect::new(0, 0, 130, 40);
@@ -617,7 +623,7 @@ fn copy_hotkeys_are_registered_on_the_instances_tab() {
 
 #[test]
 fn startup_waits_for_complete_inventory_before_showing_and_selecting_rows() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.handle_message(
         Msg::SetRunningOnly(false),
@@ -665,7 +671,7 @@ fn startup_waits_for_complete_inventory_before_showing_and_selecting_rows() {
 
 #[test]
 fn data_view_starts_expanded_through_instances() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let area = Rect::new(0, 0, 130, 40);
@@ -689,7 +695,7 @@ fn data_view_starts_expanded_through_instances() {
 
 #[test]
 fn global_h_clears_search_focuses_the_first_item_and_expands_all_rows() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let area = Rect::new(0, 0, 130, 40);
@@ -740,7 +746,7 @@ fn global_h_clears_search_focuses_the_first_item_and_expands_all_rows() {
 
 #[test]
 fn z_toggles_templates_and_instances_without_expanding_their_groups() {
-    tuicore::init();
+    init_ui();
     let mut snapshot = snapshot();
     let mut setup = snapshot.instances[0].services[0].clone();
     setup.name = "migrate".into();
@@ -786,7 +792,7 @@ fn z_toggles_templates_and_instances_without_expanding_their_groups() {
 
 #[test]
 fn details_hotkey_opens_the_selected_template_in_bottom_tabs() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let mut events = EventCtx::new(AnimationSettings::default());
@@ -865,7 +871,7 @@ fn details_hotkey_opens_the_selected_template_in_bottom_tabs() {
 
 #[test]
 fn detail_tabs_keep_the_header_and_close_control_above_the_content() {
-    tuicore::init();
+    init_ui();
     let _app = root(AppService::for_tests());
     let rows = rows::from_snapshot(&snapshot());
     for width in [56, 130] {
@@ -912,7 +918,7 @@ fn detail_tabs_keep_the_header_and_close_control_above_the_content() {
 
 #[test]
 fn new_instance_dialog_validates_input_without_losing_the_dialog() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let mut events = EventCtx::new(AnimationSettings::default());
@@ -931,7 +937,7 @@ fn new_instance_dialog_validates_input_without_losing_the_dialog() {
 
 #[test]
 fn new_instance_dialog_has_multiline_description_and_prompt_fields() {
-    tuicore::init();
+    init_ui();
     let mut dialog = super::dialogs::instance_entry(
         "New instance",
         "review",
@@ -978,7 +984,7 @@ fn entered_names_are_preserved() {
 
 #[test]
 fn description_hotkey_opens_an_unpadded_text_editor_in_insert_mode() {
-    tuicore::init();
+    init_ui();
     let mut environment = snapshot();
     environment.instances[0].description = "Review environment".into();
     let mut app = root(AppService::for_tests());
@@ -1053,7 +1059,7 @@ fn description_hotkey_opens_an_unpadded_text_editor_in_insert_mode() {
 
 #[test]
 fn template_name_entry_contains_only_a_wide_input() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     app.action(2, &mut EventCtx::new(AnimationSettings::default()));
@@ -1086,7 +1092,7 @@ fn template_name_entry_contains_only_a_wide_input() {
 fn details_hotkey_uses_full_width_on_mobile_and_seventy_five_percent_on_desktop() {
     assert_eq!(super::details_width_percent(99), 100);
     assert_eq!(super::details_width_percent(100), 75);
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     app.action(0, &mut EventCtx::new(AnimationSettings::default()));
@@ -1146,7 +1152,7 @@ fn details_hotkey_uses_full_width_on_mobile_and_seventy_five_percent_on_desktop(
 
 #[test]
 fn bottom_dialog_dims_the_status_bar_background() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let area = Rect::new(0, 0, 130, 40);
@@ -1192,7 +1198,7 @@ fn bottom_dialog_dims_the_status_bar_background() {
 
 #[test]
 fn details_hotkey_opens_the_selected_instance_in_a_bottom_dialog() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
@@ -1208,7 +1214,7 @@ fn details_hotkey_opens_the_selected_instance_in_a_bottom_dialog() {
 
 #[test]
 fn details_hotkey_opens_the_selected_routed_service() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     super::instances::set_highlighted(&app.instances, Some("service:review:web".into()));
@@ -1224,7 +1230,7 @@ fn details_hotkey_opens_the_selected_routed_service() {
 
 #[test]
 fn template_action_menu_keeps_typed_hotkeys_in_its_search() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let area = Rect::new(0, 0, 130, 40);
@@ -1265,7 +1271,7 @@ fn template_action_menu_keeps_typed_hotkeys_in_its_search() {
 
 #[test]
 fn template_stop_and_purge_hotkeys_open_bulk_confirmations() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let mut events = EventCtx::new(AnimationSettings::default());
@@ -1282,7 +1288,7 @@ fn template_stop_and_purge_hotkeys_open_bulk_confirmations() {
 
 #[test]
 fn instance_action_menu_lists_instance_actions() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let area = Rect::new(0, 0, 130, 40);
@@ -1330,7 +1336,7 @@ fn expand_first_instance(tree: &mut crate::app::Instances) {
 
 #[test]
 fn stopped_instance_menu_mutes_stop_without_changing_its_hotkey() {
-    tuicore::init();
+    init_ui();
     let mut environment = snapshot();
     environment.instances[0].services[0].status = "down (exit 0)".into();
     let mut app = root(AppService::for_tests());
@@ -1369,7 +1375,7 @@ fn stopped_instance_menu_mutes_stop_without_changing_its_hotkey() {
 
 #[test]
 fn start_stop_hotkey_follows_the_instance_state() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let mut events = EventCtx::new(AnimationSettings::default());
@@ -1390,7 +1396,7 @@ fn start_stop_hotkey_follows_the_instance_state() {
 
 #[test]
 fn active_data_view_search_keeps_action_hotkeys_as_search_text() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let mut events = EventCtx::new(AnimationSettings::default());

@@ -3,7 +3,7 @@ use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn conversation_content_loads_asynchronously_and_disposal_cancels_pending_reads() {
-    tuicore::init();
+    crate::app::tests::init_ui();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let mut view = Conversation::new(Ok(receiver));
     let area = Rect::new(0, 0, 80, 15);

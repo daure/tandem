@@ -17,7 +17,7 @@ fn render(app: &mut crate::app::App) -> String {
 
 #[test]
 fn restart_key_and_menu_confirm_the_selected_instance_or_service() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     let mut database = inventory.instances[0].services[0].clone();
     database.name = "db".into();
@@ -99,7 +99,7 @@ fn restart_key_and_menu_confirm_the_selected_instance_or_service() {
 
 #[test]
 fn template_selection_ignores_restart_and_uppercase_r_refreshes() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     app.event(

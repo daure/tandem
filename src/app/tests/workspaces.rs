@@ -3,7 +3,7 @@ use crate::store::environments::{RepositoryCheckout, StartupKind, StartupTiming}
 
 #[test]
 fn repository_setup_rows_precede_jobs_and_copy_absolute_checkout_paths() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     inventory.instances[0].repositories = ["z-ui", "a-api"]
         .map(|target| RepositoryCheckout {
@@ -66,7 +66,7 @@ fn repository_setup_rows_precede_jobs_and_copy_absolute_checkout_paths() {
 
 #[test]
 fn workspace_rows_keep_a_childless_services_group() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     inventory.templates[0].compose_file.clear();
     inventory.templates[0].compose_source.clear();
@@ -112,7 +112,7 @@ fn workspace_rows_keep_a_childless_services_group() {
 fn inactive_instance_icons_are_green_for_live_opencode_sessions() {
     use crate::store::opencode::{Activity, Pane, Session, Snapshot};
 
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     let instance = &mut inventory.instances[0];
     instance.services.clear();
@@ -199,7 +199,7 @@ fn inactive_instance_icons_are_green_for_live_opencode_sessions() {
 
 #[test]
 fn completed_setup_icon_is_muted_when_the_instance_is_stopped() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     inventory.instances[0].services[0].status = "exited 0".into();
     inventory.instances[0]

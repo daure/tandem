@@ -7,7 +7,7 @@ use crate::store::{
 
 #[test]
 fn optimistic_purge_preserves_selection_and_restores_failures_in_both_tabs() {
-    tuicore::init();
+    init_ui();
     for sessions_tab in [false, true] {
         let mut inventory = snapshot();
         for name in ["alpha", "zulu"] {

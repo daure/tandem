@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn starting_instances_without_sessions_follow_each_tabs_active_filter() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     for sessions in [false, true] {
         app.attached_sessions_only = sessions;
@@ -48,7 +48,7 @@ fn starting_instances_without_sessions_follow_each_tabs_active_filter() {
 
 #[test]
 fn creation_preserves_literal_prompts_and_resets_fields_between_dialogs() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let mut ctx = EventCtx::new(AnimationSettings::default());
@@ -90,7 +90,7 @@ fn creation_launch_errors_are_reported_for_each_instance() {
 
 #[test]
 fn description_content_grows_from_two_to_eight_rows() {
-    tuicore::init();
+    init_ui();
     for (description, expected_height) in [("".into(), 2), ("line\n".repeat(12), 8)] {
         let mut dialog = crate::app::dialogs::instance_entry(
             "New instance",
@@ -119,7 +119,7 @@ fn description_content_grows_from_two_to_eight_rows() {
 
 #[test]
 fn creation_textareas_accept_multiline_input_without_submitting_the_dialog() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     app.action(1, &mut EventCtx::new(AnimationSettings::default()));
@@ -151,7 +151,7 @@ fn creation_textareas_accept_multiline_input_without_submitting_the_dialog() {
 
 #[test]
 fn creation_shortcut_submits_from_name_or_textarea_focus_mode() {
-    tuicore::init();
+    init_ui();
     let shortcut = TuiEvent::Key(KeyEvent {
         code: Key::Enter,
         modifiers: KeyModifiers::CONTROL,

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn detail_search_matches_property_names_and_multiline_values() {
-    tuicore::init();
+    init_ui();
     let mut snapshot = snapshot();
     snapshot.templates[0].manifest.description = "First line\nneonquartz".into();
     let rows = rows::from_snapshot(&snapshot);
@@ -76,7 +76,7 @@ fn detail_search_matches_property_names_and_multiline_values() {
 
 #[test]
 fn tree_search_matches_service_labels_and_resource_values() {
-    tuicore::init();
+    init_ui();
     let mut snapshot = snapshot();
     snapshot.instances[0].services[0].usage = Some(crate::store::environments::ResourceUsage {
         memory_bytes: 2 * 1048576,

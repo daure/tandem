@@ -30,7 +30,7 @@ fn render(app: &mut super::super::App, width: u16) -> (tuicore::LayoutCtx, Vec<S
 
 #[test]
 fn bulk_buttons_are_responsive_and_follow_instance_availability() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     for width in [40, 130] {
         for (status, stop_enabled, purge_enabled) in [
@@ -101,7 +101,7 @@ fn bulk_buttons_are_responsive_and_follow_instance_availability() {
 
 #[test]
 fn bulk_hotkeys_open_confirmation_and_respect_disabled_states_and_search() {
-    tuicore::init();
+    init_ui();
     for width in [40, 130] {
         let mut app = root(AppService::for_tests());
         app.update_snapshot(inventory());
@@ -168,7 +168,7 @@ fn bulk_hotkeys_open_confirmation_and_respect_disabled_states_and_search() {
 
 #[test]
 fn toolbar_bulk_hotkeys_use_configured_letters_for_labels_and_activation() {
-    tuicore::init();
+    init_ui();
     for width in [40, 130] {
         let state = std::rc::Rc::new(std::cell::RefCell::new(
             super::super::toolbar::State::from_snapshot(&inventory()),
@@ -209,7 +209,7 @@ fn toolbar_bulk_hotkeys_use_configured_letters_for_labels_and_activation() {
 
 #[test]
 fn bulk_actions_confirm_captured_targets_across_all_templates_before_submission() {
-    tuicore::init();
+    init_ui();
     for width in [40, 130] {
         for (key, action, expected) in [
             ("stop-all", "stop_instance", vec!["other", "review"]),
@@ -304,7 +304,7 @@ fn bulk_actions_confirm_captured_targets_across_all_templates_before_submission(
 
 #[test]
 fn active_operations_do_not_block_bulk_confirmation_or_other_instances() {
-    tuicore::init();
+    init_ui();
     for message in [Msg::StopAll, Msg::PurgeAll] {
         let mut app = root(AppService::for_tests());
         app.update_snapshot(inventory());

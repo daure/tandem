@@ -63,7 +63,7 @@ fn render(app: &mut crate::app::App) -> String {
 
 #[test]
 fn service_start_stop_uses_selected_state_and_configured_key_with_confirmation() {
-    tuicore::init();
+    init_ui();
     for (status, running) in [
         ("up", true),
         ("healthy", true),

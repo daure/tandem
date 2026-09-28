@@ -68,7 +68,7 @@ fn select(tree: &mut Instances, state: &instances::SharedState, id: &str) {
 
 #[test]
 fn closing_a_session_selects_its_original_neighbor_and_failure_does_not_steal_focus() {
-    tuicore::init();
+    init_ui();
     for agents in [false, true] {
         let mut observation = conversation();
         observation.sessions = ["alpha", "middle", "zulu"]
@@ -132,7 +132,7 @@ fn closing_a_session_selects_its_original_neighbor_and_failure_does_not_steal_fo
 
 #[test]
 fn selection_follows_the_pane_between_home_and_its_first_conversation() {
-    tuicore::init();
+    init_ui();
     for agents in [false, true] {
         let state = instances::state(project(&home(), agents));
         instances::set_attached_sessions_only(&state, agents);
@@ -159,7 +159,7 @@ fn selection_follows_the_pane_between_home_and_its_first_conversation() {
 
 #[test]
 fn selection_follows_the_exact_pane_when_a_conversation_has_multiple_clients() {
-    tuicore::init();
+    init_ui();
     let state = instances::state(project(&home(), false));
     let mut tree = Instances::new(state.clone());
     tree.expand_for_tests("sessions:review");
@@ -178,7 +178,7 @@ fn selection_follows_the_exact_pane_when_a_conversation_has_multiple_clients() {
 
 #[test]
 fn a_conversation_transition_does_not_steal_selection_from_another_row() {
-    tuicore::init();
+    init_ui();
     let state = instances::state(project(&home(), false));
     let mut tree = Instances::new(state.clone());
     tree.expand_for_tests("sessions:review");
@@ -190,7 +190,7 @@ fn a_conversation_transition_does_not_steal_selection_from_another_row() {
 
 #[test]
 fn a_closed_client_does_not_follow_a_pane_with_the_same_number_in_another_zellij_session() {
-    tuicore::init();
+    init_ui();
     let state = instances::state(project(&home(), false));
     let mut tree = Instances::new(state.clone());
     tree.expand_for_tests("sessions:review");
@@ -204,7 +204,7 @@ fn a_closed_client_does_not_follow_a_pane_with_the_same_number_in_another_zellij
 
 #[test]
 fn creation_selects_the_exact_observed_pane_and_reveals_its_ancestors() {
-    tuicore::init();
+    init_ui();
     for agents in [false, true] {
         for observed_first in [false, true] {
             let mut app = root(AppService::for_tests());
@@ -266,7 +266,7 @@ fn creation_selects_the_exact_observed_pane_and_reveals_its_ancestors() {
 
 #[test]
 fn created_session_selection_prefers_the_exact_pane_child() {
-    tuicore::init();
+    init_ui();
     let state = instances::state(project(&home(), false));
     let mut tree = Instances::new(state.clone());
     let mut observation = conversation();
@@ -282,7 +282,7 @@ fn created_session_selection_prefers_the_exact_pane_child() {
 
 #[test]
 fn created_external_client_selection_expands_its_workspace_group() {
-    tuicore::init();
+    init_ui();
     for agents in [false, true] {
         let state = instances::state(project(&Snapshot::default(), agents));
         instances::set_attached_sessions_only(&state, agents);

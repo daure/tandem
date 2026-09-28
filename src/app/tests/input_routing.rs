@@ -23,7 +23,7 @@ fn rendered_app(app: &mut super::super::App, area: Rect) -> String {
 
 #[test]
 fn unfocus_keys_clear_an_applied_instance_search() {
-    tuicore::init();
+    init_ui();
     for key in [
         KeyEvent::from(Key::Esc),
         KeyEvent {
@@ -70,7 +70,7 @@ fn unfocus_keys_clear_an_applied_instance_search() {
 
 #[test]
 fn status_bar_search_keeps_app_shortcuts_as_text() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     assert!(app.service.branch_instances());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
@@ -114,7 +114,7 @@ fn status_bar_search_keeps_app_shortcuts_as_text() {
 
 #[test]
 fn status_bar_menu_opens_branch_instance_settings() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     let area = Rect::new(0, 0, 130, 40);
     let settings = AnimationSettings {
@@ -174,7 +174,7 @@ fn status_bar_menu_opens_branch_instance_settings() {
 
 #[test]
 fn settings_duration_input_accepts_digits_and_persists_the_value() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     let settings = AnimationSettings {
         enabled: false,
@@ -252,7 +252,7 @@ fn settings_duration_input_accepts_digits_and_persists_the_value() {
 
 #[test]
 fn sound_dropdown_previews_and_saves_only_when_a_choice_is_confirmed() {
-    tuicore::init();
+    init_ui();
     let mut service = AppService::for_tests();
     service.set_sound_choices_for_tests(vec![
         crate::store::completion::SoundChoice {

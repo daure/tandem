@@ -35,7 +35,7 @@ fn template_operation_scope_ignores_unrelated_instances_with_the_same_name() {
 
 #[test]
 fn instance_operations_only_block_their_target_instance() {
-    tuicore::init();
+    init_ui();
     let service = AppService::for_tests();
     service.queue_instance_for_tests("review", "website");
     let mut app = root(service);
@@ -56,7 +56,7 @@ fn instance_operations_only_block_their_target_instance() {
 
 #[test]
 fn instance_descriptions_can_be_edited_and_saved_during_lifecycle_operations() {
-    tuicore::init();
+    init_ui();
     for action in ["create_instance", "stop_instance"] {
         let service = AppService::for_tests();
         let operation = service.queue_instance_for_tests("review", "website");
@@ -122,7 +122,7 @@ fn instance_descriptions_can_be_edited_and_saved_during_lifecycle_operations() {
 
 #[test]
 fn instances_from_one_template_can_start_concurrently() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     inventory.instances[0].services[0].status = "down (exit 0)".into();
     let mut other = inventory.instances[0].clone();
@@ -156,7 +156,7 @@ fn instances_from_one_template_can_start_concurrently() {
 
 #[test]
 fn one_template_can_create_multiple_instances_concurrently() {
-    tuicore::init();
+    init_ui();
     let service = AppService::for_tests();
     service.queue_instance_for_tests("review", "website");
     let mut app = root(service);
@@ -183,7 +183,7 @@ fn one_template_can_create_multiple_instances_concurrently() {
 
 #[test]
 fn new_instance_form_ignores_an_active_operation_for_the_draft_name() {
-    tuicore::init();
+    init_ui();
     let service = AppService::for_tests();
     service.queue_instance_for_tests("review", "website");
     let mut app = root(service);
@@ -203,7 +203,7 @@ fn new_instance_form_ignores_an_active_operation_for_the_draft_name() {
 
 #[test]
 fn stop_shortcut_notifies_when_instance_startup_is_active() {
-    tuicore::init();
+    init_ui();
     let service = AppService::for_tests();
     service.queue_instance_for_tests("review", "website");
     let mut app = root(service);
@@ -218,7 +218,7 @@ fn stop_shortcut_notifies_when_instance_startup_is_active() {
 
 #[test]
 fn pending_container_operations_keep_notifications_silent() {
-    tuicore::init();
+    init_ui();
     for action in [
         "restart_instance",
         "restart_service",
@@ -238,7 +238,7 @@ fn pending_container_operations_keep_notifications_silent() {
 
 #[test]
 fn accepted_deletes_hide_targets_immediately_and_notify_once_on_completion() {
-    tuicore::init();
+    init_ui();
     for (action, name, title, template_count) in [
         ("delete_instance", "review", "Instance purged", 1),
         ("remove_template", "website", "Template deleted", 0),
@@ -280,7 +280,7 @@ fn accepted_deletes_hide_targets_immediately_and_notify_once_on_completion() {
 
 #[test]
 fn failed_deletes_restore_inventory_and_report_the_failure() {
-    tuicore::init();
+    init_ui();
     for (action, name) in [
         ("delete_instance", "review"),
         ("remove_template", "website"),
@@ -304,7 +304,7 @@ fn failed_deletes_restore_inventory_and_report_the_failure() {
 
 #[test]
 fn completed_purge_hides_matching_instances_and_preserves_other_templates() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     let mut second = inventory.instances[0].clone();
     second.name = "second".into();
@@ -324,7 +324,7 @@ fn completed_purge_hides_matching_instances_and_preserves_other_templates() {
 
 #[test]
 fn created_items_are_selected_on_arrival_without_reselecting_on_refresh() {
-    tuicore::init();
+    init_ui();
     for (action, name, target) in [
         ("create_instance", "review", "instance:review"),
         (
@@ -372,7 +372,7 @@ fn created_items_are_selected_on_arrival_without_reselecting_on_refresh() {
 
 #[test]
 fn accepted_instance_deletion_moves_to_the_next_visible_row_then_the_previous() {
-    tuicore::init();
+    init_ui();
     let mut inventory = snapshot();
     for name in ["alpha", "zulu"] {
         let mut instance = inventory.instances[0].clone();
@@ -400,7 +400,7 @@ fn accepted_instance_deletion_moves_to_the_next_visible_row_then_the_previous() 
 
 #[test]
 fn duplicate_new_instance_focuses_existing_and_notifies_without_another_operation() {
-    tuicore::init();
+    init_ui();
     let service = AppService::for_tests();
     let existing = service.queue_instance_for_tests("review", "website");
     service.complete_instance_for_tests(&existing.id, snapshot().instances.remove(0));
@@ -434,7 +434,7 @@ fn duplicate_new_instance_focuses_existing_and_notifies_without_another_operatio
 
 #[test]
 fn failed_instance_cleanup_rows_offer_confirmed_deletion_but_active_and_template_rows_do_not() {
-    tuicore::init();
+    init_ui();
     for (action, finished, enabled) in [
         ("delete_instance", true, true),
         ("delete_instance", false, false),

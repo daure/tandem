@@ -60,7 +60,7 @@ fn tree(running: bool) -> Vec<rows::Row> {
 
 #[test]
 fn nested_lifecycle_hotkeys_confirm_the_instance_or_selected_service() {
-    tuicore::init();
+    init_ui();
     for running in [false, true] {
         let rows = tree(running);
         for row in rows.iter().filter(|row| row.parent.is_some()) {
@@ -109,7 +109,7 @@ fn nested_lifecycle_hotkeys_confirm_the_instance_or_selected_service() {
 
 #[test]
 fn nested_lifecycle_actions_use_configured_keys_and_instance_capabilities() {
-    tuicore::init();
+    init_ui();
     for (index, key) in [(6, 'q'), (3, 'z'), (7, 'w')] {
         for enabled in [false, true] {
             let mut rows = tree(true);
@@ -133,7 +133,7 @@ fn nested_lifecycle_actions_use_configured_keys_and_instance_capabilities() {
 
 #[test]
 fn external_workspace_rows_cannot_target_instance_lifecycle_actions() {
-    tuicore::init();
+    init_ui();
     let mut rows = rows::from_snapshot(&snapshot());
     opencode::append_rows(
         &mut rows,

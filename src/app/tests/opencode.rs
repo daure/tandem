@@ -4,7 +4,7 @@ use crate::store::opencode::{Activity, Client, Pane, Session, Snapshot};
 
 #[test]
 fn conversation_details_show_fresh_pending_approvals() {
-    tuicore::init();
+    init_ui();
     let mut observation = external_observation();
     for (pending, stale, expected) in [
         (Some(true), false, Some("Pending")),
@@ -77,7 +77,7 @@ fn external_observation() -> Snapshot {
 
 #[test]
 fn overview_places_other_opencode_workspaces_before_templates() {
-    tuicore::init();
+    init_ui();
     let mut projected = rows::from_snapshot(&snapshot());
     super::super::opencode::append_rows(&mut projected, &external_observation(), false);
 
@@ -145,7 +145,7 @@ fn overview_places_other_opencode_workspaces_before_templates() {
 fn overview_keeps_other_opencode_workspaces_collapsed_on_startup_and_shift_h() {
     use crate::app::instances::{self, Instances};
 
-    tuicore::init();
+    init_ui();
     let mut projected = rows::from_snapshot(&snapshot());
     super::super::opencode::append_rows(&mut projected, &external_observation(), false);
     let state = instances::state(projected);
@@ -186,7 +186,7 @@ fn overview_keeps_other_opencode_workspaces_collapsed_on_startup_and_shift_h() {
 fn agent_view_startup_and_shift_h_expand_external_workspaces() {
     use crate::app::instances::{self, Instances};
 
-    tuicore::init();
+    init_ui();
     let state = instances::state(Vec::new());
     instances::set_attached_sessions_only(&state, true);
     let mut tree = Instances::new(state.clone());
@@ -231,7 +231,7 @@ fn agent_view_startup_and_shift_h_expand_external_workspaces() {
 
 #[test]
 fn attached_view_promotes_external_directories_to_workspace_rows() {
-    tuicore::init();
+    init_ui();
     let projected = super::super::opencode::attached_rows(
         rows::from_snapshot(&snapshot()),
         &external_observation(),
@@ -280,7 +280,7 @@ fn attached_view_promotes_external_directories_to_workspace_rows() {
 
 #[test]
 fn session_views_show_twenty_recent_sessions_per_directory_then_a_muted_more_row() {
-    tuicore::init();
+    init_ui();
     let pane = Pane {
         session: "main".into(),
         id: 7,
@@ -489,7 +489,7 @@ fn saved_sessions_follow_live_sessions_and_clients_in_every_workspace() {
 
 #[test]
 fn disabling_integration_removes_rows_and_counts_and_clears_the_cached_observation() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.service.set_opencode_snapshot_for_tests(Snapshot {
         sessions: vec![Session {
@@ -532,7 +532,7 @@ fn disabling_integration_removes_rows_and_counts_and_clears_the_cached_observati
 
 #[test]
 fn child_rows_show_four_states_with_overlapping_counts_and_explicit_history() {
-    tuicore::init();
+    init_ui();
     let pane = Pane {
         session: "main".into(),
         id: 7,
@@ -639,7 +639,7 @@ fn session_timers_share_a_display_beat_across_refreshes_and_stop_when_idle() {
     use crate::app::instances::{self, Instances};
     use std::time::Duration;
 
-    tuicore::init();
+    init_ui();
     let mut observation = Snapshot {
         sessions: vec![Session {
             id: "ses_timer".into(),
@@ -967,7 +967,7 @@ fn instance_children_group_opencode_sessions_before_setup_and_services() {
 
 #[test]
 fn sessions_group_is_muted_for_history_only_and_green_with_an_attached_session() {
-    tuicore::init();
+    init_ui();
     let observation = Snapshot {
         sessions: vec![Session {
             id: "ses_saved".into(),
@@ -1058,7 +1058,7 @@ fn multiple_panes_share_one_session_row_and_have_individual_navigation_targets()
 
 #[test]
 fn session_menu_and_shortcut_open_or_goto_the_panel() {
-    tuicore::init();
+    init_ui();
     for attached in [false, true] {
         let pane = Pane {
             session: "main".into(),
@@ -1132,7 +1132,7 @@ fn session_menu_and_shortcut_open_or_goto_the_panel() {
 
 #[test]
 fn c_requests_closing_the_selected_opencode_session_pane() {
-    tuicore::init();
+    init_ui();
     let pane = Pane {
         session: "main".into(),
         id: 7,
@@ -1175,7 +1175,7 @@ fn c_requests_closing_the_selected_opencode_session_pane() {
 
 #[test]
 fn external_client_menu_and_c_hotkey_close_its_observed_pane() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.service
         .set_opencode_snapshot_for_tests(external_observation());
@@ -1220,7 +1220,7 @@ fn external_client_menu_and_c_hotkey_close_its_observed_pane() {
 
 #[test]
 fn external_client_o_navigates_from_overview_and_attached_views() {
-    tuicore::init();
+    init_ui();
     for attached_only in [false, true] {
         let mut app = root(AppService::for_tests());
         app.service
@@ -1250,7 +1250,7 @@ fn external_client_o_navigates_from_overview_and_attached_views() {
 
 #[test]
 fn c_on_an_instance_confirms_closing_all_opencode_sessions() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     super::super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
@@ -1293,7 +1293,7 @@ fn c_on_an_instance_confirms_closing_all_opencode_sessions() {
 
 #[test]
 fn c_on_the_sessions_group_confirms_closing_all_instance_sessions() {
-    tuicore::init();
+    init_ui();
     let mut app = root(AppService::for_tests());
     app.service.set_opencode_snapshot_for_tests(Snapshot {
         sessions: vec![Session {
@@ -1328,7 +1328,7 @@ fn c_on_the_sessions_group_confirms_closing_all_instance_sessions() {
 
 #[test]
 fn closing_a_pane_hides_it_across_stale_observations_and_restores_it_on_failure() {
-    tuicore::init();
+    init_ui();
     let pane = Pane {
         session: "main".into(),
         id: 7,
@@ -1379,7 +1379,7 @@ fn closing_a_pane_hides_it_across_stale_observations_and_restores_it_on_failure(
 
 #[test]
 fn enter_opens_a_bottom_conversation_dialog_without_jumping_to_the_pane() {
-    tuicore::init();
+    init_ui();
     for width in [80, 130] {
         let mut app = root(AppService::for_tests());
         app.service.set_opencode_snapshot_for_tests(Snapshot {
