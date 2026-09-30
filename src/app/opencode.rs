@@ -387,6 +387,7 @@ fn append_rows_for_owners(
             .unwrap_or(rows.len());
         rows.splice(insertion..insertion, children);
     }
+    folders::active_templates_first(rows, snapshot, owners);
     if include_external {
         append_external_rows(rows, snapshot, show_saved, group_sessions, owners, false);
         resources::apply(rows, snapshot, owners);

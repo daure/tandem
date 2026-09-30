@@ -9,13 +9,43 @@ type BeforeCreation = Box<dyn FnOnce(&str, Instant) -> Result<(), String> + Send
 pub(crate) struct Startup {
     pub branch_instances: bool,
     pub description: Option<String>,
-    pub workspace_ready: Option<tokio::sync::oneshot::Sender<String>>,
+    pub opencode: Option<Option<String>>,
+    pub opencode_result: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
     pub instance_lock: Option<gateway::Lock>,
     pub before_creation: Option<BeforeCreation>,
+    pub before_repositories: Option<BeforeCreation>,
     pub writer: Option<std::sync::Arc<super::startup::Writer>>,
 }
 
 impl Environments {
+    pub(crate) fn admit_instance_start(
+        &self,
+        name: &str,
+    ) -> Result<(Instance, gateway::Lock), String> {
+        validate_instance_name(name)?;
+        let lock = gateway::lock(&self.config, &format!("instance-{name}"))?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let (instance, _) = lifecycle::managed_instance(&self.config, name, deadline)?;
+        let template = templates::get(&self.config, &instance.template)?;
+        if instance.template_directory != template.directory
+            || instance.workspace != self.config.workspaces.join(name).display().to_string()
+            || instance.workspace_only != template.workspace_only()
+        {
+            return Err(
+                "instance belongs to a different template directory, workspace, or execution kind"
+                    .into(),
+            );
+        }
+        if instance
+            .services
+            .iter()
+            .any(|service| service.state() == crate::store::environments::ContainerState::Paused)
+        {
+            return Err("unpause the instance containers before start".into());
+        }
+        Ok((instance, lock))
+    }
+
     pub fn admit_new_instance(
         &self,
         name: &str,

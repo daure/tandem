@@ -27,6 +27,10 @@ pub(crate) struct Record {
     pub timeout: u64,
     pub owner_pid: u32,
     pub workspace_ready: bool,
+    #[serde(default)]
+    pub opencode_requested: bool,
+    #[serde(default)]
+    pub opencode_result: Option<Result<(), String>>,
     pub services: Vec<InstanceService>,
 }
 
@@ -198,6 +202,10 @@ impl Writer {
     }
     pub fn workspace_ready(&self) {
         self.update(|record| record.workspace_ready = true);
+    }
+
+    pub fn opencode_result(&self, result: Result<(), String>) {
+        self.update(|record| record.opencode_result = Some(result));
     }
 
     pub fn finish(&self, mut operation: Operation) -> Result<(), String> {

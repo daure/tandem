@@ -47,7 +47,8 @@ impl Properties {
                 .columns([
                     Column::text("property", "", Constraint::Length(25), |row: &Property| {
                         row.name.clone()
-                    }),
+                    })
+                    .fit_content(),
                     Column::multiline("value", "", Constraint::Min(20), |row: &Property, _| {
                         Text::styled(row.value.clone(), Style::default().fg(row.tone.color()))
                     })

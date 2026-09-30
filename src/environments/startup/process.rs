@@ -28,10 +28,18 @@ pub(crate) fn launch(
         timeout,
         owner_pid: 0,
         workspace_ready: false,
+        opencode_requested: startup.opencode.is_some(),
+        opencode_result: None,
         services: Vec::new(),
     };
     write(config, &record)?;
-    let result = spawn(config, &record, &lock, &lease_lock);
+    let result = spawn(
+        config,
+        &record,
+        &lock,
+        &lease_lock,
+        startup.opencode.as_ref(),
+    );
     match result {
         Ok(child) => {
             lock.handoff();
@@ -54,8 +62,13 @@ fn spawn(
     record: &Record,
     lock: &gateway::Lock,
     lease: &gateway::Lock,
+    opencode: Option<&Option<String>>,
 ) -> Result<Child, String> {
     use std::os::unix::process::CommandExt;
+    // Keep the worker on the running executable inode when a rebuild replaces its pathname.
+    #[cfg(target_os = "linux")]
+    let mut command = Command::new("/proc/self/exe");
+    #[cfg(not(target_os = "linux"))]
     let mut command = Command::new(std::env::current_exe().map_err(|error| error.to_string())?);
     #[cfg(not(test))]
     command.args([
@@ -82,9 +95,16 @@ fn spawn(
         .env("TANDEM_GATEWAY_PORT", config.port.to_string())
         .env("TANDEM_INSTRUCTIONS_FILE", &config.instructions)
         .env("TANDEM_PROCESS_MODE", "startup-worker")
+        .env_remove("TANDEM_STARTUP_OPENCODE")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(prompt) = opencode {
+        command.env(
+            "TANDEM_STARTUP_OPENCODE",
+            serde_json::to_string(prompt).map_err(|error| error.to_string())?,
+        );
+    }
     let descriptors = [lock.descriptor(), lease.descriptor()];
     // Only async-signal-safe calls are permitted between fork and exec.
     unsafe {
@@ -106,7 +126,13 @@ fn spawn(
 }
 
 #[cfg(not(unix))]
-fn spawn(_: &Config, _: &Record, _: &gateway::Lock, _: &gateway::Lock) -> Result<Child, String> {
+fn spawn(
+    _: &Config,
+    _: &Record,
+    _: &gateway::Lock,
+    _: &gateway::Lock,
+    _: Option<&Option<String>>,
+) -> Result<Child, String> {
     Err("detached startup requires Unix".into())
 }
 

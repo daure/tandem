@@ -183,6 +183,9 @@ enum Intent {
 type Content = Split<Tabs<Msg>, overview::Pages>;
 trait ModalNode: TuiNode<Msg> + DockChrome {
     fn set_bottom_left(&mut self, _title: String) {}
+    fn updated_details(&self, _previous: &Row, _row: &Row) -> Option<Modal> {
+        None
+    }
 }
 
 impl ModalNode for DialogHost<Flex<Msg>, Msg> {
@@ -191,7 +194,15 @@ impl ModalNode for DialogHost<Flex<Msg>, Msg> {
     }
 }
 
-impl ModalNode for Tabs<Msg> {}
+impl ModalNode for Tabs<Msg> {
+    fn updated_details(&self, previous: &Row, row: &Row) -> Option<Modal> {
+        Some(dialogs::updated_details(
+            self.selected_index(),
+            previous,
+            row,
+        ))
+    }
+}
 
 type Modal = Box<dyn ModalNode>;
 type MainContent = Split<Content, StatusBar<Msg>>;
@@ -223,6 +234,8 @@ pub(crate) struct App {
     description_save: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
     area: Rect,
     details_open: bool,
+    template_details: Option<Row>,
+    details_layout_pending: bool,
     opencode_snapshot: crate::store::opencode::Snapshot,
     closing_opencode_panes: Vec<opencode::ClosingPane>,
     opencode_history: bool,
@@ -234,7 +247,7 @@ pub(crate) struct App {
 pub(crate) fn root(service: AppService) -> App {
     #[cfg(test)]
     tests::init_ui();
-    tuicore::set_keybindings(tuicore::keybindings().with_tabs_close([KeySpec::plain('c')]));
+    tuicore::set_keybindings(tuicore::keybindings().with_tabs_close([KeySpec::plain('x')]));
     let keys = service.environment_keys();
     let snapshot = service.environment_snapshot();
     let opencode_enabled = service.opencode_enabled();
@@ -326,6 +339,8 @@ pub(crate) fn root(service: AppService) -> App {
         description_save: None,
         area: Rect::default(),
         details_open: false,
+        template_details: None,
+        details_layout_pending: false,
         opencode_snapshot,
         closing_opencode_panes: Vec::new(),
         opencode_history: false,
@@ -351,6 +366,9 @@ impl App {
         let initial_load_completed = self.snapshot.loading;
         let operations = self.service.operations();
         let snapshot_changed = snapshot != self.snapshot;
+        if snapshot.templates != self.snapshot.templates {
+            self.update_template_details(&snapshot);
+        }
         let mut opencode_snapshot = self.service.opencode_snapshot();
         for deletion in &self.deletions {
             deletion.hide_opencode(&mut opencode_snapshot);
@@ -528,6 +546,7 @@ impl App {
                 ctx.focus(initial_focus());
                 self.intent = None;
                 self.details_open = false;
+                self.template_details = None;
             }
             Msg::NameChanged(name) => self.name = name,
             Msg::DescriptionChanged(description) => self.description = description,
@@ -708,6 +727,7 @@ impl App {
             return;
         }
         self.details_open = false;
+        self.template_details = None;
         self.view.replace_layer(modal, ctx);
         self.view.set_fit_content(true);
         self.view.set_fit_content_max(110, 34);
@@ -851,6 +871,7 @@ impl App {
     fn open_details(&mut self, row: &Row, ctx: &mut EventCtx<Msg>) {
         self.view.replace_layer(dialogs::details(row), ctx);
         self.details_open = true;
+        self.template_details = row.is_template().then(|| row.clone());
         self.resize_details_dialog();
         self.view.set_active_with_context(true, ctx);
     }
@@ -1613,6 +1634,7 @@ impl TuiNode<Msg> for App {
             }
         }
         let mut result = self.view.tick(dt, settings);
+        result.layout |= std::mem::take(&mut self.details_layout_pending);
         result.layout |= opencode_enabled != self.toolbar_state.borrow().opencode_enabled;
         self.poll_manual_refresh();
         result = result.merge(self.notifications.tick(dt, settings));

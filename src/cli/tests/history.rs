@@ -77,17 +77,19 @@ fn either_disabled_cleanup_or_disabled_integration_preserves_saved_history() {
 }
 
 #[test]
-fn active_history_blocks_readiness_and_cleanup_is_retried_after_it_becomes_idle() {
+fn active_history_blocks_client_launch_and_cleanup_is_retried_after_it_becomes_idle() {
     let (fixture, server) = fixture(true);
     server.data.lock().unwrap().busy = true;
-    let output = create(&fixture);
+    let output = fixture.run(&["new-instance", "review", "-t", "blank", "-o"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("conversations are active"));
     assert!(!fixture.home.join("workspaces/review/AGENTS.md").exists());
+    assert!(!fixture.home.join("opened").exists());
     assert!(server.data.lock().unwrap().deleted.is_empty());
     server.data.lock().unwrap().busy = false;
-    success(create(&fixture));
+    success(fixture.run(&["new-instance", "review", "-t", "blank", "-o"]));
     assert_eq!(server.data.lock().unwrap().deleted, ["ses_old"]);
+    assert!(fixture.home.join("opened").exists());
 }
 
 #[test]

@@ -10,7 +10,7 @@ use crate::{
 
 mod actions;
 
-pub(super) use actions::launch_instance_opencode;
+pub(super) use actions::launch_workspace_opencode;
 
 pub(super) struct Integration {
     state: Mutex<State>,

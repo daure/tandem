@@ -99,6 +99,7 @@ fn process_mode() -> String {
         None => "tui",
         Some("mcp") => "mcp-stdio",
         Some("serve") => "mcp-http",
+        #[cfg(debug_assertions)]
         Some("dev") => "development",
         Some(_) => "cli",
     }

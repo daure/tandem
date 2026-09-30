@@ -418,6 +418,7 @@ pub(crate) async fn run_http(
     run_http_inner(service, address, None).await
 }
 
+#[cfg(any(debug_assertions, test))]
 pub(crate) async fn run_http_with_startup(
     service: AppService,
     address: SocketAddr,

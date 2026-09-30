@@ -73,8 +73,10 @@ A template is a shared development recipe; an instance has its own name and work
   provisioning retries retain conversations. Active clients or cleanup failures block creation;
   close clients or ask the user to disable cleanup if they want to preserve history.
 - Tandem writes workspace-root `AGENTS.md` after repository preparation and before any container startup,
-  and generates it if missing before launching OpenCode in an instance workspace. Read it and the
-  repository guidance it lists.
+  and generates it if missing when opening a prepared instance workspace. A client requested during
+  creation launches after workspace creation and history cleanup, before repository provisioning;
+  its presence does not certify that sources or guidance are ready. Wait for preparation, then read
+  workspace `AGENTS.md` and the repository guidance it lists.
   For service instances, inspect containers for missing mappings and runtime state
   for current health. The base template at `workspace_agents_template` affects future generation;
   bundled updates replace it after backing up local edits.
@@ -89,7 +91,10 @@ A template is a shared development recipe; an instance has its own name and work
   Preserve Tandem-generated `.tandem-*` files for ownership checks and cleanup.
   Failed deletion can be retried when containers are absent: cleanup validates the retained instance
   record and template ownership receipt, then checks project membership. Missing execution-kind metadata
-  requires Docker access for recovery; unverifiable ownership blocks deletion and preserves data.
+  requires Docker access for recovery; unverifiable ownership blocks resource deletion and preserves data.
+  A failed new-instance request with no accepted worker or preparation record can be deleted without
+  Docker access; only its failure records are removed. Unverified workspaces, clients, and resources
+  are preserved.
 - Inspect `list_instances` for runtime evidence and retained failures. Running is not proof of health;
   Docker healthchecks and gateway content readiness are separate checks.
   Workspace-only instances (blank, repository-only, or guidance-only) are retained across processes and report

@@ -6,7 +6,9 @@ mod mcp;
 mod service;
 mod store;
 
-use std::{net::SocketAddr, sync::mpsc, thread};
+use std::net::SocketAddr;
+#[cfg(debug_assertions)]
+use std::{sync::mpsc, thread};
 
 use service::AppService;
 
@@ -37,6 +39,7 @@ pub fn run_http(bind: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
+#[cfg(debug_assertions)]
 pub fn run_dev(bind: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     let service = AppService::initialize()?;
     let _dev_server = service.replace_dev_server(bind.port())?;

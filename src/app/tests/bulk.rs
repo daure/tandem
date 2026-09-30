@@ -260,7 +260,7 @@ fn bulk_actions_confirm_captured_targets_across_all_templates_before_submission(
             }
             let route =
                 EventRoute::new(tuicore::TreePath::from_keys([tuicore::ChildKey::second()]));
-            for (key, submit) in [('o', true), ('c', false)] {
+            for (key, submit) in [('o', true), ('c', false), ('x', false)] {
                 let mut action = EventCtx::new(AnimationSettings::default());
                 app.dispatch_event(
                     &route,

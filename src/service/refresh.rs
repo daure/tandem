@@ -113,41 +113,47 @@ impl RefreshWorker {
         thread::Builder::new()
             .name("tandem-refresh".into())
             .spawn(move || {
-                run(connection, scopes, receiver, |targets, manual| {
-                    let mut errors = Vec::new();
-                    if targets[0] {
-                        environments.refresh_templates();
-                    }
-                    if targets[2]
-                        && let Err(error) = settings.refresh()
-                    {
-                        errors.push(format!("Settings: {error}"));
-                    }
-                    if targets[1] {
-                        environments.refresh_instances();
-                        if let Some(request) = environments.begin_resource_sample(manual) {
-                            environments.sample_resources(request);
+                run(
+                    connection,
+                    scopes,
+                    receiver,
+                    || environments.refresh_templates(),
+                    |targets, manual| {
+                        let mut errors = Vec::new();
+                        if targets[0] {
+                            environments.refresh_templates();
                         }
-                    }
-                    let snapshot = environments.snapshot();
-                    errors.extend(snapshot.error);
-                    if targets[0] {
-                        errors.extend(snapshot.templates.iter().filter_map(|template| {
-                            template
-                                .error
-                                .as_ref()
-                                .map(|error| format!("{}: {error}", template.name))
-                        }));
-                    }
-                    if targets[1] {
-                        errors.extend(snapshot.resource_error);
-                    }
-                    if errors.is_empty() {
-                        Ok(())
-                    } else {
-                        Err(errors.join("\n"))
-                    }
-                });
+                        if targets[2]
+                            && let Err(error) = settings.refresh()
+                        {
+                            errors.push(format!("Settings: {error}"));
+                        }
+                        if targets[1] {
+                            environments.refresh_instances();
+                            if let Some(request) = environments.begin_resource_sample(manual) {
+                                environments.sample_resources(request);
+                            }
+                        }
+                        let snapshot = environments.snapshot();
+                        errors.extend(snapshot.error);
+                        if targets[0] {
+                            errors.extend(snapshot.templates.iter().filter_map(|template| {
+                                template
+                                    .error
+                                    .as_ref()
+                                    .map(|error| format!("{}: {error}", template.name))
+                            }));
+                        }
+                        if targets[1] {
+                            errors.extend(snapshot.resource_error);
+                        }
+                        if errors.is_empty() {
+                            Ok(())
+                        } else {
+                            Err(errors.join("\n"))
+                        }
+                    },
+                );
             })?;
         Ok(Self { requests, notifier })
     }
@@ -189,6 +195,7 @@ fn run(
     connection: Connection,
     scopes: [String; 3],
     receiver: mpsc::Receiver<RefreshRequest>,
+    mut poll_templates: impl FnMut(),
     mut refresh: impl FnMut([bool; 3], bool) -> Result<(), String>,
 ) {
     // MCP-only processes publish changes without running a background inventory observer.
@@ -216,6 +223,9 @@ fn run(
                 crate::diagnostics::record_error("cannot read inventory changes", &error);
                 errors.push(format!("Cannot read inventory changes: {error}"));
             }
+        }
+        if !targets[0] {
+            poll_templates();
         }
         if targets.iter().any(|target| *target)
             && let Err(error) = refresh(targets, !completions.is_empty())

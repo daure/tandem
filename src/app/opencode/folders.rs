@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::{Row, Snapshot, workspace_owner};
+use super::{Row, Snapshot, Tone, workspace_owner};
 use crate::store::opencode::resources::Owner;
 
 pub(super) fn known_instances<'a>(snapshot: &Snapshot, owners: &'a [Owner]) -> HashSet<&'a str> {
@@ -48,6 +48,43 @@ pub(super) fn active_first(rows: &mut [Row], snapshot: &Snapshot, owners: &[Owne
             .and_then(|parent| ranks.get(parent))
             .copied()
             .unwrap_or((group, index));
+        ranks.insert(row.id.clone(), rank);
+    }
+    rows.sort_by_key(|row| ranks[&row.id]);
+}
+
+pub(super) fn active_templates_first(rows: &mut [Row], snapshot: &Snapshot, owners: &[Owner]) {
+    let active_instances = snapshot
+        .sessions
+        .iter()
+        .filter(|session| session.live() && !session.stale)
+        .map(|session| session.directory.as_str())
+        .chain(
+            snapshot
+                .clients
+                .iter()
+                .filter(|client| !client.stale)
+                .map(|client| client.directory.as_str()),
+        )
+        .filter_map(|directory| owner(directory, owners))
+        .collect::<HashSet<_>>();
+    let active_templates = owners
+        .iter()
+        .filter(|owner| active_instances.contains(owner.name.as_str()))
+        .map(|owner| owner.template_directory.as_str())
+        .collect::<HashSet<_>>();
+    let mut ranks = HashMap::new();
+    for (index, row) in rows.iter_mut().enumerate() {
+        if row.is_template() && active_templates.contains(row.directory.as_str()) {
+            row.tone = Tone::Success;
+        }
+        let active = row.is_template() && row.tone == Tone::Success;
+        let rank = row
+            .parent
+            .as_ref()
+            .and_then(|parent| ranks.get(parent))
+            .copied()
+            .unwrap_or((!active, index));
         ranks.insert(row.id.clone(), rank);
     }
     rows.sort_by_key(|row| ranks[&row.id]);

@@ -202,6 +202,15 @@ case "$*" in
       shift
     done
     cd "$directory" || exit 24
+    if [ "$BLOCK_OPEN" = 1 ]; then
+      touch "$TANDEM_HOME/opening"
+      count=0
+      while [ ! -f "$TANDEM_HOME/release-open" ]; do
+        count=$((count + 1))
+        if [ "$count" -gt 200 ]; then exit 26; fi
+        sleep 0.05
+      done
+    fi
     "$@" || exit 25
     if [ "$kind" = tab ]; then printf '9\n'; else printf 'terminal_100\n'; fi
     ;;
@@ -209,7 +218,10 @@ esac
 "#;
 
 const OPENCODE: &str = r#"#!/bin/sh
-test -s AGENTS.md || exit 27
+if [ "$EXPECT_EMPTY_WORKSPACE" = 1 ]; then
+  test ! -e app || exit 27
+  test ! -e AGENTS.md || exit 28
+fi
 if [ -f app/file.txt ]; then
   git -C app branch --show-current > "$TANDEM_HOME/branch"
 fi

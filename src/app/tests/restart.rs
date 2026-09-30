@@ -81,7 +81,7 @@ fn restart_key_and_menu_confirm_the_selected_instance_or_service() {
                 &mut ctx,
             );
             assert!(ctx.messages().is_empty());
-            for (key, submit) in [('o', true), ('c', false)] {
+            for (key, submit) in [('o', true), ('c', false), ('x', false)] {
                 let mut ctx = EventCtx::new(AnimationSettings::default());
                 app.dispatch_event(
                     &route,

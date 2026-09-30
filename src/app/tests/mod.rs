@@ -861,7 +861,7 @@ fn details_hotkey_opens_the_selected_template_in_bottom_tabs() {
     let mut close = EventCtx::new(AnimationSettings::default());
     app.dispatch_event(
         &route,
-        &TuiEvent::Key(KeyEvent::from(Key::Char('c'))),
+        &TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
         &mut close,
     );
     assert!(matches!(close.messages(), [Msg::Close]));
@@ -904,7 +904,7 @@ fn detail_tabs_keep_the_header_and_close_control_above_the_content() {
                 "{} at {width}: {lines:#?}",
                 row.id
             );
-            assert!(lines[0].contains("┤c├"), "{lines:#?}");
+            assert!(lines[0].contains("┤x├"), "{lines:#?}");
             assert!(lines[1].contains("Search"), "{lines:#?}");
             assert!(lines[2].contains(content), "{lines:#?}");
             assert!(lines[2].contains(value), "{lines:#?}");

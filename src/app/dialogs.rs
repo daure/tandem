@@ -12,7 +12,7 @@ fn dialog(title: &str) -> Dialog<Msg> {
     Dialog::new()
         .top_left(title)
         .keybindings(DialogKeyBindings {
-            close: vec![KeySpec::plain('c')],
+            close: vec![KeySpec::plain('x')],
         })
         .on_close(|_| Msg::Close)
 }
@@ -30,6 +30,10 @@ fn cancel() -> DialogAction<Msg> {
 }
 
 pub(super) fn details(row: &Row) -> Modal {
+    Box::new(details_tabs(row))
+}
+
+fn details_tabs(row: &Row) -> Tabs<Msg> {
     let title = if row.is_template() {
         "Template details"
     } else {
@@ -72,12 +76,31 @@ pub(super) fn details(row: &Row) -> Modal {
             ));
         }
     }
-    Box::new(
-        Tabs::dialog(tabs)
-            .variant(TabsVariant::OneRow)
-            .edge_borders(Borders::TOP)
-            .on_close(|_| Msg::Close),
-    )
+    Tabs::dialog(tabs)
+        .variant(TabsVariant::OneRow)
+        .edge_borders(Borders::TOP)
+        .on_close(|_| Msg::Close)
+}
+
+pub(super) fn updated_details(selected_index: usize, previous: &Row, row: &Row) -> Modal {
+    fn tab_names(row: &Row) -> Vec<&'static str> {
+        let mut names = vec!["Details"];
+        if !row.compose_file.is_empty() {
+            names.push("Compose");
+        }
+        names.push("Manifest");
+        if row.guidance_source.is_some() {
+            names.push("Guidance");
+        }
+        names
+    }
+    let previous_tabs = tab_names(previous);
+    let selected = previous_tabs.get(selected_index);
+    let index = tab_names(row)
+        .iter()
+        .position(|name| Some(name) == selected)
+        .unwrap_or(0);
+    Box::new(details_tabs(row).selected(index))
 }
 
 pub(super) fn name_entry(
@@ -135,7 +158,6 @@ pub(super) fn instance_entry(
         .max_rows(8)
         .value(description)
         .on_change(Msg::DescriptionChanged);
-    description_input.set_insert_mode(true);
     description_input.move_cursor_to_end();
     let mut prompt = TextareaInput::new()
         .placeholder("Optional; a prompt opens OpenCode automatically")
@@ -144,7 +166,6 @@ pub(super) fn instance_entry(
         .max_rows(8)
         .value(&creation.prompt)
         .on_change(Msg::InitialPromptChanged);
-    prompt.set_insert_mode(true);
     prompt.move_cursor_to_end();
     Box::new(
         dialog(title).actions([confirm(), cancel()]).host(
@@ -171,7 +192,6 @@ pub(super) fn instance_entry(
 pub(super) fn description_entry(value: &str) -> Modal {
     let mut input = TextareaInput::new()
         .placeholder("Description")
-        .panel("Description")
         .min_rows(2)
         .max_rows(8)
         .on_change(Msg::DescriptionChanged);
@@ -226,7 +246,7 @@ pub(super) fn settings(
     Box::new(
         dialog("Settings")
             .actions([DialogAction::new("Close")
-                .hotkey(KeySpec::plain('c'))
+                .hotkey(KeySpec::plain('x'))
                 .on_trigger(|| Msg::Close)])
             .host(
                 Flex::column()

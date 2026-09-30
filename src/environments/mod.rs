@@ -6,6 +6,7 @@ mod containers;
 mod creation;
 mod docker;
 mod gateway;
+mod inspection;
 mod journal;
 mod lifecycle;
 pub(crate) mod opencode;

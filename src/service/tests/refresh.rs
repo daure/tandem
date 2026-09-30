@@ -23,11 +23,17 @@ fn external_changes_refresh_only_their_domain_without_an_inventory_poll() {
     let (observed, results) = mpsc::channel();
     let scopes = notifier.scopes.clone();
     let worker = thread::spawn(move || {
-        run(connection, scopes, receiver, |targets, manual| {
-            assert!(!manual);
-            observed.send(targets).unwrap();
-            Ok(())
-        })
+        run(
+            connection,
+            scopes,
+            receiver,
+            || {},
+            |targets, manual| {
+                assert!(!manual);
+                observed.send(targets).unwrap();
+                Ok(())
+            },
+        )
     });
     requests.send(Refresh::All.into()).unwrap();
     assert_eq!(
@@ -53,15 +59,21 @@ fn changes_during_a_refresh_are_picked_up_on_the_next_check() {
     let scopes = notifier.scopes.clone();
     let worker = thread::spawn(move || {
         let mut first = true;
-        run(connection, scopes, receiver, |targets, manual| {
-            assert!(!manual);
-            if first {
-                first = false;
-                notifier.publish_result(Refresh::Templates).unwrap();
-            }
-            observed.send(targets).unwrap();
-            Ok(())
-        });
+        run(
+            connection,
+            scopes,
+            receiver,
+            || {},
+            |targets, manual| {
+                assert!(!manual);
+                if first {
+                    first = false;
+                    notifier.publish_result(Refresh::Templates).unwrap();
+                }
+                observed.send(targets).unwrap();
+                Ok(())
+            },
+        );
     });
     requests.send(Refresh::All.into()).unwrap();
     assert_eq!(
@@ -83,10 +95,16 @@ fn manual_completion_waits_for_its_own_refresh_and_returns_errors_to_coalesced_c
     let (entered, entries) = mpsc::channel();
     let (release, released) = mpsc::channel();
     let worker = thread::spawn(move || {
-        run(connection, notifier.scopes, receiver, |targets, manual| {
-            entered.send((targets, manual)).unwrap();
-            released.recv_timeout(Duration::from_secs(3)).unwrap()
-        });
+        run(
+            connection,
+            notifier.scopes,
+            receiver,
+            || {},
+            |targets, manual| {
+                entered.send((targets, manual)).unwrap();
+                released.recv_timeout(Duration::from_secs(3)).unwrap()
+            },
+        );
     });
     requests.send(Refresh::Instances.into()).unwrap();
     assert_eq!(
@@ -228,4 +246,44 @@ fn manual_refresh_rereads_external_template_edits() {
     );
     service.refresh.request(Refresh::Templates);
     wait_for(|| service.environment_snapshot().templates[0].compose_source == "services: {}\n");
+}
+
+#[test]
+fn template_observer_tracks_disk_edits_replacements_and_optional_file_removal() {
+    let service = AppService::for_tests();
+    let template = service
+        .runtime
+        .block_on(service.create_template("website".into()))
+        .unwrap();
+    service.refresh.request(Refresh::Templates);
+    wait_for(|| service.environment_snapshot().templates.len() == 1);
+    let directory = std::path::Path::new(&template.directory);
+    std::fs::write(directory.join("compose.yaml"), "services: {}\n").unwrap();
+    std::fs::write(directory.join("tandem-agents.md"), "# Disk guidance\n").unwrap();
+    let replacement = directory.join("manifest.tmp");
+    std::fs::write(&replacement, "{\"description\":\"Disk manifest\"}\n").unwrap();
+    std::fs::rename(replacement, directory.join("tandem.json")).unwrap();
+    wait_for(|| {
+        let snapshot = service.environment_snapshot();
+        let template = &snapshot.templates[0];
+        template.compose_source == "services: {}\n"
+            && template.guidance_source.as_deref() == Some("# Disk guidance\n")
+            && template.manifest.description == "Disk manifest"
+    });
+    std::fs::write(directory.join("tandem.json"), "{invalid").unwrap();
+    wait_for(|| {
+        let snapshot = service.environment_snapshot();
+        snapshot.templates[0].manifest_source.as_deref() == Some("{invalid")
+            && snapshot.templates[0].error.is_some()
+    });
+    std::fs::remove_file(directory.join("compose.yaml")).unwrap();
+    std::fs::remove_file(directory.join("tandem-agents.md")).unwrap();
+    std::fs::write(directory.join("tandem.json"), "{}\n").unwrap();
+    wait_for(|| {
+        let snapshot = service.environment_snapshot();
+        let template = &snapshot.templates[0];
+        template.compose_file.is_empty()
+            && template.guidance_source.is_none()
+            && template.error.is_none()
+    });
 }

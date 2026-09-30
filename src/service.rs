@@ -4,8 +4,10 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 mod creation;
+#[cfg(debug_assertions)]
 mod dev_server;
 mod environments;
+mod lifecycle;
 mod opencode;
 mod refresh;
 mod settings;
@@ -110,6 +112,7 @@ impl AppService {
         }
     }
 
+    #[cfg(debug_assertions)]
     pub(crate) fn replace_dev_server(
         &self,
         port: u16,

@@ -21,9 +21,12 @@ struct Client {
 
 impl Client {
     fn new(fixture: &Fixture) -> Self {
+        Self::with_command(fixture.command(&["mcp"]))
+    }
+
+    fn with_command(mut command: Command) -> Self {
         use std::os::unix::process::CommandExt;
-        let mut child = fixture
-            .command(&["mcp"])
+        let mut child = command
             .env("BLOCK_CONFIG", "1")
             .stdin(Stdio::piped())
             .process_group(0)
@@ -121,6 +124,39 @@ fn start(client: &mut Client) -> Value {
     client.tool("create_instance", json!({"template": "website", "name": "review", "confirmed": true, "wait": false, "timeout_seconds": 30}))
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn startup_uses_the_running_binary_after_its_executable_is_replaced() {
+    let fixture = Fixture::new();
+    let executable = fixture.bin.join("tandem");
+    fs::copy(env!("CARGO_BIN_EXE_tandem"), &executable).unwrap();
+    let mut client = Client::with_command(fixture.command_at(&executable, &["mcp"]));
+    let replacement = fixture.bin.join("replacement");
+    fs::write(&replacement, "#!/bin/sh\nexit 99\n").unwrap();
+    fs::set_permissions(&replacement, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::rename(&replacement, &executable).unwrap();
+    assert_eq!(
+        fs::read_link(format!("/proc/{}/exe", client.child.id())).unwrap(),
+        PathBuf::from(format!("{} (deleted)", executable.display()))
+    );
+
+    fs::write(fixture.home.join("release-config"), "").unwrap();
+    let operation = start(&mut client);
+    assert_eq!(operation["state"], "running", "{operation}");
+    wait_until(|| {
+        client.tool("get_operation", json!({"id": operation["id"]}))["state"] != "running"
+    });
+    let completed = client.tool("get_operation", json!({"id": operation["id"]}));
+    assert_eq!(completed["state"], "succeeded", "{completed}");
+    assert!(
+        fixture
+            .home
+            .join("workspaces/review/app/file.txt")
+            .is_file()
+    );
+    assert!(fixture.home.join("workspaces/review/AGENTS.md").is_file());
+}
+
 #[test]
 fn startup_survives_client_exit_hangup_and_kill_and_reconnects_without_reexecution() {
     for signal in [None, Some(libc::SIGHUP), Some(libc::SIGKILL)] {
@@ -163,6 +199,37 @@ fn startup_survives_client_exit_hangup_and_kill_and_reconnects_without_reexecuti
             1
         );
     }
+}
+
+#[test]
+fn requested_client_launch_and_cloning_survive_the_initiating_cli_exit() {
+    let fixture = Fixture::new();
+    let mut client = fixture
+        .command(&["new-instance", "review", "-t", "website", "-o"])
+        .env("BLOCK_OPEN", "1")
+        .spawn()
+        .unwrap();
+    wait_until(|| fixture.home.join("opening").exists());
+    let workspace = fixture.home.join("workspaces/review");
+    assert!(workspace.is_dir());
+    assert!(!workspace.join("app").exists());
+    client.kill().unwrap();
+    client.wait().unwrap();
+    fs::write(fixture.home.join("release-open"), "").unwrap();
+    let record_path = fixture.home.join("runtime/cli-test/review.startup.json");
+    wait_until(|| {
+        let record: Value =
+            serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
+        record["operation"]["state"] != "running"
+    });
+    let record: Value = serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
+    assert_eq!(record["operation"]["state"], "succeeded", "{record}");
+    assert_eq!(record["opencode_result"], json!({"Ok": null}));
+    assert!(workspace.join("app/file.txt").is_file());
+    assert_eq!(
+        fs::read_to_string(fixture.home.join("opened")).unwrap(),
+        format!("{}\n", workspace.display())
+    );
 }
 
 #[test]

@@ -96,3 +96,22 @@ fn delete_instance_requires_a_name() {
     assert_eq!(name, "review");
     assert!(headless);
 }
+
+#[cfg(debug_assertions)]
+#[test]
+fn development_builds_expose_the_combined_tui_and_http_command() {
+    let Some(Commands::Dev { bind }) = parse(&["tandem", "dev"]).unwrap().command else {
+        panic!("expected dev");
+    };
+    assert_eq!(bind, "127.0.0.1:7348".parse::<SocketAddr>().unwrap());
+    assert!(parse(&["tandem", "dev", "--bind", "0.0.0.0:7348"]).is_err());
+}
+
+#[cfg(not(debug_assertions))]
+#[test]
+fn release_builds_only_expose_supported_installed_commands() {
+    assert!(parse(&["tandem", "dev"]).is_err());
+    for command in ["list-instances", "list-templates", "serve", "mcp"] {
+        assert!(parse(&["tandem", command]).is_ok(), "{command}");
+    }
+}

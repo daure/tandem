@@ -14,6 +14,8 @@ use serde_json::json;
 mod cleanup;
 mod existing;
 mod history;
+mod inspection;
+mod lifecycle;
 mod opencode;
 mod startup;
 mod workspaces;
@@ -87,7 +89,11 @@ impl Fixture {
     }
 
     fn command(&self, arguments: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_tandem"));
+        self.command_at(Path::new(env!("CARGO_BIN_EXE_tandem")), arguments)
+    }
+
+    fn command_at(&self, executable: &Path, arguments: &[&str]) -> Command {
+        let mut command = Command::new(executable);
         let path = std::env::join_paths(
             std::iter::once(self.bin.clone())
                 .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
@@ -154,13 +160,29 @@ fn wait_output(mut child: Child) -> Output {
 }
 
 #[test]
-fn opencode_launches_once_after_checkout_before_compose_startup() {
+fn opencode_launches_once_in_the_workspace_before_cloning_and_compose_startup() {
     for flag in ["--opencode", "-o"] {
         let fixture = Fixture::new();
+        let git_path = Command::new("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .unwrap();
+        assert!(git_path.status.success());
+        let git_path = String::from_utf8(git_path.stdout).unwrap();
+        fs::write(
+            fixture.bin.join("git"),
+            format!(
+                "#!/bin/sh\ncase \" $* \" in *' clone '*) test -f \"$TANDEM_HOME/opened\" || exit 29;; esac\nexec '{}' \"$@\"\n",
+                git_path.trim().replace('\'', "'\\''"),
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(fixture.bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
         let output = wait_output(
             fixture
                 .command(&["new-instance", "review", "-t", "website", flag])
                 .env("EXPECT_OPEN", "1")
+                .env("EXPECT_EMPTY_WORKSPACE", "1")
                 .spawn()
                 .unwrap(),
         );
@@ -175,9 +197,11 @@ fn opencode_launches_once_after_checkout_before_compose_startup() {
             format!("{}\n", workspace.display())
         );
         assert_eq!(
-            fs::read_to_string(fixture.home.join("branch")).unwrap(),
-            "review\n"
+            git(&workspace.join("app"), &["branch", "--show-current"]),
+            "review"
         );
+        let guidance = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
+        assert!(guidance.contains("./app/AGENTS.md"));
         assert!(String::from_utf8_lossy(&output.stdout).contains("Instance review ready"));
     }
 }
@@ -230,7 +254,7 @@ fn creation_without_opencode_prepares_the_workspace_without_opening_a_client() {
 }
 
 #[test]
-fn preparation_failures_never_launch_opencode() {
+fn repository_failures_preserve_the_early_client_and_block_container_startup() {
     for missing in ["template", "repository", "second-repository"] {
         let fixture = Fixture::new();
         if missing == "repository" {
@@ -256,7 +280,7 @@ fn preparation_failures_never_launch_opencode() {
         };
         let output = fixture.run(&["new-instance", "review", "-t", template, "-o"]);
         assert!(!output.status.success());
-        assert!(!fixture.home.join("opened").exists());
+        assert_eq!(fixture.home.join("opened").exists(), missing != "template");
         assert!(!fixture.home.join("configured").exists());
         assert!(!fixture.home.join("started").exists());
         if missing == "second-repository" {
@@ -293,7 +317,7 @@ fn opencode_opens_a_prepared_workspace_without_repositories() {
 }
 
 #[test]
-fn workspace_guidance_failure_blocks_opening_and_container_startup() {
+fn workspace_guidance_failure_preserves_the_early_client_and_blocks_container_startup() {
     let fixture = Fixture::new();
     fs::write(
         fixture.home.join(".workspace-agents.bundled.md"),
@@ -311,7 +335,7 @@ fn workspace_guidance_failure_blocks_opening_and_container_startup() {
         String::from_utf8_lossy(&output.stderr)
             .contains("unknown workspace AGENTS.md template placeholder")
     );
-    assert!(!fixture.home.join("opened").exists());
+    assert!(fixture.home.join("opened").exists());
     assert!(!fixture.home.join("started").exists());
     assert!(!fixture.home.join("workspaces/review/AGENTS.md").exists());
 }

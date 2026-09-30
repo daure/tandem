@@ -1279,7 +1279,7 @@ fn c_on_an_instance_confirms_closing_all_opencode_sessions() {
     assert!(text.contains("Ok (o) · Cancel (c)"), "{text}");
 
     let route = EventRoute::new(tuicore::TreePath::from_keys([tuicore::ChildKey::second()]));
-    for (key, submit) in [('o', true), ('c', false)] {
+    for (key, submit) in [('o', true), ('c', false), ('x', false)] {
         let mut action = EventCtx::new(AnimationSettings::default());
         app.dispatch_event(
             &route,
@@ -1452,7 +1452,7 @@ fn enter_opens_a_bottom_conversation_dialog_without_jumping_to_the_pane() {
         let mut close = EventCtx::new(AnimationSettings::default());
         app.dispatch_event(
             &route,
-            &TuiEvent::Key(KeyEvent::from(Key::Char('c'))),
+            &TuiEvent::Key(KeyEvent::from(Key::Char('x'))),
             &mut close,
         );
         assert!(matches!(close.messages(), [Msg::Close]));

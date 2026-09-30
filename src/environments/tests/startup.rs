@@ -37,6 +37,8 @@ fn fixture() -> (tempfile::TempDir, Config, Record) {
         timeout: 60,
         owner_pid: 42,
         workspace_ready: false,
+        opencode_requested: false,
+        opencode_result: None,
         services: Vec::new(),
     };
     (directory, config, record)
@@ -113,7 +115,12 @@ fn completed_startup_retains_its_outcome_and_bounded_progress() {
     assert_eq!(progress[0], "Step 10");
     let mut operation = record.operation.clone();
     operation.state = OperationState::Succeeded;
+    writer.opencode_result(Err("client launch unavailable".into()));
     writer.finish(operation.clone()).unwrap();
+    assert_eq!(
+        read(&config, "Review").unwrap().unwrap().opencode_result,
+        Some(Err("client launch unavailable".into()))
+    );
     assert_eq!(
         record.observe(&config).unwrap().operation.state,
         OperationState::Succeeded
@@ -126,4 +133,88 @@ fn completed_startup_retains_its_outcome_and_bounded_progress() {
     );
     forget(&config, "Review").unwrap();
     assert!(records(&config).unwrap().is_empty());
+}
+
+#[test]
+fn purge_clears_an_unclaimed_cold_startup_and_preserves_unverified_data() {
+    for existing_workspace in [false, true] {
+        let (_directory, config, mut record) = fixture();
+        record.owner_pid = 0;
+        record.operation.state = OperationState::Failed;
+        record.operation.error =
+            Some("cannot launch startup worker: No such file or directory (os error 2)".into());
+        write(&config, &record).unwrap();
+        let workspace = config.workspaces.join("Review");
+        if existing_workspace {
+            fs::create_dir(&workspace).unwrap();
+            fs::write(workspace.join("data"), "keep").unwrap();
+        }
+        let mut instances = Vec::new();
+        let mut activities = Vec::new();
+        enrich(&config, &mut instances, &mut activities).unwrap();
+        assert_eq!(instances.len(), 1);
+
+        let held = gateway::lock(&config, "instance-Review").unwrap();
+        assert!(
+            super::super::lifecycle::delete(
+                &config,
+                "Review",
+                std::sync::Arc::new(|_| {}),
+                &|_, _| { panic!("busy startup must not close clients") }
+            )
+            .unwrap_err()
+            .contains("busy")
+        );
+        assert!(read(&config, "Review").unwrap().is_some());
+        drop(held);
+        super::super::lifecycle::delete(&config, "Review", std::sync::Arc::new(|_| {}), &|_, _| {
+            panic!("unclaimed startup must not close clients")
+        })
+        .unwrap();
+
+        let reconnected = Environments::new(config.clone());
+        reconnected.refresh_startups().unwrap();
+        assert!(reconnected.operation(&record.operation.id).is_err());
+        instances.clear();
+        activities.clear();
+        enrich(&config, &mut instances, &mut activities).unwrap();
+        assert!(instances.is_empty());
+        assert!(activities.is_empty());
+        assert!(journal::enrich(&config, &mut instances).unwrap().is_empty());
+        if existing_workspace {
+            assert_eq!(fs::read_to_string(workspace.join("data")).unwrap(), "keep");
+        } else {
+            assert!(!workspace.exists());
+        }
+    }
+}
+
+#[test]
+fn metadata_only_purge_requires_a_failed_unclaimed_cold_startup_without_preparation() {
+    let (_directory, config, mut record) = fixture();
+    let eligible =
+        |config: &Config| super::super::cleanup::unclaimed_startup(config, "Review").unwrap();
+    assert!(!eligible(&config));
+    let _lease = gateway::lock(&config, &lease(&record.operation.id)).unwrap();
+    record.owner_pid = 0;
+    write(&config, &record).unwrap();
+    assert!(!eligible(&config));
+    record.operation.state = OperationState::Succeeded;
+    write(&config, &record).unwrap();
+    assert!(!eligible(&config));
+    record.operation.state = OperationState::Failed;
+    record.owner_pid = 42;
+    write(&config, &record).unwrap();
+    assert!(!eligible(&config));
+    record.owner_pid = 0;
+    record.kind = StartupKind::Hot;
+    write(&config, &record).unwrap();
+    assert!(!eligible(&config));
+    record.kind = StartupKind::Cold;
+    write(&config, &record).unwrap();
+    assert!(eligible(&config));
+    let template = super::super::templates::create(&config, "website").unwrap();
+    journal::prepare(&config, &template, "Review", None).unwrap();
+    assert!(!eligible(&config));
+    assert!(read(&config, "Review").unwrap().is_some());
 }

@@ -8,35 +8,42 @@ pub(crate) enum NewInstanceOutcome {
 }
 
 impl AppService {
-    pub(super) fn schedule_instance_opencode(
-        &self,
-        ready: tokio::sync::oneshot::Receiver<String>,
-        name: String,
-        prompt: Option<String>,
-    ) -> tokio::sync::oneshot::Receiver<Result<(), String>> {
-        let environments = std::sync::Arc::clone(&self.environments);
+    pub(super) fn configure_startup_opencode(&self, startup: &mut Startup, name: &str) {
+        let Some(prompt) = startup.opencode.take() else {
+            return;
+        };
         let settings = std::sync::Arc::clone(&self.settings);
         let integration = std::sync::Arc::clone(&self.opencode);
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        self.runtime.spawn(async move {
-            let result = match ready.await {
-                Ok(workspace) => {
-                    super::opencode::launch_instance_opencode(
-                        environments,
+        let writer = startup.writer.clone();
+        let runtime = self.runtime.handle().clone();
+        let name = name.to_owned();
+        startup.before_repositories = Some(Box::new(move |workspace, deadline| {
+            settings.refresh()?;
+            if let Some(writer) = &writer {
+                writer.progress("Launching OpenCode before repository preparation".into());
+            }
+            let result = runtime.block_on(async {
+                tokio::time::timeout(
+                    deadline.saturating_duration_since(std::time::Instant::now()),
+                    super::opencode::launch_workspace_opencode(
                         &settings,
                         &integration,
-                        &workspace,
+                        workspace,
                         &name,
                         prompt.as_deref(),
-                    )
-                    .await
+                    ),
+                )
+                .await
+                .unwrap_or_else(|_| Err("OpenCode launch timed out".into()))
+            });
+            if let Some(writer) = writer {
+                if let Err(error) = &result {
+                    writer.progress(format!("OpenCode launch failed: {error}"));
                 }
-                // The creation operation reports preparation failures.
-                Err(_) => Ok(()),
-            };
-            let _ = sender.send(result);
-        });
-        receiver
+                writer.opencode_result(result);
+            }
+            Ok(())
+        }));
     }
 
     pub(crate) fn new_instance(
@@ -62,6 +69,7 @@ impl AppService {
             return Ok(NewInstanceOutcome::Existing(instance));
         }
         let (sender, ready) = tokio::sync::oneshot::channel();
+        let open_requested = opencode.is_some();
         let operation = self
             .environments
             .begin_instance(name, template, description.as_deref())?;
@@ -73,21 +81,19 @@ impl AppService {
             Startup {
                 instance_lock: Some(instance_lock),
                 description: description.clone(),
-                workspace_ready: opencode.is_some().then_some(sender),
+                opencode,
+                opencode_result: open_requested.then_some(sender),
                 ..Default::default()
             },
         );
         self.runtime.block_on(async {
             let open = async {
-                let Some(initial_prompt) = opencode else {
+                if !open_requested {
                     return Ok(());
-                };
-                // A failed preparation closes the channel without permitting OpenCode startup.
-                let Ok(workspace) = ready.await else {
-                    return Ok(());
-                };
-                self.launch_instance_opencode(&workspace, name, initial_prompt.as_deref())
+                }
+                ready
                     .await
+                    .map_err(|_| "OpenCode launch result unavailable".to_owned())?
             };
             let (operation, opened) = tokio::join!(self.wait_operation(&operation.id), open);
             let operation = operation?;

@@ -168,6 +168,17 @@ pub(in crate::service) async fn launch_instance_opencode(
     tokio::task::spawn_blocking(move || environments.prepare_workspace_open(&target, &instance))
         .await
         .map_err(|error| error.to_string())??;
+    launch_workspace_opencode(settings, integration, workspace, name, initial_prompt).await
+}
+
+pub(in crate::service) async fn launch_workspace_opencode(
+    settings: &crate::service::settings::Settings,
+    integration: &super::Integration,
+    workspace: &str,
+    name: &str,
+    initial_prompt: Option<&str>,
+) -> Result<(), String> {
+    validate_launch(settings, integration)?;
     // A short-lived CLI has no TUI observation cache yet.
     let snapshot = tokio::time::timeout(
         Duration::from_secs(15),

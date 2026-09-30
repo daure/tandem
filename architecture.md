@@ -76,8 +76,12 @@ conversation ID with PID, heartbeat, server, and Zellij identity. Server process
 across directories and do not own client attachment identity. Fresh receipts and live panes
 establish attachment and authorize navigation or closure of that exact pane. Observed conversations
 can be resumed in their recorded directory on their loopback server, including external workspaces.
-New clients target an instance workspace or an observed directory; instance workspaces receive
+New clients target an instance workspace or an observed directory. Prepared instance workspaces receive
 validated guidance preparation, while external directories remain outside Tandem provisioning.
+During instance creation, the detached startup worker launches a requested client after workspace
+validation and history cleanup, before repository provisioning. It retains the launch outcome separately
+from instance readiness; launch failures permit provisioning to continue. Workspace guidance is generated
+after repository preparation.
 Bulk closure selects observed panes by instance ownership or exact external directory and excludes
 owned panes from the external aggregate. With integration enabled, instance purge closes associated
 clients under the instance lock after ownership validation and before resource deletion. Verified local

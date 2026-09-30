@@ -13,10 +13,14 @@ Blank and guidance-only templates prepare a workspace folder without Git or Dock
 
 ```bash
 cargo run                   # TUI
-cargo run -- dev            # TUI + HTTP MCP at http://127.0.0.1:7348/mcp; replaces a prior dev server using this Tandem home and port
+cargo run -- dev            # development TUI + HTTP MCP at http://127.0.0.1:7348/mcp
 cargo run -- mcp            # protocol-only stdio MCP
 cargo run -- serve          # HTTP MCP at http://127.0.0.1:7345/mcp
 ```
+
+`dev` is available in debug builds. It replaces a prior development server using the same Tandem home
+and port. Release builds, including the installed binary, expose `serve` for HTTP MCP and launch the
+TUI with `tandem`.
 
 1. Press `T` or use the Template button to create a template named `website`; its folder contains only `tandem.json` with `{}`.
 2. Press `Enter` on a template, instance or service to view its details. Template details include
@@ -93,12 +97,40 @@ with the same home and namespace shows current startup progress or its retained 
 before containers exist. An interrupted startup requires an explicit retry; reopening only observes
 state. Service start and restart keep their documented scope.
 
+## CLI inspection
+
+```bash
+tandem list-instances
+tandem inspect-instance review
+tandem list-templates
+tandem inspect-template website
+tandem list-instances --json
+```
+
+All four commands support `--json`. Instance listings show current status, running/expected service
+counts, workspace paths, and retained activities. JSON includes runtime evidence and service details.
+If Docker is unavailable, retained workspace/startup inventory is printed when available; the command
+reports the incomplete inventory on stderr and exits nonzero. JSON also includes `runtime_error`.
+`inspect-instance NAME` shows that instance's description, paths, repositories, service states,
+healthcheck observations, URLs, recorded readiness timestamps, and retained startup progress/results.
+It can show retained failure evidence even when no runtime instance is observed. A failed operation
+is inspection data; incomplete observation or a missing instance makes the inspection command fail.
+
+Template listings include descriptions, directories, execution kinds, and configuration errors.
+`inspect-template` shows the template's paths, manifest, Compose source, optional guidance, templates
+root, and configured gateway URL. The URL is configuration, not a health check; inspection does not
+provision repositories or start services. Missing or invalid templates fail with a nonzero exit code.
+Source output may contain secrets from template files; handle it accordingly.
+
 ## CLI instance lifecycle
 
 ```bash
 tandem new-instance review --template website
 tandem new-instance review -t website --opencode
 tandem new-instance review -t website -o "Explain this project"
+tandem start-instance review
+tandem stop-instance review
+tandem restart-instance review
 tandem delete-instance review
 tandem delete-instance review --headless
 ```
@@ -109,8 +141,23 @@ the same ownership checks, locks and startup rules as the TUI/MCP. The CLI waits
 startup readiness, prints the workspace and service URLs on success, and exits nonzero on failure.
 Failed startups preserve resources for inspection.
 
-An existing instance owned by the requested template is left unchanged, including when stopped or
-paused. The CLI reports that it exists without checking readiness. With `--opencode` or `-o`,
+`start-instance` requires an existing managed instance and its trusted template. It uses the TUI's
+startup path, provisions missing repositories, reapplies Compose configuration, and may rerun setup
+jobs. Existing checkout edits, branches, descriptions, and workspace guidance are preserved. Start
+waits up to ten minutes for readiness and continues in the background if its CLI closes. Unpause
+containers before starting; use a new instance name to change execution kind.
+
+`stop-instance` waits up to one minute for containers to stop and preserves workspaces, volumes,
+networks, templates, and the gateway. Workspace-only instances are preserved without container work.
+`restart-instance` restarts existing long-running containers, including stopped ones, while preserving
+data and configuration and skipping setup jobs and the gateway. It waits up to ten minutes for
+configured healthchecks and route content assertions; services without checks are verified as running.
+Restart applies no template edits or builds. Routed services require their current template readiness
+configuration. Workspace-only instances have no restart targets; paused containers require unpausing.
+Invoking these lifecycle commands authorizes their scoped operations; failures exit nonzero.
+
+`new-instance` leaves an existing instance owned by the requested template unchanged, including when
+stopped or paused. It reports that the instance exists without checking readiness. With `--opencode` or `-o`,
 it opens a fresh OpenCode client in that instance's workspace; template files and repository sources
 are not needed. Ownership mismatches and concurrent instance operations are rejected.
 
@@ -127,10 +174,11 @@ OpenCode launches directly. A direnv failure stops the client launch and appears
 Tandem never automatically approves `.envrc` files. Attaching to a shared server keeps that server's
 existing configuration.
 
-For a new instance, OpenCode launches after declared repositories have been cloned or validated,
-Compose configuration has been rendered when applicable, and workspace `AGENTS.md` has been written.
-Opening and container startup then proceed independently. Template-owned clone scripts and
-container-created files are outside this milestone; declare repositories for early source access.
+For a new instance, Tandem creates and validates the workspace directory, completes creation-history
+cleanup when enabled, and launches the requested OpenCode client before cloning repositories.
+Repository preparation, workspace `AGENTS.md` generation, and any container startup follow the launch
+attempt. The client can open before sources and guidance exist; initial prompts run without waiting
+for instance readiness. Startup continues if the client launch fails.
 Client lifetime does not delay CLI exit. Launch failures make the CLI fail after startup completes,
 or immediately for an existing instance; prepared workspaces remain available.
 
@@ -375,7 +423,7 @@ guidance files are user-owned; update them explicitly when adopting this workflo
 
 Application hotkey overrides accept distinct ASCII letters; `TANDEM_KEY_INFO` also accepts `Enter`.
 Shared navigation, focus, and component keys use tuicore configuration. The TUI displays resolved key labels.
-Dialog actions use **Ok** (`o`) and **Cancel** (`c`); settings and detail views close with `c`.
+Dialog actions use **Ok** (`o`) and **Cancel** (`c`); the top-right close control uses `x`.
 While editing text or searching, letters belong to the active input.
 
 ### Workspace actions
@@ -556,8 +604,9 @@ background over the configured fade duration (20 seconds by default) before disa
 Text positions, selection, and text colors stay intact. Initial, stale, and filter-only observations do not trigger these effects;
 disabling animations suppresses them.
 With the tree focused in Sessions or Instances, `Shift+J` / `Shift+K` selects the next / previous
-conversation with an active completion marker in tree order, expanding its ancestors and scrolling
-it into view. A successful jump clears a committed search; typing in search keeps these keys as text.
+busy conversation or conversation with an active completion marker in tree order, expanding its
+ancestors and scrolling it into view. A successful jump clears a committed search; typing in search
+keeps these keys as text.
 Navigation stops at either end and leaves the tree unchanged when no eligible target exists.
 Active markers retain their remaining lifetime when switching tabs.
 

@@ -162,19 +162,20 @@ impl AppService {
             .environments
             .begin_instance(name, template, Some(&description))?;
         let (sender, ready) = tokio::sync::oneshot::channel();
+        let open_requested = opencode.is_some();
         let operation = self.schedule_operation(
             operation,
             600,
             Startup {
                 description: Some(description),
-                workspace_ready: opencode.is_some().then_some(sender),
+                opencode,
+                opencode_result: open_requested.then_some(sender),
                 ..Default::default()
             },
         );
         Ok(CreateInstanceOutcome::Started {
             operation: Box::new(operation),
-            opencode: opencode
-                .map(|prompt| self.schedule_instance_opencode(ready, name.to_owned(), prompt)),
+            opencode: open_requested.then_some(ready),
         })
     }
 
@@ -342,6 +343,7 @@ impl AppService {
                 }
                 Ok(())
             }));
+            self.configure_startup_opencode(&mut startup, &operation.name);
         }
         let settings = Arc::clone(&self.settings);
         let observer = self.opencode.observer.clone();
@@ -363,13 +365,14 @@ impl AppService {
             if let Some((template, kind)) = startup_timing
                 && let Ok(operation) = environments.operation(&operation_id)
                 && operation.state == OperationState::Succeeded
-                && let Err(error) =
-                    settings.record_startup(template, kind, operation.elapsed_milliseconds)
             {
-                crate::diagnostics::record_error(
-                    "cannot save startup timing",
-                    &std::io::Error::other(error),
-                );
+                match settings.record_startup(template, kind, operation.elapsed_milliseconds) {
+                    Ok(()) => notifier.publish(Refresh::Settings),
+                    Err(error) => crate::diagnostics::record_error(
+                        "cannot save startup timing",
+                        &std::io::Error::other(error),
+                    ),
+                }
             }
             // Failed lifecycle operations can still leave changed Docker/filesystem state.
             notifier.publish(refresh);
@@ -444,6 +447,13 @@ impl AppService {
     }
     pub(crate) async fn list_instances(&self) -> Result<RuntimeInventory, String> {
         self.environment_call(Environments::list_instances).await
+    }
+    pub(crate) async fn inspect_instance(
+        &self,
+        name: String,
+    ) -> Result<crate::store::environments::InstanceInspection, String> {
+        self.environment_call(move |environments| environments.inspect_instance(&name))
+            .await
     }
     pub(crate) async fn get_instructions(&self) -> Result<Instructions, String> {
         self.environment_call(Environments::instructions).await

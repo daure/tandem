@@ -38,6 +38,10 @@ fn observation(activity: Activity) -> Snapshot {
 }
 
 fn project(sessions_only: bool, activity: Activity) -> Vec<rows::Row> {
+    project_observation(sessions_only, &observation(activity))
+}
+
+fn project_observation(sessions_only: bool, observation: &Snapshot) -> Vec<rows::Row> {
     let mut inventory = snapshot();
     inventory.instances.push(Instance {
         name: "second".into(),
@@ -45,11 +49,10 @@ fn project(sessions_only: bool, activity: Activity) -> Vec<rows::Row> {
         ..inventory.instances[0].clone()
     });
     let mut rows = rows::from_snapshot(&inventory);
-    let observation = observation(activity);
     if sessions_only {
-        projection::attached_rows(rows, &observation)
+        projection::attached_rows(rows, observation)
     } else {
-        projection::append_rows(&mut rows, &observation, false);
+        projection::append_rows(&mut rows, observation, false);
         rows
     }
 }
@@ -147,13 +150,13 @@ fn completion_navigation_expands_ancestors_and_reveals_targets_in_both_tabs() {
 }
 
 #[test]
-fn completion_navigation_is_inert_without_an_active_marker() {
+fn session_navigation_is_inert_without_busy_sessions_or_active_markers() {
     init_ui();
     for sessions_only in [false, true] {
         for (initial, current, elapsed) in [
             (Activity::Idle, Activity::Idle, 0),
             (Activity::Busy, Activity::Idle, 20_750),
-            (Activity::Busy, Activity::Busy, 0),
+            (Activity::Unknown, Activity::Unknown, 0),
         ] {
             let (mut view, state) = view(sessions_only, initial);
             instances::replace_rows(&state, project(sessions_only, Activity::Idle));
@@ -169,6 +172,58 @@ fn completion_navigation_is_inert_without_an_active_marker() {
                 assert_eq!(render(&mut view), before);
             }
         }
+    }
+}
+
+#[test]
+fn session_navigation_selects_busy_sessions_without_completion_markers_in_both_tabs() {
+    init_ui();
+    for sessions_only in [false, true] {
+        let (mut view, state) = view(sessions_only, Activity::Busy);
+        press(&mut view, Key::Char('z').into(), false);
+        for (key, expected) in [
+            ('J', "external"),
+            ('J', "first"),
+            ('J', "second"),
+            ('J', "second"),
+            ('K', "first"),
+            ('K', "external"),
+            ('K', "external"),
+        ] {
+            press(&mut view, Key::Char(key).into(), true);
+            assert_eq!(selected_session(&state), expected);
+            let text = render(&mut view);
+            assert!(text.contains(&format!("Conversation {expected}")), "{text}");
+        }
+    }
+}
+
+#[test]
+fn session_navigation_combines_busy_sessions_and_recent_completions_in_tree_order() {
+    init_ui();
+    for sessions_only in [false, true] {
+        let (mut view, state) = view(sessions_only, Activity::Busy);
+        let mut current = observation(Activity::Idle);
+        current.sessions[2].activity = Activity::Busy;
+        instances::replace_rows(&state, project_observation(sessions_only, &current));
+        render(&mut view);
+        press(&mut view, Key::Char('z').into(), false);
+        for (key, expected) in [
+            ('J', "external"),
+            ('J', "first"),
+            ('J', "second"),
+            ('K', "first"),
+            ('K', "external"),
+        ] {
+            press(&mut view, Key::Char(key).into(), true);
+            assert_eq!(selected_session(&state), expected);
+        }
+
+        view.tick(Duration::from_millis(20_750), AnimationSettings::default());
+        press(&mut view, Key::Char('J').into(), true);
+        assert_eq!(selected_session(&state), "second");
+        press(&mut view, Key::Char('K').into(), true);
+        assert_eq!(selected_session(&state), "second");
     }
 }
 

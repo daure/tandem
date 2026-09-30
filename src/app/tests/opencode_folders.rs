@@ -76,6 +76,148 @@ fn roots(rows: &[rows::Row]) -> Vec<&str> {
         .collect()
 }
 
+fn template_inventory() -> EnvironmentSnapshot {
+    let mut inventory = snapshot();
+    let template = inventory.templates[0].clone();
+    let instance = inventory.instances[0].clone();
+    inventory.templates.clear();
+    inventory.instances.clear();
+    for (name, status) in [
+        ("dice-fe", "down (exit 0)"),
+        ("dice-local", "down (exit 0)"),
+        ("dice-be", "up"),
+    ] {
+        let mut template = template.clone();
+        template.name = name.into();
+        template.directory = format!("/tmp/templates/{name}");
+        let mut instance = instance.clone();
+        instance.name = name.into();
+        instance.template = name.into();
+        instance.template_directory = template.directory.clone();
+        instance.workspace = format!("/tmp/workspaces/{name}");
+        instance.services[0].status = status.into();
+        inventory.templates.push(template);
+        inventory.instances.push(instance);
+    }
+    inventory
+}
+
+#[test]
+fn templates_with_fresh_opencode_activity_are_green_and_precede_inactive_templates() {
+    init_ui();
+    let inventory = template_inventory();
+    let mut observation = observation();
+    observation.sessions.truncate(1);
+    observation.clients.clear();
+    observation.sessions[0].directory = "/tmp/workspaces/dice-local/repo".into();
+    for (activity, attached) in [
+        (Activity::Idle, true),
+        (Activity::Unknown, true),
+        (Activity::Busy, false),
+        (Activity::AwaitingAnswer, false),
+    ] {
+        observation.sessions[0].activity = activity;
+        observation.sessions[0].panes = if attached {
+            vec![Pane {
+                session: "main".into(),
+                id: 7,
+                tab_id: 1,
+                tab_name: "work".into(),
+            }]
+        } else {
+            Vec::new()
+        };
+        for history in [false, true] {
+            let rows =
+                projection::project_rows(&inventory, &[], &observation, false, history, false);
+            assert_eq!(
+                roots(&rows),
+                [
+                    "template:/tmp/templates/dice-be",
+                    "template:/tmp/templates/dice-local",
+                    "template:/tmp/templates/dice-fe",
+                ]
+            );
+            let template = rows
+                .iter()
+                .find(|row| row.template == "dice-local")
+                .unwrap();
+            assert_eq!(template.tone, rows::Tone::Success);
+            assert_eq!(template.label, "dice-local\n 0/1");
+            let instance = rows
+                .iter()
+                .find(|row| row.id == "instance:dice-local")
+                .unwrap();
+            assert_eq!(instance.status.as_deref(), Some("Stopped"));
+            assert!(!instance.running);
+        }
+    }
+}
+
+#[test]
+fn template_activity_tracks_new_clients_and_ignores_saved_stale_and_external_sessions() {
+    init_ui();
+    let inventory = template_inventory();
+    let mut observation = observation();
+    observation.sessions.clear();
+    observation.clients[0].directory = "/tmp/workspaces/dice-local/repo".into();
+    let rows = projection::project_rows(&inventory, &[], &observation, false, false, false);
+    assert_eq!(roots(&rows)[1], "template:/tmp/templates/dice-local");
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.id == "template:/tmp/templates/dice-local")
+            .unwrap()
+            .tone,
+        rows::Tone::Success
+    );
+
+    observation.clients[0].stale = true;
+    for (activity, attached, stale, directory) in [
+        (
+            Activity::Idle,
+            false,
+            false,
+            "/tmp/workspaces/dice-local/repo",
+        ),
+        (
+            Activity::Busy,
+            true,
+            true,
+            "/tmp/workspaces/dice-local/repo",
+        ),
+        (
+            Activity::Busy,
+            true,
+            false,
+            "/tmp/workspaces/dice-local-other",
+        ),
+    ] {
+        observation.sessions = vec![Session {
+            directory: directory.into(),
+            activity,
+            panes: attached
+                .then(|| observation.clients[0].pane.clone())
+                .into_iter()
+                .collect(),
+            stale,
+            ..Default::default()
+        }];
+        let rows = projection::project_rows(&inventory, &[], &observation, false, true, false);
+        let templates = rows
+            .iter()
+            .filter(|row| row.is_template())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            templates
+                .iter()
+                .map(|row| row.template.as_str())
+                .collect::<Vec<_>>(),
+            ["dice-be", "dice-fe", "dice-local"]
+        );
+        assert_eq!(templates[2].tone, rows::Tone::Normal);
+    }
+}
+
 #[test]
 fn agents_keep_all_known_folders_and_put_open_clients_first_independently_of_history() {
     init_ui();

@@ -3,6 +3,8 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::mpsc,
+    thread,
     time::Instant,
 };
 
@@ -11,6 +13,8 @@ use super::{
     config::{private_file, read_text},
 };
 use crate::store::environments::{Repository, RepositoryCheckout, Template};
+
+const MAX_CONCURRENT_REPOSITORIES: usize = 4;
 
 pub(super) fn validate(repositories: &[Repository]) -> Result<(), String> {
     for (index, repository) in repositories.iter().enumerate() {
@@ -90,61 +94,121 @@ pub(super) fn prepare(
         }
     }
     claim_workspace(workspace, template)?;
-    for repository in repositories {
-        remaining(deadline)?;
-        let target = checked_target(workspace, &repository.target, true)?;
-        if fs::symlink_metadata(&target).is_ok() {
-            validate_checkout(&target, repository, deadline)?;
-            progress(format!(
-                "Preserving repository {} (branch and edits unchanged)",
-                repository.target
-            ));
-            prepared(RepositoryCheckout {
-                target: repository.target.clone(),
-                path: target.display().to_string(),
-                cloned: false,
-            })?;
-            continue;
+    // Create shared parent directories serially before workers use sibling targets.
+    let jobs = repositories
+        .iter()
+        .map(|repository| {
+            remaining(deadline)?;
+            checked_target(workspace, &repository.target, true).map(|target| (repository, target))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    thread::scope(|scope| {
+        let mut jobs = jobs.into_iter();
+        let (completed, results) = mpsc::channel();
+        let mut workers = Vec::new();
+        for index in 0..MAX_CONCURRENT_REPOSITORIES {
+            let Some(job) = jobs.next() else {
+                break;
+            };
+            let (sender, receiver) = mpsc::channel();
+            sender.send(job).map_err(|error| error.to_string())?;
+            let completed = completed.clone();
+            let progress = &progress;
+            scope.spawn(move || {
+                for (repository, target) in receiver {
+                    let result = prepare_repository(
+                        workspace, repository, &target, branch, deadline, progress,
+                    );
+                    if completed.send((index, result)).is_err() {
+                        break;
+                    }
+                }
+            });
+            workers.push(sender);
         }
-        progress(format!("Cloning repository {}", repository.target));
-        let staging = tempfile::Builder::new()
-            .prefix(".tandem-clone-")
-            .tempdir_in(target.parent().ok_or("repository target has no parent")?)
-            .map_err(|error| error.to_string())?;
-        let checkout = staging.path().join("checkout");
-        let mut command = git(staging.path());
-        command
-            .args([
-                "clone",
-                "--no-local",
-                "--origin",
-                "origin",
-                "--template=",
-                "--",
-                &repository.source,
-            ])
-            .arg(&checkout);
-        // Git can echo credential-helper output. Only expose the target and recovery action.
-        run(command, remaining(deadline)?, None).map_err(|_| format!(
-            "repository {}: clone failed or timed out; check source access, host Git credentials and the startup budget",
-            repository.target
-        ))?;
-        select_branch(&checkout, branch, deadline)?;
-        validate_checkout(&checkout, repository, deadline)?;
-        let selected = query(&checkout, &["symbolic-ref", "--short", "HEAD"], deadline)?;
-        checked_target(workspace, &repository.target, false)?;
-        install(&checkout, &target)?;
-        prepared(RepositoryCheckout {
-            target: repository.target.clone(),
-            path: target.display().to_string(),
-            cloned: true,
-        })?;
+        drop(completed);
+        let mut active = workers.len();
+        let mut error = None;
+        while active > 0 {
+            let (index, result) = results.recv().map_err(|error| error.to_string())?;
+            active -= 1;
+            // Journal each installed checkout on the caller, including in-flight successes
+            // after a failure. Stop dispatching new work, but drain all active workers.
+            if let Err(failure) = result.and_then(&mut prepared) {
+                error.get_or_insert(failure);
+            }
+            if error.is_none()
+                && let Some(job) = jobs.next()
+            {
+                workers[index]
+                    .send(job)
+                    .map_err(|error| error.to_string())?;
+                active += 1;
+            }
+        }
+        drop(workers);
+        error.map_or(Ok(()), Err)
+    })
+}
+
+fn prepare_repository(
+    workspace: &Path,
+    repository: &Repository,
+    target: &Path,
+    branch: Option<&str>,
+    deadline: Instant,
+    progress: &Progress,
+) -> Result<RepositoryCheckout, String> {
+    remaining(deadline)?;
+    if fs::symlink_metadata(target).is_ok() {
+        validate_checkout(target, repository, deadline)?;
         progress(format!(
-            "Repository {} ready on branch {selected}",
+            "Preserving repository {} (branch and edits unchanged)",
             repository.target
         ));
+        return Ok(RepositoryCheckout {
+            target: repository.target.clone(),
+            path: target.display().to_string(),
+            cloned: false,
+        });
     }
-    Ok(())
+    progress(format!("Cloning repository {}", repository.target));
+    let staging = tempfile::Builder::new()
+        .prefix(".tandem-clone-")
+        .tempdir_in(target.parent().ok_or("repository target has no parent")?)
+        .map_err(|error| error.to_string())?;
+    let checkout = staging.path().join("checkout");
+    let mut command = git(staging.path());
+    command
+        .args([
+            "clone",
+            "--no-local",
+            "--origin",
+            "origin",
+            "--template=",
+            "--",
+            &repository.source,
+        ])
+        .arg(&checkout);
+    // Git can echo credential-helper output. Only expose the target and recovery action.
+    run(command, remaining(deadline)?, None).map_err(|_| format!(
+        "repository {}: clone failed or timed out; check source access, host Git credentials and the startup budget",
+        repository.target
+    ))?;
+    select_branch(&checkout, branch, deadline)?;
+    validate_checkout(&checkout, repository, deadline)?;
+    let selected = query(&checkout, &["symbolic-ref", "--short", "HEAD"], deadline)?;
+    checked_target(workspace, &repository.target, false)?;
+    install(&checkout, target)?;
+    progress(format!(
+        "Repository {} ready on branch {selected}",
+        repository.target
+    ));
+    Ok(RepositoryCheckout {
+        target: repository.target.clone(),
+        path: target.display().to_string(),
+        cloned: true,
+    })
 }
 
 fn git(directory: &Path) -> Command {

@@ -118,22 +118,64 @@ fn description_content_grows_from_two_to_eight_rows() {
 }
 
 #[test]
-fn creation_textareas_accept_multiline_input_without_submitting_the_dialog() {
+fn creation_textareas_require_enter_after_tab_and_accept_multiline_input() {
     init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     app.action(1, &mut EventCtx::new(AnimationSettings::default()));
     let mut layout = LayoutEngine::new();
     layout.layout(&mut app, Rect::new(0, 0, 80, 30));
+    let name = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.path.keys().iter().any(|key| key.as_str() == "name"))
+        .unwrap();
+    let settings = AnimationSettings::default();
+    let mut focus = tuicore::FocusManager::new();
+    let mut dispatcher = tuicore::TreeDispatcher::new();
+    let transition = focus
+        .apply_request(
+            &tuicore::FocusRequest::Path(name.path.clone()),
+            layout.focus_targets(),
+        )
+        .unwrap();
+    dispatcher.dispatch_focus(&mut app, transition, settings);
+    app.dispatch_event(
+        &EventRoute::new(focus.current_path()),
+        &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+        &mut EventCtx::new(settings),
+    );
     for field in ["description", "initial-prompt"] {
-        let target = layout
-            .focus_targets()
-            .iter()
-            .find(|target| target.path.keys().iter().any(|key| key.as_str() == field))
-            .unwrap()
-            .clone();
-        app.dispatch_focus(&target, true, &mut tuicore::FocusCtx::default());
-        let route = EventRoute::new(target.path);
+        let mut ctx = EventCtx::new(settings);
+        let outcome = app.dispatch_event(
+            &EventRoute::new(focus.current_path()),
+            &TuiEvent::Key(KeyEvent::from(Key::Tab)),
+            &mut ctx,
+        );
+        assert_eq!(outcome, tuicore::EventOutcome::Ignored);
+        assert_eq!(ctx.propagation(), tuicore::Propagation::Continue);
+        let transition = focus.next(layout.focus_targets()).unwrap();
+        dispatcher.dispatch_focus(&mut app, transition, settings);
+        assert!(
+            focus
+                .current_path()
+                .keys()
+                .iter()
+                .any(|key| key.as_str() == field)
+        );
+        let route = EventRoute::new(focus.current_path());
+        let mut ctx = EventCtx::new(settings);
+        app.dispatch_event(&route, &TuiEvent::Paste("Ignored".into()), &mut ctx);
+        assert!(
+            ctx.messages().is_empty(),
+            "{field} must start in focus mode"
+        );
+        let mut ctx = EventCtx::new(settings);
+        app.dispatch_event(&route, &TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+        assert!(
+            ctx.messages().is_empty(),
+            "Enter activates editing without inserting a newline"
+        );
         let mut ctx = EventCtx::new(AnimationSettings::default());
         app.dispatch_event(&route, &TuiEvent::Paste("First\nSecond".into()), &mut ctx);
         assert!(matches!(ctx.messages(),
@@ -146,6 +188,11 @@ fn creation_textareas_accept_multiline_input_without_submitting_the_dialog() {
         ));
         assert!(app.view.is_active());
         assert!(app.service.operations().is_empty());
+        app.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Esc)),
+            &mut EventCtx::new(settings),
+        );
     }
 }
 
@@ -175,16 +222,6 @@ fn creation_shortcut_submits_from_name_or_textarea_focus_mode() {
             .clone();
         app.dispatch_focus(&target, true, &mut tuicore::FocusCtx::default());
         let route = EventRoute::new(target.path);
-        if field != "name" {
-            app.dispatch_event(
-                &route,
-                &shortcut,
-                &mut EventCtx::new(AnimationSettings::default()),
-            );
-            assert!(app.view.is_active(), "{field}");
-            assert!(app.intent.is_some(), "{field}");
-            assert!(app.notifications.center().history().next().is_none());
-        }
         app.dispatch_event(
             &route,
             &shortcut,

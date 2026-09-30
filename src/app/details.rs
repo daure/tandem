@@ -4,6 +4,46 @@ use crate::store::environments::{
 
 use super::{properties::Property, rows::Tone};
 
+impl super::App {
+    pub(super) fn update_template_details(
+        &mut self,
+        snapshot: &crate::store::environments::EnvironmentSnapshot,
+    ) {
+        if !self.details_open || !self.view.is_active() {
+            return;
+        }
+        let Some(previous) = &self.template_details else {
+            return;
+        };
+        let Some(row) = super::rows::from_snapshot_with_operations(snapshot, &[])
+            .into_iter()
+            .find(|row| row.id == previous.id)
+        else {
+            self.view.set_active(false);
+            self.details_open = false;
+            self.template_details = None;
+            self.details_layout_pending = true;
+            return;
+        };
+        if row.details == previous.details
+            && row.compose_file == previous.compose_file
+            && row.compose_source == previous.compose_source
+            && row.manifest_source == previous.manifest_source
+            && row.guidance_source == previous.guidance_source
+        {
+            return;
+        }
+        let Some(modal) = self.view.layer().updated_details(previous, &row) else {
+            return;
+        };
+        let mut ctx = tuicore::EventCtx::new(tuicore::animation_settings());
+        self.view.replace_layer(modal, &mut ctx);
+        self.template_details = Some(row);
+        self.details_layout_pending = true;
+        self.resize_details_dialog();
+    }
+}
+
 pub(super) fn memory_tone(usage: Option<ResourceUsage>, limit: Option<u64>) -> Tone {
     match (usage, limit.filter(|limit| *limit > 0)) {
         (None, _) => Tone::Muted,

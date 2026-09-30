@@ -199,6 +199,16 @@ pub(crate) struct RuntimeInventory {
     pub runtime_error: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct InstanceInspection {
+    pub name: String,
+    pub instance: Option<Instance>,
+    pub activities: Vec<Activity>,
+    pub startup: Option<Operation>,
+    pub observed_at_unix_seconds: u64,
+    pub runtime_error: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, JsonSchema, PartialEq, Eq)]
 pub(crate) struct EnvironmentSnapshot {
     pub templates: Vec<Template>,

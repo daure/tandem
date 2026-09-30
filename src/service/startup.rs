@@ -30,7 +30,7 @@ impl AppService {
                     .unwrap_or(operation);
             }
         }
-        let Some(ready) = request.workspace_ready else {
+        let Some(reply) = request.opencode_result else {
             return operation;
         };
         let config = self.environments.config.clone();
@@ -48,17 +48,12 @@ impl AppService {
                 .await;
                 match observed {
                     Ok(Ok(Some(record))) if record.operation.id == id => {
-                        if record.workspace_ready {
-                            let _ = ready.send(
-                                config
-                                    .workspaces
-                                    .join(&record.operation.name)
-                                    .display()
-                                    .to_string(),
-                            );
+                        if let Some(result) = record.opencode_result {
+                            let _ = reply.send(result);
                             break;
                         }
                         if record.operation.state != OperationState::Running {
+                            let _ = reply.send(Ok(()));
                             break;
                         }
                     }
@@ -91,6 +86,17 @@ impl AppService {
                 Err("Startup deadline reached before worker initialization".into()),
             );
         } else {
+            let opencode = if claimed.record.opencode_requested {
+                Some(
+                    serde_json::from_str(
+                        &std::env::var("TANDEM_STARTUP_OPENCODE")
+                            .map_err(|error| error.to_string())?,
+                    )
+                    .map_err(|error| error.to_string())?,
+                )
+            } else {
+                None
+            };
             service.schedule_operation(
                 claimed.record.operation.clone(),
                 remaining,
@@ -98,6 +104,7 @@ impl AppService {
                     instance_lock: Some(claimed.instance_lock.borrowed()?),
                     branch_instances: claimed.record.branch_instances,
                     description: claimed.record.description.clone(),
+                    opencode,
                     writer: Some(Arc::clone(&claimed.writer)),
                     ..Default::default()
                 },

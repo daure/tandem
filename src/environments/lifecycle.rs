@@ -85,6 +85,13 @@ pub(crate) fn start(
         {
             return Err("workspace escapes workspace root".into());
         }
+        if let Some(before_repositories) = startup.before_repositories {
+            super::removal::validate_workspace(config, name)?;
+            before_repositories(
+                workspace.to_str().ok_or("invalid workspace path")?,
+                deadline,
+            )?;
+        }
         repositories::prepare(
             &config.workspaces,
             &workspace,
@@ -101,9 +108,6 @@ pub(crate) fn start(
             journal::workspace_ready(config, name)?;
             if let Some(writer) = &startup.writer {
                 writer.workspace_ready();
-            }
-            if let Some(sender) = startup.workspace_ready {
-                let _ = sender.send(workspace.display().to_string());
             }
             pending_services(Vec::new());
             progress("Workspace ready; no services specified".into());
@@ -140,9 +144,6 @@ pub(crate) fn start(
         )?;
         if let Some(writer) = &startup.writer {
             writer.workspace_ready();
-        }
-        if let Some(sender) = startup.workspace_ready {
-            let _ = sender.send(workspace.display().to_string());
         }
         journal::topology(config, template_name, name, &description, services.clone())?;
         pending_services(services);
@@ -320,6 +321,11 @@ pub(super) fn delete(
     let _lock = gateway::lock(config, &format!("instance-{name}"))?;
     let activity = journal::ActivityGuard::begin(config, name, "delete_instance", None, 60)?;
     let result = (|| {
+        if cleanup::unclaimed_startup(config, name)? {
+            // An unclaimed request proves no resource ownership; only its journals may be removed.
+            progress("Removing failed startup request; preserving any unverified resources".into());
+            return Ok(());
+        }
         let workspace = cleanup::recorded_workspace(config, name)?;
         if let Some(workspace) = &workspace {
             progress("Closing associated OpenCode clients before inspecting containers".into());

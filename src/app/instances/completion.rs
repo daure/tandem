@@ -80,9 +80,6 @@ impl Markers {
     }
 
     fn next(&self, rows: &[Row], highlighted: Option<&str>, backwards: bool) -> Option<String> {
-        if self.elapsed.is_empty() {
-            return None;
-        }
         let mut children: HashMap<Option<&str>, Vec<&Row>> = HashMap::new();
         for row in rows {
             children.entry(row.parent.as_deref()).or_default().push(row);
@@ -105,7 +102,8 @@ impl Markers {
             .map_or(0, |index| index + 1);
         ordered.into_iter().skip(start).find_map(|row| {
             let (id, activity) = session(row)?;
-            (activity.completed() && self.elapsed.contains_key(id)).then(|| row.id.clone())
+            (activity == Activity::Busy || (activity.completed() && self.elapsed.contains_key(id)))
+                .then(|| row.id.clone())
         })
     }
 

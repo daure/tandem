@@ -1,6 +1,9 @@
 use super::*;
 use crate::environments::{config::Config, templates};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 fn git_test(path: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -64,6 +67,152 @@ fn provision(
         Arc::new(|_| {}),
         |_| Ok(()),
     )
+}
+
+fn concurrent_fixture() -> (tempfile::TempDir, Config, Template, PathBuf) {
+    let (home, config, mut template, workspace) = fixture();
+    let source = template.manifest.repositories[0].source.clone();
+    template.manifest.repositories = (0..6)
+        .map(|index| Repository {
+            source: source.clone(),
+            target: format!("src/repo{index}"),
+        })
+        .collect();
+    (home, config, template, workspace)
+}
+
+fn gated_clones() -> (Progress, mpsc::Receiver<usize>, Vec<mpsc::Sender<()>>) {
+    let (started, starts) = mpsc::channel();
+    let (releases, gates): (Vec<_>, Vec<_>) = (0..4)
+        .map(|_| {
+            let (sender, receiver) = mpsc::channel();
+            (sender, Mutex::new(receiver))
+        })
+        .unzip();
+    let progress: Progress = Arc::new(move |message| {
+        if let Some(index) = message.strip_prefix("Cloning repository src/repo") {
+            let index = index.parse::<usize>().unwrap();
+            started.send(index).unwrap();
+            if let Some(gate) = gates.get(index) {
+                let _ = gate.lock().unwrap().recv();
+            }
+        }
+    });
+    (progress, starts, releases)
+}
+
+#[test]
+fn repository_clones_fill_four_slots_and_replace_each_finished_clone_without_a_batch_barrier() {
+    let (_home, config, template, workspace) = concurrent_fixture();
+    let (progress, starts, releases) = gated_clones();
+    thread::scope(|scope| {
+        // Drop the gates inside the scope on assertion failure so workers can exit.
+        let release_gates = releases;
+        let worker = scope.spawn(|| {
+            let mut checkouts = Vec::new();
+            prepare(
+                &config.workspaces,
+                &workspace,
+                &template,
+                Some("review"),
+                Instant::now() + Duration::from_secs(15),
+                progress,
+                |checkout| {
+                    checkouts.push(checkout);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            checkouts
+        });
+        let mut initial: Vec<_> = (0..4)
+            .map(|_| starts.recv_timeout(Duration::from_secs(3)).unwrap())
+            .collect();
+        initial.sort_unstable();
+        assert_eq!(initial, [0, 1, 2, 3]);
+        assert!(matches!(
+            starts.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        release_gates[1].send(()).unwrap();
+        assert_eq!(starts.recv_timeout(Duration::from_secs(3)).unwrap(), 4);
+        assert_eq!(starts.recv_timeout(Duration::from_secs(3)).unwrap(), 5);
+        for index in [0, 2, 3] {
+            release_gates[index].send(()).unwrap();
+        }
+        let checkouts = worker.join().unwrap();
+        assert_eq!(checkouts.len(), 6);
+        assert!(checkouts.iter().all(|checkout| checkout.cloned));
+        for repository in &template.manifest.repositories {
+            assert_eq!(
+                git_test(
+                    &workspace.join(&repository.target),
+                    &["branch", "--show-current"]
+                ),
+                "review"
+            );
+        }
+    });
+}
+
+#[test]
+fn checkout_record_failure_stops_queued_clones_and_records_in_flight_successes() {
+    let (_home, config, template, workspace) = concurrent_fixture();
+    let (progress, starts, releases) = gated_clones();
+    let (recorded, records) = mpsc::channel();
+    thread::scope(|scope| {
+        let release_gates = releases;
+        let worker = scope.spawn(|| {
+            prepare(
+                &config.workspaces,
+                &workspace,
+                &template,
+                None,
+                Instant::now() + Duration::from_secs(15),
+                progress,
+                |checkout| {
+                    let failed = checkout.target == "src/repo1";
+                    recorded.send(checkout).unwrap();
+                    if failed {
+                        Err("checkout record failed".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+        });
+        for _ in 0..4 {
+            starts.recv_timeout(Duration::from_secs(3)).unwrap();
+        }
+        release_gates[1].send(()).unwrap();
+        assert_eq!(
+            records.recv_timeout(Duration::from_secs(3)).unwrap().target,
+            "src/repo1"
+        );
+        assert!(matches!(
+            starts.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        for index in [0, 2, 3] {
+            release_gates[index].send(()).unwrap();
+        }
+        assert_eq!(
+            worker.join().unwrap().unwrap_err(),
+            "checkout record failed"
+        );
+        let mut completed: Vec<_> = records.try_iter().map(|checkout| checkout.target).collect();
+        completed.sort();
+        assert_eq!(completed, ["src/repo0", "src/repo2", "src/repo3"]);
+    });
+    assert!(!workspace.join("src/repo4").exists());
+    assert!(!workspace.join("src/repo5").exists());
+    assert!(fs::read_dir(workspace.join("src")).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".tandem-clone-")
+    }));
 }
 
 #[test]

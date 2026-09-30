@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn details_show_a_horizontal_scrollbar_only_when_properties_overflow() {
+    init_ui();
+    let mut row = rows::from_snapshot(&snapshot()).remove(1);
+    let label = "Clients without a conversation";
+    let value = "Background observation, at most once every 2s; CPU is averaged between samples";
+    row.details = vec![
+        crate::app::properties::Property::new(label, "0"),
+        crate::app::properties::Property::new("Client resource refresh", value),
+    ];
+    for width in [110, 156, 60] {
+        let mut modal = crate::app::dialogs::details(&row);
+        let area = Rect::new(0, 0, width, 12);
+        modal.layout(area, &mut tuicore::LayoutCtx::new());
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| {
+                let mut render = RenderCtx::new();
+                modal.render(frame, area, &mut render);
+                render.flush(frame);
+            })
+            .unwrap();
+        let lines = rendered_lines(&terminal, area);
+        let fits = width >= 110;
+        assert_eq!(
+            lines.last().unwrap().trim().is_empty(),
+            fits,
+            "horizontal scrollbar at {width} columns: {lines:#?}"
+        );
+        assert!(lines[2].contains(label), "{lines:#?}");
+        if fits {
+            assert!(lines[3].contains(value), "{lines:#?}");
+        }
+    }
+}
+
+#[test]
 fn detail_search_matches_property_names_and_multiline_values() {
     init_ui();
     let mut snapshot = snapshot();

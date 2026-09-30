@@ -34,6 +34,7 @@ impl OpencodeSetting {
     }
 }
 type CommandReply = oneshot::Sender<Result<String, String>>;
+type StartupReply = mpsc::Sender<Result<(), String>>;
 type StartupHistory = BTreeMap<(String, StartupKind), Vec<u64>>;
 
 #[derive(Clone, Copy)]
@@ -70,10 +71,12 @@ enum SettingsRequest {
     SetBranchInstances(bool),
     Opencode(OpencodeSetting, Option<bool>, CommandReply),
     Feedback(FeedbackSetting, Option<String>, CommandReply),
+    RefreshStartupHistory(StartupReply),
     RecordStartup {
         template: String,
         kind: StartupKind,
         duration_milliseconds: u64,
+        reply: StartupReply,
     },
     #[cfg(test)]
     Flush(mpsc::Sender<()>),
@@ -174,7 +177,11 @@ impl Settings {
                 .blocking_recv()
                 .map_err(|_| "settings worker stopped")??;
         }
-        Ok(())
+        let (sender, receiver) = mpsc::channel();
+        self.commands
+            .send(SettingsRequest::RefreshStartupHistory(sender))
+            .map_err(|_| "settings worker stopped")?;
+        receiver.recv().map_err(|_| "settings worker stopped")?
     }
 
     pub(super) fn opencode_enabled(&self) -> bool {
@@ -220,13 +227,16 @@ impl Settings {
         kind: StartupKind,
         duration_milliseconds: u64,
     ) -> Result<(), String> {
+        let (sender, receiver) = mpsc::channel();
         self.commands
             .send(SettingsRequest::RecordStartup {
                 template,
                 kind,
                 duration_milliseconds,
+                reply: sender,
             })
-            .map_err(|_| "settings worker stopped".to_owned())
+            .map_err(|_| "settings worker stopped")?;
+        receiver.recv().map_err(|_| "settings worker stopped")?
     }
 
     #[cfg(test)]
@@ -329,20 +339,26 @@ fn persist_settings(
                 };
                 finish_feedback(result, &feedback[kind as usize], reply);
             }
+            SettingsRequest::RefreshStartupHistory(reply) => {
+                let result = read_startup_history(&connection).map(|history| {
+                    *startup_history.write().unwrap_or_else(|error| error.into_inner()) = history;
+                });
+                let _ = reply.send(result.map_err(|error| error.to_string()));
+            }
             SettingsRequest::RecordStartup {
                 template,
                 kind,
                 duration_milliseconds,
+                reply,
             } => {
-                if let Err(error) = record_startup(
+                let result = record_startup(
                     &connection,
                     &startup_history,
                     template,
                     kind,
                     duration_milliseconds,
-                ) {
-                    crate::diagnostics::record_error("could not persist startup timing", &error);
-                }
+                );
+                let _ = reply.send(result.map_err(|error| error.to_string()));
             }
             #[cfg(test)]
             SettingsRequest::Flush(sender) => {
@@ -523,6 +539,10 @@ impl AppService {
         self.settings.flush();
     }
 }
+
+#[cfg(test)]
+#[path = "tests/startup_settings.rs"]
+mod startup_tests;
 
 #[cfg(test)]
 mod tests {
