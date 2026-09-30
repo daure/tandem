@@ -12,7 +12,8 @@ use super::{
     command::{Progress, docker, remaining, run},
     compose,
     config::Config,
-    docker as runtime, gateway, journal, ownership, repositories, templates, workspace_agents,
+    docker as runtime, gateway, journal, ownership, repositories, template_files, templates,
+    workspace_agents,
 };
 use crate::store::environments::{
     Instance, Route, Template, validate_instance_name, validate_name,
@@ -92,6 +93,8 @@ pub(crate) fn start(
                 deadline,
             )?;
         }
+        super::removal::validate_workspace(config, name)?;
+        template_files::prepare(&workspace, &template, deadline, progress.clone())?;
         repositories::prepare(
             &config.workspaces,
             &workspace,

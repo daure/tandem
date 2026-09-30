@@ -287,3 +287,45 @@ fn template_observer_tracks_disk_edits_replacements_and_optional_file_removal() 
             && template.error.is_none()
     });
 }
+
+#[test]
+fn template_observer_tracks_seed_file_edits_nested_entries_and_folder_removal() {
+    let service = AppService::for_tests();
+    let template = service
+        .runtime
+        .block_on(service.create_template("website".into()))
+        .unwrap();
+    service.refresh.request(Refresh::Templates);
+    wait_for(|| service.environment_snapshot().templates.len() == 1);
+    let files = std::path::Path::new(&template.directory).join("tandem-files");
+    std::fs::create_dir_all(files.join("nested")).unwrap();
+    std::fs::write(files.join("nested/file.txt"), "first").unwrap();
+    wait_for(|| service.environment_snapshot().templates[0].files.len() == 2);
+    let initial = service.environment_snapshot().templates[0].files.clone();
+    std::fs::write(files.join("nested/file.txt"), "updated content").unwrap();
+    wait_for(|| service.environment_snapshot().templates[0].files != initial);
+    let updated = service.environment_snapshot().templates[0].files.clone();
+    assert_eq!(updated[1].size_bytes, 15);
+    std::fs::write(files.join("nested/file.txt"), "changed content").unwrap();
+    let stamp = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(files.join("nested/file.txt"))
+        .unwrap()
+        .set_modified(stamp)
+        .unwrap();
+    wait_for(|| service.environment_snapshot().templates[0].files != updated);
+    std::fs::rename(
+        files.join("nested/file.txt"),
+        files.join("nested/renamed.txt"),
+    )
+    .unwrap();
+    wait_for(|| service.environment_snapshot().templates[0].files[1].path == "nested/renamed.txt");
+    std::fs::remove_file(files.join("nested/renamed.txt")).unwrap();
+    wait_for(|| service.environment_snapshot().templates[0].files.len() == 1);
+    std::fs::remove_dir_all(files).unwrap();
+    wait_for(|| {
+        let snapshot = service.environment_snapshot();
+        snapshot.templates[0].files_directory.is_none() && snapshot.templates[0].files.is_empty()
+    });
+}

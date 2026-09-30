@@ -30,6 +30,7 @@ impl super::App {
             && row.compose_source == previous.compose_source
             && row.manifest_source == previous.manifest_source
             && row.guidance_source == previous.guidance_source
+            && row.files == previous.files
         {
             return;
         }
@@ -119,6 +120,9 @@ pub(super) fn template(template: &Template, count: usize) -> Vec<Property> {
     ];
     if template.guidance_source.is_some() {
         rows.push(Property::new("Guidance file", &template.guidance_file));
+    }
+    if let Some(directory) = &template.files_directory {
+        rows.push(Property::new("Files directory", directory));
     }
     if let Some(error) = &template.error {
         rows.push(Property::new("Error", error).tone(Tone::Error));

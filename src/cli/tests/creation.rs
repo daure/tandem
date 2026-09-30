@@ -160,9 +160,12 @@ fn wait_output(mut child: Child) -> Output {
 }
 
 #[test]
-fn opencode_launches_once_in_the_workspace_before_cloning_and_compose_startup() {
+fn opencode_launches_before_seed_copying_cloning_and_compose_startup() {
     for flag in ["--opencode", "-o"] {
         let fixture = Fixture::new();
+        let files = fixture.home.join("templates/website/tandem-files");
+        fs::create_dir(&files).unwrap();
+        fs::write(files.join("seed.txt"), "seed content").unwrap();
         let git_path = Command::new("sh")
             .args(["-c", "command -v git"])
             .output()
@@ -172,7 +175,7 @@ fn opencode_launches_once_in_the_workspace_before_cloning_and_compose_startup() 
         fs::write(
             fixture.bin.join("git"),
             format!(
-                "#!/bin/sh\ncase \" $* \" in *' clone '*) test -f \"$TANDEM_HOME/opened\" || exit 29;; esac\nexec '{}' \"$@\"\n",
+                "#!/bin/sh\ncase \" $* \" in *' clone '*) test -f \"$TANDEM_HOME/opened\" || exit 29; test -f \"$TANDEM_HOME/workspaces/review/seed.txt\" || exit 30;; esac\nexec '{}' \"$@\"\n",
                 git_path.trim().replace('\'', "'\\''"),
             ),
         )
@@ -192,6 +195,10 @@ fn opencode_launches_once_in_the_workspace_before_cloning_and_compose_startup() 
             String::from_utf8_lossy(&output.stderr)
         );
         let workspace = fixture.home.join("workspaces/review");
+        assert_eq!(
+            fs::read_to_string(workspace.join("seed.txt")).unwrap(),
+            "seed content"
+        );
         assert_eq!(
             fs::read_to_string(fixture.home.join("opened")).unwrap(),
             format!("{}\n", workspace.display())

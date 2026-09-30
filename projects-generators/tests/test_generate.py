@@ -132,8 +132,13 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(set(model["services"]), {"redis"})
         self.assertEqual(model["services"]["redis"]["healthcheck"]["test"], ["CMD", "redis-cli", "ping"])
         guidance = templates / "guidance-only"
-        self.assertEqual({path.name for path in guidance.iterdir()}, {"tandem-agents.md"})
+        self.assertEqual({path.name for path in guidance.iterdir()}, {"tandem-agents.md", "tandem-files"})
         self.assertIn("## Scratch workspace", (guidance / "tandem-agents.md").read_text())
+        files = guidance / "tandem-files"
+        expected = {"notes.md", "research/sources.md", "experiments/README.md"}
+        self.assertEqual({str(path.relative_to(files)) for path in files.rglob("*") if path.is_file()}, expected)
+        for path in expected:
+            self.assertEqual((files / path).read_bytes(), (ASSETS / "guidance-only" / path).read_bytes())
         subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"],
                        cwd=self.root / "repo-only", check=True, capture_output=True)
 
@@ -161,6 +166,7 @@ class GeneratorTests(unittest.TestCase):
         head = git(self.root / "repo-only", "rev-parse", "HEAD")
         add_minimal(self.root, names=("guidance-only",))
         self.assertTrue((directory / "tandem-agents.md").is_file())
+        self.assertTrue((directory / "tandem-files/research/sources.md").is_file())
         self.assertEqual(json.loads((self.root / "fixtures.json").read_text()), before)
         self.assertEqual(git(self.root / "repo-only", "rev-parse", "HEAD"), head)
 

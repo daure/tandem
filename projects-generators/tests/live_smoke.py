@@ -203,7 +203,11 @@ class Smoke:
             assert not instance["services"] and not instance["repositories"]
             assert "## Scratch workspace" in guidance
             assert "## Docker" not in guidance and "## Repositories" not in guidance
-            assert {path.name for path in workspace.iterdir()} == {"AGENTS.md"}
+            assert {path.name for path in workspace.iterdir()} == {"AGENTS.md", "notes.md", "research", "experiments"}
+            files = self.root / ".tandem/templates/guidance-only/tandem-files"
+            for source in files.rglob("*"):
+                if source.is_file():
+                    assert (workspace / source.relative_to(files)).read_bytes() == source.read_bytes()
         elif template == "repo-only":
             assert instance["summary"]["status"] == "workspace_ready", instance
             assert not instance["services"]

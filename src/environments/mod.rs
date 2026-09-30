@@ -17,6 +17,7 @@ mod resources;
 pub(crate) mod sound;
 pub(crate) mod startup;
 mod stats;
+mod template_files;
 mod templates;
 mod workspace_agents;
 mod workspace_template;

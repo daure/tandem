@@ -28,6 +28,14 @@ A template is a shared development recipe; an instance has its own name and work
   Its UTF-8 contents (up to 256 KiB) are appended verbatim to generated workspace `AGENTS.md`,
   including literal `{{...}}`. The file must resolve within the template directory. Read errors block
   generation, and edits apply to future generation; existing workspace guidance is preserved.
+- Optional `tandem-files/` supplies workspace seed files. Its contents are copied into the workspace
+  root after any creation-requested OpenCode client launch and before repository provisioning.
+  Nested directories, hidden files, binary contents, and file permissions are supported; paths must
+  be UTF-8 and entries must be real directories or regular files. Symlinks and special files are refused.
+  Keep repository targets clear and reserve root `AGENTS.md`, root `.tandem-*`, and every `.git` path
+  for Tandem or Git. Existing regular files are preserved on preparation retries; incompatible
+  destinations block preparation. Template edits affect future preparation, not ready workspaces.
+  Files-only templates need no manifest, Git, or Docker.
 - Generated workspace guidance includes repository instructions when repositories are identified,
   Compose controls when services are identified, and HTTP testing instructions when URLs exist.
   Write `tandem-agents.md` for verified template-specific development and self-verification:
@@ -74,7 +82,7 @@ A template is a shared development recipe; an instance has its own name and work
   close clients or ask the user to disable cleanup if they want to preserve history.
 - Tandem writes workspace-root `AGENTS.md` after repository preparation and before any container startup,
   and generates it if missing when opening a prepared instance workspace. A client requested during
-  creation launches after workspace creation and history cleanup, before repository provisioning;
+  creation launches after workspace creation and history cleanup, before seed copying and repository provisioning;
   its presence does not certify that sources or guidance are ready. Wait for preparation, then read
   workspace `AGENTS.md` and the repository guidance it lists.
   For service instances, inspect containers for missing mappings and runtime state

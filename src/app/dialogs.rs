@@ -1,12 +1,13 @@
 use ratatui::widgets::Borders;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, path::Path, rc::Rc};
 use tuicore::{
-    CrossSize, Dialog, DialogAction, DialogKeyBindings, Dropdown, DropdownCommitMode, Flex,
-    FlexItem, FormField, KeySpec, Language, Padding, Paragraph, SyntaxHighlighter, Tab, Tabs,
-    TabsVariant, TextInput, TextareaInput, Toggle,
+    CrossSize, DataView, Dialog, DialogAction, DialogKeyBindings, Dropdown, DropdownCommitMode,
+    Flex, FlexItem, FormField, KeySpec, Language, Padding, Paragraph, SyntaxHighlighter, Tab, Tabs,
+    TabsVariant, TextInput, TextareaInput, Toggle, TreeAdapter,
 };
 
 use super::{Modal, Msg, properties::Properties, rows::Row};
+use crate::store::environments::TemplateFile;
 
 fn dialog(title: &str) -> Dialog<Msg> {
     Dialog::new()
@@ -75,11 +76,47 @@ fn details_tabs(row: &Row) -> Tabs<Msg> {
                 .wrap(true),
             ));
         }
+        if row.files.iter().any(|file| !file.directory) {
+            tabs.push(Tab::new("Files", files_tree(&row.files)));
+        }
     }
     Tabs::dialog(tabs)
         .variant(TabsVariant::OneRow)
         .edge_borders(Borders::TOP)
         .on_close(|_| Msg::Close)
+}
+
+fn files_tree(files: &[TemplateFile]) -> DataView<TemplateFile, String> {
+    DataView::list(
+        files.to_vec(),
+        |file: &TemplateFile| file.path.clone(),
+        |file| {
+            let name = Path::new(&file.path)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+            if file.directory {
+                format!("{name}/")
+            } else {
+                name.into_owned()
+            }
+        },
+    )
+    .headers(false)
+    .action_bar(false)
+    .filter_controls(false)
+    .tree(TreeAdapter::parent_id(|file: &TemplateFile| {
+        Path::new(&file.path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(|parent| parent.to_string_lossy().into_owned())
+    }))
+    .expanded(
+        files
+            .iter()
+            .filter(|file| file.directory)
+            .map(|file| file.path.clone()),
+    )
 }
 
 pub(super) fn updated_details(selected_index: usize, previous: &Row, row: &Row) -> Modal {
@@ -91,6 +128,9 @@ pub(super) fn updated_details(selected_index: usize, previous: &Row, row: &Row) 
         names.push("Manifest");
         if row.guidance_source.is_some() {
             names.push("Guidance");
+        }
+        if row.files.iter().any(|file| !file.directory) {
+            names.push("Files");
         }
         names
     }

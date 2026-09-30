@@ -47,6 +47,9 @@ fn template_inspection_exposes_sources_and_configured_paths_without_startup() {
     let guidance = "## Website\nRun the application tests.\n";
     fs::write(template_directory.join("compose.yaml"), compose).unwrap();
     fs::write(template_directory.join("tandem-agents.md"), guidance).unwrap();
+    let files = template_directory.join("tandem-files");
+    fs::create_dir_all(files.join("config")).unwrap();
+    fs::write(files.join("config/settings.json"), "secret seed content").unwrap();
     fs::write(
         template_directory.join("tandem.json"),
         json!({
@@ -72,6 +75,9 @@ fn template_inspection_exposes_sources_and_configured_paths_without_startup() {
         "\"setup\"",
         compose,
         guidance,
+        "Files directory:",
+        "tandem-files",
+        "Files (copied into workspace root):\nconfig/\n  settings.json",
     ] {
         assert!(text.contains(expected), "missing {expected:?}: {text}");
     }
@@ -92,6 +98,18 @@ fn template_inspection_exposes_sources_and_configured_paths_without_startup() {
     );
     assert_eq!(inspection["template"]["compose_source"], compose);
     assert_eq!(inspection["template"]["guidance_source"], guidance);
+    assert_eq!(
+        inspection["template"]["files_directory"],
+        files.display().to_string()
+    );
+    assert_eq!(inspection["template"]["files"][0]["path"], "config");
+    assert_eq!(inspection["template"]["files"][0]["directory"], true);
+    assert_eq!(
+        inspection["template"]["files"][1]["path"],
+        "config/settings.json"
+    );
+    assert_eq!(inspection["template"]["files"][1]["directory"], false);
+    assert!(!text.contains("secret seed content"));
     assert_eq!(
         inspection["template"]["manifest"]["routes"]["web"]["port"],
         80

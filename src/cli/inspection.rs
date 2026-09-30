@@ -258,7 +258,7 @@ fn template_text(template: &Template, templates_root: &str, gateway_origin: &str
     );
     writeln!(
         output,
-        "Manifest file: {}\nCompose file: {}\nGuidance file: {}",
+        "Manifest file: {}\nCompose file: {}\nGuidance file: {}\nFiles directory: {}",
         if template.manifest_source.is_some() {
             &template.manifest_file
         } else {
@@ -274,6 +274,7 @@ fn template_text(template: &Template, templates_root: &str, gateway_origin: &str
         } else {
             "None"
         },
+        template.files_directory.as_deref().unwrap_or("None"),
     )
     .unwrap();
     writeln!(
@@ -287,6 +288,21 @@ fn template_text(template: &Template, templates_root: &str, gateway_origin: &str
     }
     if let Some(guidance) = &template.guidance_source {
         writeln!(output, "\nGuidance:\n{guidance}").unwrap();
+    }
+    if template.files_directory.is_some() {
+        writeln!(output, "\nFiles (copied into workspace root):").unwrap();
+        for file in &template.files {
+            let path = std::path::Path::new(&file.path);
+            let depth = path.components().count().saturating_sub(1);
+            writeln!(
+                output,
+                "{}{}{}",
+                "  ".repeat(depth),
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                if file.directory { "/" } else { "" }
+            )
+            .unwrap();
+        }
     }
     output
 }

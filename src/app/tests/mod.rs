@@ -34,6 +34,7 @@ mod resources;
 mod restart;
 mod service_state;
 mod template_actions;
+mod template_files;
 mod toolbar;
 mod workspaces;
 
@@ -65,6 +66,8 @@ fn snapshot() -> EnvironmentSnapshot {
             manifest_file: "/tmp/templates/website/tandem.json".into(),
             guidance_file: "/tmp/templates/website/tandem-agents.md".into(),
             guidance_source: None,
+            files_directory: None,
+            files: Vec::new(),
             compose_source: "services:\n  web:\n    image: nginx".into(),
             manifest_source: Some(
                 "{\n  \"description\": \"Website manifest\",\n  \"routes\": {}\n}\n".into(),

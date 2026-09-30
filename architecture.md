@@ -80,7 +80,8 @@ New clients target an instance workspace or an observed directory. Prepared inst
 validated guidance preparation, while external directories remain outside Tandem provisioning.
 During instance creation, the detached startup worker launches a requested client after workspace
 validation and history cleanup, before repository provisioning. It retains the launch outcome separately
-from instance readiness; launch failures permit provisioning to continue. Workspace guidance is generated
+from instance readiness; launch failures permit provisioning to continue. Template seed files are copied
+after the requested launch and before repository preparation. Workspace guidance is generated
 after repository preparation.
 Bulk closure selects observed panes by instance ownership or exact external directory and excludes
 owned panes from the external aggregate. With integration enabled, instance purge closes associated
@@ -102,9 +103,14 @@ independently of the displayed tree. Shared-server and child-process costs are o
 
 ## Template and workspace model
 
-A template may describe a Compose environment, a repository-backed workspace, a guidance-only setup, or a blank workspace identified by an empty `tandem.json` object. New templates contain only that manifest. Instance execution kind is fixed when prepared because container-backed and workspace-only instances have different ownership evidence and lifecycle behavior.
+A template may describe a Compose environment, a repository-backed workspace, a guidance-only or files-only setup, or a blank workspace identified by an empty `tandem.json` object. New templates contain only that manifest. Instance execution kind is fixed when prepared because container-backed and workspace-only instances have different ownership evidence and lifecycle behavior.
 
 Template manifests declare core-managed repositories, routes, and setup jobs. Template authors own application-specific setup and prefix-aware routing. Tandem owns safe provisioning, generated workspace guidance, and lifecycle coordination.
+
+Optional `tandem-files/` contents seed the workspace root before repository provisioning. Preparation
+preserves existing regular files and rejects symlinks, special files, reserved workspace paths, and
+repository-target overlap. Template snapshots include the recursive file tree and metadata; the
+background template observer detects additions, edits, removals, and folder deletion for every interface.
 
 ## Growth rules
 

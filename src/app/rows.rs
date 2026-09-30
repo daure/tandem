@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::store::environments::{
     EnvironmentSnapshot, Instance, InstanceService, Operation, OperationState, ResourceUsage,
-    Severity, StartupKind, StartupTiming, Status, Template, UsageSummary,
+    Severity, StartupKind, StartupTiming, Status, Template, TemplateFile, UsageSummary,
 };
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -261,6 +261,7 @@ pub(super) struct Row {
     pub cleanup_target: Option<String>,
     pub manifest_source: Option<String>,
     pub guidance_source: Option<String>,
+    pub files: Vec<TemplateFile>,
     pub instance: Option<String>,
     pub description: String,
     pub service: Option<(String, String)>,
@@ -862,6 +863,7 @@ fn from_snapshot_with_operations_and_totals(
             hide_resources: template.workspace_only(),
             manifest_source: template.manifest_source.clone(),
             guidance_source: template.guidance_source.clone(),
+            files: template.files.clone(),
             instance: None,
             service: None,
             workspace: None,
@@ -988,6 +990,7 @@ fn from_snapshot_with_operations_and_totals(
             instance: Some(instance.name.clone()),
             description: instance.description.clone(),
             guidance_source: None,
+            files: Vec::new(),
             service: None,
             service_name: None,
             workspace: Some(instance.workspace.clone()),
@@ -1091,6 +1094,7 @@ fn from_snapshot_with_operations_and_totals(
                 manifest_source: None,
                 instance: None,
                 guidance_source: None,
+                files: Vec::new(),
                 service: (!service.one_shot).then(|| (instance.name.clone(), service.name.clone())),
                 service_name: Some(service.name.clone()),
                 description: String::new(),

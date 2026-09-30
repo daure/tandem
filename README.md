@@ -327,7 +327,7 @@ references; those checks occur during startup. Direct file edits are validated w
 
 ## Template layout and routing
 
-A template contains `compose.yaml`, `tandem.json`, `tandem-agents.md`, or a combination. Compose-only
+A template contains `compose.yaml`, `tandem.json`, `tandem-agents.md`, `tandem-files/`, or a combination. Compose-only
 templates use empty manifest defaults: services have no Tandem routes, one-shot roles, or managed clones.
 Repository-only templates omit `compose.yaml`, declare at least one repository, and omit routes and
 one-shots. Guidance-only templates supply `tandem-agents.md` with an optional manifest and prepare an
@@ -342,6 +342,7 @@ kind; use a new instance name to switch between workspace-only and container-bac
   tandem.json
   compose.yaml                   # optional services
   tandem-agents.md                # optional template guidance
+  tandem-files/                   # optional files copied into workspace root
   scripts/                       # optional, edited by the agent
   config/                        # optional, edited by the agent
 ```
@@ -349,6 +350,19 @@ kind; use a new instance name to switch between workspace-only and container-bac
 Relative mounts, builds, env files, and scripts resolve against the template directory. Tandem renders
 a private `.tandem-<namespace>-<instance>.compose.json` beside the Compose file. The rendered artifact
 may contain secrets; exclude `.tandem-*.compose.json` and `.tandem-*.owner.json` from Git.
+
+`tandem-files/` seeds each instance workspace with its contents, including nested directories, hidden
+files, binary files, and file permissions. Copying runs after any creation-requested OpenCode pane
+launch and before repository cloning. Existing regular files are preserved during preparation retries;
+incompatible destinations fail preparation. Ready workspaces remain user-owned when the template changes.
+Paths must be UTF-8; symlinks and special files are refused. Seed paths must not occupy repository targets,
+root `AGENTS.md`, root `.tandem-*`, or any `.git` path. Files-only templates prepare a workspace and
+generated guidance without a manifest, Git, or Docker.
+
+Template details show a **Files** tree tab when the folder contains files. The background observer
+refreshes the tree when entries change or the folder is removed; an empty folder hides the tab.
+`tandem inspect-template <name>` lists its directory and tree; JSON and MCP template inspection expose
+`files_directory` and `files` with relative paths, entry types, sizes, and modification timestamps.
 
 `tandem.json` declares each public service's internal port, prefix behavior, and readiness content
 assertion. No route is inferred for databases or other non-HTTP services. `strip_prefix=true` sends

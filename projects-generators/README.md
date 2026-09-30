@@ -11,7 +11,7 @@ Python 3.11+, Git, local Docker Engine, and Docker Compose 2.20+ are required.
 | `mailroom` | `mailroom` | Queue a greeting and poll its delivery | Redis, worker heartbeat, asynchronous completion |
 | `repo-only` | `repo-only` cloned as `app` | Local Python greeting and unit tests | Manifest-only template, Git Setup row, checkout-path copy, local guidance |
 | `compose-only` | — | Redis with a healthcheck and persistent volume | Compose without a manifest, service-only guidance, no routes |
-| `guidance-only` | — | Scratch workspace for notes and research | Guidance-only discovery, empty workspace, custom `AGENTS.md`, no Git or Docker |
+| `guidance-only` | — | Scratch workspace for notes and research | Optional manifest, custom `AGENTS.md`, nested `tandem-files/` seeds, no Git or Docker |
 
 ## Generate and run
 
@@ -42,8 +42,12 @@ Web fixtures use `http://localhost:9886/guestbook-one/web/`; APIs use the siblin
 `repo-only` completes without Docker and exposes its checkout beneath Setup; `yy` copies its absolute
 directory. Run `python3 -m unittest discover -s tests -v` there. `compose-only` has no HTTP URL;
 use its generated Compose command with `exec -T redis redis-cli ping` and expect `PONG`.
-`guidance-only` creates a folder containing `AGENTS.md` with the template's scratch-workspace instructions;
-open the workspace and follow that guidance to create notes locally.
+`guidance-only` creates `AGENTS.md` with scratch-workspace instructions and copies `tandem-files/`
+contents into the workspace: `notes.md`, `research/sources.md`, and `experiments/README.md`.
+Open its template details and select **Files** to browse the seed tree. Edit, add, or remove a seed
+file to see the tree refresh; removing all seed files or the folder hides that tab.
+Start a fresh instance to copy the current seeds, then follow its guidance to record findings locally.
+Existing workspace files remain user-owned when template seeds change.
 Expand `greetings` Setup to compare its sorted Git rows with the migration job beneath them.
 On Unix, every `cargo run` invocation of Tandem sources the checkout's `projects/env.sh` when it
 exists, including plain TUI, `dev`, `new-instance` and MCP modes. Its exports override inherited
@@ -85,6 +89,10 @@ projects/
 `projects-generators/` is the tracked source of fixture recipes and app assets. Edit it to change
 what fresh fixtures contain. Each generated source repository is also editable and independently
 versioned; those edits belong to that local fixture set.
+
+The scratch-workspace seeds live in `projects-generators/assets/guidance-only/`; the generator places
+them under `.tandem/templates/guidance-only/tandem-files/`. Existing generated templates are editable:
+add the same seed paths there to try the example without regenerating or overwriting a fixture root.
 
 Each template's `tandem-agents.md` describes its services, workspace mounts, edit/restart
 behavior and a fixture-specific evaluation cycle. The tracked originals live in

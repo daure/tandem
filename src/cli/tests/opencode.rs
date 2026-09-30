@@ -221,6 +221,7 @@ const OPENCODE: &str = r#"#!/bin/sh
 if [ "$EXPECT_EMPTY_WORKSPACE" = 1 ]; then
   test ! -e app || exit 27
   test ! -e AGENTS.md || exit 28
+  test ! -e seed.txt || exit 30
 fi
 if [ -f app/file.txt ]; then
   git -C app branch --show-current > "$TANDEM_HOME/branch"

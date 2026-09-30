@@ -6,7 +6,7 @@ use std::{
 
 use super::{
     config::{Config, private_file, read_text},
-    gateway,
+    gateway, template_files,
 };
 use crate::store::environments::{Manifest, Template, validate_name};
 
@@ -18,7 +18,8 @@ pub(crate) fn list(config: &Config) -> Result<Vec<Template>, String> {
         if validate_name(&name).is_ok()
             && (entry.path().join("compose.yaml").is_file()
                 || entry.path().join("tandem.json").is_file()
-                || fs::symlink_metadata(entry.path().join("tandem-agents.md")).is_ok())
+                || fs::symlink_metadata(entry.path().join("tandem-agents.md")).is_ok()
+                || fs::symlink_metadata(entry.path().join("tandem-files")).is_ok())
         {
             match read_template(config, &name) {
                 Ok(template) => templates.push(template),
@@ -31,6 +32,8 @@ pub(crate) fn list(config: &Config) -> Result<Vec<Template>, String> {
                     compose_source: String::new(),
                     manifest_source: None,
                     guidance_source: None,
+                    files_directory: None,
+                    files: Vec::new(),
                     manifest: Manifest::default(),
                     error: Some(error),
                 }),
@@ -79,7 +82,9 @@ pub(crate) fn update_manifest(
         !template.workspace_only(),
         true,
         template.guidance_source.is_some(),
+        template.files_directory.is_some(),
     )?;
+    template_files::validate(&template.files, &manifest.repositories)?;
     let mut temporary = tempfile::Builder::new()
         .prefix(".tandem-manifest-")
         .tempfile_in(&directory)
@@ -142,13 +147,16 @@ fn read_template(config: &Config, name: &str) -> Result<Template, String> {
         .then(|| read_text(&compose_path))
         .transpose()?;
     let guidance_source = read_guidance(&directory)?;
+    let (files_directory, files) = template_files::inspect(&directory)?;
     let manifest = manifest.and_then(|manifest| {
         validate_workspace_template(
             &manifest,
             compose_source.is_some(),
             manifest_source.is_some(),
             guidance_source.is_some(),
+            files_directory.is_some(),
         )?;
+        template_files::validate(&files, &manifest.repositories)?;
         Ok(manifest)
     });
     let error = manifest.as_ref().err().cloned();
@@ -164,6 +172,8 @@ fn read_template(config: &Config, name: &str) -> Result<Template, String> {
         compose_source: compose_source.unwrap_or_default(),
         manifest_source,
         guidance_source,
+        files_directory,
+        files,
         manifest: manifest.unwrap_or_default(),
         error,
     })
@@ -174,10 +184,14 @@ fn validate_workspace_template(
     has_compose: bool,
     has_manifest: bool,
     has_guidance: bool,
+    has_files: bool,
 ) -> Result<(), String> {
     if !has_compose {
-        if !has_manifest && !has_guidance {
-            return Err("templates require compose.yaml, tandem.json, or tandem-agents.md".into());
+        if !has_manifest && !has_guidance && !has_files {
+            return Err(
+                "templates require compose.yaml, tandem.json, tandem-agents.md, or tandem-files/"
+                    .into(),
+            );
         }
         if !manifest.routes.is_empty() || !manifest.one_shots.is_empty() {
             return Err("routes and one_shots require compose.yaml".into());

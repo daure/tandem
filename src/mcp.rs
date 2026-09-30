@@ -240,7 +240,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Get the editable template directory, Compose file/source when present, optional manifest and tandem-agents.md guidance. Workspace-only templates have empty Compose fields; guidance-only templates need no manifest. Relative scripts and config belong in this directory."
+        description = "Get the editable template directory, Compose file/source when present, optional manifest and tandem-agents.md guidance, and the tandem-files directory/tree when present. Workspace-only templates have empty Compose fields; guidance-only and files-only templates need no manifest. Relative scripts and config belong in this directory."
     )]
     async fn get_template(
         &self,
@@ -250,7 +250,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a blank editable template folder containing only tandem.json with {}. Refuses existing names. Its instances prepare workspaces with standard AGENTS.md guidance; add Compose, repositories, routes, or tandem-agents.md as needed. Does not start containers."
+        description = "Create a blank editable template folder containing only tandem.json with {}. Refuses existing names. Its instances prepare workspaces with standard AGENTS.md guidance; add Compose, repositories, routes, tandem-agents.md, or tandem-files as needed. Does not start containers."
     )]
     async fn create_template(
         &self,

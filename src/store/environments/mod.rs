@@ -69,8 +69,18 @@ pub(crate) struct Template {
     pub compose_source: String,
     pub manifest_source: Option<String>,
     pub guidance_source: Option<String>,
+    pub files_directory: Option<String>,
+    pub files: Vec<TemplateFile>,
     pub manifest: Manifest,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq)]
+pub(crate) struct TemplateFile {
+    pub path: String,
+    pub directory: bool,
+    pub size_bytes: u64,
+    pub modified_at_unix_nanoseconds: Option<u64>,
 }
 
 impl Template {

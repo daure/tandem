@@ -34,6 +34,8 @@ def create_templates(root, names=FIXTURES):
         directory.mkdir(parents=True)
         if name == "guidance-only":
             asset("guidance/guidance-only.md", directory / "tandem-agents.md")
+            for path in ("notes.md", "research/sources.md", "experiments/README.md"):
+                asset(f"guidance-only/{path}", directory / "tandem-files" / path)
             continue
         if name == "repo-only":
             write_json(directory / "tandem.json", {
