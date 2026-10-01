@@ -107,24 +107,26 @@ class RefreshTests(unittest.TestCase):
                     terminal.output = b""
                     terminal.send(b"\r")
                     terminal.wait_for(lambda: b"Fresh MCP manifest" in terminal.output)
-                    external = home / "templates" / "manual-only"
+                    external = home / "templates" / "disk-visible"
                     external.mkdir()
                     (external / "compose.yaml").write_text("services: {}\n")
                     terminal.wait_for(lambda: inventory_calls() == 3, timeout=12)
                     terminal.send(b"\x1b")
                     terminal.drain_for(0.5)
-                    self.assertNotIn(b"manual-only", terminal.output)
+                    terminal.wait_for(lambda: b"disk-visible" in terminal.output)
+                    self.assertEqual(inventory_calls(), 3, "Disk template observation must not inspect Docker")
                     self.assertNotIn(b"Refresh complete", terminal.output)
                     terminal.send(b"R")
-                    terminal.wait_for(lambda: b"manual-only" in terminal.output and inventory_calls() == 4
+                    terminal.wait_for(lambda: b"disk-visible" in terminal.output and inventory_calls() == 4
                                       and b"Refresh complete" in terminal.output)
                     (external / "tandem.json").write_text("{ invalid json")
                     terminal.output = b""
                     terminal.send(b"R")
-                    terminal.wait_for(lambda: b"tandem.json:" in terminal.output and inventory_calls() == 5)
+                    terminal.wait_for(lambda: b"key must be a string" in terminal.output and inventory_calls() == 5)
                     # A resize repaints text that the terminal diff can otherwise reuse from the success toast.
                     fcntl.ioctl(terminal.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 44, 151, 0, 0))
                     terminal.wait_for(lambda: b"Refresh completed with errors" in terminal.output
+                                       and b"tandem.json:" in terminal.output
                                       and inventory_calls() == 5)
                     terminal.send(b"\x1b[O")
 
