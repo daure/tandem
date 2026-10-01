@@ -86,6 +86,17 @@ pub(crate) fn start(
         {
             return Err("workspace escapes workspace root".into());
         }
+        super::removal::validate_workspace(config, name)?;
+        template_files::prepare(&workspace, &template, deadline, progress.clone())?;
+        let mut preparing = journal::recorded(config, name)?.ok_or("instance record missing")?;
+        preparing.services = compose::preview_services(config, &template, name);
+        progress("Preparing workspace AGENTS.md".into());
+        let guidance = workspace_agents::prepare(
+            config,
+            &preparing,
+            &template.manifest.repositories,
+            !template.workspace_only() || !template.manifest.repositories.is_empty(),
+        )?;
         if let Some(before_repositories) = startup.before_repositories {
             super::removal::validate_workspace(config, name)?;
             before_repositories(
@@ -94,7 +105,6 @@ pub(crate) fn start(
             )?;
         }
         super::removal::validate_workspace(config, name)?;
-        template_files::prepare(&workspace, &template, deadline, progress.clone())?;
         repositories::prepare(
             &config.workspaces,
             &workspace,
@@ -107,7 +117,7 @@ pub(crate) fn start(
         if template.workspace_only() {
             let instance =
                 journal::workspace_instance(config, name)?.ok_or("workspace record missing")?;
-            workspace_agents::generate(config, &instance, &template.manifest.repositories)?;
+            workspace_agents::finish(config, &instance, &template.manifest.repositories, guidance)?;
             journal::workspace_ready(config, name)?;
             if let Some(writer) = &startup.writer {
                 writer.workspace_ready();
@@ -130,8 +140,8 @@ pub(crate) fn start(
             path: rendered,
             services,
         } = rendered;
-        progress("Preparing workspace AGENTS.md".into());
-        workspace_agents::generate(
+        progress("Finalizing workspace AGENTS.md".into());
+        workspace_agents::finish(
             config,
             &Instance {
                 name: name.into(),
@@ -144,6 +154,7 @@ pub(crate) fn start(
                 ..Default::default()
             },
             &template.manifest.repositories,
+            guidance,
         )?;
         if let Some(writer) = &startup.writer {
             writer.workspace_ready();

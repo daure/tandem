@@ -30,7 +30,8 @@ Read `core_guidance` together with this editable guidance for placement and clea
   including literal `{{...}}`. The file must resolve within the template directory. Read errors block
   generation, and edits apply to future generation; existing workspace guidance is preserved.
 - Optional `tandem-files/` supplies workspace seed files. Its contents are copied into the workspace
-  root after any creation-requested OpenCode client launch and before repository provisioning.
+  root before workspace guidance generation, any creation-requested OpenCode client launch,
+  and repository provisioning.
   Nested directories, hidden files, binary contents, and file permissions are supported; paths must
   be UTF-8 and entries must be real directories or regular files. Symlinks and special files are refused.
   Keep repository targets clear and reserve root `AGENTS.md`, root `.tandem-*`, and every `.git` path
@@ -60,9 +61,12 @@ Read `core_guidance` together with this editable guidance for placement and clea
   omit URL passwords/tokens. Targets must be non-overlapping paths of non-hidden directory names
   using letters, digits, dots, underscores or hyphens; the workspace root is not a target.
 - Tandem provisions missing repositories with host Git before Compose configuration, builds or
-  startup. With Branch instances enabled, it checks out the instance-named remote branch when present,
+  startup, using depth-1 single-branch clones of the source default. With Branch instances enabled,
+  it shallow-fetches and checks out the instance-named remote branch when present,
   otherwise creates a local branch from the remote default; when disabled it uses the default branch.
   Local source defaults follow their checked-out branch. New branches are not pushed.
+  Restore history on demand with `git fetch --unshallow` if the checkout is shallow;
+  fetch other branches explicitly.
 - Existing checkout roots and exact origin URLs must match; their branches and work are preserved.
   Git updates require explicit user approval. Failed provisioning stops startup; completed checkouts
   survive retries. Resolve mismatches explicitly; never delete or reset user work to make a retry pass.
@@ -81,11 +85,12 @@ Read `core_guidance` together with this editable guidance for placement and clea
   a deleted instance with the same name. Include this in creation approval. Existing instances and
   provisioning retries retain conversations. Active clients or cleanup failures block creation;
   close clients or ask the user to disable cleanup if they want to preserve history.
-- Tandem writes workspace-root `AGENTS.md` after repository preparation and before any container startup,
-  and generates it if missing when opening a prepared instance workspace. A client requested during
-  creation launches after workspace creation and history cleanup, before seed copying and repository provisioning;
-  its presence does not certify that sources or guidance are ready. Wait for preparation, then read
-  workspace `AGENTS.md` and the repository guidance it lists.
+- Tandem writes workspace-root `AGENTS.md` after seed copying and before any creation-requested OpenCode
+  launch or repository provisioning, and generates it if missing when opening a prepared instance workspace.
+  Early guidance uses declared repositories and previewed services. Preparation refreshes verified mappings
+  before container startup only when the newly generated file remains unchanged; existing files and client
+  edits are preserved. A client's presence does not certify that sources or services are ready.
+  Wait for preparation, then reread workspace `AGENTS.md` and the repository guidance it lists.
   For service instances, inspect containers for missing mappings and runtime state
   for current health. The base template at `workspace_agents_template` affects future generation;
   bundled updates replace it after backing up local edits.

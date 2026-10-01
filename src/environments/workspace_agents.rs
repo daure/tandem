@@ -69,10 +69,71 @@ pub(super) fn generate(
     instance: &Instance,
     repositories: &[Repository],
 ) -> Result<(), String> {
+    prepare(config, instance, repositories, false).map(|_| ())
+}
+
+pub(super) fn prepare(
+    config: &Config,
+    instance: &Instance,
+    repositories: &[Repository],
+    pending: bool,
+) -> Result<Option<String>, String> {
     let workspace = Path::new(&instance.workspace);
     if existing(workspace)? {
+        return Ok(None);
+    }
+    let mut markdown = markdown(config, instance, repositories)?;
+    if pending {
+        markdown.push_str("\n\n## Preparation\n\nInstance creation may still be preparing repository checkouts and services. Wait for instance readiness before working in repositories or using services; reread this file for verified mappings after preparation.\n");
+    }
+    let file = temporary(workspace, &markdown)?;
+    match file.persist_noclobber(workspace.join("AGENTS.md")) {
+        Ok(_) => Ok(Some(markdown)),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            if existing(workspace)? {
+                Ok(None)
+            } else {
+                Err("workspace AGENTS.md disappeared during generation".into())
+            }
+        }
+        Err(error) => Err(format!("cannot write workspace AGENTS.md: {error}")),
+    }
+}
+
+pub(super) fn finish(
+    config: &Config,
+    instance: &Instance,
+    repositories: &[Repository],
+    prepared: Option<String>,
+) -> Result<(), String> {
+    let Some(prepared) = prepared else {
+        return Ok(());
+    };
+    let workspace = Path::new(&instance.workspace);
+    let path = workspace.join("AGENTS.md");
+    if !existing(workspace)?
+        || fs::read(&path).map_err(|error| error.to_string())? != prepared.as_bytes()
+    {
         return Ok(());
     }
+    let markdown = markdown(config, instance, repositories)?;
+    let file = temporary(workspace, &markdown)?;
+    // The client can edit guidance while repositories and Compose are being prepared.
+    if !existing(workspace)?
+        || fs::read(&path).map_err(|error| error.to_string())? != prepared.as_bytes()
+    {
+        return Ok(());
+    }
+    file.persist(&path)
+        .map_err(|error| format!("cannot write workspace AGENTS.md: {error}"))?;
+    Ok(())
+}
+
+fn markdown(
+    config: &Config,
+    instance: &Instance,
+    repositories: &[Repository],
+) -> Result<String, String> {
     let compose_file = runtime_db::launch::materialize(config, &instance.name)?
         .unwrap_or(runtime_db::launch::path(config, &instance.name)?);
     let command = format!(
@@ -176,23 +237,17 @@ pub(super) fn generate(
         markdown.push_str("\n\n");
         markdown.push_str(&guidance);
     }
+    Ok(markdown)
+}
+
+fn temporary(workspace: &Path, markdown: &str) -> Result<tempfile::NamedTempFile, String> {
     let mut file = tempfile::NamedTempFile::new_in(workspace).map_err(|error| error.to_string())?;
     file.write_all(markdown.as_bytes())
         .map_err(|error| error.to_string())?;
     file.as_file()
         .sync_all()
         .map_err(|error| error.to_string())?;
-    match file.persist_noclobber(workspace.join("AGENTS.md")) {
-        Ok(_) => Ok(()),
-        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if existing(workspace)? {
-                Ok(())
-            } else {
-                Err("workspace AGENTS.md disappeared during generation".into())
-            }
-        }
-        Err(error) => Err(format!("cannot write workspace AGENTS.md: {error}")),
-    }
+    Ok(file)
 }
 
 fn http_url_lines(instance: &Instance) -> String {

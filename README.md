@@ -252,9 +252,11 @@ subdirectory and can differ from the container's working directory. Missing conf
 unidentified mappings display `Not identified`; named volumes and image-only code require runtime
 inspection. Malformed or mismatched rendered configuration blocks generation.
 
-Every new instance receives a root `AGENTS.md` after repository preparation and before any container startup.
+Every new instance receives a root `AGENTS.md` after seed copying and before any requested OpenCode launch
+or repository cloning. Early guidance lists declared repositories and previewed services; preparation
+refreshes verified mappings before container startup if the newly generated file remains unchanged.
 OpenCode launches in instance workspaces also generate it if missing; generation failures block the launch.
-Existing regular files are preserved, while symlinks and directories are
+Existing regular files and client edits during preparation are preserved, while symlinks and directories are
 rejected. This is a configuration snapshot: keep local guidance current as repositories or services
 change. To regenerate from the editable template, move the workspace file aside and launch OpenCode in the instance.
 Template-owned clone jobs and container-created files appear only after their own setup completes.
@@ -353,8 +355,8 @@ Relative mounts, builds, env files, and scripts resolve against the template dir
 Generated configuration and instance records live in Tandem's private local storage.
 
 `tandem-files/` seeds each instance workspace with its contents, including nested directories, hidden
-files, binary files, and file permissions. Copying runs after any creation-requested OpenCode pane
-launch and before repository cloning. Existing regular files are preserved during preparation retries;
+files, binary files, and file permissions. Copying runs before workspace guidance generation, any
+creation-requested OpenCode pane launch, and repository cloning. Existing regular files are preserved during preparation retries;
 incompatible destinations fail preparation. Ready workspaces remain user-owned when the template changes.
 Paths must be UTF-8; symlinks and special files are refused. Seed paths must not occupy repository targets,
 root `AGENTS.md`, root `.tandem-*`, or any `.git` path. Files-only templates prepare a workspace and

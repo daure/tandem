@@ -113,7 +113,15 @@ pub(super) fn table(
             .collect();
         has_guidance |= !guidance.is_empty();
         let guidance = if guidance.is_empty() {
-            "None".into()
+            if !root.exists() {
+                format!(
+                    "After checkout, check {} and {} if present",
+                    cell(&format!("./{target}/AGENTS.md")),
+                    cell(&format!("./{target}/agents.md")),
+                )
+            } else {
+                "None".into()
+            }
         } else {
             guidance.join(" and ")
         };

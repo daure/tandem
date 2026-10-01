@@ -187,12 +187,17 @@ fn wait_output(mut child: Child) -> Output {
 }
 
 #[test]
-fn opencode_launches_before_seed_copying_cloning_and_compose_startup() {
+fn opencode_receives_seed_files_and_guidance_before_repository_and_service_startup() {
     for flag in ["--opencode", "-o"] {
         let fixture = Fixture::new();
         let files = fixture.home.join("templates/website/tandem-files");
         fs::create_dir(&files).unwrap();
         fs::write(files.join("seed.txt"), "seed content").unwrap();
+        fs::write(
+            fixture.home.join("templates/website/tandem-agents.md"),
+            "## Template workflow\n\nRead seed.txt before working.\n",
+        )
+        .unwrap();
         let git_path = Command::new("sh")
             .args(["-c", "command -v git"])
             .output()
@@ -212,7 +217,7 @@ fn opencode_launches_before_seed_copying_cloning_and_compose_startup() {
             fixture
                 .command(&["new-instance", "review", "-t", "website", flag])
                 .env("EXPECT_OPEN", "1")
-                .env("EXPECT_EMPTY_WORKSPACE", "1")
+                .env("EXPECT_PREPARED_GUIDANCE", "1")
                 .spawn()
                 .unwrap(),
         );
@@ -236,6 +241,7 @@ fn opencode_launches_before_seed_copying_cloning_and_compose_startup() {
         );
         let guidance = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
         assert!(guidance.contains("./app/AGENTS.md"));
+        assert!(!guidance.contains("## Preparation"));
         assert!(String::from_utf8_lossy(&output.stdout).contains("Instance review ready"));
     }
 }
@@ -351,7 +357,7 @@ fn opencode_opens_a_prepared_workspace_without_repositories() {
 }
 
 #[test]
-fn workspace_guidance_failure_preserves_the_early_client_and_blocks_container_startup() {
+fn workspace_guidance_failure_blocks_client_repository_and_container_startup() {
     let fixture = Fixture::new();
     fs::write(
         fixture.home.join(".workspace-agents.bundled.md"),
@@ -369,9 +375,38 @@ fn workspace_guidance_failure_preserves_the_early_client_and_blocks_container_st
         String::from_utf8_lossy(&output.stderr)
             .contains("unknown workspace AGENTS.md template placeholder")
     );
-    assert!(fixture.home.join("opened").exists());
+    assert!(!fixture.home.join("opened").exists());
     assert!(!fixture.home.join("started").exists());
+    assert!(!fixture.home.join("workspaces/review/app").exists());
     assert!(!fixture.home.join("workspaces/review/AGENTS.md").exists());
+}
+
+#[test]
+fn client_guidance_edits_are_preserved_during_repository_and_service_preparation() {
+    let fixture = Fixture::new();
+    let output = wait_output(
+        fixture
+            .command(&["new-instance", "review", "-t", "website", "-o"])
+            .env("EDIT_GUIDANCE", "1")
+            .spawn()
+            .unwrap(),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.home.join("workspaces/review/AGENTS.md")).unwrap(),
+        "Client guidance\n"
+    );
+    assert!(
+        fixture
+            .home
+            .join("workspaces/review/app/file.txt")
+            .is_file()
+    );
+    assert!(fixture.home.join("started").is_file());
 }
 
 #[test]

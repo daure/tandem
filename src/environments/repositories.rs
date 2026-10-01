@@ -182,6 +182,9 @@ fn prepare_repository(
     command
         .args([
             "clone",
+            "--depth",
+            "1",
+            "--single-branch",
             "--no-local",
             "--origin",
             "origin",
@@ -265,14 +268,30 @@ fn select_branch(checkout: &Path, branch: Option<&str>, deadline: Instant) -> Re
             .map(|_| ());
         }
         let remote = format!("refs/remotes/origin/{branch}");
+        let source = format!("refs/heads/{branch}");
         let exists = query(
             checkout,
-            &["for-each-ref", "--format=%(refname)", &remote],
+            &["ls-remote", "--heads", "origin", &source],
             deadline,
         )?
         .lines()
-        .any(|reference| reference == remote);
+        .any(|reference| {
+            reference
+                .split_once('\t')
+                .is_some_and(|(_, name)| name == source)
+        });
         if exists {
+            let refspec = format!("+{source}:{remote}");
+            query(
+                checkout,
+                &["config", "--add", "remote.origin.fetch", &refspec],
+                deadline,
+            )?;
+            query(
+                checkout,
+                &["fetch", "--depth", "1", "origin", &refspec],
+                deadline,
+            )?;
             query(
                 checkout,
                 &["switch", "--track", "-c", branch, &remote],

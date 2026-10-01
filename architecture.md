@@ -87,11 +87,13 @@ establish attachment and authorize navigation or closure of that exact pane. Obs
 can be resumed in their recorded directory on their loopback server, including external workspaces.
 New clients target an instance workspace or an observed directory. Prepared instance workspaces receive
 validated guidance preparation, while external directories remain outside Tandem provisioning.
-During instance creation, the detached startup worker launches a requested client after workspace
-validation and history cleanup, before repository provisioning. It retains the launch outcome separately
-from instance readiness; launch failures permit provisioning to continue. Template seed files are copied
-after the requested launch and before repository preparation. Workspace guidance is generated
-after repository preparation.
+During instance creation, the detached startup worker validates the workspace and clears history,
+copies template seed files, and generates workspace guidance before launching a requested client.
+The client launches before repository provisioning and Compose rendering. Early guidance uses declared
+repositories and previewed services; preparation refreshes verified mappings before container startup
+only if the file created by that startup remains unchanged. Existing guidance and client edits are preserved.
+The worker retains the launch outcome separately from instance readiness; launch failures permit
+provisioning to continue. Seed-copying or guidance-generation failures block the requested launch.
 Bulk closure selects observed panes by instance ownership or exact external directory and excludes
 owned panes from the external aggregate. With integration enabled, instance purge closes associated
 clients under the instance lock after ownership validation and before resource deletion. Verified local

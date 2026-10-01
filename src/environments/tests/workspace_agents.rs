@@ -161,9 +161,25 @@ fn rendered_compose(
 }
 
 #[test]
-fn repository_table_matches_shared_workspace_mounts_using_runtime_and_build_paths() {
+fn prepared_guidance_gains_verified_shared_workspace_mappings_after_checkout() {
     let (_directory, config, instance) = fixture();
     let workspace = Path::new(&instance.workspace);
+    let repositories = [
+        Repository {
+            source: "/sources/api".into(),
+            target: "api".into(),
+        },
+        Repository {
+            source: "https://example.invalid/ui.git".into(),
+            target: "ui".into(),
+        },
+    ];
+    let prepared = prepare(&config, &instance, &repositories, true).unwrap();
+    let early = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
+    assert!(
+        early.contains("After checkout, check `./api/AGENTS.md` and `./api/agents.md` if present")
+    );
+    assert!(early.contains("## Preparation"));
     fs::create_dir_all(workspace.join("api/.git")).unwrap();
     fs::create_dir_all(workspace.join("ui/.git")).unwrap();
     fs::write(workspace.join("api/AGENTS.md"), "API guidance").unwrap();
@@ -182,22 +198,9 @@ fn repository_table_matches_shared_workspace_mounts_using_runtime_and_build_path
             "db": {"volumes": [{"type": "volume", "source": "data", "target": "/var/lib/db"}]}
         }),
     );
-    generate(
-        &config,
-        &instance,
-        &[
-            Repository {
-                source: "/sources/api".into(),
-                target: "api".into(),
-            },
-            Repository {
-                source: "https://example.invalid/ui.git".into(),
-                target: "ui".into(),
-            },
-        ],
-    )
-    .unwrap();
+    finish(&config, &instance, &repositories, prepared).unwrap();
     let text = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
+    assert!(!text.contains("## Preparation"));
     let table = text
         .split_once("## Services\n\n")
         .unwrap()

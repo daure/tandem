@@ -218,11 +218,15 @@ esac
 "#;
 
 const OPENCODE: &str = r#"#!/bin/sh
-if [ "$EXPECT_EMPTY_WORKSPACE" = 1 ]; then
+if [ "$EXPECT_PREPARED_GUIDANCE" = 1 ]; then
   test ! -e app || exit 27
-  test ! -e AGENTS.md || exit 28
-  test ! -e seed.txt || exit 30
+  test -f AGENTS.md || exit 28
+  test -f seed.txt || exit 30
+  grep -q 'Template workflow' AGENTS.md || exit 31
+  grep -q './app/AGENTS.md' AGENTS.md || exit 32
+  test ! -e "$TANDEM_HOME/started" || exit 33
 fi
+if [ "$EDIT_GUIDANCE" = 1 ]; then printf 'Client guidance\n' > AGENTS.md; fi
 if [ -f app/file.txt ]; then
   git -C app branch --show-current > "$TANDEM_HOME/branch"
 fi

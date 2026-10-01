@@ -216,20 +216,49 @@ fn checkout_record_failure_stops_queued_clones_and_records_in_flight_successes()
 }
 
 #[test]
-fn declared_repositories_choose_default_existing_or_new_local_branches() {
-    for branch in [None, Some("trunk"), Some("existing"), Some("Feature-123")] {
+fn declared_repositories_use_shallow_default_existing_or_new_local_branches() {
+    for (default, branch) in [
+        ("main", None),
+        ("master", None),
+        ("trunk", None),
+        ("trunk", Some("trunk")),
+        ("trunk", Some("existing")),
+        ("trunk", Some("Feature-123")),
+    ] {
         let (_home, config, template, workspace) = fixture();
         let source = Path::new(&template.manifest.repositories[0].source);
+        if default != "trunk" {
+            git_test(source, &["branch", "-m", default]);
+        }
+        git_test(
+            source,
+            &["commit", "--allow-empty", "-m", "Default history"],
+        );
         git_test(source, &["switch", "-c", "existing"]);
         fs::write(source.join("file.txt"), "existing branch content").unwrap();
         git_test(source, &["add", "."]);
         git_test(source, &["commit", "-m", "Branch fixture"]);
-        git_test(source, &["switch", "trunk"]);
+        git_test(source, &["switch", default]);
         provision(&config, &template, &workspace, branch).unwrap();
         let target = workspace.join("src/app");
         assert_eq!(
             git_test(&target, &["branch", "--show-current"]),
-            branch.unwrap_or("trunk")
+            branch.unwrap_or(default)
+        );
+        assert_eq!(
+            git_test(&target, &["rev-parse", "--is-shallow-repository"]),
+            "true"
+        );
+        assert_eq!(git_test(&target, &["rev-list", "--count", "HEAD"]), "1");
+        let refspec = format!("+refs/heads/{default}:refs/remotes/origin/{default}");
+        let expected_fetch = if branch == Some("existing") {
+            format!("{refspec}\n+refs/heads/existing:refs/remotes/origin/existing")
+        } else {
+            refspec
+        };
+        assert_eq!(
+            git_test(&target, &["config", "--get-all", "remote.origin.fetch"]),
+            expected_fetch
         );
         assert_eq!(
             fs::read_to_string(target.join("file.txt")).unwrap(),
@@ -257,6 +286,19 @@ fn declared_repositories_choose_default_existing_or_new_local_branches() {
             );
             assert_eq!(git_test(source, &["branch", "--list", "Feature-123"]), "");
         }
+        git_test(&target, &["fetch", "--unshallow"]);
+        assert_eq!(
+            git_test(&target, &["rev-parse", "--is-shallow-repository"]),
+            "false"
+        );
+        assert_eq!(
+            git_test(&target, &["rev-list", "--count", "HEAD"]),
+            if branch == Some("existing") { "3" } else { "2" }
+        );
+        assert_eq!(
+            git_test(&target, &["config", "--get-all", "remote.origin.fetch"]),
+            expected_fetch
+        );
     }
 }
 
