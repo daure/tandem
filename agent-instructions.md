@@ -97,6 +97,9 @@ Read `core_guidance` together with this editable guidance for placement and clea
 - Run trusted templates with approval: repository provisioning uses host Git and credentials;
   Docker execution grants local privileges.
   Keep environments local; gateway routes share a browser origin.
+- Instance creation applies the selected template and builds services that declare `build`, using
+  Docker's layer cache, before starting containers. Build contexts must contain the intended sources
+  and dependencies, including when retrying preparation or reusing a deleted instance name.
 - Stop preserves instance data; deletion permanently removes its workspace and owned resources.
   With OpenCode integration enabled, instance purge first closes associated observed clients in the
   workspace and its subdirectories. Closure failures block that instance's deletion; clients outside

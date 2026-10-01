@@ -173,7 +173,8 @@ pub(crate) fn start(
             name,
             branch,
         );
-        command.args(["up", "--detach", "--remove-orphans"]);
+        // A reused instance name may retain image tags built by another template.
+        command.args(["up", "--detach", "--build", "--remove-orphans"]);
         run(command, remaining(deadline)?, Some(progress.clone()))?;
         progress("Waiting for service health and gateway content assertions".into());
         wait_ready(config, &template, name, deadline, progress)

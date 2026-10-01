@@ -20,7 +20,7 @@ CHECKOUT = ROOT.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(CHECKOUT / "src/mcp/tests"))
 from generate import MINIMAL_FIXTURES, generate
-from stdio_smoke import Client
+from stdio_smoke import Client, disable_history_cleanup
 from templates import FIXTURES
 
 
@@ -173,6 +173,56 @@ class Smoke:
         self.check_cleanup_recovery("guidance-only-one")
         print("Minimal fixture creation, guidance, inventory, lifecycle, and damaged-record cleanup passed.", flush=True)
 
+    def exercise_image_reuse(self):
+        namespace = json.loads((self.root / "fixtures.json").read_text())["environment"]["TANDEM_NAMESPACE"]
+        name = "reused-name"
+        for template in ("guestbook", "greetings", "mailroom", "greetings"):
+            self.start(template, name)
+            self.check_routes_and_git(template, name)
+            operation = self.client.tool("delete_instance", {"name": name, "confirmed": True})
+            deadline = time.monotonic() + 60
+            while operation["state"] == "running" and time.monotonic() < deadline:
+                time.sleep(0.2)
+                operation = self.client.tool("get_operation", {"id": operation["id"]})
+            assert operation["state"] == "succeeded", operation
+            assert not (self.root / ".tandem/workspaces" / name).exists()
+            subprocess.run(["docker", "image", "inspect", f"{namespace}-{name}-api"],
+                           check=True, capture_output=True, timeout=10)
+        print("Reused instance names build the selected template with retained image tags.", flush=True)
+
+    def exercise_concurrent(self):
+        pending = {}
+        completed = {}
+        names = [f"concurrent-{index:02}" for index in range(12)]
+        for name in names:
+            operation = self.client.tool("create_instance", {
+                "template": "greetings", "name": name, "confirmed": True,
+                "wait": False, "timeout_seconds": 120,
+            })
+            assert operation["state"] in ("running", "succeeded"), operation
+            pending[name] = operation["id"]
+        deadline = time.monotonic() + 150
+        while pending and time.monotonic() < deadline:
+            for name, operation_id in list(pending.items()):
+                operation = self.client.tool("get_operation", {"id": operation_id})
+                if operation["state"] == "running":
+                    continue
+                completed[name] = operation
+                del pending[name]
+                print(f"{name}: {operation['state']}", flush=True)
+            time.sleep(0.2)
+        assert not pending, pending
+        for operation in completed.values():
+            assert operation["state"] == "succeeded", operation
+        inventory = self.client.tool("list_instances")
+        assert inventory["runtime_error"] is None, inventory["runtime_error"]
+        instances = {instance["name"]: instance for instance in inventory["instances"]}
+        for name in names:
+            assert instances[name]["summary"]["status"] == "healthy", instances[name]
+            assert instances[name]["runtime"]["issue"] is None, instances[name]
+            assert self.api(name, "health")["status"] == "ready"
+        print("Twelve concurrent startups retained successful outcomes and healthy routes.", flush=True)
+
     def check_cleanup_recovery(self, name):
         environment = json.loads((self.root / "fixtures.json").read_text())["environment"]
         record_path = self.root / ".tandem/runtime" / environment["TANDEM_NAMESPACE"] / f"{name}.json"
@@ -286,7 +336,10 @@ def cleanup(root, namespace):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=CHECKOUT / "target/debug/tandem")
-    parser.add_argument("--minimal", action="store_true", help="Exercise repo-only, compose-only and guidance-only fixtures")
+    checks = parser.add_mutually_exclusive_group()
+    checks.add_argument("--minimal", action="store_true", help="Exercise repo-only, compose-only and guidance-only fixtures")
+    checks.add_argument("--image-reuse", action="store_true", help="Exercise template changes with retained instance image tags")
+    checks.add_argument("--concurrent", action="store_true", help="Exercise twelve simultaneous routed startups and durable outcomes")
     options = parser.parse_args()
     if not options.binary.is_file():
         parser.error("Build Tandem first with cargo build")
@@ -301,14 +354,21 @@ def main():
     environment = {**os.environ, **json.loads((root / "fixtures.json").read_text())["environment"],
                    "XDG_STATE_HOME": str(root / "state")}
     environment.pop("TANDEM_INSTRUCTIONS_FILE", None)
+    if options.concurrent:
+        disable_history_cleanup(root / ".tandem")
     client = Client(options.binary.resolve(), environment)
     succeeded = False
     try:
         smoke = Smoke(root, client, port)
         if options.minimal:
             smoke.exercise_minimal()
+        elif options.image_reuse:
+            smoke.exercise_image_reuse()
+        elif options.concurrent:
+            smoke.exercise_concurrent()
         else:
             smoke.exercise()
+            smoke.exercise_image_reuse()
         succeeded = True
     finally:
         client.close()

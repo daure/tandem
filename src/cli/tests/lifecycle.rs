@@ -42,6 +42,23 @@ fn running_fixture() -> Fixture {
 }
 
 #[test]
+fn instance_creation_builds_the_selected_template_images() {
+    let fixture = Fixture::new();
+    success(fixture.run(&["new-instance", "review", "-t", "website"]));
+    let calls = fs::read_to_string(fixture.home.join("docker-calls")).unwrap();
+    let startup = calls
+        .lines()
+        .find(|line| line.contains("--project-name cli-test-review") && line.contains(" up "))
+        .unwrap();
+    assert!(
+        startup
+            .split_whitespace()
+            .any(|argument| argument == "--build"),
+        "{startup}"
+    );
+}
+
+#[test]
 fn stopping_starting_and_restarting_preserve_workspace_changes_and_report_completion() {
     let fixture = running_fixture();
     let checkout = fixture.home.join("workspaces/review/app");

@@ -34,6 +34,13 @@ pub(crate) fn prepare(config: &Config) -> Result<(), String> {
         &progress,
     )?;
     let mut connection = super::open(config)?;
+    // Inventory readers must not block startup writes while holding read snapshots.
+    let journal_mode: String = connection
+        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        return Err("Tandem database requires SQLite write-ahead logging".into());
+    }
     if connection
         .query_row(
             "SELECT 1 FROM runtime_imports WHERE namespace = ?1",

@@ -43,6 +43,7 @@ Presentation layers adapt input and output. `AppService` is the sole application
 - SQLite owns local instance identity and ownership, preparation outcomes, launch snapshots, lifecycle receipts,
   retained activities, startup requests/outcomes, settings, timing history, and cross-process refresh revisions.
   Records are keyed by namespace and case-normalized instance name; state writes publish revisions in the same transaction.
+  Initialization enables write-ahead logging so read snapshots coexist with runtime writes.
 - The filesystem owns team-shareable templates, repositories, workspaces, locks, and private runtime artifacts.
   Resolved Compose snapshots are materialized atomically beneath `runtime/<namespace>/<instance>/compose.json`
   with private permissions. SQLite snapshots repair altered or missing regular materializations; unsafe paths fail closed.
@@ -126,7 +127,9 @@ not a sandbox against privileged containers or external Docker resources.
 
 Creation and instance startup apply the selected template. Existing-container restart and service start use
 saved launch-time readiness assertions; imported launches without a historical manifest require current
-template assertions. Verified inventory and instance cleanup do not require the template files to exist.
+template assertions. Startup builds services that declare Compose build configurations with Docker's layer
+cache before starting containers; instance-name reuse can retain image tags from a previous template.
+Verified inventory and instance cleanup do not require the template files to exist.
 MCP initialization directs clients to bundled placement rules alongside preserved editable guidance;
 upgrades distribute the baseline without replacing user-owned instructions.
 

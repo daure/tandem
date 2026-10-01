@@ -107,7 +107,6 @@ fn completed_startup_retains_its_outcome_and_bounded_progress() {
     let writer = Writer {
         config: config.clone(),
         record: Mutex::new(record.clone()),
-        error: Mutex::new(None),
     };
     for index in 0..40 {
         writer.progress(format!("Step {index}"));
@@ -135,6 +134,53 @@ fn completed_startup_retains_its_outcome_and_bounded_progress() {
     );
     forget(&config, "Review").unwrap();
     assert!(records(&config).unwrap().is_empty());
+}
+
+#[test]
+fn successful_completion_persists_after_a_progress_write_error() {
+    let (_directory, config, record) = fixture();
+    write(&config, &record).unwrap();
+    let writer = Writer {
+        config: config.clone(),
+        record: Mutex::new(record.clone()),
+    };
+    let connection = rusqlite::Connection::open(config.home.join("settings.sqlite3")).unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_progress BEFORE UPDATE ON runtime_records WHEN NEW.kind = 'startup' BEGIN SELECT RAISE(ABORT, 'progress write unavailable'); END;").unwrap();
+    writer.workspace_ready();
+    connection
+        .execute_batch("DROP TRIGGER reject_progress;")
+        .unwrap();
+    let mut operation = record.operation;
+    operation.state = OperationState::Succeeded;
+    writer.finish(operation).unwrap();
+    let completed = read(&config, "Review").unwrap().unwrap();
+    assert_eq!(completed.operation.state, OperationState::Succeeded);
+    assert!(completed.operation.error.is_none());
+    assert!(completed.workspace_ready);
+}
+
+#[test]
+fn completion_write_failures_preserve_the_last_durable_startup_record() {
+    let (_directory, config, record) = fixture();
+    write(&config, &record).unwrap();
+    let writer = Writer {
+        config: config.clone(),
+        record: Mutex::new(record.clone()),
+    };
+    let connection = rusqlite::Connection::open(config.home.join("settings.sqlite3")).unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_completion BEFORE UPDATE ON runtime_records WHEN NEW.kind = 'startup' BEGIN SELECT RAISE(ABORT, 'completion write unavailable'); END;").unwrap();
+    let mut operation = record.operation;
+    operation.state = OperationState::Succeeded;
+    assert!(
+        writer
+            .finish(operation)
+            .unwrap_err()
+            .contains("completion write unavailable")
+    );
+    assert_eq!(
+        read(&config, "Review").unwrap().unwrap().operation.state,
+        OperationState::Running
+    );
 }
 
 #[test]

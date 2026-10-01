@@ -116,8 +116,9 @@ branch by default; push a feature branch if needed. Uncommitted source edits are
 
 Images build from source-repository Dockerfiles; application processes read code from workspace
 clones. Edit workspace assets and refresh the browser. Restart the affected container after Python
-code changes. To change dependencies or image build rules, edit the source repository and explicitly
-rebuild the template's image. Template infrastructure is shared across instances; database volumes,
+code changes. To change dependencies or image build rules, edit the source repository and start the
+instance from its template again; startup builds images using Docker's layer cache. Template
+infrastructure is shared across instances; database volumes,
 Redis volumes, and source workspaces are instance-specific.
 
 The web fixture source repositories also have standalone Compose infrastructure. From that repository,
@@ -161,3 +162,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -W error projects-generators/tests/live_smoke.
 The live smoke test creates its own temporary seeded fixture root and Docker namespace, exercises the
 real Tandem MCP boundary, and removes only its own runtime resources and volumes. It does not mutate
 the development fixtures. Run it with local Docker access; allow time for first-use image builds.
+Use `--image-reuse` for a focused check that reuses one instance name across Guestbook, Greetings,
+Mailroom, and Greetings while retaining Compose image tags between deletions.
+Use `--concurrent` to verify twelve simultaneous Greetings startups, durable completion records,
+and healthy gateway routes; it disables OpenCode history cleanup in its isolated fixture root.

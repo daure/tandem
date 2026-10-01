@@ -150,7 +150,6 @@ fn forget(config: &Config, name: &str) -> Result<(), String> {
 pub(crate) struct Writer {
     config: Config,
     record: Mutex<Record>,
-    error: Mutex<Option<String>>,
 }
 
 impl Writer {
@@ -163,9 +162,8 @@ impl Writer {
         if let Err(error) = update(&self.config, &record) {
             crate::diagnostics::record_error(
                 "cannot persist startup",
-                &std::io::Error::other(error.clone()),
+                &std::io::Error::other(error),
             );
-            *self.error.lock().unwrap_or_else(|error| error.into_inner()) = Some(error);
         }
     }
 
@@ -189,16 +187,7 @@ impl Writer {
         self.update(|record| record.opencode_result = Some(result));
     }
 
-    pub fn finish(&self, mut operation: Operation) -> Result<(), String> {
-        if let Some(error) = self
-            .error
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
-        {
-            operation.state = OperationState::Failed;
-            operation.error = Some(format!("Startup status could not be persisted: {error}"));
-        }
+    pub fn finish(&self, operation: Operation) -> Result<(), String> {
         let mut record = self
             .record
             .lock()

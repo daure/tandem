@@ -85,6 +85,39 @@ fn instance_records_are_namespace_scoped_and_publish_atomic_revisions() {
 }
 
 #[test]
+fn runtime_writes_commit_while_an_observer_retains_a_read_snapshot() {
+    let (_home, config, _template, _instance) = fixture();
+    prepare(&config).unwrap();
+    save(&config, "Review", Kind::Journal, "original").unwrap();
+    let mut reader = open(&config).unwrap();
+    let snapshot = reader.transaction().unwrap();
+    let original: String = snapshot
+        .query_row(
+            "SELECT payload FROM runtime_records WHERE kind = 'journal'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(original, "original");
+    let (sent, received) = std::sync::mpsc::channel();
+    let writer_config = config.clone();
+    let writer = std::thread::spawn(move || {
+        sent.send(save(&writer_config, "Review", Kind::Journal, "updated"))
+            .unwrap();
+    });
+    let committed = received.recv_timeout(Duration::from_secs(1));
+    snapshot.rollback().unwrap();
+    writer.join().unwrap();
+    committed
+        .expect("runtime write waited for the observer snapshot")
+        .unwrap();
+    assert_eq!(
+        load(&config, "Review", Kind::Journal).unwrap().as_deref(),
+        Some("updated")
+    );
+}
+
+#[test]
 fn startup_updates_require_the_current_operation_and_preserve_deleted_records() {
     let (_home, config, _template, _instance) = fixture();
     let first = json!({"operation":{"id":"1-1"}}).to_string();

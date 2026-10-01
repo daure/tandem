@@ -175,7 +175,6 @@ pub(crate) fn claim(
     let writer = Arc::new(Writer {
         config: config.clone(),
         record: Mutex::new(record.clone()),
-        error: Mutex::new(None),
     });
     Ok(Claimed {
         record,
