@@ -78,7 +78,7 @@ def main():
             terminal.expect(pexpect.EOF, timeout=10)
         finally:
             terminal.close(force=True)
-            rendered = Path(directory, "templates", "website", f".tandem-{namespace}-ui-review.compose.json")
+            rendered = Path(directory, "runtime", namespace, "ui-review", "compose.json")
             gateway = Path(directory, "gateway", "compose.json")
             for project, path in [(f"{namespace}-ui-review", rendered), (f"{namespace}-gateway", gateway)]:
                 if path.is_file():

@@ -120,7 +120,7 @@ pub(super) fn template_with(
         }
     }
     for plan in &plans {
-        remover.remove_instance(plan)?;
+        remover.remove_instance(name, plan)?;
         journal::forget(config, &plan.name)?;
     }
     if !remover.template_containers(&directory)?.is_empty() {
@@ -164,7 +164,7 @@ fn remove_workspace_template(
     for instance_name in &names {
         remaining(deadline)?;
         lifecycle::remove_workspace(config, instance_name, progress.clone())?;
-        ownership::forget(config, name, instance_name)?;
+        lifecycle::remove_rendered_compose(config, name, instance_name, progress.clone())?;
         journal::forget(config, instance_name)?;
     }
     remaining(deadline)?;
@@ -264,7 +264,7 @@ impl<F: FnMut(Command, Duration, Option<Progress>) -> Result<String, String>> Re
         })
     }
 
-    fn remove_instance(&mut self, plan: &InstancePlan) -> Result<(), String> {
+    fn remove_instance(&mut self, template: &str, plan: &InstancePlan) -> Result<(), String> {
         (self.progress)(format!("Deleting instance {} and its data", plan.name));
         if !plan.containers.is_empty() {
             self.command(
@@ -292,7 +292,14 @@ impl<F: FnMut(Command, Duration, Option<Progress>) -> Result<String, String>> Re
                 ));
             }
         }
-        lifecycle::remove_workspace(self.config, &plan.name, self.progress.clone())
+        lifecycle::remove_workspace(self.config, &plan.name, self.progress.clone())?;
+        lifecycle::remove_rendered_compose(
+            self.config,
+            template,
+            &plan.name,
+            self.progress.clone(),
+        )?;
+        Ok(())
     }
 }
 

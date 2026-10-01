@@ -8,6 +8,7 @@ fn fixture() -> (tempfile::TempDir, Config, Instance) {
         name: "review".into(),
         template: "website".into(),
         template_directory: config.templates.join("website").display().to_string(),
+        workspace: config.workspaces.join("review").display().to_string(),
         project: config.project("review"),
         services: vec![InstanceService {
             name: "web".into(),
@@ -138,9 +139,15 @@ fn rendered_launch_topology_is_read_without_using_edited_template_configuration(
         (compose::WORKSPACE): app.workspace, (compose::ROLE): "service"
     });
     let model = json!({"name": app.project, "services": {"web": {"labels": labels, "deploy": {"replicas": 2}}}});
-    fs::write(
-        directory.join(format!(".tandem-{}-review.compose.json", config.namespace)),
-        serde_json::to_vec(&model).unwrap(),
+    fs::write(directory.join("tandem.json"), "{}").unwrap();
+    let template = crate::environments::templates::get(&config, "website").unwrap();
+    let snapshot =
+        runtime_db::launch::Snapshot::new(&config, &template, "review", model.to_string());
+    runtime_db::save(
+        &config,
+        "review",
+        Kind::Launch,
+        &snapshot.encode(&config).unwrap(),
     )
     .unwrap();
     fs::write(directory.join("compose.yaml"), "services: {}").unwrap();

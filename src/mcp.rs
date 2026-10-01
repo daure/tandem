@@ -223,7 +223,7 @@ impl Transport<RoleServer> for TolerantStdioTransport {
 #[tool_router]
 impl McpServer {
     #[tool(
-        description = "Read editable agent guidance, absolute instructions/template/workspace paths, and the generated tandem.json manifest_schema. Call this before using Tandem."
+        description = "Read bundled core_guidance and editable markdown guidance, absolute instructions/template/workspace paths, and the generated tandem.json manifest_schema. Call this before using Tandem."
     )]
     async fn get_instructions(&self) -> Result<Json<Instructions>, String> {
         self.service.get_instructions().await.map(Json)
@@ -323,7 +323,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Start only the named service's existing containers. Preserves data and configuration; leaves dependencies and the gateway untouched. One-shot jobs are refused. Requires confirmed=true. Returns a background operation with a ten-minute readiness budget for running state, configured healthchecks and gateway content assertions. Routed services require current template readiness configuration."
+        description = "Start only the named service's existing containers. Preserves data and configuration; leaves dependencies and the gateway untouched. One-shot jobs are refused. Requires confirmed=true. Returns a background operation with a ten-minute readiness budget for running state, configured healthchecks and saved launch-time gateway assertions. Imported instances without saved assertions require current template readiness configuration."
     )]
     async fn start_service(
         &self,
@@ -347,7 +347,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Restart an instance's existing long-running containers, including stopped ones. Preserves data and configuration, skips one-shot jobs and the shared gateway. Requires confirmed=true. Returns a background operation with a ten-minute budget; success requires targeted containers to run and pass configured healthchecks and gateway content assertions. Routed services require current template readiness configuration; services without checks are verified only as running."
+        description = "Restart an instance's existing long-running containers, including stopped ones. Preserves data and configuration, skips one-shot jobs and the shared gateway. Requires confirmed=true. Returns a background operation with a ten-minute budget; success requires targeted containers to run and pass configured healthchecks and saved launch-time gateway assertions. Imported instances without saved assertions require current template readiness configuration; services without checks are verified only as running."
     )]
     async fn restart_instance(
         &self,
@@ -359,7 +359,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Restart only the named service's existing containers within an instance. Leaves other services and dependencies untouched; preserves data and configuration. One-shot jobs are refused. Requires confirmed=true. Returns a background operation with a ten-minute budget; success requires targeted containers to run and pass configured healthchecks and gateway content assertions. Routed services require current template readiness configuration; services without checks are verified only as running."
+        description = "Restart only the named service's existing containers within an instance. Leaves other services and dependencies untouched; preserves data and configuration. One-shot jobs are refused. Requires confirmed=true. Returns a background operation with a ten-minute budget; success requires targeted containers to run and pass configured healthchecks and saved launch-time gateway assertions. Imported instances without saved assertions require current template readiness configuration; services without checks are verified only as running."
     )]
     async fn restart_service(
         &self,
@@ -392,7 +392,9 @@ impl McpServer {
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            instructions: Some("Call get_instructions before any other MCP calls.".into()),
+            instructions: Some(
+                "Call get_instructions before any other MCP calls. Read both core_guidance and markdown; ask the user before acting if they conflict.".into(),
+            ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }

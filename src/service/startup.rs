@@ -73,6 +73,7 @@ impl AppService {
     ) -> Result<(), String> {
         let mut config = Config::from_env()?;
         config.operation_id = Some(id.into());
+        crate::environments::runtime_db::require_ready(&config)?;
         let claimed = startup::claim(&config, name, id, instance_fd, lease_fd)?;
         let service = Self::from_config(config).map_err(|error| error.to_string())?;
         service.environments.adopt_startup(&claimed.record);

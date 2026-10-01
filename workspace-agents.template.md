@@ -29,3 +29,10 @@ To run a command in a running service, substitute its service name and code path
 For replicated services, use `exec --index N` to select a replica.
 Omit `-w CODE_PATH` for services without a code path.
 Building or recreating services also requires the instance's rendered Compose configuration.{{/services}}{{http_section}}
+
+## File placement
+
+Keep shared template assets read-only and secrets in private external files.
+Put instance-local caches, temporary files, logs, and data under workspace `.local/{cache,tmp,logs,data}`
+or project-owned named volumes. This is a convention; configure tools and mounts explicitly.
+Ask before using shared storage and agree on its cleanup policy.

@@ -14,6 +14,7 @@ mod ownership;
 mod removal;
 mod repositories;
 mod resources;
+pub(crate) mod runtime_db;
 pub(crate) mod sound;
 pub(crate) mod startup;
 mod stats;
@@ -439,6 +440,7 @@ impl Environments {
     pub fn instructions(&self) -> Result<Instructions, String> {
         Ok(Instructions {
             file: self.config.instructions.display().to_string(),
+            core_guidance: include_str!("../../agent-core-guidance.md").into(),
             markdown: config::read_text(&self.config.instructions)?,
             workspace_agents_template: self
                 .config

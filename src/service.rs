@@ -56,7 +56,9 @@ pub(crate) struct ServiceStatus {
 
 impl AppService {
     pub(crate) fn initialize() -> Result<Self, Box<dyn Error>> {
-        Self::from_config(crate::environments::config::Config::from_env()?)
+        let config = crate::environments::config::Config::from_env()?;
+        crate::environments::runtime_db::prepare(&config)?;
+        Self::from_config(config)
     }
 
     fn from_config(config: crate::environments::config::Config) -> Result<Self, Box<dyn Error>> {

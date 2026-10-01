@@ -46,9 +46,7 @@ fn stopping_starting_and_restarting_preserve_workspace_changes_and_report_comple
     let fixture = running_fixture();
     let checkout = fixture.home.join("workspaces/review/app");
     fs::write(checkout.join("file.txt"), "Local edits").unwrap();
-    let rendered = fixture
-        .home
-        .join("templates/website/.tandem-cli-test-review.compose.json");
+    let rendered = fixture.home.join("runtime/cli-test/review/compose.json");
 
     let stopped = success(fixture.run(&["stop-instance", "review"]));
     assert_eq!(stopped, "Instance review stopped\n");

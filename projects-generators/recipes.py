@@ -177,7 +177,7 @@ def create_repositories(root):
     mailroom(root)
     local_repository(root)
     for name in REPOSITORIES:
-        write(root / name / ".gitignore", ".env\n.venv/\n__pycache__/\n*.pyc\n.tandem-*.compose.json\n")
+        write(root / name / ".gitignore", ".env\n.venv/\n__pycache__/\n*.pyc\n")
         if name == "repo-only":
             continue
         write(root / name / "README.md", f"""# {name}

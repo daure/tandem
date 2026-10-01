@@ -216,13 +216,11 @@ fn requested_client_launch_and_cloning_survive_the_initiating_cli_exit() {
     client.kill().unwrap();
     client.wait().unwrap();
     fs::write(fixture.home.join("release-open"), "").unwrap();
-    let record_path = fixture.home.join("runtime/cli-test/review.startup.json");
     wait_until(|| {
-        let record: Value =
-            serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
+        let record = fixture.runtime_record("review", "startup").unwrap();
         record["operation"]["state"] != "running"
     });
-    let record: Value = serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
+    let record = fixture.runtime_record("review", "startup").unwrap();
     assert_eq!(record["operation"]["state"], "succeeded", "{record}");
     assert_eq!(record["opencode_result"], json!({"Ok": null}));
     assert!(workspace.join("app/file.txt").is_file());
@@ -238,10 +236,7 @@ fn worker_death_is_reported_as_interrupted_after_reconnecting() {
     let mut client = Client::new(&fixture);
     let operation = start(&mut client);
     wait_until(|| fixture.home.join("configured").exists());
-    let record: Value = serde_json::from_str(
-        &fs::read_to_string(fixture.home.join("runtime/cli-test/review.startup.json")).unwrap(),
-    )
-    .unwrap();
+    let record = fixture.runtime_record("review", "startup").unwrap();
     let pid = record["owner_pid"].as_i64().unwrap() as i32;
     assert!(pid > 0);
     assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);

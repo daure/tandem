@@ -3,7 +3,17 @@ use crate::{
     mcp::{NameInput, UpdateTemplateManifestInput},
     store::environments::Manifest,
 };
+use rmcp::ServerHandler;
 use rmcp::handler::server::wrapper::Parameters;
+
+#[test]
+fn initialize_requires_both_guidance_fields_and_user_resolution_of_conflicts() {
+    let server = McpServer::new(AppService::for_tests());
+    let instructions = server.get_info().instructions.unwrap();
+    assert!(instructions.contains("Call get_instructions before any other MCP calls."));
+    assert!(instructions.contains("Read both core_guidance and markdown"));
+    assert!(instructions.contains("ask the user before acting if they conflict"));
+}
 
 #[test]
 fn instruction_payload_includes_current_schema_and_preserves_editable_guidance() {
@@ -12,6 +22,10 @@ fn instruction_payload_includes_current_schema_and_preserves_editable_guidance()
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
         let instructions = server.get_instructions().await.unwrap().0;
+        let baseline = include_str!("../../../agent-core-guidance.md");
+        assert_eq!(instructions.core_guidance, baseline);
+        assert!(baseline.contains(".local/cache"));
+        assert!(baseline.contains("secrets in private external files"));
         assert_eq!(
             instructions.manifest_schema,
             serde_json::to_value(schemars::schema_for!(Manifest)).unwrap()
@@ -29,14 +43,25 @@ fn instruction_payload_includes_current_schema_and_preserves_editable_guidance()
             instructions.manifest_schema["$defs"]["Route"]["properties"]["strip_prefix"]["default"],
             true
         );
-        std::fs::write(&instructions.file, "# Custom guidance").unwrap();
-        let second = server.get_instructions().await.unwrap().0;
-        assert_eq!(second.markdown, "# Custom guidance");
-        assert_eq!(second.manifest_schema, instructions.manifest_schema);
-        assert_eq!(
-            std::fs::read_to_string(&instructions.file).unwrap(),
-            "# Custom guidance"
-        );
+        for markdown in [
+            "# Using Tandem\n\nPreserve Tandem-generated `.tandem-*` files for ownership checks and cleanup.\n",
+            "# Custom guidance\r\n\r\nUse team conventions.  \r\n",
+        ] {
+            std::fs::write(&instructions.file, markdown).unwrap();
+            let second = server.get_instructions().await.unwrap().0;
+            assert_eq!(second.markdown, markdown);
+            assert_eq!(second.core_guidance, baseline);
+            assert_eq!(second.file, instructions.file);
+            assert_eq!(second.manifest_schema, instructions.manifest_schema);
+            assert_eq!(
+                serde_json::to_value(&second).unwrap()["core_guidance"],
+                baseline
+            );
+            assert_eq!(
+                std::fs::read(&instructions.file).unwrap(),
+                markdown.as_bytes()
+            );
+        }
     });
 }
 

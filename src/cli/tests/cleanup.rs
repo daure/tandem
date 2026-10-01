@@ -16,9 +16,7 @@ fn damaged_workspace() -> Fixture {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let path = fixture.home.join("runtime/cli-test/review.json");
-    let mut record: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let mut record = fixture.runtime_record("review", "journal").unwrap();
     let expected = record["expected"].as_object_mut().unwrap();
     expected.remove("workspace_only");
     expected.remove("repositories");
@@ -30,7 +28,7 @@ fn damaged_workspace() -> Fixture {
     record["activity"]["action"] = "delete_instance".into();
     record["activity"]["error"] = "instance not found".into();
     record["activity"]["finished"] = true.into();
-    fs::write(path, record.to_string()).unwrap();
+    fixture.set_runtime_record("review", "journal", &record);
     fs::write(
         fixture.home.join("workspaces/review/notes.md"),
         "workspace notes",
@@ -52,13 +50,8 @@ fn deletion_recovers_owned_workspaces_when_the_runtime_kind_is_missing() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(!fixture.home.join("workspaces/review").exists());
-    assert!(!fixture.home.join("runtime/cli-test/review.json").exists());
-    assert!(
-        !fixture
-            .home
-            .join("templates/website/.tandem-cli-test-review.owner.json")
-            .exists()
-    );
+    assert!(fixture.runtime_record("review", "journal").is_none());
+    assert!(fixture.runtime_record("review", "ownership").is_none());
     assert_eq!(
         fs::read_to_string(other.join("notes.md")).unwrap(),
         "keep me"
@@ -112,23 +105,19 @@ fn cleanup_recovery_preserves_work_when_ownership_or_docker_evidence_is_unavaila
         "symlinked-workspace",
     ] {
         let fixture = damaged_workspace();
-        let receipt = fixture
-            .home
-            .join("templates/website/.tandem-cli-test-review.owner.json");
         match failure {
-            "missing-receipt" => fs::remove_file(&receipt).unwrap(),
+            "missing-receipt" => fixture.remove_runtime_record("review", "ownership"),
             "foreign-receipt" => {
-                let mut owner: serde_json::Value = serde_json::from_str(&fs::read_to_string(&receipt).unwrap()).unwrap();
+                let mut owner = fixture.runtime_record("review", "ownership").unwrap();
                 owner["namespace"] = "other".into();
-                fs::write(&receipt, owner.to_string()).unwrap();
+                fixture.set_runtime_record("review", "ownership", &owner);
             }
             "docker-unavailable" => fs::write(fixture.bin.join("docker"), "#!/bin/sh\nexit 99\n").unwrap(),
             "unmanaged-container" => fs::write(fixture.bin.join("docker"), "#!/bin/sh\ncase \"$*\" in *com.docker.compose.project=cli-test-review*) printf 'foreign-container\\n';; esac\n").unwrap(),
             "foreign-workspace" => {
-                let path = fixture.home.join("runtime/cli-test/review.json");
-                let mut record: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                let mut record = fixture.runtime_record("review", "journal").unwrap();
                 record["expected"]["workspace"] = fixture.source.display().to_string().into();
-                fs::write(path, record.to_string()).unwrap();
+                fixture.set_runtime_record("review", "journal", &record);
             }
             "symlinked-workspace" => {
                 let workspace = fixture.home.join("workspaces/review");
@@ -144,6 +133,6 @@ fn cleanup_recovery_preserves_work_when_ownership_or_docker_evidence_is_unavaila
             fs::read_to_string(fixture.home.join("workspaces/review/notes.md")).unwrap(),
             "workspace notes"
         );
-        assert!(fixture.home.join("runtime/cli-test/review.json").exists());
+        assert!(fixture.runtime_record("review", "journal").is_some());
     }
 }

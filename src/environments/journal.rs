@@ -1,17 +1,12 @@
-use std::{
-    collections::BTreeMap,
-    fs,
-    io::Write,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, fs, time::Instant};
 
 use serde::{Deserialize, Serialize};
 
 use super::{
     command::{Progress, docker, remaining, run},
-    config::{Config, read_text},
+    config::Config,
     gateway,
+    runtime_db::{self, Kind},
 };
 use crate::store::environments::{
     Activity, ContainerState, Instance, InstanceService, validate_instance_name,
@@ -47,69 +42,77 @@ pub(super) fn now() -> u64 {
     chrono::Utc::now().timestamp().max(0) as u64
 }
 
-pub(super) fn directory(config: &Config) -> Result<PathBuf, String> {
-    let directory = config.home.join("runtime").join(&config.namespace);
-    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    if !fs::canonicalize(&directory)
-        .map_err(|error| error.to_string())?
-        .starts_with(&config.home)
-    {
-        return Err("runtime journal escapes Tandem home".into());
-    }
-    Ok(directory)
-}
-
-fn path(config: &Config, name: &str) -> Result<PathBuf, String> {
-    validate_instance_name(name)?;
-    Ok(directory(config)?.join(format!("{}.json", name.to_ascii_lowercase())))
-}
-
 fn read(config: &Config, name: &str) -> Result<Record, String> {
-    let path = path(config, name)?;
-    match fs::symlink_metadata(&path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Record::default()),
-        Err(error) => return Err(error.to_string()),
-        Ok(metadata) if !metadata.file_type().is_file() => {
-            return Err("runtime journal must be a regular file".into());
-        }
-        Ok(_) => {}
-    }
-    serde_json::from_str(&read_text(&path)?).map_err(|error| format!("runtime journal: {error}"))
+    runtime_db::load(config, name, Kind::Journal)?
+        .map(|text| {
+            serde_json::from_str(&text).map_err(|error| format!("runtime journal: {error}"))
+        })
+        .transpose()
+        .map(|record| record.unwrap_or_default())
 }
 
 fn write(config: &Config, name: &str, record: &Record) -> Result<(), String> {
-    let path = path(config, name)?;
-    let mut file = tempfile::NamedTempFile::new_in(path.parent().ok_or("invalid journal path")?)
-        .map_err(|error| error.to_string())?;
-    serde_json::to_writer(file.as_file_mut(), record).map_err(|error| error.to_string())?;
-    if file
-        .as_file()
-        .metadata()
-        .map_err(|error| error.to_string())?
-        .len()
-        > 262_144
-    {
-        return Err("runtime journal exceeds 256 KiB; reduce the instance topology or retained error output".into());
-    }
-    file.flush()
-        .and_then(|()| file.as_file().sync_all())
-        .map_err(|error| error.to_string())?;
-    file.persist(path).map_err(|error| error.to_string())?;
-    publish(config);
-    Ok(())
+    let text = encode(record)?;
+    runtime_db::save(config, name, Kind::Journal, &text)
 }
 
-pub(super) fn publish(config: &Config) {
-    let result = (|| -> rusqlite::Result<()> {
-        let connection = rusqlite::Connection::open(config.home.join("settings.sqlite3"))?;
-        connection.busy_timeout(Duration::from_secs(2))?;
-        connection.execute_batch("CREATE TABLE IF NOT EXISTS refresh_revisions (scope TEXT PRIMARY KEY, revision INTEGER NOT NULL)")?;
-        connection.execute("INSERT INTO refresh_revisions(scope,revision) VALUES (?1,1) ON CONFLICT(scope) DO UPDATE SET revision=revision+1", [format!("instances:{}", config.namespace)])?;
-        Ok(())
-    })();
-    if let Err(error) = result {
-        crate::diagnostics::record_error("cannot publish runtime journal", &error);
+fn encode(record: &Record) -> Result<String, String> {
+    let text = serde_json::to_string(record).map_err(|error| error.to_string())?;
+    if text.len() > 262_144 {
+        return Err("runtime journal exceeds 256 KiB; reduce the instance topology or retained error output".into());
     }
+    Ok(text)
+}
+
+pub(super) fn validate_legacy(
+    config: &Config,
+    key: &str,
+    text: &str,
+) -> Result<Option<Instance>, String> {
+    let record: Record = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    if let Some(expected) = &record.expected {
+        workspaces::validate(config, &expected.name, expected)?;
+        if expected.name.to_ascii_lowercase() != key {
+            return Err("legacy journal name mismatch".into());
+        }
+    }
+    if let Some(activity) = &record.activity {
+        validate_instance_name(&activity.name)?;
+        if activity.name.to_ascii_lowercase() != key {
+            return Err("legacy activity name mismatch".into());
+        }
+    }
+    Ok(record.expected)
+}
+
+pub(super) fn record_launch(
+    config: &Config,
+    snapshot: &runtime_db::launch::Snapshot,
+    services: Vec<InstanceService>,
+    description: &str,
+) -> Result<(), String> {
+    let mut record = read(config, &snapshot.name)?;
+    record.expected = Some(Instance {
+        name: snapshot.name.clone(),
+        description: description.into(),
+        template: snapshot.template.clone(),
+        template_directory: snapshot.directory.display().to_string(),
+        workspace: config.workspaces.join(&snapshot.name).display().to_string(),
+        project: config.project(&snapshot.name),
+        services,
+        ..Default::default()
+    });
+    if let Some(activity) = &mut record.activity {
+        activity.template = Some(snapshot.template.clone());
+    }
+    record.whole_stop.clear();
+    let journal = encode(&record)?;
+    let launch = snapshot.encode(config)?;
+    runtime_db::save_many(
+        config,
+        &snapshot.name,
+        &[(Kind::Journal, &journal), (Kind::Launch, &launch)],
+    )
 }
 
 pub(super) struct ActivityGuard<'a> {
@@ -163,10 +166,7 @@ impl<'a> ActivityGuard<'a> {
             activity.finished = true;
             activity.error = result.as_ref().err().cloned();
             if activity.action == "delete_instance" && result.is_ok() {
-                super::startup::forget(self.config, &self.name)?;
-                fs::remove_file(path(self.config, &self.name)?)
-                    .map_err(|error| error.to_string())?;
-                publish(self.config);
+                forget(self.config, &self.name)?;
                 self.finished = true;
                 return result;
             }
@@ -199,6 +199,7 @@ impl Drop for ActivityGuard<'_> {
     }
 }
 
+#[cfg(test)]
 pub(super) fn topology(
     config: &Config,
     template: &str,
@@ -273,29 +274,8 @@ pub(super) fn readiness_passed(config: &Config, instance: &Instance) -> Result<(
 pub(super) fn enrich(config: &Config, instances: &mut [Instance]) -> Result<Vec<Activity>, String> {
     let mut activities = Vec::new();
     let mut records = BTreeMap::new();
-    for entry in fs::read_dir(directory(config)?).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        if entry
-            .file_name()
-            .to_string_lossy()
-            .ends_with(".startup.json")
-        {
-            continue;
-        }
-        if entry
-            .path()
-            .extension()
-            .is_none_or(|extension| extension != "json")
-        {
-            continue;
-        }
-        let name = entry
-            .path()
-            .file_stem()
-            .ok_or("invalid runtime record")?
-            .to_string_lossy()
-            .into_owned();
-        let mut record = read(config, &name)?;
+    for (name, text) in runtime_db::list(config, Kind::Journal)? {
+        let mut record: Record = serde_json::from_str(&text).map_err(|error| error.to_string())?;
         if let Some(activity) = &mut record.activity {
             if activity.active()
                 && (activity.deadline <= now()

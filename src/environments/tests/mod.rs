@@ -656,9 +656,7 @@ fn instance_deletion_removes_only_its_workspace() {
 #[test]
 fn instance_deletion_removes_its_rendered_compose_file() {
     let (_directory, config) = fixture();
-    let template = templates::create(&config, "website").unwrap();
-    let rendered =
-        std::path::Path::new(&template.directory).join(".tandem-tandem-test-review.compose.json");
+    let rendered = super::runtime_db::launch::path(&config, "review").unwrap();
     fs::write(&rendered, "{}").unwrap();
 
     lifecycle::remove_rendered_compose(&config, "website", "review", Arc::new(|_| {})).unwrap();

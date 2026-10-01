@@ -40,13 +40,22 @@ Presentation layers adapt input and output. `AppService` is the sole application
 ## State ownership
 
 - Docker labels and inspected containers are authoritative for container-backed runtime inventory.
-- Runtime journals own workspace-only identity, preparation outcomes, launch topology, and recoverable activity evidence.
-- The filesystem owns templates, generated configuration, repositories, and workspaces.
-- SQLite owns settings, startup history, and cross-process refresh revisions.
+- SQLite owns local instance identity and ownership, preparation outcomes, launch snapshots, lifecycle receipts,
+  retained activities, startup requests/outcomes, settings, timing history, and cross-process refresh revisions.
+  Records are keyed by namespace and case-normalized instance name; state writes publish revisions in the same transaction.
+- The filesystem owns team-shareable templates, repositories, workspaces, locks, and private runtime artifacts.
+  Resolved Compose snapshots are materialized atomically beneath `runtime/<namespace>/<instance>/compose.json`
+  with private permissions. SQLite snapshots repair altered or missing regular materializations; unsafe paths fail closed.
 - The latest startup request, bounded progress, and outcome per instance are durable runtime records.
 - Other operation history, resource samples, and transient UI state are process-local caches.
 
 An empty or failed Docker observation never proves that an instance is workspace-only. Recovery and cleanup require positive ownership evidence from the appropriate source.
+
+Ordinary service initialization imports validated legacy records before starting observers or workers.
+Import holds a migration gate and legacy operation locks, backs up originals privately, and commits records
+and its completion marker atomically. Conflicts block initialization. Imported-file cleanup is retryable;
+SQL remains authoritative after import. Old clients must be closed during the upgrade because they do not
+participate in the migration gate. Detached workers require their parent's completed import marker.
 
 ## Background work and refresh
 
@@ -106,6 +115,18 @@ independently of the displayed tree. Shared-server and child-process costs are o
 A template may describe a Compose environment, a repository-backed workspace, a guidance-only or files-only setup, or a blank workspace identified by an empty `tandem.json` object. New templates contain only that manifest. Instance execution kind is fixed when prepared because container-backed and workspace-only instances have different ownership evidence and lifecycle behavior.
 
 Template manifests declare core-managed repositories, routes, and setup jobs. Template authors own application-specific setup and prefix-aware routing. Tandem owns safe provisioning, generated workspace guidance, and lifecycle coordination.
+
+Templates contain shared recipes and static assets. Lifecycle operations write local instance state outside
+templates. Compose resolves relative assets from the template directory; writable binds, bind-backed local
+volumes, and local build-cache exports must not expose the templates root or its ancestors. Existing static
+template assets may be mounted read-only. This validation is a configuration guardrail for trusted templates,
+not a sandbox against privileged containers or external Docker resources.
+
+Creation and instance startup apply the selected template. Existing-container restart and service start use
+saved launch-time readiness assertions; imported launches without a historical manifest require current
+template assertions. Verified inventory and instance cleanup do not require the template files to exist.
+MCP initialization directs clients to bundled placement rules alongside preserved editable guidance;
+upgrades distribute the baseline without replacing user-owned instructions.
 
 Optional `tandem-files/` contents seed the workspace root before repository provisioning. Preparation
 preserves existing regular files and rejects symlinks, special files, reserved workspace paths, and

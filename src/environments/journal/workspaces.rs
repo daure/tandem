@@ -11,18 +11,23 @@ pub(in crate::environments) fn recorded(
 ) -> Result<Option<Instance>, String> {
     let expected = read(config, name)?.expected;
     if let Some(instance) = &expected {
-        validate_instance_name(&instance.name)?;
-        validate_name(&instance.template)?;
-        if instance.name != name
-            || instance.project != config.project(name)
-            || Path::new(&instance.workspace) != config.workspaces.join(name)
-            || Path::new(&instance.template_directory) != config.templates.join(&instance.template)
-            || instance.workspace_only && !instance.services.is_empty()
-        {
-            return Err(format!("instance record ownership mismatch for {name}"));
-        }
+        validate(config, name, instance)?;
     }
     Ok(expected)
+}
+
+pub(super) fn validate(config: &Config, name: &str, instance: &Instance) -> Result<(), String> {
+    validate_instance_name(&instance.name)?;
+    validate_name(&instance.template)?;
+    if instance.name != name
+        || instance.project != config.project(name)
+        || Path::new(&instance.workspace) != config.workspaces.join(name)
+        || Path::new(&instance.template_directory) != config.templates.join(&instance.template)
+        || instance.workspace_only && !instance.services.is_empty()
+    {
+        return Err(format!("instance record ownership mismatch for {name}"));
+    }
+    Ok(())
 }
 
 pub(in crate::environments) fn prepare(
@@ -98,22 +103,9 @@ pub(in crate::environments) fn workspace_instance(
 
 pub(in crate::environments) fn workspaces(config: &Config) -> Result<Vec<Instance>, String> {
     let mut instances = Vec::new();
-    for entry in std::fs::read_dir(super::directory(config)?).map_err(|error| error.to_string())? {
-        let path = entry.map_err(|error| error.to_string())?.path();
-        if path
-            .file_name()
-            .is_some_and(|name| name.to_string_lossy().ends_with(".startup.json"))
-        {
-            continue;
-        }
-        if path.extension().is_none_or(|extension| extension != "json") {
-            continue;
-        }
-        let key = path
-            .file_stem()
-            .ok_or("invalid instance record")?
-            .to_string_lossy();
-        let record = read(config, &key)?;
+    for (key, text) in super::runtime_db::list(config, super::Kind::Journal)? {
+        let record: super::Record =
+            serde_json::from_str(&text).map_err(|error| error.to_string())?;
         if let Some(expected) = record.expected.filter(|instance| instance.workspace_only) {
             if expected.name.to_ascii_lowercase() != key {
                 return Err("instance record name mismatch".into());
@@ -128,11 +120,14 @@ pub(in crate::environments) fn workspaces(config: &Config) -> Result<Vec<Instanc
 }
 
 pub(in crate::environments) fn forget(config: &Config, name: &str) -> Result<(), String> {
-    crate::environments::startup::forget(config, name)?;
-    match std::fs::remove_file(super::path(config, name)?) {
-        Ok(()) => super::publish(config),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.to_string()),
-    }
-    Ok(())
+    super::runtime_db::remove(
+        config,
+        name,
+        &[
+            super::Kind::Journal,
+            super::Kind::Startup,
+            super::Kind::Ownership,
+            super::Kind::Launch,
+        ],
+    )
 }

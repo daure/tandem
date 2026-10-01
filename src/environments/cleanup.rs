@@ -1,12 +1,19 @@
 use std::time::Instant;
 
 use super::{
-    command::Progress, config::Config, docker, journal, lifecycle, ownership, removal, startup,
+    command::Progress,
+    config::Config,
+    docker, journal, lifecycle, ownership, removal,
+    runtime_db::{self, Kind},
+    startup,
 };
 use crate::store::environments::{Instance, OperationState, StartupKind};
 
 pub(super) fn unclaimed_startup(config: &Config, name: &str) -> Result<bool, String> {
-    if journal::recorded(config, name)?.is_some() {
+    if journal::recorded(config, name)?.is_some()
+        || runtime_db::load(config, name, Kind::Ownership)?.is_some()
+        || runtime_db::load(config, name, Kind::Launch)?.is_some()
+    {
         return Ok(false);
     }
     let Some(record) = startup::read(config, name)? else {

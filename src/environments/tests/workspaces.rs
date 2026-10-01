@@ -198,15 +198,15 @@ fn launch_kind_changes_and_forged_workspace_ownership_are_rejected() {
     .unwrap();
     let compose = templates::get(&config, "local").unwrap();
     assert!(journal::prepare(&config, &compose, "review", None).is_err());
-    let record_path = config
-        .home
-        .join("runtime")
-        .join(&config.namespace)
-        .join("review.json");
-    let mut record: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
+    use crate::environments::runtime_db::{self, Kind};
+    let mut record: serde_json::Value = serde_json::from_str(
+        &runtime_db::load(&config, "review", Kind::Journal)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     record["expected"]["workspace"] = "/outside".into();
-    fs::write(record_path, record.to_string()).unwrap();
+    runtime_db::save(&config, "review", Kind::Journal, &record.to_string()).unwrap();
     assert!(journal::workspace_instance(&config, "review").is_err());
     assert!(
         lifecycle::delete(&config, "review", Arc::new(|_| {}), &|_, _| {

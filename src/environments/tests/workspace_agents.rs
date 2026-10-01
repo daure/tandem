@@ -82,7 +82,13 @@ fn workspace_guidance_lists_declared_and_discovered_repositories_and_service_acc
     }
     assert_eq!(
         text.split_once("## HTTP URLs\n\n").unwrap().1,
-        "- `web`: `http://localhost:9876/review/web/`\n\nThese URLs use a shared gateway; container ports are internal.\n"
+        concat!(
+            "- `web`: `http://localhost:9876/review/web/`\n\nThese URLs use a shared gateway; container ports are internal.\n",
+            "\n## File placement\n\nKeep shared template assets read-only and secrets in private external files.\n",
+            "Put instance-local caches, temporary files, logs, and data under workspace `.local/{cache,tmp,logs,data}`\n",
+            "or project-owned named volumes. This is a convention; configure tools and mounts explicitly.\n",
+            "Ask before using shared storage and agree on its cleanup policy.\n"
+        )
     );
     assert!(!text.contains("{{"));
     assert!(!text.contains("`repo-sync`"));
@@ -106,7 +112,7 @@ fn workspace_guidance_omits_http_content_when_no_service_has_a_url() {
     assert!(text.contains("| — | `db` | — | — |"));
     assert!(text.contains("docker compose -p 'test-review' exec -T -w CODE_PATH SERVICE COMMAND"));
     assert!(text.contains("dependencies.\n\nVerify the running services"));
-    assert!(text.ends_with("Building or recreating services also requires the instance's rendered Compose configuration.\n"));
+    assert!(text.contains("Building or recreating services also requires the instance's rendered Compose configuration.\n"));
 }
 
 #[test]
@@ -136,16 +142,22 @@ fn rendered_compose(
         &mut model,
     )
     .unwrap();
-    let path = Path::new(&instance.template_directory).join(format!(
-        ".tandem-{}-{}.compose.json",
-        config.namespace, instance.name
-    ));
-    fs::write(
-        &path,
+    let snapshot = runtime_db::launch::Snapshot::new(
+        config,
+        &template,
+        &instance.name,
         serde_json::to_string(&model).unwrap().replace('$', "$$"),
+    );
+    runtime_db::save(
+        config,
+        &instance.name,
+        runtime_db::Kind::Launch,
+        &snapshot.encode(config).unwrap(),
     )
     .unwrap();
-    path
+    runtime_db::launch::materialize(config, &instance.name)
+        .unwrap()
+        .unwrap()
 }
 
 #[test]
@@ -326,14 +338,23 @@ fn repository_mappings_reject_another_instances_compose_artifact() {
     let (_directory, config, instance) = fixture();
     let workspace = Path::new(&instance.workspace);
     fs::create_dir_all(workspace.join("app/.git")).unwrap();
-    let path = rendered_compose(&config, &instance, serde_json::json!({"api": {}}));
-    let mut model: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    rendered_compose(&config, &instance, serde_json::json!({"api": {}}));
+    let mut snapshot = runtime_db::launch::load(&config, &instance.name)
+        .unwrap()
+        .unwrap();
+    let mut model: serde_json::Value = serde_json::from_str(&snapshot.source).unwrap();
     model["services"]["api"]["labels"]["io.tandem.instance"] = "other".into();
-    fs::write(&path, serde_json::to_string(&model).unwrap()).unwrap();
+    snapshot.source = model.to_string();
+    runtime_db::save(
+        &config,
+        &instance.name,
+        runtime_db::Kind::Launch,
+        &serde_json::to_string(&snapshot).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         generate(&config, &instance, &[]).unwrap_err(),
-        "rendered Compose repository mappings do not match this instance"
+        "launch snapshot ownership mismatch"
     );
     assert!(!workspace.join("AGENTS.md").exists());
 }

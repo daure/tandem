@@ -42,7 +42,8 @@ TUI with `tandem`.
    appears after every restarted container is running, its configured healthcheck passes, and its
    configured gateway content assertion succeeds. Restart has a ten-minute budget; failures produce
    an error notification. Services without healthchecks or routes are verified only as running.
-   Routed services require their current template readiness configuration. Applying template or image
+    Routed services use saved launch-time readiness assertions; imported instances without saved assertions
+    require current template readiness configuration. Applying template or image
    changes requires startup.
 
 Within an instance subtree, `s` and `r` target the selected service on service rows and the instance
@@ -152,8 +153,9 @@ networks, templates, and the gateway. Workspace-only instances are preserved wit
 `restart-instance` restarts existing long-running containers, including stopped ones, while preserving
 data and configuration and skipping setup jobs and the gateway. It waits up to ten minutes for
 configured healthchecks and route content assertions; services without checks are verified as running.
-Restart applies no template edits or builds. Routed services require their current template readiness
-configuration. Workspace-only instances have no restart targets; paused containers require unpausing.
+Restart applies no template edits or builds. Routed services use saved launch-time readiness assertions;
+imported instances without saved assertions require current template readiness configuration.
+Workspace-only instances have no restart targets; paused containers require unpausing.
 Invoking these lifecycle commands authorizes their scoped operations; failures exit nonzero.
 
 `new-instance` leaves an existing instance owned by the requested template unchanged, including when
@@ -193,7 +195,7 @@ CLI success confirms instance readiness and pane launch, not prompt delivery or 
 The companion reports submission failures in the new client and does not retry uncertain requests.
 
 `delete-instance` permanently removes the named instance's owned containers, workspace, private volumes,
-networks, rendered Compose file, and ownership receipt. It leaves templates, shared images, and the gateway intact.
+networks, private rendered Compose file, and local instance records. It leaves templates, shared images, and the gateway intact.
 `--headless` (also `-h`) launches deletion in a detached Tandem process and returns after that process starts.
 Inspect diagnostic logs or runtime state for the detached deletion result.
 
@@ -347,9 +349,8 @@ kind; use a new instance name to switch between workspace-only and container-bac
   config/                        # optional, edited by the agent
 ```
 
-Relative mounts, builds, env files, and scripts resolve against the template directory. Tandem renders
-a private `.tandem-<namespace>-<instance>.compose.json` beside the Compose file. The rendered artifact
-may contain secrets; exclude `.tandem-*.compose.json` and `.tandem-*.owner.json` from Git.
+Relative mounts, builds, env files, and scripts resolve against the template directory.
+Generated configuration and instance records live in Tandem's private local storage.
 
 `tandem-files/` seeds each instance workspace with its contents, including nested directories, hidden
 files, binary files, and file permissions. Copying runs after any creation-requested OpenCode pane
@@ -389,6 +390,36 @@ The template receives `TANDEM_INSTANCE`, `TANDEM_WORKSPACE`, `TANDEM_ORIGIN`, `T
 `TANDEM_GID`. When the local Branch instances setting is enabled, new instances also receive
 `TANDEM_BRANCH` set to their instance name. Put writable source checkouts and per-instance data under
 the workspace; template files are shared. Installed dependency trees and databases must be instance-specific.
+
+### Shared recipes and local state
+
+Keep `$TANDEM_HOME/templates` under Git for team-shareable recipes, scripts, static assets, and non-secret
+seed files. Instance ownership, preparation and lifecycle records, startup outcomes, and launch snapshots
+live in local `$TANDEM_HOME/settings.sqlite3`. Generated Compose files live in private
+`$TANDEM_HOME/runtime/<namespace>/<instance>/compose.json`; Docker supplies observed container state.
+
+Compose resolves relative paths from the template directory. Mount static template assets read-only.
+Tandem rejects writable binds and local bind-backed volumes exposing the templates root, its descendants,
+or ancestors, including symlink aliases. Missing template mount sources and local build-cache exports into
+templates are rejected. Trusted privileged containers and externally configured Docker resources still
+require care; this is not a container sandbox.
+
+Put package caches, temporary files, logs, and application data in the instance workspace or project-owned
+named volumes. Workspace `.local/{cache,tmp,logs,data}` is a convention, not automatic configuration.
+Set host cache paths to host absolute paths and container cache paths to mounted container paths.
+Shared caches require an explicit location, permissions, and retention policy. Keep secrets in private
+external files, even when an in-repository path would be ignored. Before creating an instance, use a private
+host temporary directory outside templates and repositories for experiments.
+
+Close old Tandem clients and workers before the first launch after upgrading storage. Initialization
+validates and imports legacy files under operation locks, retains private backups under `runtime`, and
+refuses conflicts or unverified ownership. Imported legacy files are removed when writable; read-only
+checkouts do not block import, and their cleanup is retried on later launches. SQLite remains authoritative
+after import. Existing application caches and data are user-owned and are not moved or removed automatically.
+
+MCP `get_instructions` returns bundled `core_guidance` alongside editable `markdown`. The placement baseline
+reaches installations with custom instructions without overwriting them; agents must ask before acting on
+conflicting guidance. Existing workspace `AGENTS.md` files remain user-owned.
 
 ### Repository provisioning
 

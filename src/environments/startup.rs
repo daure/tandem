@@ -1,14 +1,14 @@
 use std::{
-    fs,
-    io::Write,
-    path::PathBuf,
     sync::Mutex,
     time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
 
-use super::{Config, Environments, Job, Startup, gateway, journal};
+use super::{
+    Config, Environments, Job, Startup, gateway, journal,
+    runtime_db::{self, Kind},
+};
 use crate::store::environments::{
     Activity, Instance, InstanceService, Operation, OperationState, StartupKind,
     validate_instance_name,
@@ -81,23 +81,14 @@ fn lease(id: &str) -> String {
     format!("startup-{id}")
 }
 
-fn path(config: &Config, name: &str) -> Result<PathBuf, String> {
-    validate_instance_name(name)?;
-    Ok(journal::directory(config)?.join(format!("{}.startup.json", name.to_ascii_lowercase())))
+pub(crate) fn read(config: &Config, name: &str) -> Result<Option<Record>, String> {
+    runtime_db::load(config, name, Kind::Startup)?
+        .map(|text| decode(name, &text))
+        .transpose()
 }
 
-pub(crate) fn read(config: &Config, name: &str) -> Result<Option<Record>, String> {
-    let path = path(config, name)?;
-    match fs::symlink_metadata(&path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
-        Ok(metadata) if !metadata.file_type().is_file() => {
-            return Err("startup record must be a regular file".into());
-        }
-        Ok(_) => {}
-    }
-    let record: Record = serde_json::from_str(&super::config::read_text(&path)?)
-        .map_err(|error| error.to_string())?;
+pub(super) fn decode(name: &str, text: &str) -> Result<Record, String> {
+    let record: Record = serde_json::from_str(text).map_err(|error| error.to_string())?;
     validate_instance_name(&record.operation.name)?;
     crate::store::environments::validate_name(
         record
@@ -118,52 +109,42 @@ pub(crate) fn read(config: &Config, name: &str) -> Result<Option<Record>, String
     {
         return Err("invalid startup record identity".into());
     }
-    Ok(Some(record))
+    Ok(record)
 }
 
 fn write(config: &Config, record: &Record) -> Result<(), String> {
-    let path = path(config, &record.operation.name)?;
-    let bytes = serde_json::to_vec(record).map_err(|error| error.to_string())?;
-    if bytes.len() > 262_144 {
+    let text = encode(record)?;
+    runtime_db::save(config, &record.operation.name, Kind::Startup, &text)
+}
+
+fn encode(record: &Record) -> Result<String, String> {
+    let text = serde_json::to_string(record).map_err(|error| error.to_string())?;
+    if text.len() > 262_144 {
         return Err("startup record exceeds 256 KiB".into());
     }
-    let mut file = tempfile::NamedTempFile::new_in(path.parent().ok_or("invalid startup path")?)
-        .map_err(|error| error.to_string())?;
-    file.write_all(&bytes)
-        .and_then(|()| file.as_file().sync_all())
-        .map_err(|error| error.to_string())?;
-    file.persist(path).map_err(|error| error.to_string())?;
-    journal::publish(config);
-    Ok(())
+    Ok(text)
+}
+
+fn update(config: &Config, record: &Record) -> Result<(), String> {
+    runtime_db::update_startup(
+        config,
+        &record.operation.name,
+        &record.operation.id,
+        &encode(record)?,
+    )
 }
 
 pub(crate) fn records(config: &Config) -> Result<Vec<Record>, String> {
     let mut records = Vec::new();
-    for entry in fs::read_dir(journal::directory(config)?).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let name = entry.file_name();
-        let Some(name) = name
-            .to_str()
-            .and_then(|name| name.strip_suffix(".startup.json"))
-        else {
-            continue;
-        };
-        if let Some(record) = read(config, name)? {
-            records.push(record.observe(config)?);
-        }
+    for (name, text) in runtime_db::list(config, Kind::Startup)? {
+        records.push(decode(&name, &text)?.observe(config)?);
     }
     Ok(records)
 }
 
-pub(super) fn forget(config: &Config, name: &str) -> Result<(), String> {
-    match fs::remove_file(path(config, name)?) {
-        Ok(()) => {
-            journal::publish(config);
-            Ok(())
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
+#[cfg(test)]
+fn forget(config: &Config, name: &str) -> Result<(), String> {
+    runtime_db::remove(config, name, &[Kind::Startup])
 }
 
 pub(crate) struct Writer {
@@ -173,13 +154,13 @@ pub(crate) struct Writer {
 }
 
 impl Writer {
-    fn update(&self, update: impl FnOnce(&mut Record)) {
+    fn update(&self, change: impl FnOnce(&mut Record)) {
         let mut record = self
             .record
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        update(&mut record);
-        if let Err(error) = write(&self.config, &record) {
+        change(&mut record);
+        if let Err(error) = update(&self.config, &record) {
             crate::diagnostics::record_error(
                 "cannot persist startup",
                 &std::io::Error::other(error.clone()),
@@ -223,7 +204,7 @@ impl Writer {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         record.operation = operation;
-        write(&self.config, &record)
+        update(&self.config, &record)
     }
 }
 

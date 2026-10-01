@@ -307,6 +307,7 @@ impl Operation {
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub(crate) struct Instructions {
     pub file: String,
+    pub core_guidance: String,
     pub markdown: String,
     pub workspace_agents_template: String,
     pub templates_root: String,

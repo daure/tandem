@@ -1,12 +1,7 @@
-use std::fs;
-
 use serde_json::Value;
 
 use crate::{
-    environments::{
-        compose,
-        config::{Config, read_text},
-    },
+    environments::{compose, config::Config, runtime_db},
     store::environments::{
         ContainerState, Instance, InstanceService, ServiceRuntime, validate_name,
     },
@@ -18,26 +13,10 @@ pub(super) fn read(config: &Config, observed: &Instance) -> Result<Option<Instan
     if directory.to_string_lossy() != observed.template_directory {
         return Ok(None);
     }
-    let path = directory.join(format!(
-        ".tandem-{}-{}.compose.json",
-        config.namespace, observed.name
-    ));
-    match fs::symlink_metadata(&path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
-        Ok(metadata) if !metadata.is_file() => {
-            return Err("rendered launch topology must be a regular file".into());
-        }
-        Ok(_) => {}
-    }
-    if !fs::canonicalize(&path)
-        .map_err(|error| error.to_string())?
-        .starts_with(&config.templates)
-    {
-        return Err("rendered launch topology escapes template root".into());
-    }
-    let model: Value =
-        serde_json::from_str(&read_text(&path)?).map_err(|error| error.to_string())?;
+    let Some(snapshot) = runtime_db::launch::load(config, &observed.name)? else {
+        return Ok(None);
+    };
+    let model: Value = snapshot.validate(config, &observed.name)?;
     if model["name"]
         .as_str()
         .is_some_and(|name| name != observed.project)

@@ -4,7 +4,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use super::{Config, Environments, Record, Startup, Writer, gateway, journal, lease, read, write};
+use super::{
+    Config, Environments, Record, Startup, Writer, gateway, journal, lease, read, update, write,
+};
 use crate::store::environments::Operation;
 
 pub(crate) fn launch(
@@ -14,6 +16,7 @@ pub(crate) fn launch(
     startup: &mut Startup,
 ) -> Result<Child, String> {
     let config = &environments.config;
+    super::runtime_db::prepare(config)?;
     let lock = match startup.instance_lock.take() {
         Some(lock) => lock,
         None => gateway::lock(config, &format!("instance-{}", operation.name))?,
@@ -168,7 +171,7 @@ pub(crate) fn claim(
     let lease_lock = inherit(config, &lease(id), lease_fd)?;
     record.owner_pid = std::process::id();
     record.operation.progress = vec!["Startup worker accepted; preparing instance".into()];
-    write(config, &record)?;
+    update(config, &record)?;
     let writer = Arc::new(Writer {
         config: config.clone(),
         record: Mutex::new(record.clone()),

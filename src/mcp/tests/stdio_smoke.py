@@ -108,15 +108,26 @@ def main():
             tools = client.request("tools/list", {})["tools"]
             assert {"get_instructions", "get_template", "create_instance", "get_operation"} <= {tool["name"] for tool in tools}
             instructions = client.tool("get_instructions")
+            assert "Tandem placement baseline" in instructions["core_guidance"]
             Path(instructions["file"]).write_text("# Local smoke guidance\n", encoding="utf-8")
-            assert client.tool("get_instructions")["markdown"] == "# Local smoke guidance\n"
+            customized = client.tool("get_instructions")
+            assert customized["markdown"] == "# Local smoke guidance\n"
+            assert customized["core_guidance"] == instructions["core_guidance"]
             template = client.tool("create_template", {"name": "website"})
-            assert Path(template["compose_file"]).parent == Path(template["directory"])
+            assert template["compose_file"] == ""
+            assert json.loads(Path(template["manifest_file"]).read_text()) == {}
             assert client.tool("list_templates")["templates"][0]["name"] == "website"
-            assert client.tool("get_template", {"name": "website"})["compose_source"].startswith("services:")
+            assert client.tool("get_template", {"name": "website"})["compose_source"] == ""
             rejected = client.request("tools/call", {"name": "create_instance", "arguments": {"template": "website", "name": "review"}})
             assert rejected.get("isError"), rejected
             if options.live:
+                Path(template["directory"], "compose.yaml").write_text(json.dumps({"services": {
+                    "web": {"image": "nginx:1.28-alpine", "command": ["/bin/sh", "-c",
+                        "printf 'Tandem template' > /usr/share/nginx/html/index.html; exec nginx -g 'daemon off;'"]}
+                }}))
+                client.tool("update_template_manifest", {"name": "website", "confirmed": True,
+                    "manifest": {"routes": {"web": {"port": 80, "strip_prefix": True,
+                        "readiness_path": "index.html", "readiness_contains": "Tandem template"}}}})
                 operation = client.tool("create_instance", {"template": "website", "name": "review", "confirmed": True, "wait": True, "timeout_seconds": 120}, timeout=150)
                 assert operation["state"] == "succeeded", operation
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -142,7 +153,7 @@ def main():
         finally:
             client.close()
             if options.live:
-                rendered = Path(directory, "templates", "website", f".tandem-{namespace}-review.compose.json")
+                rendered = Path(directory, "runtime", namespace, "review", "compose.json")
                 gateway = Path(directory, "gateway", "compose.json")
                 for project, path in [(f"{namespace}-review", rendered), (f"{namespace}-gateway", gateway)]:
                     if path.is_file():

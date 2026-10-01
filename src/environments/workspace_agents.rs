@@ -9,7 +9,7 @@ use std::{
 use super::{
     Environments,
     config::{Config, read_text},
-    lifecycle, templates,
+    lifecycle, runtime_db, templates,
 };
 use crate::store::environments::{Instance, Repository};
 
@@ -73,10 +73,8 @@ pub(super) fn generate(
     if existing(workspace)? {
         return Ok(());
     }
-    let compose_file = Path::new(&instance.template_directory).join(format!(
-        ".tandem-{}-{}.compose.json",
-        config.namespace, instance.name
-    ));
+    let compose_file = runtime_db::launch::materialize(config, &instance.name)?
+        .unwrap_or(runtime_db::launch::path(config, &instance.name)?);
     let command = format!(
         "docker compose --project-name {} --project-directory {} --file {}",
         shell_quote(&instance.project),

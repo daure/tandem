@@ -165,11 +165,9 @@ fn tui_quit_terminal_closure_and_kill_preserve_startup_and_reopened_status() {
             -1
         );
         fs::write(fixture.home.join("release-config"), "").unwrap();
-        let record_path = fixture.home.join("runtime/cli-test/review.startup.json");
         wait_until(|| {
             reopened.drain();
-            let record: Value =
-                serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
+            let record = fixture.runtime_record("review", "startup").unwrap();
             record["operation"]["state"] == "succeeded"
         });
         reopened.close("quit");

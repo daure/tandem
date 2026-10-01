@@ -1,10 +1,11 @@
-use std::{io::Write, path::Path, process::Command, time::Duration};
+use std::{path::Path, process::Command, time::Duration};
 
 use serde_json::{Value, json};
 
 use super::{
     command::{docker, run},
-    config::{Config, private_file},
+    config::Config,
+    journal, runtime_db,
 };
 use crate::store::environments::{
     InstanceService, Template, validate_instance_name, validate_name,
@@ -20,6 +21,8 @@ pub(crate) const PORT: &str = "io.tandem.port";
 pub(crate) const KIND: &str = "io.tandem.kind";
 pub(crate) const INSTANCE: &str = "io.tandem.instance";
 pub(crate) const DESCRIPTION: &str = "io.tandem.description";
+
+mod mounts;
 
 pub(crate) struct Rendered {
     pub path: std::path::PathBuf,
@@ -113,17 +116,18 @@ pub(crate) fn render(
     let mut model: Value =
         serde_json::from_str(&run(cmd, timeout, None)?).map_err(|error| error.to_string())?;
     decorate(config, template, name, description, &mut model)?;
-    let rendered = directory.join(format!(".tandem-{}-{name}.compose.json", config.namespace));
     // Compose will interpolate this resolved model once more when launching it.
     let text = serde_json::to_string_pretty(&model)
         .map_err(|error| error.to_string())?
         .replace('$', "$$");
-    private_file(&rendered, false)
-        .and_then(|mut file| file.write_all(text.as_bytes()))
-        .map_err(|error| error.to_string())?;
+    let services = expected_services(config, template, name, &model);
+    let snapshot = runtime_db::launch::Snapshot::new(config, template, name, text);
+    journal::record_launch(config, &snapshot, services.clone(), description)?;
+    let rendered =
+        runtime_db::launch::materialize(config, name)?.ok_or("launch snapshot missing")?;
     Ok(Rendered {
         path: rendered,
-        services: expected_services(config, template, name, &model),
+        services,
     })
 }
 
@@ -186,6 +190,8 @@ pub(crate) fn decorate(
     model: &mut Value,
 ) -> Result<(), String> {
     validate_instance_name(name)?;
+    mounts::validate(config, model)?;
+    mounts::validate_build_caches(config, Path::new(&template.directory), model)?;
     let services = model
         .get_mut("services")
         .and_then(Value::as_object_mut)

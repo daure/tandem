@@ -54,7 +54,7 @@ class Smoke:
         }, timeout=timeout + 20)
         if operation["state"] != expected:
             namespace = json.loads((self.root / "fixtures.json").read_text())["environment"]["TANDEM_NAMESPACE"]
-            rendered = self.root / ".tandem/templates" / template / f".tandem-{namespace}-{instance}.compose.json"
+            rendered = self.root / ".tandem/runtime" / namespace / instance.lower() / "compose.json"
             subprocess.run(["docker", "compose", "-p", f"{namespace}-{instance}", "-f", str(rendered),
                             "logs", "--no-color"], check=False, timeout=20)
         assert operation["state"] == expected, operation
@@ -263,8 +263,8 @@ def git(repo, *arguments):
 
 def cleanup(root, namespace):
     failures = []
-    for path in sorted((root / ".tandem/templates").glob("*/.tandem-*.compose.json")):
-        instance = path.name.removeprefix(f".tandem-{namespace}-").removesuffix(".compose.json")
+    for path in sorted((root / ".tandem/runtime" / namespace).glob("*/compose.json")):
+        instance = path.parent.name
         result = subprocess.run(["docker", "compose", "-p", f"{namespace}-{instance}", "-f", str(path),
                                  "down", "--volumes", "--remove-orphans"], capture_output=True, text=True, timeout=60)
         if result.returncode:

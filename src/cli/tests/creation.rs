@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use rusqlite::OptionalExtension;
 use serde_json::json;
 
 mod cleanup;
@@ -119,6 +120,32 @@ impl Fixture {
 
     fn run(&self, arguments: &[&str]) -> Output {
         wait_output(self.command(arguments).spawn().unwrap())
+    }
+
+    fn runtime_record(&self, name: &str, kind: &str) -> Option<serde_json::Value> {
+        let connection = rusqlite::Connection::open(self.home.join("settings.sqlite3")).unwrap();
+        connection.busy_timeout(Duration::from_secs(5)).unwrap();
+        let text: Option<String> = connection.query_row(
+            "SELECT payload FROM runtime_records WHERE namespace = 'cli-test' AND name = ?1 AND kind = ?2",
+            rusqlite::params![name.to_ascii_lowercase(), kind], |row|row.get(0)
+        ).optional().unwrap();
+        text.map(|text| serde_json::from_str(&text).unwrap())
+    }
+
+    fn set_runtime_record(&self, name: &str, kind: &str, value: &serde_json::Value) {
+        let connection = rusqlite::Connection::open(self.home.join("settings.sqlite3")).unwrap();
+        connection.busy_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(connection.execute(
+            "UPDATE runtime_records SET payload = ?3 WHERE namespace = 'cli-test' AND name = ?1 AND kind = ?2",
+            rusqlite::params![name.to_ascii_lowercase(),kind,value.to_string()]
+        ).unwrap(),1);
+    }
+
+    fn remove_runtime_record(&self, name: &str, kind: &str) {
+        rusqlite::Connection::open(self.home.join("settings.sqlite3")).unwrap().execute(
+            "DELETE FROM runtime_records WHERE namespace = 'cli-test' AND name = ?1 AND kind = ?2",
+            rusqlite::params![name.to_ascii_lowercase(),kind]
+        ).unwrap();
     }
 }
 

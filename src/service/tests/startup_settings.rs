@@ -80,7 +80,7 @@ fn detached_workspace_startups_update_an_open_observers_cold_and_hot_timings() {
                 == Some(&operation.elapsed_milliseconds)
         });
     }
-    assert_eq!(observer.environment_snapshot().instances.len(), 1);
+    wait_for(|| observer.environment_snapshot().instances.len() == 1);
     let snapshot = observer.environment_snapshot();
     assert!(
         snapshot

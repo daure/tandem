@@ -1,11 +1,12 @@
 # Using Tandem
 
 A template is a shared development recipe; an instance has its own name and workspace.
+Read `core_guidance` together with this editable guidance for placement and cleanup decisions.
 
 ## Templates
 
 - All templates live under `templates_root`. Keep this directory
-  under Git version control; exclude secrets and machine-local files. Obtain approval before
+  under Git version control. Obtain approval before
   initializing a repository, committing, or pushing.
 - Edit template files in the returned directory; keep reusable scripts there.
   Template edits are shared across instances; keep application edits in instance workspaces.
@@ -96,9 +97,9 @@ A template is a shared development recipe; an instance has its own name and work
   workspace and its subdirectories. Closure failures block that instance's deletion; clients outside
   Zellij require manual closure. Include client closure in purge approval. Conversation history and
   shared OpenCode servers are preserved. Clients can close even when later resource deletion fails.
-  Preserve Tandem-generated `.tandem-*` files for ownership checks and cleanup.
+  Preserve Tandem-owned runtime records; use lifecycle tools for cleanup.
   Failed deletion can be retried when containers are absent: cleanup validates the retained instance
-  record and template ownership receipt, then checks project membership. Missing execution-kind metadata
+   record and local ownership evidence, then checks project membership. Missing execution-kind metadata
   requires Docker access for recovery; unverifiable ownership blocks resource deletion and preserves data.
   A failed new-instance request with no accepted worker or preparation record can be deleted without
   Docker access; only its failure records are removed. Unverified workspaces, clients, and resources
@@ -115,7 +116,8 @@ A template is a shared development recipe; an instance has its own name and work
   configuration and data; they exclude setup jobs and the gateway. Service actions affect only the
   named service, leaving dependencies untouched. These actions do not build or apply template edits.
   Restart and service start verify running state, configured healthchecks and gateway content readiness;
-  routed services need current template readiness configuration. Services without checks are verified
+   routed services use saved launch-time readiness assertions; imported instances without saved assertions
+   require current template readiness configuration. Services without checks are verified
   only as running. Unpause selected containers before starting or restarting.
 - Template mutation tools are blocked while instances start from that template.
 - Verify readiness before handing over URLs. On failure, inspect operation output, containers,

@@ -7,7 +7,7 @@ use std::{
 use super::{
     command::{Progress, docker, remaining, run},
     config::Config,
-    docker as runtime, gateway, journal, lifecycle, templates,
+    docker as runtime, gateway, journal, lifecycle, runtime_db, templates,
 };
 use crate::store::environments::{Route, validate_instance_name};
 
@@ -57,12 +57,19 @@ pub(super) fn change_state(
             && targets.iter().any(|target| target.url.is_some())
         {
             let lock = gateway::shared_lock(config, &format!("template-{}", instance.template))?;
-            let template = templates::get(config, &instance.template)?;
-            if template.directory != instance.template_directory {
-                return Err("instance belongs to a different template directory".into());
-            }
+            let manifest = if let Some(snapshot) = runtime_db::launch::load(config, name)?
+                && let Some(manifest) = snapshot.manifest
+            {
+                manifest
+            } else {
+                let template = templates::get(config, &instance.template)?;
+                if template.directory != instance.template_directory {
+                    return Err("instance belongs to a different template directory".into());
+                }
+                template.manifest
+            };
             for target in targets.iter().filter(|target| target.url.is_some()) {
-                let route = template.manifest.routes.get(&target.name).ok_or_else(|| {
+                let route = manifest.routes.get(&target.name).ok_or_else(|| {
                     format!("missing readiness configuration for {}", target.name)
                 })?;
                 routes.insert(target.name.clone(), route.clone());

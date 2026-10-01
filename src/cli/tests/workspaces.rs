@@ -35,9 +35,7 @@ fn repository_only_creation_reopens_and_deletes_across_processes_without_docker(
         git(&workspace.join("app"), &["branch", "--show-current"]),
         "review"
     );
-    let record_path = fixture.home.join("runtime/cli-test/review.json");
-    let record: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
+    let record = fixture.runtime_record("review", "journal").unwrap();
     assert_eq!(record["repositories"][0]["cloned"], true);
     assert_eq!(
         record["repositories"][0]["path"],
@@ -58,7 +56,7 @@ fn repository_only_creation_reopens_and_deletes_across_processes_without_docker(
     );
     success(fixture.run(&["delete-instance", "review"]));
     assert!(!workspace.exists());
-    assert!(!record_path.exists());
+    assert!(fixture.runtime_record("review", "journal").is_none());
     assert!(!fixture.home.join("docker-calls").exists());
 }
 
@@ -81,9 +79,7 @@ fn partial_repository_setup_is_retained_and_retry_preserves_work() {
             .status
             .success()
     );
-    let record_path = fixture.home.join("runtime/cli-test/review.json");
-    let record: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
+    let record = fixture.runtime_record("review", "journal").unwrap();
     assert_eq!(record["repositories"].as_array().unwrap().len(), 1);
     assert_eq!(record["expected"]["runtime"]["workspace_ready"], false);
     assert!(record["activity"]["error"].is_string());
@@ -103,8 +99,7 @@ fn partial_repository_setup_is_retained_and_retry_preserves_work() {
         fs::read_to_string(checkout.join("file.txt")).unwrap(),
         "keep changes"
     );
-    let record: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
+    let record = fixture.runtime_record("review", "journal").unwrap();
     assert_eq!(record["repositories"][0]["cloned"], false);
     assert_eq!(record["repositories"][1]["cloned"], true);
     assert_eq!(record["expected"]["runtime"]["workspace_ready"], true);
@@ -143,9 +138,7 @@ fn blank_workspaces_create_reopen_and_delete_without_git_or_docker() {
     for section in ["## Repositories", "## Services", "## Docker", "## HTTP"] {
         assert!(!guidance.contains(section), "{guidance}");
     }
-    let record_path = fixture.home.join("runtime/cli-test/scratch.json");
-    let record: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&record_path).unwrap()).unwrap();
+    let record = fixture.runtime_record("scratch", "journal").unwrap();
     assert_eq!(record["expected"]["workspace_only"], true);
     assert_eq!(record["expected"]["runtime"]["workspace_ready"], true);
     fs::write(workspace.join("notes.md"), "Keep my notes").unwrap();
@@ -157,9 +150,34 @@ fn blank_workspaces_create_reopen_and_delete_without_git_or_docker() {
     assert!(fixture.home.join("opened").exists());
     success(fixture.run(&["delete-instance", "scratch"]));
     assert!(!workspace.exists());
-    assert!(!record_path.exists());
+    assert!(fixture.runtime_record("scratch", "journal").is_none());
     assert!(!fixture.home.join("git-called").exists());
     assert!(!fixture.home.join("docker-calls").exists());
+}
+
+#[test]
+fn git_managed_read_only_templates_support_instance_creation_and_cleanup() {
+    let fixture = repository_fixture();
+    let root = fixture.home.join("templates");
+    let template = root.join("website");
+    fs::write(template.join("tandem.json"), "{}\n").unwrap();
+    git(&root, &["init", "-b", "trunk"]);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "Shared recipes"]);
+    fs::set_permissions(&template, fs::Permissions::from_mode(0o555)).unwrap();
+    let output = fixture.run(&["new-instance", "scratch", "-t", "website"]);
+    fs::set_permissions(&template, fs::Permissions::from_mode(0o755)).unwrap();
+    success(output);
+    assert_eq!(
+        git(&root, &["status", "--porcelain", "--untracked-files=all"]),
+        ""
+    );
+    assert!(fixture.runtime_record("scratch", "ownership").is_some());
+    fs::remove_dir_all(&template).unwrap();
+    success(fixture.run(&["delete-instance", "scratch"]));
+    assert!(!fixture.home.join("workspaces/scratch").exists());
+    assert!(fixture.runtime_record("scratch", "journal").is_none());
+    assert!(fixture.runtime_record("scratch", "ownership").is_none());
 }
 
 #[test]

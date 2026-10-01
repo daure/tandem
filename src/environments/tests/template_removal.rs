@@ -172,11 +172,7 @@ fn template_deletion_cleans_running_stopped_paused_and_orphaned_instances() {
     .unwrap();
     let mut model = json!({"services": {"web": {"image": "nginx"}}});
     compose::decorate(&config, &template, "orphan", "", &mut model).unwrap();
-    fs::write(
-        Path::new(&template.directory).join(".tandem-tandem-test-orphan.compose.json"),
-        serde_json::to_vec(&model).unwrap(),
-    )
-    .unwrap();
+    ownership::record(&config, "website", Path::new(&template.directory), "orphan").unwrap();
     fs::write(&template.manifest_file, "invalid manifest").unwrap();
 
     removal::template_with(&config, "website", 60, Arc::new(|_| {}), |command, _, _| {
@@ -185,6 +181,11 @@ fn template_deletion_cleans_running_stopped_paused_and_orphaned_instances() {
     .unwrap();
 
     assert!(!Path::new(&template.directory).exists());
+    assert!(
+        ownership::instances(&config, "website", Path::new(&template.directory))
+            .unwrap()
+            .is_empty()
+    );
     for name in ["running", "stopped", "orphan", "failed-start"] {
         assert!(!config.workspaces.join(name).exists());
     }

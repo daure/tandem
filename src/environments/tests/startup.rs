@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 
 #[test]
 #[ignore = "entry point for detached test workers"]
@@ -102,6 +103,7 @@ fn worker_failure_survives_a_later_successful_action() {
 #[test]
 fn completed_startup_retains_its_outcome_and_bounded_progress() {
     let (_directory, config, record) = fixture();
+    write(&config, &record).unwrap();
     let writer = Writer {
         config: config.clone(),
         record: Mutex::new(record.clone()),

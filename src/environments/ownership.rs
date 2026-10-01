@@ -1,17 +1,13 @@
 use std::{
     collections::BTreeSet,
-    fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use super::{
-    compose,
-    config::{Config, private_file, read_text},
-    templates,
+    config::Config,
+    runtime_db::{self, Kind},
 };
 use crate::store::environments::{Instance, validate_instance_name, validate_name};
 
@@ -22,10 +18,28 @@ struct Owner {
     template: String,
     directory: PathBuf,
     instance: String,
+    #[serde(default)]
+    workspace: PathBuf,
 }
 
-fn record_path(config: &Config, directory: &Path, name: &str) -> PathBuf {
-    directory.join(format!(".tandem-{}-{name}.owner.json", config.namespace))
+fn expected(
+    config: &Config,
+    template: &str,
+    directory: &Path,
+    name: &str,
+) -> Result<Owner, String> {
+    validate_name(template)?;
+    validate_instance_name(name)?;
+    if directory != config.templates.join(template) {
+        return Err("template directory does not match instance ownership".into());
+    }
+    Ok(Owner {
+        namespace: config.namespace.clone(),
+        template: template.into(),
+        directory: directory.into(),
+        instance: name.into(),
+        workspace: config.workspaces.join(name),
+    })
 }
 
 pub(super) fn record(
@@ -34,57 +48,37 @@ pub(super) fn record(
     directory: &Path,
     name: &str,
 ) -> Result<(), String> {
-    validate_name(template)?;
-    validate_instance_name(name)?;
-    let owner = Owner {
-        namespace: config.namespace.clone(),
-        template: template.into(),
-        directory: directory.into(),
-        instance: name.into(),
-    };
-    let path = record_path(config, directory, name);
-    if path.try_exists().map_err(|error| error.to_string())? {
-        let existing: Owner =
-            serde_json::from_str(&read_record(&path)?).map_err(|error| error.to_string())?;
+    let owner = expected(config, template, directory, name)?;
+    if let Some(text) = runtime_db::load(config, name, Kind::Ownership)? {
+        let existing: Owner = serde_json::from_str(&text).map_err(|error| error.to_string())?;
         if existing != owner {
             return Err(format!("conflicting instance ownership: {name}"));
         }
         return Ok(());
     }
-    let text = serde_json::to_vec(&owner).map_err(|error| error.to_string())?;
-    private_file(&path, true)
-        .and_then(|mut file| file.write_all(&text))
-        .map_err(|error| error.to_string())
-}
-
-pub(super) fn forget(config: &Config, template: &str, name: &str) -> Result<(), String> {
-    let path = record_path(config, &config.templates.join(template), name);
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
+    runtime_db::save(
+        config,
+        name,
+        Kind::Ownership,
+        &serde_json::to_string(&owner).map_err(|error| error.to_string())?,
+    )
 }
 
 pub(super) fn verify(config: &Config, instance: &Instance) -> Result<(), String> {
-    validate_instance_name(&instance.name)?;
-    let directory = templates::removal_directory(config, &instance.template)?;
-    if Path::new(&instance.template_directory) != directory {
-        return Err("cleanup template directory does not match instance ownership".into());
-    }
-    let path = record_path(config, &directory, &instance.name);
-    let owner: Owner = serde_json::from_str(&read_record(&path).map_err(|error| {
+    let expected = expected(
+        config,
+        &instance.template,
+        Path::new(&instance.template_directory),
+        &instance.name,
+    )?;
+    let text = runtime_db::load(config, &instance.name, Kind::Ownership)?.ok_or_else(|| {
         format!(
-            "cannot verify cleanup ownership for {}: {error}",
+            "cannot verify cleanup ownership for {}: ownership record missing",
             instance.name
         )
-    })?)
-    .map_err(|error| format!("invalid cleanup ownership record: {error}"))?;
-    if owner.namespace != config.namespace
-        || owner.template != instance.template
-        || owner.directory != directory
-        || owner.instance != instance.name
-    {
+    })?;
+    let owner: Owner = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    if owner != expected || Path::new(&instance.workspace) != expected.workspace {
         return Err(format!(
             "conflicting cleanup ownership for {}",
             instance.name
@@ -98,79 +92,40 @@ pub(super) fn instances(
     template: &str,
     directory: &Path,
 ) -> Result<BTreeSet<String>, String> {
+    validate_name(template)?;
     let mut names = BTreeSet::new();
-    let prefix = format!(".tandem-{}-", config.namespace);
-    for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let filename = entry.file_name().to_string_lossy().into_owned();
-        let Some(suffix) = filename.strip_prefix(&prefix) else {
-            continue;
-        };
-        if let Some(name) = suffix.strip_suffix(".owner.json") {
-            validate_instance_name(name)?;
-            let owner: Owner = serde_json::from_str(&read_record(&entry.path())?)
-                .map_err(|error| error.to_string())?;
-            if owner.namespace != config.namespace
-                || owner.template != template
-                || owner.directory != directory
-                || owner.instance != name
-            {
-                return Err(format!("conflicting ownership record: {filename}"));
-            }
-            names.insert(name.into());
-        } else if let Some(name) = suffix.strip_suffix(".compose.json") {
-            validate_instance_name(name)?;
-            let model: Value = serde_json::from_str(&read_record(&entry.path())?)
-                .map_err(|error| error.to_string())?;
-            let services = model["services"]
-                .as_object()
-                .filter(|services| !services.is_empty())
-                .ok_or("rendered Compose has no services")?;
-            let workspace = config.workspaces.join(name);
-            for service in services.values() {
-                let labels = &service["labels"];
-                for (key, expected) in [
-                    (compose::NAMESPACE, config.namespace.as_str()),
-                    (compose::KIND, "instance"),
-                    (compose::TEMPLATE, template),
-                    (
-                        compose::DIRECTORY,
-                        directory.to_str().ok_or("invalid template path")?,
-                    ),
-                    (
-                        compose::WORKSPACE,
-                        workspace.to_str().ok_or("invalid workspace path")?,
-                    ),
-                ] {
-                    if labels[key].as_str().map(|value| value.replace("$$", "$"))
-                        != Some(expected.into())
-                    {
-                        return Err(format!("unverified instance ownership in {filename}"));
-                    }
-                }
-                if labels[compose::INSTANCE]
-                    .as_str()
-                    .is_some_and(|instance| instance != name)
-                {
-                    return Err(format!("conflicting instance name in {filename}"));
-                }
-            }
-            names.insert(name.into());
+    for (key, text) in runtime_db::list(config, Kind::Ownership)? {
+        let owner: Owner = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+        if owner != expected(config, &owner.template, &owner.directory, &owner.instance)?
+            || owner.instance.to_ascii_lowercase() != key
+        {
+            return Err("conflicting instance ownership record".into());
+        }
+        if owner.template == template && owner.directory == directory {
+            names.insert(owner.instance);
         }
     }
     Ok(names)
 }
 
-fn read_record(path: &Path) -> Result<String, String> {
-    if !fs::symlink_metadata(path)
-        .map_err(|error| error.to_string())?
-        .file_type()
-        .is_file()
-    {
-        return Err(format!(
-            "ownership record must be a regular file: {}",
-            path.display()
-        ));
+pub(super) fn import_legacy(
+    config: &Config,
+    template: &str,
+    name: &str,
+    text: &str,
+    corroborated: bool,
+) -> Result<String, String> {
+    let mut owner: Owner = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    if owner.workspace.as_os_str().is_empty() {
+        if !corroborated {
+            return Err(format!(
+                "legacy ownership for {name} lacks local workspace evidence"
+            ));
+        }
+        owner.workspace = config.workspaces.join(name);
     }
-    read_text(path)
+    if owner != expected(config, template, &config.templates.join(template), name)? {
+        return Err(format!("conflicting legacy ownership for {name}"));
+    }
+    serde_json::to_string(&owner).map_err(|error| error.to_string())
 }

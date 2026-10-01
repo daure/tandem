@@ -12,8 +12,8 @@ use super::{
     command::{Progress, docker, remaining, run},
     compose,
     config::Config,
-    docker as runtime, gateway, journal, ownership, repositories, template_files, templates,
-    workspace_agents,
+    docker as runtime, gateway, journal, ownership, repositories, runtime_db, template_files,
+    templates, workspace_agents,
 };
 use crate::store::environments::{
     Instance, Route, Template, validate_instance_name, validate_name,
@@ -148,7 +148,6 @@ pub(crate) fn start(
         if let Some(writer) = &startup.writer {
             writer.workspace_ready();
         }
-        journal::topology(config, template_name, name, &description, services.clone())?;
         pending_services(services);
         gateway::ensure(config, progress.clone(), remaining(deadline)?)?;
         progress(format!(
@@ -352,7 +351,6 @@ pub(super) fn delete(
         }
         remove_workspace(config, name, progress.clone())?;
         remove_rendered_compose(config, &instance.template, name, progress)?;
-        ownership::forget(config, &instance.template, name)?;
         Ok(())
     })();
     activity.finish(result)
@@ -400,11 +398,7 @@ fn template_instances(config: &Config, template_name: &str) -> Result<Vec<Instan
     let _lock = gateway::lock(config, &format!("template-{template_name}"))?;
     let mut instances = journal::workspaces(config)?;
     let directory = config.templates.join(template_name);
-    let names = if directory.is_dir() {
-        ownership::instances(config, template_name, &directory)?
-    } else {
-        BTreeSet::new()
-    };
+    let names = ownership::instances(config, template_name, &directory)?;
     let only_workspaces = (instances
         .iter()
         .any(|instance| instance.template == template_name)
@@ -555,23 +549,10 @@ pub(super) fn remove_workspace(
 
 pub(super) fn remove_rendered_compose(
     config: &Config,
-    template_name: &str,
+    _template_name: &str,
     name: &str,
     progress: Progress,
 ) -> Result<(), String> {
-    let directory = config.templates.join(template_name);
-    if !directory.is_dir() {
-        return Ok(());
-    }
-    let root = fs::canonicalize(&config.templates).map_err(|error| error.to_string())?;
-    let directory = fs::canonicalize(directory).map_err(|error| error.to_string())?;
-    if !directory.starts_with(root) {
-        return Err("template directory escapes template root".into());
-    }
-    let rendered = directory.join(format!(".tandem-{}-{name}.compose.json", config.namespace));
-    if !rendered.exists() {
-        return Ok(());
-    }
     progress("Removing rendered Compose file".into());
-    fs::remove_file(rendered).map_err(|error| error.to_string())
+    runtime_db::launch::remove(config, name)
 }
