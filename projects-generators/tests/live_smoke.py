@@ -139,7 +139,7 @@ class Smoke:
         assert result["result"] == "Delivered: Hello, worker!", result
         self.api("mailroom-one", "jobs/missing", status=404)
 
-        manifest_path = self.root / ".tandem/templates/postcard/tandem.json"
+        manifest_path = self.root / ".tandem/templates/instances/postcard/tandem.json"
         original_manifest = manifest_path.read_text()
         broken_manifest = json.loads(original_manifest)
         broken_manifest["repositories"][0]["source"] = str(self.root / "missing-repository")
@@ -151,7 +151,7 @@ class Smoke:
             manifest_path.write_text(original_manifest)
         for template, setting in [("greetings", "FAIL_MIGRATION"),
                                   ("mailroom", "FAIL_WORKER"), ("guestbook", "FAIL_READINESS")]:
-            fault = self.root / ".tandem/templates" / template / ".env"
+            fault = self.root / ".tandem/templates/instances" / template / ".env"
             fault.write_text(f"{setting}=1\n")
             try:
                 self.start(template, f"{template}-broken", expected="failed", timeout=15)
@@ -254,7 +254,7 @@ class Smoke:
             assert "## Scratch workspace" in guidance
             assert "## Docker" not in guidance and "## Repositories" not in guidance
             assert {path.name for path in workspace.iterdir()} == {"AGENTS.md", "notes.md", "research", "experiments"}
-            files = self.root / ".tandem/templates/guidance-only/tandem-files"
+            files = self.root / ".tandem/templates/instances/guidance-only/tandem-files"
             for source in files.rglob("*"):
                 if source.is_file():
                     assert (workspace / source.relative_to(files)).read_bytes() == source.read_bytes()

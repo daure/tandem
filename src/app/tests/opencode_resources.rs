@@ -165,9 +165,12 @@ fn every_resource_parent_sums_its_scope_without_counting_panes_or_pids_twice() {
 }
 
 #[test]
-fn totals_refresh_when_only_client_usage_changes_and_survive_view_filters() {
+fn totals_publish_client_usage_on_the_shared_resource_batch_and_survive_view_filters() {
     init_ui();
-    let (inventory, mut observation) = observations();
+    let (mut inventory, mut observation) = observations();
+    inventory.resource_revision = Some(1);
+    inventory.available_memory_bytes = Some(8 * 1_073_741_824);
+    inventory.cpu_temperature_millicelsius = Some(65_000);
     let service = AppService::for_tests();
     service.set_opencode_snapshot_for_tests(observation.clone());
     let mut app = crate::app::root(service);
@@ -177,12 +180,33 @@ fn totals_refresh_when_only_client_usage_changes_and_survive_view_filters() {
         Some(197 * 1_048_576)
     );
     observation.resources[0].usage.memory_bytes = Some(15 * 1_048_576);
+    observation.resources[0].usage.cpu_basis_points = Some(150);
     app.service
         .set_opencode_snapshot_for_tests(observation.clone());
     assert!(app.update_snapshot(inventory.clone()));
     assert_eq!(
         app.toolbar_state.borrow().totals.memory_bytes,
+        Some(197 * 1_048_576)
+    );
+    inventory.resource_revision = Some(2);
+    inventory.available_memory_bytes = Some(7 * 1_073_741_824);
+    inventory.cpu_temperature_millicelsius = Some(70_000);
+    assert!(app.update_snapshot(inventory.clone()));
+    assert_eq!(
+        app.toolbar_state.borrow().totals.memory_bytes,
         Some(202 * 1_048_576)
+    );
+    assert_eq!(
+        app.toolbar_state.borrow().totals.cpu_basis_points,
+        Some(2020)
+    );
+    assert_eq!(
+        app.toolbar_state.borrow().available_memory_bytes,
+        Some(7 * 1_073_741_824)
+    );
+    assert_eq!(
+        app.toolbar_state.borrow().cpu_temperature_millicelsius,
+        Some(70_000)
     );
     for attached in [true, false] {
         app.attached_sessions_only = attached;

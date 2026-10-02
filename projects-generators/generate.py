@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate six local Git repositories and seven isolated Tandem templates."""
+"""Generate six source repositories, seven instance templates, and four event providers."""
 
 import argparse
 import hashlib
@@ -12,6 +12,7 @@ import subprocess
 
 from recipes import REPOSITORIES, create_repositories, local_repository, write, write_json
 from templates import FIXTURES, create_templates
+from providers import create_providers, instance_catalog
 
 MINIMAL_FIXTURES = ("repo-only", "compose-only", "guidance-only")
 
@@ -69,13 +70,15 @@ def generate(root, seed_commits=False, port=9886):
     for name in REPOSITORIES:
         initialize_git(root / name, seed_commits)
     create_templates(root)
+    create_providers(root)
+    initialize_git(root / ".tandem/templates", seed_commits)
     suffix = hashlib.sha256(str(root).encode()).hexdigest()[:8]
     environment = {"TANDEM_HOME": str(root / ".tandem"), "TANDEM_NAMESPACE": f"tandem-fixtures-{suffix}",
                    "TANDEM_GATEWAY_PORT": str(port)}
     write(root / "env.sh", "# Source this file from your shell before starting Tandem.\n"
           + "".join(f"export {key}={shlex.quote(value)}\n" for key, value in environment.items()))
     write_json(root / "fixtures.json", {"environment": environment, "repositories": list(REPOSITORIES),
-                                       "templates": list(FIXTURES), "seeded": seed_commits})
+                                        "templates": list(FIXTURES), "providers": ["message", "ticket", "system-event", "generic"], "seeded": seed_commits})
     return root
 
 
@@ -92,7 +95,7 @@ def add_minimal(root, seed_commits=False, names=MINIMAL_FIXTURES):
         raise ValueError("Invalid fixture inventory")
     if Path(inventory["environment"]["TANDEM_HOME"]) != root / ".tandem":
         raise ValueError("Fixture inventory belongs to a different root")
-    templates = root / ".tandem/templates"
+    templates = instance_catalog(root)
     if not templates.is_dir() or templates.is_symlink() or (root / ".tandem").is_symlink():
         raise ValueError("Fixture templates must be an existing real directory")
     targets = [templates / name for name in names]
@@ -119,9 +122,17 @@ def main():
     additions = parser.add_mutually_exclusive_group()
     additions.add_argument("--add-minimal", action="store_true", help="Append repo-only, compose-only and guidance-only fixtures; refuse occupied paths")
     additions.add_argument("--add-guidance", action="store_true", help="Append only guidance-only to an existing fixture root; requires no Git")
+    additions.add_argument("--add-providers", action="store_true", help="Append four developer provider packages; refuse occupied paths")
     options = parser.parse_args()
     try:
-        if options.add_minimal:
+        if options.add_providers:
+            root = validate_environment(options.output, git_required=False)
+            if not (root / ".tandem").is_dir() or (root / ".tandem").is_symlink():
+                raise ValueError("Provider additions require an existing fixture Tandem home")
+            if (root / ".tandem/templates").is_symlink():
+                raise ValueError("Fixture templates must be a real directory")
+            create_providers(root)
+        elif options.add_minimal:
             root = add_minimal(options.output, options.seed_commits)
         elif options.add_guidance:
             root = add_minimal(options.output, names=("guidance-only",))
@@ -130,8 +141,8 @@ def main():
     except (ValueError, KeyError, OSError, RuntimeError, subprocess.CalledProcessError) as error:
         detail = error.stderr if isinstance(error, subprocess.CalledProcessError) else str(error)
         parser.exit(1, f"Generation failed: {detail}\n")
-    print(f"Added requested fixtures under {root}" if options.add_minimal or options.add_guidance else f"Created {len(REPOSITORIES)} repositories and {len(FIXTURES)} templates under {root}")
-    if not options.seed_commits and not options.add_guidance:
+    print(f"Added requested fixtures under {root}" if options.add_minimal or options.add_guidance or options.add_providers else f"Created {len(REPOSITORIES)} source repositories, {len(FIXTURES)} instance templates and four providers under {root}")
+    if not options.seed_commits and not options.add_guidance and not options.add_providers:
         print("Repositories have no commits. Commit their source before starting instances.")
     print(f"Load the fixture environment: source {shlex.quote(str(root / 'env.sh'))}")
 

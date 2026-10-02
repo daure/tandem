@@ -45,8 +45,19 @@ fn key(app: &mut App, key: Key) {
 }
 
 fn switch(app: &mut App) {
-    key(app, Key::Char(']'));
-    render(app);
+    loop {
+        app.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char(']'))),
+            &mut EventCtx::new(AnimationSettings {
+                enabled: false,
+                ..Default::default()
+            }),
+        );
+        render(app);
+        if !app.events_active && !app.providers_active {
+            break;
+        }
+    }
 }
 
 fn select(app: &mut App, id: &str) {
@@ -128,10 +139,7 @@ fn external_workspace_expansion_survives_switches_and_the_sessions_overview_shor
     assert!(render(&mut app).1.contains("External conversation"));
     switch(&mut app);
     assert!(render(&mut app).1.contains("External conversation"));
-    assert_eq!(
-        app.selected().unwrap().id,
-        "opencode-workspace:/work/external"
-    );
+    assert_eq!(app.selected().unwrap().id, "opencode-workspaces");
 }
 
 #[test]

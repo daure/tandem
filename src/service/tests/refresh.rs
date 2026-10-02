@@ -17,6 +17,38 @@ fn fixture() -> (tempfile::TempDir, Connection, RefreshNotifier) {
 }
 
 #[test]
+fn resource_polling_continues_while_inventory_refresh_is_idle() {
+    let (_directory, connection, notifier) = fixture();
+    let (requests, receiver) = mpsc::channel();
+    let (sampled, samples) = mpsc::channel();
+    let (refreshed, refreshes) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        run(
+            connection,
+            notifier.scopes,
+            receiver,
+            || {},
+            || sampled.send(()).unwrap(),
+            |targets, _| {
+                refreshed.send(targets).unwrap();
+                Ok(())
+            },
+        );
+    });
+    assert_eq!(samples.try_recv(), Err(mpsc::TryRecvError::Empty));
+    requests.send(Refresh::Templates.into()).unwrap();
+    samples.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(
+        refreshes.recv_timeout(Duration::from_secs(3)).unwrap(),
+        [true, false, false]
+    );
+    samples.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert_eq!(refreshes.try_recv(), Err(mpsc::TryRecvError::Empty));
+    drop(requests);
+    worker.join().unwrap();
+}
+
+#[test]
 fn external_changes_refresh_only_their_domain_without_an_inventory_poll() {
     let (_directory, connection, notifier) = fixture();
     let (requests, receiver) = mpsc::channel();
@@ -27,6 +59,7 @@ fn external_changes_refresh_only_their_domain_without_an_inventory_poll() {
             connection,
             scopes,
             receiver,
+            || {},
             || {},
             |targets, manual| {
                 assert!(!manual);
@@ -64,6 +97,7 @@ fn changes_during_a_refresh_are_picked_up_on_the_next_check() {
             scopes,
             receiver,
             || {},
+            || {},
             |targets, manual| {
                 assert!(!manual);
                 if first {
@@ -99,6 +133,7 @@ fn manual_completion_waits_for_its_own_refresh_and_returns_errors_to_coalesced_c
             connection,
             notifier.scopes,
             receiver,
+            || {},
             || {},
             |targets, manual| {
                 entered.send((targets, manual)).unwrap();

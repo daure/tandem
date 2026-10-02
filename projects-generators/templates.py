@@ -4,6 +4,7 @@ import copy
 import json
 
 from recipes import asset, healthy, redis_infrastructure, write, write_json
+from providers import instance_catalog
 
 FIXTURES = {
     "guestbook": {"repos": ["guestbook"], "web": "guestbook/frontend", "api": "guestbook/backend"},
@@ -28,9 +29,12 @@ def workspace_service(service, source, root):
 
 
 def create_templates(root, names=FIXTURES):
+    templates = instance_catalog(root)
+    if not templates.exists():
+        templates = root / ".tandem/templates/instances"
     for name in names:
         fixture = FIXTURES[name]
-        directory = root / ".tandem/templates" / name
+        directory = templates / name
         directory.mkdir(parents=True)
         if name == "guidance-only":
             asset("guidance/guidance-only.md", directory / "tandem-agents.md")

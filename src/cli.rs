@@ -4,7 +4,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 mod inspection;
 
@@ -21,6 +21,21 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[command(hide = true)]
+    ProviderSidecarWorker {
+        #[arg(long, default_value = "127.0.0.1:0", value_parser = parse_loopback)]
+        bind: SocketAddr,
+    },
+    #[command(about = "Inspect provider templates and Tandem-owned runtime state")]
+    ListProviders,
+    #[command(
+        about = "Manage a trusted provider through Tandem, including its sidecar and credentials"
+    )]
+    Provider {
+        #[arg(value_enum)]
+        action: ProviderCommand,
+        name: String,
+    },
     #[command(hide = true)]
     StartupWorker {
         name: String,
@@ -93,6 +108,13 @@ enum Commands {
     },
     #[command(about = "Run protocol-only MCP server over stdin/stdout")]
     Mcp,
+    #[command(about = "Write private credentials for the four developer event providers")]
+    ProvidersSetup,
+    #[command(about = "Run the authenticated provider event sidecar; does not expose MCP")]
+    ServeEvents {
+        #[arg(long, default_value = "127.0.0.1:7350")]
+        bind: SocketAddr,
+    },
     #[cfg(debug_assertions)]
     #[command(about = "Run the TUI and loopback HTTP MCP for development")]
     Dev {
@@ -117,9 +139,52 @@ fn parse_loopback(value: &str) -> Result<SocketAddr, String> {
     }
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum ProviderCommand {
+    Start,
+    Stop,
+    Pause,
+    Resume,
+    Restart,
+    Logs,
+}
+
+impl From<ProviderCommand> for crate::store::providers::Action {
+    fn from(action: ProviderCommand) -> Self {
+        match action {
+            ProviderCommand::Start => Self::Start,
+            ProviderCommand::Stop => Self::Stop,
+            ProviderCommand::Pause => Self::Pause,
+            ProviderCommand::Resume => Self::Resume,
+            ProviderCommand::Restart => Self::Restart,
+            ProviderCommand::Logs => Self::Logs,
+        }
+    }
+}
+
 pub fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::try_parse_from(std::env::args_os()).unwrap_or_else(|error| error.exit());
     match cli.command {
+        Some(Commands::ProviderSidecarWorker { bind }) => {
+            let service = crate::service::AppService::initialize()?;
+            service.run_provider_sidecar_worker(bind)
+        }
+        Some(Commands::Provider { name, action }) => {
+            let service = crate::service::AppService::initialize()?;
+            let result = service
+                .provider_action(name, action.into(), true)
+                .blocking_recv()??;
+            println!("{result}");
+            Ok(())
+        }
+        Some(Commands::ListProviders) => {
+            let service = crate::service::AppService::initialize()?;
+            let runtime = tokio::runtime::Runtime::new()?;
+            let snapshot = runtime.block_on(service.list_providers())?;
+            println!("{}", serde_json::to_string_pretty(&snapshot)?);
+            drop(runtime);
+            Ok(())
+        }
         Some(Commands::StartupWorker {
             name,
             id,
@@ -153,6 +218,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             crate::run()
         }
         Some(Commands::Mcp) => crate::run_mcp(),
+        Some(Commands::ProvidersSetup) => {
+            let service = crate::service::AppService::initialize()?;
+            println!("{}", service.setup_developer_providers()?);
+            Ok(())
+        }
+        Some(Commands::ServeEvents { bind }) => crate::run_events(bind),
         #[cfg(debug_assertions)]
         Some(Commands::Dev { bind }) => {
             tuicore::init();

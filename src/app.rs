@@ -27,13 +27,16 @@ mod bulk;
 mod creation;
 mod details;
 mod dialogs;
+mod events;
 mod instances;
 mod opencode;
 mod operations;
 mod overview;
 mod properties;
+mod providers;
 mod refresh;
 mod route_menu;
+mod row_actions;
 mod rows;
 mod toolbar;
 mod yank_menu;
@@ -151,6 +154,15 @@ pub(crate) enum Msg {
     CopyWorkspace,
     CopyGatewayUrl,
     Submit,
+    OpenEvent(Box<crate::store::events::Record>),
+    ReplayEvent(i64),
+    HandleEvent(i64, i64),
+    ProviderAction(String, crate::store::providers::Action),
+    ProviderBulkAction(crate::store::providers::Action),
+    ProviderDetails(Box<crate::store::providers::Provider>),
+    ShowProvider(String),
+    ProviderEvents(String),
+    OpenRowMenu(row_actions::Target),
 }
 
 enum Intent {
@@ -242,6 +254,12 @@ pub(crate) struct App {
     attached_sessions_only: bool,
     completion_sound: bool,
     opencode_action: Option<opencode::PendingAction>,
+    events_active: bool,
+    providers_active: bool,
+    provider_actions: Vec<providers::PendingAction>,
+    provider_confirmation: Option<(String, crate::store::providers::Action)>,
+    provider_bulk_confirmation: Option<(Vec<String>, crate::store::providers::Action)>,
+    event_action: Option<tokio::sync::oneshot::Receiver<Result<i64, crate::store::events::Error>>>,
 }
 
 pub(crate) fn root(service: AppService) -> App {
@@ -347,6 +365,12 @@ pub(crate) fn root(service: AppService) -> App {
         attached_sessions_only: opencode_enabled,
         completion_sound: false,
         opencode_action: None,
+        events_active: false,
+        providers_active: false,
+        provider_actions: Vec::new(),
+        provider_confirmation: None,
+        provider_bulk_confirmation: None,
+        event_action: None,
     }
 }
 
@@ -355,8 +379,20 @@ impl App {
         let opencode_enabled = self.service.opencode_enabled();
         let tabs_changed = self.toolbar_state.borrow().opencode_enabled != opencode_enabled;
         if tabs_changed {
+            let events_active = self.events_active;
+            let providers_active = self.providers_active;
             self.select_overview(self.attached_sessions_only && opencode_enabled);
             *self.tabs_mut() = overview_tabs(opencode_enabled, self.attached_sessions_only);
+            if events_active {
+                self.tabs_mut().select_index(1);
+                self.events_active = true;
+                self.pages_mut().select_events();
+            }
+            if providers_active {
+                self.tabs_mut().select_index(2);
+                self.providers_active = true;
+                self.pages_mut().select_providers();
+            }
             self.toolbar_state.borrow_mut().opencode_enabled = opencode_enabled;
         }
         if snapshot.loading {
@@ -381,6 +417,17 @@ impl App {
         let rows_changed =
             self.update_overview_rows(&snapshot, &operations, initial_load_completed);
         let mut toolbar_state = toolbar::State::from_snapshots(&snapshot, &self.opencode_snapshot);
+        if !initial_load_completed
+            && !tabs_changed
+            && snapshot.resource_revision.is_some()
+            && snapshot.resource_revision == self.snapshot.resource_revision
+        {
+            let previous = self.toolbar_state.borrow();
+            toolbar_state.totals = previous.totals.clone();
+            toolbar_state.available_memory_bytes = previous.available_memory_bytes;
+            toolbar_state.cpu_temperature_millicelsius = previous.cpu_temperature_millicelsius;
+            toolbar_state.has_running_instances = previous.has_running_instances;
+        }
         let totals_changed = toolbar_state.totals != self.toolbar_state.borrow().totals;
         toolbar_state.running_only = self.running_only;
         toolbar_state.opencode_enabled = opencode_enabled;
@@ -392,6 +439,9 @@ impl App {
     }
 
     fn selected(&self) -> Option<Row> {
+        if self.events_active || self.providers_active {
+            return None;
+        }
         instances::selected(&self.instances)
     }
 
@@ -412,6 +462,8 @@ impl App {
     }
 
     fn select_overview(&mut self, sessions: bool) {
+        self.events_active = false;
+        self.providers_active = false;
         self.attached_sessions_only = sessions;
         self.instances = self.pages_mut().select(sessions);
     }
@@ -506,6 +558,51 @@ impl App {
 
     pub(crate) fn handle_message(&mut self, message: Msg, ctx: &mut EventCtx<Msg>) {
         match message {
+            Msg::OpenRowMenu(target) => {
+                let menu = self.menu_layer_mut();
+                menu.layer_mut().open_row(target, ctx);
+                menu.set_active_with_context(true, ctx);
+            }
+            Msg::ShowProvider(identity) => {
+                if self.pages_mut().highlight_provider(&identity) {
+                    self.tabs_mut().select_index(2);
+                    self.providers_active = true;
+                    self.events_active = false;
+                    self.pages_mut().select_providers();
+                    ctx.focus(tuicore::FocusRequest::Target(FocusId::new(
+                        providers::FOCUS,
+                    )));
+                    ctx.request_layout();
+                } else {
+                    ctx.notify(Notification::error(
+                        "Provider unavailable",
+                        "No installed provider package matches this event's source",
+                    ));
+                }
+            }
+            Msg::ProviderEvents(identity) => {
+                self.tabs_mut().select_index(1);
+                self.events_active = true;
+                self.providers_active = false;
+                self.pages_mut().select_events();
+                self.pages_mut().filter_events(identity);
+                ctx.focus(tuicore::FocusRequest::Target(FocusId::new(events::FOCUS)));
+                ctx.request_layout();
+            }
+            Msg::ProviderAction(name, action) => self.request_provider_action(name, action, ctx),
+            Msg::ProviderBulkAction(action) => self.request_provider_bulk_action(action, ctx),
+            Msg::ProviderDetails(provider) => self.open_provider_details(&provider, ctx),
+            Msg::OpenEvent(row) => self.open_event(&row, ctx),
+            Msg::ReplayEvent(sequence) => {
+                if self.event_action.is_none() {
+                    self.event_action = Some(self.service.replay_event(sequence));
+                }
+            }
+            Msg::HandleEvent(sequence, attempt) => {
+                if self.event_action.is_none() {
+                    self.event_action = Some(self.service.mark_event_handled(sequence, attempt));
+                }
+            }
             Msg::SetOpencodeIntegration(enabled) => {
                 match self.service.set_opencode_enabled(enabled) {
                     Ok(reply) => self.settings_save = Some(reply),
@@ -527,7 +624,7 @@ impl App {
                 let enabled = enabled && opencode_enabled;
                 self.select_overview(enabled);
                 self.tabs_mut().select_index_with_settings(
-                    usize::from(opencode_enabled && !enabled),
+                    if opencode_enabled && !enabled { 3 } else { 0 },
                     ctx.animation(),
                 );
                 self.update_snapshot(self.snapshot.clone());
@@ -540,10 +637,18 @@ impl App {
                 ctx.request_redraw();
             }
             Msg::Close => {
+                self.provider_confirmation = None;
+                self.provider_bulk_confirmation = None;
                 self.service.cancel_opencode_conversation();
                 self.settings_save = None;
                 self.view.set_active_with_context(false, ctx);
-                ctx.focus(initial_focus());
+                ctx.focus(if self.providers_active {
+                    tuicore::FocusRequest::Target(FocusId::new(providers::FOCUS))
+                } else if self.events_active {
+                    tuicore::FocusRequest::Target(FocusId::new(events::FOCUS))
+                } else {
+                    initial_focus()
+                });
                 self.intent = None;
                 self.details_open = false;
                 self.template_details = None;
@@ -593,6 +698,28 @@ impl App {
                 self.copy_gateway_url(ctx);
             }
             Msg::Submit => {
+                if let Some((names, action)) = self.provider_bulk_confirmation.take() {
+                    for name in names {
+                        self.start_provider_action(name, action, true);
+                    }
+                    self.view.set_active_with_context(false, ctx);
+                    ctx.focus(tuicore::FocusRequest::Target(FocusId::new(
+                        providers::FOCUS,
+                    )));
+                    ctx.request_layout();
+                    ctx.request_redraw();
+                    return;
+                }
+                if let Some((name, action)) = self.provider_confirmation.take() {
+                    self.start_provider_action(name, action, true);
+                    self.view.set_active_with_context(false, ctx);
+                    ctx.focus(tuicore::FocusRequest::Target(FocusId::new(
+                        providers::FOCUS,
+                    )));
+                    ctx.request_layout();
+                    ctx.request_redraw();
+                    return;
+                }
                 if self.target_instance_has_operation() {
                     self.block_operation(ctx);
                     return;
@@ -749,6 +876,11 @@ impl App {
                 tuicore::ChildKey::new("description"),
             ])));
         }
+    }
+
+    fn open_compact(&mut self, modal: Modal, ctx: &mut EventCtx<Msg>) {
+        self.open(modal, ctx);
+        self.view.set_fit_content_max(dialogs::COMPACT_WIDTH, 34);
     }
 
     fn target_instance_has_operation(&self) -> bool {
@@ -937,6 +1069,14 @@ impl App {
         self.menu_layer_mut().set_active_with_context(false, ctx);
         if let Some(action) = action {
             match action {
+                action_menu::Action::Row(command) => {
+                    if let Some(message) =
+                        self.menu_layer_mut().layer_mut().take_row_message(command)
+                    {
+                        self.handle_message(message, ctx);
+                    }
+                    return;
+                }
                 action_menu::Action::CopyTemplateName
                 | action_menu::Action::CopyInstanceName
                 | action_menu::Action::CopyServiceName
@@ -1302,11 +1442,17 @@ impl App {
                 .matches(*key)
     }
 
+    fn overview_requested(event: &TuiEvent) -> bool {
+        matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "shift+h")
+            || matches!(event, TuiEvent::Key(key) if KeySpec::shifted('h').matches(*key))
+    }
+
     fn show_agent_overview(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
-        if !matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "shift+h")
+        if !Self::overview_requested(event) || self.view.is_active() || self.transient_menu_active()
         {
             return false;
         }
+        let event = TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit("shift+h".into()));
         self.running_only = true;
         self.opencode_history = false;
         self.select_overview(self.service.opencode_enabled());
@@ -1319,15 +1465,15 @@ impl App {
         }
         let operations = self.service.operations();
         self.update_overview_rows(&self.snapshot.clone(), &operations, false);
-        self.pages_mut().focus_overview(event, ctx);
+        self.pages_mut().reset_overviews(&event, ctx);
         ctx.request_layout();
         ctx.request_redraw();
+        ctx.stop_propagation();
         true
     }
 
     fn navigate_tabs(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
-        if self.view.is_active() || self.transient_menu_active() || !self.service.opencode_enabled()
-        {
+        if self.view.is_active() || self.transient_menu_active() {
             return false;
         }
         let TuiEvent::Key(key) = event else {
@@ -1337,11 +1483,22 @@ impl App {
         if !bindings.tabs().previous_matches(*key) && !bindings.tabs().next_matches(*key) {
             return false;
         }
-        // With two tabs, wrapping left or right selects the other view.
-        self.handle_message(
-            Msg::SetAttachedSessionsOnly(!self.attached_sessions_only),
-            ctx,
-        );
+        let count = if self.service.opencode_enabled() {
+            4
+        } else {
+            3
+        };
+        let current = self.tabs_mut().selected_index();
+        let next = if bindings.tabs().previous_matches(*key) {
+            (current + count - 1) % count
+        } else {
+            (current + 1) % count
+        };
+        self.tabs_mut()
+            .select_index_with_settings(next, ctx.animation());
+        self.sync_overview_tab(ctx);
+        ctx.request_layout();
+        ctx.request_redraw();
         ctx.stop_propagation();
         true
     }
@@ -1365,6 +1522,9 @@ impl App {
             return true;
         }
         if self.transient_menu_active() || self.view.is_active() {
+            return false;
+        }
+        if self.events_active || self.providers_active {
             return false;
         }
         if instances::is_searching(&self.instances) {
@@ -1461,10 +1621,7 @@ impl App {
         if let Some(sound) = sound {
             self.handle_message(Msg::CompletionSoundSelected(sound), ctx);
         }
-        let sessions = self.service.opencode_enabled() && self.tabs_mut().selected_index() == 0;
-        if sessions != self.attached_sessions_only {
-            self.handle_message(Msg::SetAttachedSessionsOnly(sessions), ctx);
-        }
+        self.sync_overview_tab(ctx);
         self.drain_action_menu(ctx);
         self.drain_yank_menu(ctx);
         self.drain_route_menu(ctx);
@@ -1600,6 +1757,12 @@ impl TuiNode<Msg> for App {
         outcome
     }
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        self.service.poll_providers();
+        let providers = self.service.provider_snapshot();
+        let providers_changed = self.pages_mut().update_providers(providers);
+        self.service.poll_events();
+        let events = self.service.event_snapshot();
+        let events_changed = self.pages_mut().update_events(events);
         let fade = self.service.completion_fade_seconds();
         for state in self.pages_mut().states() {
             instances::set_completion_fade(&state, fade);
@@ -1611,6 +1774,11 @@ impl TuiNode<Msg> for App {
         }
         let opencode_enabled = self.toolbar_state.borrow().opencode_enabled;
         let mut changed = self.sync_environment();
+        changed |= events_changed;
+        changed |= providers_changed;
+        let provider_action_changed = self.poll_provider_action();
+        changed |= provider_action_changed;
+        changed |= self.poll_event_action();
         changed |= self.poll_description_save();
         changed |= self.poll_creation_launches();
         if let Some(reply) = &mut self.settings_save {
@@ -1634,6 +1802,7 @@ impl TuiNode<Msg> for App {
             }
         }
         let mut result = self.view.tick(dt, settings);
+        result.layout |= provider_action_changed;
         result.layout |= std::mem::take(&mut self.details_layout_pending);
         result.layout |= opencode_enabled != self.toolbar_state.borrow().opencode_enabled;
         self.poll_manual_refresh();
@@ -1682,11 +1851,19 @@ fn overview_tabs(opencode_enabled: bool, sessions: bool) -> Tabs<Msg> {
     if opencode_enabled {
         pages.push(Tab::text("Sessions", ""));
     }
-    pages.push(Tab::text("Instances", ""));
+    if !opencode_enabled {
+        pages.push(Tab::text("Instances", ""));
+    }
+    pages.push(Tab::text("Events", ""));
+    pages.push(Tab::text("Providers", ""));
+    if opencode_enabled {
+        pages.push(Tab::text("Instances", ""));
+    }
     let mut tabs = Tabs::new(pages)
-        .selected(usize::from(opencode_enabled && !sessions))
+        .selected(if opencode_enabled && !sessions { 3 } else { 0 })
         .focused(true)
         .variant(TabsVariant::OneRow)
+        .tab_stop(false)
         .action_hotkey("yy", |_| Msg::CopyName)
         .action_hotkey("yi", |_| Msg::CopyName)
         .action_hotkey("yd", |_| Msg::CopyDescription)

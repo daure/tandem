@@ -19,6 +19,7 @@ use crate::store::environments::{EnvironmentSnapshot, UsageSummary};
 pub(super) struct State {
     pub totals: UsageSummary,
     pub available_memory_bytes: Option<u64>,
+    pub cpu_temperature_millicelsius: Option<i32>,
     pub has_running_instances: bool,
     pub stop_targets: Vec<String>,
     pub purge_targets: Vec<String>,
@@ -44,6 +45,7 @@ impl State {
         Self {
             totals: UsageSummary::instances(snapshot.instances.iter()),
             available_memory_bytes: snapshot.available_memory_bytes,
+            cpu_temperature_millicelsius: snapshot.cpu_temperature_millicelsius,
             has_running_instances: snapshot
                 .instances
                 .iter()
@@ -183,12 +185,20 @@ impl Toolbar {
     fn totals_text(&self) -> Line<'static> {
         let state = self.state.borrow();
         let totals = &state.totals;
+        let mut spans = Vec::new();
+        if let Some(temperature) = state.cpu_temperature_millicelsius {
+            spans.push(Span::raw(format!(
+                "{:.0}°C · ",
+                f64::from(temperature) / 1000.0
+            )));
+        }
         let waiting = totals.memory_waiting || totals.cpu_waiting;
         if waiting && (totals.memory_bytes.is_none() || totals.cpu_basis_points.is_none()) {
-            return Line::from(Span::styled(
+            spans.push(Span::styled(
                 self.spinner.glyph().to_owned(),
                 Style::default().fg(tuicore::theme().muted_fg()),
             ));
+            return Line::from(spans);
         }
         let mut resources =
             rows::resource_text_with_single_spinner(totals, None, self.spinner.glyph()).lines;
@@ -205,7 +215,7 @@ impl Toolbar {
             }
             cpu.spans.retain(|span| !span.content.is_empty());
         }
-        let mut spans = vec![
+        spans.extend([
             Span::raw(" "),
             Span::raw(
                 state
@@ -213,7 +223,7 @@ impl Toolbar {
                     .map(details::memory)
                     .unwrap_or_else(|| "—".into()),
             ),
-        ];
+        ]);
         if state.has_running_instances && totals.memory_bytes.is_some() {
             spans.push(Span::raw(" "));
             spans.extend(memory.spans);

@@ -68,7 +68,37 @@ fn environment() -> (tempfile::TempDir, Environments) {
 }
 
 #[test]
-fn warmup_publishes_memory_then_cpu_with_a_one_second_gap_before_minute_polling() {
+fn host_batches_refresh_every_five_seconds_without_containers_and_allow_manual_refresh() {
+    let (_home, environment) = environment();
+    environment.snapshot.lock().unwrap().instances.clear();
+    environment.refresh_resources(false);
+    assert_eq!(environment.snapshot().resource_revision, Some(1));
+    environment.refresh_resources(false);
+    assert_eq!(environment.snapshot().resource_revision, Some(1));
+
+    environment.resources.lock().unwrap().last_published =
+        Some(Instant::now() - Duration::from_secs(5));
+    environment.refresh_resources(false);
+    assert_eq!(environment.snapshot().resource_revision, Some(2));
+    environment.refresh_resources(true);
+    assert_eq!(environment.snapshot().resource_revision, Some(3));
+}
+
+#[test]
+fn host_batches_publish_when_runtime_inventory_is_unavailable() {
+    let (_home, environment) = environment();
+    environment.inventory_errors.lock().unwrap()[1] = Some("Docker unavailable".into());
+    environment.refresh_resources(false);
+    assert_eq!(environment.snapshot().resource_revision, Some(1));
+    assert!(
+        environment.snapshot().instances[0].services[0]
+            .usage
+            .is_none()
+    );
+}
+
+#[test]
+fn warmup_publishes_memory_then_cpu_with_a_one_second_gap_before_five_second_polling() {
     let (_home, environment) = environment();
     let request = environment.begin_resource_sample(false).unwrap();
     let mut reads = 0;
@@ -85,6 +115,9 @@ fn warmup_publishes_memory_then_cpu_with_a_one_second_gap_before_minute_polling(
         |gap| {
             assert_eq!(gap, Duration::from_secs(1));
             let snapshot = environment.snapshot();
+            assert_eq!(snapshot.resource_revision, Some(1));
+            environment.refresh_resources(true);
+            assert_eq!(environment.snapshot().resource_revision, Some(1));
             let usage = snapshot.instances[0].services[0].usage.unwrap();
             assert_eq!(usage.memory_bytes, 80 * 1048576);
             assert_eq!(usage.cpu_basis_points, None);
@@ -95,7 +128,7 @@ fn warmup_publishes_memory_then_cpu_with_a_one_second_gap_before_minute_polling(
                     .unwrap()
                     .begin(
                         &snapshot.instances,
-                        Instant::now() + Duration::from_secs(60),
+                        Instant::now() + Duration::from_secs(5),
                         false,
                     )
                     .is_none()
@@ -103,6 +136,7 @@ fn warmup_publishes_memory_then_cpu_with_a_one_second_gap_before_minute_polling(
         },
     );
     assert_eq!(reads, 2);
+    assert_eq!(environment.snapshot().resource_revision, Some(2));
     assert_eq!(
         environment.snapshot().instances[0].services[0]
             .usage
@@ -117,7 +151,7 @@ fn warmup_publishes_memory_then_cpu_with_a_one_second_gap_before_minute_polling(
         .resources
         .lock()
         .unwrap()
-        .begin(&instances, Instant::now() + Duration::from_secs(60), false)
+        .begin(&instances, Instant::now() + Duration::from_secs(5), false)
         .unwrap();
     environment.sample_resources_with(
         request,
@@ -365,7 +399,7 @@ fn failed_readings_report_errors_and_recover_on_the_next_poll() {
 }
 
 #[test]
-fn completed_samples_wait_one_minute_before_polling_again() {
+fn completed_samples_wait_five_seconds_before_polling_again() {
     let mut cache = ResourceCache::default();
     let instances = instances();
     let now = Instant::now();
@@ -374,12 +408,12 @@ fn completed_samples_wait_one_minute_before_polling_again() {
     cache.finish(request, Ok(samples(stats(1, 100, 1000))));
     assert!(
         cache
-            .begin(&instances, now + Duration::from_secs(59), false)
+            .begin(&instances, now + Duration::from_secs(4), false)
             .is_none()
     );
     assert!(
         !cache
-            .begin(&instances, now + Duration::from_secs(60), false)
+            .begin(&instances, now + Duration::from_secs(5), false)
             .unwrap()
             .warm_up
     );
@@ -425,7 +459,7 @@ fn new_instances_sample_only_their_containers_and_preserve_cached_totals_and_cad
         .resources
         .lock()
         .unwrap()
-        .begin(&instances, now + Duration::from_secs(30), false)
+        .begin(&instances, now + Duration::from_secs(2), false)
         .unwrap();
     assert!(request.warm_up);
     environment.sample_resources_with(
@@ -459,7 +493,7 @@ fn new_instances_sample_only_their_containers_and_preserve_cached_totals_and_cad
     let mut cache = environment.resources.lock().unwrap();
     assert!(
         cache
-            .begin(&instances, now + Duration::from_secs(59), false)
+            .begin(&instances, now + Duration::from_secs(4), false)
             .is_none()
     );
     let periodic = cache
@@ -608,7 +642,7 @@ fn partial_failures_preserve_valid_baselines_and_refresh_successful_containers()
     for (index, offset) in [
         Duration::ZERO,
         SAMPLE_INTERVAL,
-        SAMPLE_INTERVAL + Duration::from_secs(10),
+        SAMPLE_INTERVAL + Duration::from_secs(1),
     ]
     .into_iter()
     .enumerate()
@@ -658,7 +692,11 @@ fn partial_failures_preserve_valid_baselines_and_refresh_successful_containers()
     );
     assert!(
         cache
-            .begin(&instances, now + Duration::from_secs(119), false)
+            .begin(
+                &instances,
+                now + SAMPLE_INTERVAL * 2 - Duration::from_secs(1),
+                false
+            )
             .is_none()
     );
     assert_eq!(

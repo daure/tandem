@@ -66,6 +66,20 @@ struct OperationInput {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ProviderActionInput {
+    name: String,
+    action: crate::store::providers::Action,
+    #[serde(default)]
+    confirmed: bool,
+}
+
+#[derive(Serialize, JsonSchema)]
+struct ProviderActionOutput {
+    output: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct CreateInstanceInput {
     /// Name of an editable template directory from list_templates.
     template: String,
@@ -385,6 +399,29 @@ impl McpServer {
     #[tool(description = "Return Tandem's shared service status.")]
     async fn get_status(&self) -> Json<ServiceStatus> {
         Json(self.service.status())
+    }
+
+    #[tool(
+        description = "List provider packages, owned containers, paused/running state and retained failures. Does not start providers."
+    )]
+    async fn list_providers(&self) -> Result<Json<crate::store::providers::Snapshot>, String> {
+        self.service.list_providers().await.map(Json)
+    }
+
+    #[tool(
+        description = "Run start, stop, pause, resume, restart, or bounded logs for one provider. Lifecycle requires confirmed=true and trusted Docker approval. Start prepares credentials and sidecar; Stop preserves checkpoints and history. Restart preserves the existing collector, configuration, and checkpoints; verifies running/unpaused state."
+    )]
+    async fn provider_action(
+        &self,
+        Parameters(input): Parameters<ProviderActionInput>,
+    ) -> Result<Json<ProviderActionOutput>, String> {
+        let output = self
+            .service
+            .provider_action(input.name, input.action, input.confirmed)
+            .await
+            .map_err(|_| "provider worker stopped")?
+            .map_err(|error| error.to_string())?;
+        Ok(Json(ProviderActionOutput { output }))
     }
 }
 

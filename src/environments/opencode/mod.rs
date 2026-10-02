@@ -190,6 +190,13 @@ impl Observer {
             }
         }
         let client = transport::client()?;
+        let previous_panes: BTreeMap<_, _> = previous
+            .sessions
+            .iter()
+            .flat_map(|session| &session.panes)
+            .chain(previous.clients.iter().map(|client| &client.pane))
+            .map(|pane| ((pane.session.clone(), pane.id), pane.clone()))
+            .collect();
         let previously_attached: BTreeSet<_> = previous
             .sessions
             .iter()
@@ -338,9 +345,15 @@ impl Observer {
             ],
         )
         .await;
-        if let Ok(names) = names {
+        let listed_sessions = if let Ok(names) = names {
+            let names = names
+                .lines()
+                .filter(|name| !name.is_empty())
+                .take(64)
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>();
             let mut pane_tasks = tokio::task::JoinSet::new();
-            for name in names.lines().filter(|name| !name.is_empty()).take(64) {
+            for name in &names {
                 let observer = self.clone();
                 let name = name.to_owned();
                 pane_tasks.spawn(async move {
@@ -361,12 +374,40 @@ impl Observer {
                     }
                 }
             }
-        } else if !sessions.is_empty() || !presences.is_empty() {
-            errors.insert("Zellij unavailable; attachment observation incomplete".into());
-            for session in sessions.values_mut() {
-                session.stale = true;
+            Some(names)
+        } else {
+            if !sessions.is_empty() || !presences.is_empty() {
+                errors.insert("Zellij unavailable; attachment observation incomplete".into());
+                for session in sessions.values_mut() {
+                    session.stale = true;
+                }
             }
-        }
+            None
+        };
+        let attached_pane = |presence: &Presence| {
+            let id = presence.pane_id?;
+            match panes.get(&presence.zellij_session) {
+                Some(panes) => panes
+                    .iter()
+                    .find(|pane| pane.id == id && !pane.is_plugin && !pane.exited)
+                    .map(|pane| Pane {
+                        session: presence.zellij_session.clone(),
+                        id: pane.id,
+                        tab_id: pane.tab_id,
+                        tab_name: clean(&pane.tab_name),
+                    }),
+                // A fresh receipt confirms the route; a failed query cannot prove closure.
+                None if listed_sessions
+                    .as_ref()
+                    .is_none_or(|names| names.contains(&presence.zellij_session)) =>
+                {
+                    previous_panes
+                        .get(&(presence.zellij_session.clone(), id))
+                        .cloned()
+                }
+                None => None,
+            }
+        };
         // Server queries can outlast a route switch. Join attachment and resource
         // identity from fresh receipts rather than the discovery-time home route.
         let observer = self.clone();
@@ -383,19 +424,10 @@ impl Observer {
             if presence.id.is_empty()
                 || deleted.contains(&presence.id) && !observed_sessions.contains(&presence.id)
             {
-                if let Some(pane) = panes.get(&presence.zellij_session).and_then(|panes| {
-                    panes.iter().find(|pane| {
-                        Some(pane.id) == presence.pane_id && !pane.is_plugin && !pane.exited
-                    })
-                }) {
+                if let Some(pane) = attached_pane(&presence) {
                     tracked.insert((presence.zellij_session.clone(), pane.id));
                     if presence.id.is_empty() {
-                        let pane = Pane {
-                            session: presence.zellij_session,
-                            id: pane.id,
-                            tab_id: pane.tab_id,
-                            tab_name: clean(&pane.tab_name),
-                        };
+                        let stale = !panes.contains_key(&pane.session);
                         clients.insert(
                             (pane.session.clone(), pane.id),
                             Client {
@@ -403,7 +435,7 @@ impl Observer {
                                 directory: presence.directory,
                                 server: local_server(&presence.server).unwrap_or_default(),
                                 pane,
-                                stale: false,
+                                stale,
                                 awaiting_presence_since: None,
                             },
                         );
@@ -414,6 +446,7 @@ impl Observer {
             let status_failed = local_server(&presence.server)
                 .and_then(|server| failed_status_directories.get(&server))
                 .is_some_and(|directories| directories.contains(&presence.directory));
+            let pane = attached_pane(&presence);
             let session = sessions
                 .entry(presence.id.clone())
                 .or_insert_with(|| Session {
@@ -478,18 +511,8 @@ impl Observer {
             {
                 session.server = server;
             }
-            if let Some(pane) = panes.get(&presence.zellij_session).and_then(|panes| {
-                panes.iter().find(|pane| {
-                    Some(pane.id) == presence.pane_id && !pane.is_plugin && !pane.exited
-                })
-            }) {
+            if let Some(pane) = pane {
                 tracked.insert((presence.zellij_session.clone(), pane.id));
-                let pane = Pane {
-                    session: presence.zellij_session,
-                    id: pane.id,
-                    tab_id: pane.tab_id,
-                    tab_name: clean(&pane.tab_name),
-                };
                 if !session.panes.contains(&pane) {
                     session.panes.push(pane);
                 }

@@ -3,14 +3,19 @@ mod command;
 mod compose;
 pub(crate) mod config;
 mod containers;
+mod cpu_temperature;
 mod creation;
 mod docker;
+pub(crate) mod events;
 mod gateway;
+mod host_resources;
 mod inspection;
 mod journal;
 mod lifecycle;
 pub(crate) mod opencode;
 mod ownership;
+pub(crate) mod provider_sidecar;
+pub(crate) mod providers;
 mod removal;
 mod repositories;
 mod resources;
@@ -241,10 +246,6 @@ impl Environments {
             return;
         }
         let revision = self.instance_revision.load(Ordering::SeqCst);
-        let mut system = sysinfo::System::new();
-        system.refresh_memory();
-        let available_memory = system.available_memory();
-        let available_memory_bytes = (available_memory > 0).then_some(available_memory);
         let instances = docker::inspect(&self.config).and_then(|mut instances| {
             let activities = journal::enrich(&self.config, &mut instances)?;
             self.snapshot
@@ -253,10 +254,6 @@ impl Environments {
                 .activities = activities;
             Ok(instances)
         });
-        self.snapshot
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .available_memory_bytes = available_memory_bytes;
         self.publish_instances(instances, revision);
     }
 
@@ -449,6 +446,13 @@ impl Environments {
                 .to_string(),
             templates_root: self.config.templates.display().to_string(),
             workspaces_root: self.config.workspaces.display().to_string(),
+            template_repository_root: self.config.home.join("templates").display().to_string(),
+            provider_templates_root: self
+                .config
+                .home
+                .join("templates/providers")
+                .display()
+                .to_string(),
             gateway_origin: self.config.origin(),
             manifest_schema: serde_json::to_value(schemars::schema_for!(
                 crate::store::environments::Manifest

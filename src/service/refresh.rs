@@ -118,6 +118,7 @@ impl RefreshWorker {
                     scopes,
                     receiver,
                     || environments.refresh_templates(),
+                    || environments.refresh_resources(false),
                     |targets, manual| {
                         let mut errors = Vec::new();
                         if targets[0] {
@@ -130,8 +131,8 @@ impl RefreshWorker {
                         }
                         if targets[1] {
                             environments.refresh_instances();
-                            if let Some(request) = environments.begin_resource_sample(manual) {
-                                environments.sample_resources(request);
+                            if manual {
+                                environments.refresh_resources(true);
                             }
                         }
                         let snapshot = environments.snapshot();
@@ -196,6 +197,7 @@ fn run(
     scopes: [String; 3],
     receiver: mpsc::Receiver<RefreshRequest>,
     mut poll_templates: impl FnMut(),
+    mut poll_resources: impl FnMut(),
     mut refresh: impl FnMut([bool; 3], bool) -> Result<(), String>,
 ) {
     // MCP-only processes publish changes without running a background inventory observer.
@@ -232,6 +234,7 @@ fn run(
         {
             errors.push(error);
         }
+        poll_resources();
         let result = if errors.is_empty() {
             Ok(())
         } else {

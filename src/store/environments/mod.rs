@@ -233,7 +233,11 @@ pub(crate) struct EnvironmentSnapshot {
     pub loading: bool,
     pub resource_error: Option<String>,
     pub resource_sample_duration_ms: Option<u64>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub resource_revision: Option<u64>,
     pub available_memory_bytes: Option<u64>,
+    pub cpu_temperature_millicelsius: Option<i32>,
     pub observed_at_unix_seconds: Option<u64>,
     pub runtime_error: Option<String>,
     pub activities: Vec<Activity>,
@@ -312,6 +316,8 @@ pub(crate) struct Instructions {
     pub workspace_agents_template: String,
     pub templates_root: String,
     pub workspaces_root: String,
+    pub template_repository_root: String,
+    pub provider_templates_root: String,
     pub gateway_origin: String,
     pub manifest_schema: serde_json::Value,
 }

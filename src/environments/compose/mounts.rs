@@ -76,10 +76,11 @@ fn protect_source(
     read_only: bool,
 ) -> Result<(), String> {
     let (source, exists) = resolve_source(source)?;
-    let templates = fs::canonicalize(&config.templates).map_err(|error| {
+    let template_repository = config.home.join("templates");
+    let templates = fs::canonicalize(&template_repository).map_err(|error| {
         format!(
             "cannot resolve shared templates root {} for service {service}: {error}",
-            config.templates.display()
+            template_repository.display()
         )
     })?;
     let protected = source.starts_with(&templates) || templates.starts_with(&source);

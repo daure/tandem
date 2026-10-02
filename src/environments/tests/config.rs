@@ -23,6 +23,40 @@ fn action_keys_support_enter_for_details_and_configurable_letters() {
     }
 }
 
+#[test]
+fn nested_catalogs_separate_provider_packages_and_refuse_ambiguous_instance_layouts() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("templates");
+    fs::create_dir_all(root.join("instances/website")).unwrap();
+    fs::write(root.join("instances/website/tandem.json"), "{}").unwrap();
+    fs::create_dir_all(root.join("providers/sample")).unwrap();
+    fs::write(root.join("providers/sample/provider.json"), "{}").unwrap();
+    let config = Config::at(directory.path().into(), "nested-test".into(), 9876).unwrap();
+    assert_eq!(config.templates, root.join("instances"));
+    let templates = crate::environments::templates::list(&config).unwrap();
+    assert_eq!(templates.len(), 1);
+    assert_eq!(templates[0].name, "website");
+    let instructions = crate::environments::Environments::new(config)
+        .instructions()
+        .unwrap();
+    assert_eq!(
+        instructions.template_repository_root,
+        root.display().to_string()
+    );
+    assert_eq!(
+        instructions.provider_templates_root,
+        root.join("providers").display().to_string()
+    );
+    fs::create_dir_all(root.join("legacy")).unwrap();
+    fs::write(root.join("legacy/tandem.json"), "{}").unwrap();
+    assert!(
+        Config::at(directory.path().into(), "mixed-test".into(), 9876)
+            .err()
+            .unwrap()
+            .contains("both flat and nested")
+    );
+}
+
 fn template_backups(home: &Path) -> Vec<PathBuf> {
     fs::read_dir(home)
         .unwrap()

@@ -24,9 +24,22 @@ pub(crate) fn docker() -> Command {
 }
 
 pub(crate) fn run(
+    command: Command,
+    timeout: Duration,
+    progress: Option<Progress>,
+) -> Result<String, String> {
+    run_captured(command, timeout, progress, false)
+}
+
+pub(crate) fn run_combined(command: Command, timeout: Duration) -> Result<String, String> {
+    run_captured(command, timeout, None, true)
+}
+
+fn run_captured(
     mut command: Command,
     timeout: Duration,
     progress: Option<Progress>,
+    combined: bool,
 ) -> Result<String, String> {
     if timeout.is_zero() {
         return Err("operation deadline reached".into());
@@ -76,7 +89,11 @@ pub(crate) fn run(
     if !status.success() {
         return Err(format!("Docker exited {status}: {}", stderr.trim()));
     }
-    Ok(stdout)
+    Ok(if combined {
+        format!("{stdout}{stderr}")
+    } else {
+        stdout
+    })
 }
 
 fn capture(

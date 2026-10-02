@@ -7,8 +7,10 @@ mod creation;
 #[cfg(debug_assertions)]
 mod dev_server;
 mod environments;
+mod events;
 mod lifecycle;
 mod opencode;
+mod providers;
 mod refresh;
 mod settings;
 mod startup;
@@ -25,6 +27,8 @@ pub(crate) struct AppService {
     state: Arc<ServiceState>,
     opencode: Arc<opencode::Integration>,
     sound_choices: Arc<Vec<crate::store::completion::SoundChoice>>,
+    events: Arc<events::Integration>,
+    providers: Arc<providers::Integration>,
     #[cfg(not(test))]
     sound_playback: Arc<SoundPlayback>,
 }
@@ -62,6 +66,8 @@ impl AppService {
     }
 
     fn from_config(config: crate::environments::config::Config) -> Result<Self, Box<dyn Error>> {
+        let events = Arc::new(events::Integration::new(&config)?);
+        let providers = Arc::new(providers::Integration::new(&config)?);
         let settings = Arc::new(settings::Settings::open(
             config.home.join("settings.sqlite3"),
         )?);
@@ -77,6 +83,8 @@ impl AppService {
             refresh,
             opencode: Arc::new(opencode::Integration::new()),
             sound_choices: Arc::new(crate::environments::sound::available()),
+            events,
+            providers,
             #[cfg(not(test))]
             sound_playback: Arc::new(SoundPlayback::default()),
             state: Arc::new(ServiceState {

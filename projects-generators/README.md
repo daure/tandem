@@ -1,6 +1,6 @@
 # Development fixtures
 
-Generate six Git repositories and seven Tandem templates under the ignored `projects/` directory.
+Generate six source repositories, seven instance templates, and four event providers under the ignored `projects/` directory.
 Python 3.11+, Git, local Docker Engine, and Docker Compose 2.20+ are required.
 
 | Template | Repositories | Minimal feature | Coverage |
@@ -58,7 +58,7 @@ helpers retain their inherited environment. To use another fixture root, source 
 The generated environment isolates Tandem storage, Docker resource names, and the gateway port;
 Tandem's development HTTP MCP listener still uses its configured/default address.
 
-`--seed-commits` explicitly authorizes one seed commit per fixture repository. Without it, repositories
+`--seed-commits` explicitly authorizes one seed commit per source repository and one for the shared template catalog. Without it, repositories
 have empty histories and must be committed before cloning. The generator never commits the Tandem
 checkout or updates Git configuration. Seed commits use a fixed fixture identity and timestamp;
 normal Git hooks and signing settings still apply.
@@ -68,6 +68,79 @@ free port for each concurrently running fixture root. The namespace is derived f
 output path. Runtime generation needs no GitHub account or external Git remote; first startup pulls
 container images and Python packages. Package versions and image release tags are specified, but
 image tags are not content-addressed locks.
+
+## Event providers
+
+The developer catalog includes `message`, `ticket`, `system-event`, and `generic` packages.
+Each owns a Dockerfile, `src/provider.py`, normalized `sample.json`, and a validated `provider.json`.
+The manifest declares `schema_version: 1`, a unique `name`, supported `profile`, `description`,
+`protocol: "tandem-events-v1"`, and optional `feedback` names. Tandem manages one installation per
+package and namespace. Edit the payload or custom metadata, then Stop and Start it to rebuild.
+Python runs inside the sample containers;
+the HTTP protocol is language-independent and Tandem requires no Python runtime.
+
+For an existing fixture root, append the packages without moving instance templates or changing
+source repositories, workspaces, or Git history:
+
+```sh
+python3 projects-generators/generate.py --add-providers
+```
+
+After generating or appending providers, open Tandem from the checkout:
+
+```sh
+cargo run -- dev
+```
+
+Open the third tab, **Providers**, select each package, and choose **Start**. Confirm trusted Docker
+execution; Tandem provisions credentials, starts its own sidecar, builds the image, and runs the
+collector. Use the same tab to Stop, Pause, Resume, inspect details, or read Logs. No manual Compose,
+credential setup, or sidecar command is required.
+
+Open the second tab, **Events**. Four row styles arrive every three seconds, with source-specific
+data, shared people/attachments/relations, bounded supporting context, and custom metadata.
+Enter opens details; `h` manually acknowledges the current attempt; `r` creates a replay attempt
+after acknowledgment. `p` selects the originating provider; Providers' **Events** action shows only
+that source, and `a` restores all sources. These actions do not create instances or run agent prompts.
+
+Tandem retains provider-scoped credentials in SQLite and atomically writes private token files
+under `$TANDEM_HOME/provider-credentials/$TANDEM_NAMESPACE/`. Containers mount their own token file
+read-only; credential values stay out of template files and Compose environment declarations.
+Named volumes hold pending batches, checkpoint identities, and deduplicated notification records.
+
+The managed collectors use Linux Docker host networking to reach Tandem's detached loopback sidecar,
+independently of MCP. Tandem supplies its verified address. Collection persists after the TUI closes;
+the TUI supervises the sidecar when reopened, and Start or Resume repairs an interrupted sidecar.
+A disconnected provider retains its pending batch and
+retries it with identical IDs. It polls, persists, and acknowledges `received`, `replayed`, and
+`acknowledged` feedback. Read its output through **Logs** in Providers.
+
+Stop preserves checkpoints and event history. Stop and Pause immediately discard incoming batches
+before Docker work. The sample runtime advances its checkpoint on explicit discarded IDs so those
+events are not retried after activation. Start, Resume, and Restart enable ingestion; failed Stop/Pause
+operations keep it disabled. The sample runtime handles SIGTERM by interrupting pending work and
+closing its checkpoint database; pending batches remain available for retry. Pause freezes the
+collector without rebuilding or discarding state; Resume continues it. Package deletion does not remove an installed collector's
+ownership evidence, so Tandem can still Stop it. The generated `compose.providers.yaml` and
+`providers-setup` command support isolated protocol tests; normal lifecycle uses Tandem's saved
+private launch configuration. The protocol-test harness can override sample batch size and interval.
+
+Run isolated verification after building:
+
+```sh
+python3 projects-generators/tests/events_smoke.py
+python3 projects-generators/tests/events_smoke.py --docker
+python3 projects-generators/tests/providers_smoke.py
+```
+
+Both checks use temporary homes and a free loopback port. They verify all four profiles, forty
+distinct events, provider feedback acknowledgment, duplicate ingestion, and sidecar restart
+persistence. The Docker variant builds all four images and removes its own containers and volumes.
+The lifecycle check starts all four providers through Tandem, proving automatic setup, pause/resume,
+stop/start checkpoint preservation, bounded logs, sidecar recovery, and Stop after package deletion.
+The lifecycle check requires clean collector exits and reports measured Stop durations.
+These checks clean up their isolated containers, volumes, and sidecar workers; they do not touch the
+active developer fixture environment or OpenCode clients.
 
 ## Where things live
 
@@ -82,7 +155,9 @@ projects/
   env.sh                    # source this to select the fixture environment
   fixtures.json             # generated inventory and environment
   .tandem/
-    templates/              # Compose and/or manifest recipes with tandem-agents.md
+    templates/              # one Git repository for both template catalogs
+      instances/<template>/ # Compose and/or manifest recipes with tandem-agents.md
+      providers/<profile>/  # Dockerfile, src/provider.py, sample.json, provider.json
     workspaces/<instance>/  # independent writable clones of the relevant repos
 ```
 
@@ -91,7 +166,7 @@ what fresh fixtures contain. Each generated source repository is also editable a
 versioned; those edits belong to that local fixture set.
 
 The scratch-workspace seeds live in `projects-generators/assets/guidance-only/`; the generator places
-them under `.tandem/templates/guidance-only/tandem-files/`. Existing generated templates are editable:
+them under `.tandem/templates/instances/guidance-only/tandem-files/`. Existing generated templates are editable:
 add the same seed paths there to try the example without regenerating or overwriting a fixture root.
 
 Each template's `tandem-agents.md` describes its services, workspace mounts, edit/restart

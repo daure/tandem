@@ -14,9 +14,12 @@ use super::{
 };
 
 pub(super) struct Pages {
-    pages: [ChildSlot<Flex<Msg>, Msg>; 2],
+    pages: [ChildSlot<Box<dyn TuiNode<Msg>>, Msg>; 4],
     states: [SharedState; 2],
     active: usize,
+    events: super::events::SharedState,
+    providers: super::providers::SharedState,
+    event_filter: super::events::FilterState,
 }
 
 impl Pages {
@@ -26,31 +29,68 @@ impl Pages {
         states: [SharedState; 2],
         sessions: bool,
     ) -> Self {
+        let events = std::rc::Rc::new(std::cell::RefCell::new(
+            crate::store::events::Snapshot::default(),
+        ));
+        let providers =
+            std::rc::Rc::new(std::cell::RefCell::new(super::providers::State::default()));
+        let event_filter = std::rc::Rc::new(std::cell::RefCell::new(None));
         let pages = std::array::from_fn(|index| {
-            ChildSlot::new(
-                if index == 0 {
-                    "inventory-page"
-                } else {
-                    "sessions-page"
-                },
-                Flex::column()
-                    .child(
-                        "template-actions",
-                        toolbar::Toolbar::new(keys[2], keys[4], keys[8], keys[9], toolbar.clone())
-                            .align_resources_with(states[index].clone()),
-                        FlexItem::fit_content(),
-                    )
-                    .child(
-                        "instances",
-                        Instances::new(states[index].clone()),
-                        FlexItem::fill(1),
+            let (key, page): (&str, Box<dyn TuiNode<Msg>>) = if index == 3 {
+                (
+                    "providers-page",
+                    Box::new(super::providers::Providers::new(
+                        providers.clone(),
+                        events.clone(),
+                    )),
+                )
+            } else if index == 2 {
+                (
+                    "events-page",
+                    Box::new(super::events::Events::new(
+                        events.clone(),
+                        event_filter.clone(),
+                        providers.clone(),
+                    )),
+                )
+            } else {
+                (
+                    if index == 0 {
+                        "inventory-page"
+                    } else {
+                        "sessions-page"
+                    },
+                    Box::new(
+                        Flex::column()
+                            .child(
+                                "template-actions",
+                                toolbar::Toolbar::new(
+                                    keys[2],
+                                    keys[4],
+                                    keys[8],
+                                    keys[9],
+                                    toolbar.clone(),
+                                )
+                                .align_resources_with(states[index].clone()),
+                                FlexItem::fit_content(),
+                            )
+                            .child(
+                                "instances",
+                                Instances::new(states[index].clone()),
+                                FlexItem::fill(1),
+                            ),
                     ),
-            )
+                )
+            };
+            ChildSlot::new(key, page)
         });
         Self {
             pages,
             states,
             active: usize::from(sessions),
+            events,
+            providers,
+            event_filter,
         }
     }
 
@@ -63,7 +103,102 @@ impl Pages {
         self.states.clone()
     }
 
+    pub(super) fn select_events(&mut self) {
+        self.active = 2;
+    }
+
+    pub(super) fn select_providers(&mut self) {
+        self.active = 3;
+    }
+
+    pub(super) fn filter_events(&mut self, provider: String) {
+        *self.event_filter.borrow_mut() = Some(vec![provider]);
+    }
+
+    pub(super) fn highlight_provider(&mut self, identity: &str) -> bool {
+        let name = self
+            .providers
+            .borrow()
+            .snapshot
+            .providers
+            .iter()
+            .find(|provider| {
+                provider
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|manifest| manifest.name == identity)
+            })
+            .map(|provider| provider.name.clone());
+        if let Some(name) = name {
+            self.providers.borrow_mut().requested = Some(name);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(super) fn update_providers(&mut self, snapshot: crate::store::providers::Snapshot) -> bool {
+        if self.providers.borrow().snapshot == snapshot {
+            return false;
+        }
+        self.providers.borrow_mut().snapshot = snapshot;
+        true
+    }
+
+    pub(super) fn provider_action_unavailable(
+        &self,
+        name: &str,
+        action: crate::store::providers::Action,
+    ) -> Option<&'static str> {
+        self.providers
+            .borrow()
+            .snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.name == name)
+            .map_or(
+                Some("Provider is unavailable; refresh the provider list"),
+                |provider| provider.action_unavailable(action),
+            )
+    }
+
+    pub(super) fn provider_bulk_targets(
+        &self,
+        action: crate::store::providers::Action,
+    ) -> Vec<String> {
+        self.providers.borrow().snapshot.action_targets(action)
+    }
+
+    pub(super) fn update_events(&mut self, snapshot: crate::store::events::Snapshot) -> bool {
+        if *self.events.borrow() == snapshot {
+            return false;
+        }
+        *self.events.borrow_mut() = snapshot;
+        true
+    }
+
     pub(super) fn retain_control_focus(&self, route: &EventRoute, ctx: &mut EventCtx<Msg>) {
+        if self.active == 3 {
+            ctx.focus(tuicore::FocusRequest::Target(FocusId::new(
+                super::providers::FOCUS,
+            )));
+            return;
+        }
+        if self.active == 2 {
+            ctx.focus(tuicore::FocusRequest::Target(FocusId::new(
+                super::events::FOCUS,
+            )));
+            return;
+        }
+        if route
+            .path
+            .keys()
+            .iter()
+            .any(|key| matches!(key.as_str(), "events-page" | "providers-page"))
+        {
+            ctx.focus(super::initial_focus());
+            return;
+        }
         let path = tuicore::TreePath::from_keys(route.path.keys().iter().map(|key| {
             if self.pages.iter().any(|page| page.key() == key) {
                 self.pages[self.active].key().clone()
@@ -76,7 +211,28 @@ impl Pages {
         }
     }
 
+    pub(super) fn reset_overviews(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) {
+        let route = EventRoute::new(tuicore::TreePath::from_keys(["instances".into()]));
+        for (index, page) in self.pages.iter_mut().enumerate() {
+            if index == self.active {
+                continue;
+            }
+            if index < 2 {
+                super::instances::request_view_reset(&self.states[index]);
+                page.tick(Duration::ZERO, ctx.animation());
+            } else {
+                page.child_mut()
+                    .dispatch_event(&route, event, &mut EventCtx::new(ctx.animation()));
+            }
+        }
+        self.focus_overview(event, ctx);
+    }
+
     pub(super) fn focus_overview(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) {
+        if self.active >= 2 {
+            self.pages[self.active].child_mut().event(event, ctx);
+            return;
+        }
         let route = EventRoute::new(tuicore::TreePath::from_keys(["instances".into()]));
         self.pages[self.active]
             .child_mut()

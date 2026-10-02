@@ -5,10 +5,10 @@ use std::{
 
 use serde::Deserialize;
 
-use super::{Environments, stats::StatsClient};
+use super::{Environments, host_resources::HostResources, stats::StatsClient};
 use crate::store::environments::{ContainerState, Instance, InstanceService, ResourceUsage};
 
-const SAMPLE_INTERVAL: Duration = Duration::from_secs(60);
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 const WARMUP_INTERVAL: Duration = Duration::from_secs(1);
 const SAMPLE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -24,6 +24,7 @@ pub(crate) struct ResourceRequest {
 #[derive(Default)]
 pub(super) struct ResourceCache {
     last_attempt: Option<Instant>,
+    last_published: Option<Instant>,
     last_containers: BTreeMap<String, Option<String>>,
     in_flight: bool,
     samples: BTreeMap<String, CachedSample>,
@@ -188,6 +189,36 @@ impl ResourceCache {
 }
 
 impl Environments {
+    pub(crate) fn refresh_resources(&self, force: bool) {
+        {
+            let cache = self
+                .resources
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let due = cache
+                .last_published
+                .is_none_or(|last| last.elapsed() >= SAMPLE_INTERVAL);
+            if cache.in_flight || (!force && !due) {
+                return;
+            }
+        }
+        if let Some(request) = self.begin_resource_sample(force) {
+            self.sample_resources(request);
+        } else {
+            let host = HostResources::read();
+            let mut snapshot = self
+                .snapshot
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let mut cache = self
+                .resources
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            host.publish(&mut snapshot);
+            cache.last_published = Some(Instant::now());
+        }
+    }
+
     pub(crate) fn begin_resource_sample(&self, force: bool) -> Option<ResourceRequest> {
         let snapshot = self.snapshot();
         if snapshot.loading
@@ -261,6 +292,7 @@ impl Environments {
                 )
             })
             .collect::<BTreeMap<_, _>>();
+        let host = HostResources::read();
         let mut snapshot = self
             .snapshot
             .lock()
@@ -288,6 +320,8 @@ impl Environments {
         snapshot.resource_error = cache.finish(request, result);
         cache.in_flight = in_flight;
         cache.apply(&mut snapshot.instances);
+        host.publish(&mut snapshot);
+        cache.last_published = Some(Instant::now());
     }
 }
 

@@ -1,5 +1,6 @@
 use super::*;
 mod actions;
+mod attachments;
 mod destinations;
 mod folders;
 mod history;
@@ -200,8 +201,14 @@ fn observer(root: &Path) -> Observer {
 root=$(dirname "$0")
 printf '%s\n' "$*" >> "$root/calls"
 case "$*" in
-  list-sessions*) printf 'main\n' ;;
-  *list-panes*) cat "$root/panes.json" ;;
+  list-sessions*)
+    [ ! -f "$root/fail-sessions" ] || exit 1
+    if [ -f "$root/no-sessions" ]; then
+      printf 'No active zellij sessions found.\n' >&2
+      exit 1
+    fi
+    printf 'main\n' ;;
+  *list-panes*) [ ! -f "$root/fail-panes" ] || exit 1; cat "$root/panes.json" ;;
   *new-tab*) printf '9\n' ;;
   *) printf 'terminal_99\n' ;;
 esac

@@ -41,7 +41,7 @@ fn tabs_share_toolbar_controls_and_retain_separate_searches() {
             .clone();
         let route = EventRoute::new(tabs.path.clone());
 
-        for (key, sessions) in [(']', false), ('[', true)] {
+        for (key, sessions) in [('[', false), (']', true)] {
             app.dispatch_event(
                 &route,
                 &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
@@ -80,17 +80,24 @@ fn tabs_share_toolbar_controls_and_retain_separate_searches() {
         let toolbar = toolbar_line(&mut app, width);
         for (label, sessions) in [("Instances", false), ("Sessions", true)] {
             let lines = rendered_lines(&toolbar_terminal(&mut app, width), area);
-            let column = lines[0].split_once(label).unwrap().0.chars().count() as u16;
-            app.dispatch_event(
-                &route,
-                &TuiEvent::Mouse(tuicore::MouseEvent {
-                    kind: tuicore::MouseEventKind::Down(tuicore::MouseButton::Left),
-                    column,
-                    row: 0,
-                    modifiers: KeyModifiers::NONE,
-                }),
-                &mut EventCtx::new(settings),
-            );
+            if let Some((prefix, _)) = lines[0].split_once(label) {
+                let column = prefix.chars().count() as u16;
+                app.dispatch_event(
+                    &route,
+                    &TuiEvent::Mouse(tuicore::MouseEvent {
+                        kind: tuicore::MouseEventKind::Down(tuicore::MouseButton::Left),
+                        column,
+                        row: 0,
+                        modifiers: KeyModifiers::NONE,
+                    }),
+                    &mut EventCtx::new(settings),
+                );
+            } else {
+                app.handle_message(
+                    Msg::SetAttachedSessionsOnly(sessions),
+                    &mut EventCtx::new(settings),
+                );
+            }
             assert_eq!(app.attached_sessions_only, sessions);
             assert!(app.running_only && app.opencode_history && app.completion_sound);
             let lines = rendered_lines(&toolbar_terminal(&mut app, width), area);
@@ -164,7 +171,11 @@ fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_en
                     &mut EventCtx::new(settings),
                 );
                 assert!(!app.attached_sessions_only);
-                assert_eq!(app.tabs_mut().selected_index(), 0);
+                assert_eq!(
+                    app.tabs_mut().selected_index(),
+                    if key == '[' { 2 } else { 0 }
+                );
+                assert_eq!(app.providers_active, key == '[');
             }
             app.handle_message(
                 Msg::SetAttachedSessionsOnly(true),
@@ -195,14 +206,19 @@ fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_en
             .unwrap();
         assert!(app.update_snapshot(snapshot()));
         assert!(!app.attached_sessions_only);
-        assert_eq!(app.tabs_mut().selected_index(), 1);
+        assert_eq!(app.tabs_mut().selected_index(), 3);
         let header =
             rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30))[0].clone();
-        assert!(header.contains("Sessions · Instances"), "{header}");
-        app.event(
-            &TuiEvent::Key(KeyEvent::from(Key::Char('['))),
-            &mut EventCtx::new(settings),
+        assert!(
+            header.contains("Sessions · Events · Providers · Instances"),
+            "{header}"
         );
+        for _ in 0..3 {
+            app.event(
+                &TuiEvent::Key(KeyEvent::from(Key::Char('['))),
+                &mut EventCtx::new(settings),
+            );
+        }
         assert!(app.attached_sessions_only);
         assert_eq!(app.tabs_mut().selected_index(), 0);
     }
@@ -237,7 +253,7 @@ fn bracket_navigation_keeps_control_focus_and_the_tab_header_active() {
     for target in targets.iter().filter(|target| target.enabled) {
         let mut current = target.clone();
         app.dispatch_focus(target, true, &mut tuicore::FocusCtx::new(settings));
-        for (key, sessions) in [(']', false), ('[', true), ('[', false), (']', true)] {
+        for (key, sessions) in [('[', false), (']', true), ('[', false), (']', true)] {
             let mut ctx = EventCtx::new(settings);
             let outcome = app.dispatch_event(
                 &EventRoute::new(current.path.clone()),
@@ -264,12 +280,12 @@ fn bracket_navigation_keeps_control_focus_and_the_tab_header_active() {
         app.dispatch_focus(&current, false, &mut tuicore::FocusCtx::new(settings));
         assert_eq!(header(&mut app), active_header);
     }
-    for key in [']', '['] {
+    for key in ['[', ']'] {
         app.event(
             &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
             &mut EventCtx::new(settings),
         );
-        assert_eq!(app.attached_sessions_only, key == '[');
+        assert_eq!(app.attached_sessions_only, key == ']');
     }
     let tree = targets
         .iter()
@@ -282,7 +298,7 @@ fn bracket_navigation_keeps_control_focus_and_the_tab_header_active() {
             &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
             &mut EventCtx::new(settings),
         );
-        assert_eq!(app.attached_sessions_only, key != ']');
+        assert_eq!(app.events_active, key == ']');
     }
     let lines = rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30));
     assert!(lines[2].contains("12"), "{}", lines[2]);
@@ -510,7 +526,9 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
     init_ui();
     let mut app = root(AppService::for_tests());
     let mut inventory = snapshot();
+    inventory.resource_revision = Some(1);
     inventory.available_memory_bytes = Some(8 * 1073741824);
+    inventory.cpu_temperature_millicelsius = Some(65_000);
     inventory.instances[0].services[0].usage = Some(crate::store::environments::ResourceUsage {
         memory_bytes: 500 * 1048576,
         cpu_basis_points: Some(25_000),
@@ -526,7 +544,7 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
     for width in [90, 130] {
         let line = toolbar_line(&mut app, width);
         assert!(
-            line.trim_end().ends_with(" 8.0 GiB · 1.0 GiB 500%"),
+            line.trim_end().ends_with("65°C ·  8.0 GiB · 1.0 GiB 500%"),
             "{line}"
         );
         for label in ["used", "available", "CPU"] {
@@ -551,16 +569,21 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
             &mut EventCtx::new(AnimationSettings::default()),
         );
     }
-    assert!(toolbar_line(&mut app, 130).contains(" 8.0 GiB · 1.0 GiB 500%"));
+    assert!(toolbar_line(&mut app, 130).contains("65°C ·  8.0 GiB · 1.0 GiB 500%"));
 
     inventory.instances.pop();
+    inventory.cpu_temperature_millicelsius = Some(66_600);
+    inventory.available_memory_bytes = Some(7 * 1073741824);
+    app.update_snapshot(inventory.clone());
+    assert!(toolbar_line(&mut app, 130).contains("65°C ·  8.0 GiB · 1.0 GiB 500%"));
+    inventory.resource_revision = Some(2);
     app.update_snapshot(inventory);
     assert!(
         app.view
             .tick(std::time::Duration::ZERO, AnimationSettings::default())
             .layout
     );
-    assert!(toolbar_line(&mut app, 130).contains(" 8.0 GiB · 0.5 GiB 250%"));
+    assert!(toolbar_line(&mut app, 130).contains("67°C ·  7.0 GiB · 0.5 GiB 250%"));
 }
 
 #[test]
@@ -568,6 +591,7 @@ fn toolbar_totals_align_with_resource_columns_when_the_scrollbar_appears_and_dis
     init_ui();
     let mut app = root(AppService::for_tests());
     let mut inventory = snapshot();
+    inventory.cpu_temperature_millicelsius = Some(65_000);
     inventory.instances[0].services[0].usage = Some(crate::store::environments::ResourceUsage {
         memory_bytes: 500 * 1048576,
         cpu_basis_points: Some(25_000),
@@ -672,9 +696,14 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
     let spinner = tuicore::Spinner::new().glyph().to_owned();
     let mut initial = snapshot();
     initial.available_memory_bytes = Some(20 * 1073741824);
+    initial.cpu_temperature_millicelsius = Some(65_000);
     app.update_snapshot(initial);
     let line = toolbar_line(&mut app, 130);
     assert!(line.contains(&spinner), "{line}");
+    assert!(
+        line.trim_end().ends_with(&format!("65°C · {spinner}")),
+        "{line}"
+    );
     assert!(!line.contains("GiB") && !line.contains(''), "{line}");
 
     let mut inventory = snapshot();

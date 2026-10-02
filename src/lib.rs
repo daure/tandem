@@ -2,6 +2,7 @@ mod app;
 pub mod cli;
 pub mod diagnostics;
 mod environments;
+mod events_http;
 mod mcp;
 mod service;
 mod store;
@@ -35,6 +36,14 @@ pub fn run_http(bind: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     let service = AppService::initialize()?;
     let runtime = tokio::runtime::Runtime::new()?;
     let result = runtime.block_on(mcp::run_http(service.clone(), bind));
+    drop(runtime);
+    result
+}
+
+pub fn run_events(bind: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    let service = AppService::initialize()?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let result = runtime.block_on(events_http::run(service.clone(), bind, None));
     drop(runtime);
     result
 }

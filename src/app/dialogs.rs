@@ -9,7 +9,9 @@ use tuicore::{
 use super::{Modal, Msg, properties::Properties, rows::Row};
 use crate::store::environments::TemplateFile;
 
-fn dialog(title: &str) -> Dialog<Msg> {
+pub(super) const COMPACT_WIDTH: u16 = 60;
+
+pub(super) fn dialog(title: &str) -> Dialog<Msg> {
     Dialog::new()
         .top_left(title)
         .keybindings(DialogKeyBindings {
@@ -378,7 +380,7 @@ pub(super) fn confirm_delete_template(name: &str) -> Modal {
     )
 }
 
-fn confirmation(title: &str, description: String) -> Modal {
+pub(super) fn confirmation(title: &str, description: String) -> Modal {
     Box::new(
         dialog(title)
             .actions([confirm(), cancel()])

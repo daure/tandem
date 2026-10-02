@@ -33,6 +33,7 @@ pub(super) struct State {
     highlighted: Option<String>,
     searching: bool,
     rows_changed: bool,
+    reset_view: bool,
     center_highlighted: bool,
     select_first: bool,
     select_created: Option<(bool, String)>,
@@ -90,6 +91,10 @@ pub(super) fn set_cpu_column_min_width(state: &SharedState, width: usize) {
 
 pub(super) fn is_searching(state: &SharedState) -> bool {
     state.borrow().searching
+}
+
+pub(super) fn request_view_reset(state: &SharedState) {
+    state.borrow_mut().reset_view = true;
 }
 
 pub(super) fn request_center_highlighted(state: &SharedState) {
@@ -272,6 +277,15 @@ impl Instances {
     }
 
     fn sync_rows(&mut self) -> bool {
+        let changed = self.sync_updated_rows();
+        let reset = std::mem::take(&mut self.state.borrow_mut().reset_view);
+        if reset {
+            self.reset_search_and_selection();
+        }
+        changed || reset
+    }
+
+    fn sync_updated_rows(&mut self) -> bool {
         let (mut rows, select_first, agent_view, mode_changed) = {
             let mut state = self.state.borrow_mut();
             if !state.rows_changed {
@@ -604,16 +618,26 @@ impl Instances {
         }
     }
 
-    fn focus_expanded_overview(&mut self, ctx: &mut EventCtx<Msg>) {
+    fn reset_search_and_selection(&mut self) {
         self.tree.clear_search();
+        self.tree.clear_filters();
+        if self.tree.is_searching() {
+            self.tree.on_key(tuicore::Key::Enter, Rect::default());
+        }
+        if let Some(id) = self.tree.rows().first().map(|row| row.id.clone()) {
+            self.tree.highlight_id(&id);
+        }
+        self.tree.reveal_highlighted();
+        self.after_event();
+    }
+
+    fn focus_expanded_overview(&mut self, ctx: &mut EventCtx<Msg>) {
+        self.reset_search_and_selection();
         self.tree.collapse_all();
         let expanded_ids =
             Self::fully_expanded_ids(self.tree.rows(), self.state.borrow().attached_sessions_only);
         for id in expanded_ids {
             self.tree.expand(&id);
-        }
-        if let Some(id) = self.tree.rows().first().map(|row| row.id.clone()) {
-            self.tree.highlight_id(&id);
         }
         self.tree.reveal_highlighted();
         self.after_event();

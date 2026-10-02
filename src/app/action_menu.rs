@@ -21,6 +21,7 @@ pub(super) const MENU_HEIGHT: u16 = 13;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum Action {
+    Row(super::row_actions::Command),
     CopyTemplateName,
     CopyInstanceName,
     CopyServiceName,
@@ -51,6 +52,7 @@ pub(super) enum Action {
 impl Action {
     pub(super) fn index(self) -> usize {
         match self {
+            Self::Row(_) => unreachable!("row commands produce messages"),
             Self::CopyTemplateName
             | Self::CopyInstanceName
             | Self::CopyServiceName
@@ -80,6 +82,7 @@ impl Action {
 
     fn label(self) -> &'static str {
         match self {
+            Self::Row(command) => command.label(),
             Self::CopyTemplateName => "Copy template name",
             Self::CopyInstanceName => "Copy instance name",
             Self::CopyServiceName => "Copy service name",
@@ -115,6 +118,7 @@ pub(super) struct ActionMenu {
     actions: Vec<Action>,
     enabled: Rc<RefCell<Vec<Action>>>,
     field_area: Rect,
+    row_target: Option<super::row_actions::Target>,
 }
 
 pub(super) struct Target {
@@ -168,10 +172,12 @@ impl ActionMenu {
             actions: Vec::new(),
             enabled,
             field_area: Rect::default(),
+            row_target: None,
         }
     }
 
     pub(super) fn open(&mut self, target: Target, ctx: &mut EventCtx<Msg>) {
+        self.row_target = None;
         self.actions = if let Some((attached, _)) = target.opencode_session {
             if attached {
                 vec![Action::GotoPanel, Action::CloseSession]
@@ -265,6 +271,26 @@ impl ActionMenu {
                 .borrow_mut()
                 .retain(|action| !matches!(action, Action::RemoveTemplate | Action::NewInstance));
         }
+        self.open_dropdown(ctx);
+    }
+
+    pub(super) fn open_row(&mut self, target: super::row_actions::Target, ctx: &mut EventCtx<Msg>) {
+        self.actions = target.commands().into_iter().map(Action::Row).collect();
+        *self.enabled.borrow_mut() = self
+            .actions
+            .iter()
+            .copied()
+            .filter(|action| matches!(action, Action::Row(command) if target.enabled(*command)))
+            .collect();
+        self.row_target = Some(target);
+        self.open_dropdown(ctx);
+    }
+
+    pub(super) fn take_row_message(&mut self, command: super::row_actions::Command) -> Option<Msg> {
+        self.row_target.take()?.message(command)
+    }
+
+    fn open_dropdown(&mut self, ctx: &mut EventCtx<Msg>) {
         self.selected.borrow_mut().take();
         self.dropdown.clear_selection();
         self.dropdown.set_rows(self.actions.clone());
@@ -278,13 +304,20 @@ impl ActionMenu {
 
     pub(super) fn take_action(&mut self) -> Option<Action> {
         let action = self.selected.borrow_mut().take()?;
-        self.enabled.borrow().contains(&action).then_some(action)
+        // Provider requests recheck the current snapshot and explain unavailable actions.
+        (self.enabled.borrow().contains(&action)
+            || matches!(
+                self.row_target,
+                Some(super::row_actions::Target::Provider(_))
+            ))
+        .then_some(action)
     }
 }
 
 fn action_text(action: Action, keys: &[KeySpec; 10], enabled: bool) -> Text<'static> {
     let label = action.label();
     let hotkey = match action {
+        Action::Row(command) => command.hotkey().into(),
         Action::CopyTemplateName | Action::CopyCheckoutPath => "yy".into(),
         Action::CopyInstanceName => "yi".into(),
         Action::CopyServiceName => String::new(),

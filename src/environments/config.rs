@@ -74,8 +74,30 @@ impl Config {
         }
         fs::create_dir_all(&home).map_err(|error| error.to_string())?;
         let home = fs::canonicalize(home).map_err(|error| error.to_string())?;
+        let nested_templates = home.join("templates/instances");
+        if nested_templates.exists() {
+            let root = home.join("templates");
+            for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
+                let directory = entry.map_err(|error| error.to_string())?.path();
+                if [
+                    "compose.yaml",
+                    "tandem.json",
+                    "tandem-agents.md",
+                    "tandem-files",
+                ]
+                .iter()
+                .any(|name| directory.join(name).exists())
+                {
+                    return Err("instance templates are present in both flat and nested catalogs; use one layout".into());
+                }
+            }
+        }
         let config = Self {
-            templates: home.join("templates"),
+            templates: if nested_templates.exists() {
+                nested_templates
+            } else {
+                home.join("templates")
+            },
             workspaces: home.join("workspaces"),
             instructions: home.join("instructions.md"),
             home,

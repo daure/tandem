@@ -40,10 +40,14 @@ class GeneratorTests(unittest.TestCase):
             self.assertEqual(git(repo, "status", "--porcelain"), "")
             self.assertEqual(git(repo, "rev-parse", "HEAD"), git(other / name, "rev-parse", "HEAD"))
         self.assertFalse((self.root / "guestbook/frontend/.git").exists())
+        catalog = self.root / ".tandem/templates"
+        self.assertEqual(git(catalog, "rev-parse", "--show-toplevel"), str(catalog))
+        self.assertEqual(git(catalog, "status", "--porcelain"), "")
+        self.assertTrue((catalog / "instances").is_dir() and (catalog / "providers").is_dir())
         self.assertEqual(set(FIXTURES), set(json.loads((self.root / "fixtures.json").read_text())["templates"]))
         for name in FIXTURES:
             self.assertEqual(
-                (self.root / ".tandem/templates" / name / "tandem-agents.md").read_text(encoding="utf-8"),
+                (self.root / ".tandem/templates/instances" / name / "tandem-agents.md").read_text(encoding="utf-8"),
                 (ASSETS / "guidance" / f"{name}.md").read_text(encoding="utf-8"))
 
     def test_regeneration_refuses_to_touch_repositories_and_workspaces(self):
@@ -88,7 +92,7 @@ class GeneratorTests(unittest.TestCase):
         environment = {**os.environ, "TANDEM_WORKSPACE": str(self.root / ".tandem/workspaces/check"),
                        "TANDEM_UID": str(os.getuid()), "TANDEM_GID": str(os.getgid())}
         for name, fixture in FIXTURES.items():
-            template = self.root / ".tandem/templates" / name
+            template = self.root / ".tandem/templates/instances" / name
             if name in ("repo-only", "guidance-only"):
                 continue
             result = subprocess.run(["docker", "compose", "-f", str(template / "compose.yaml"),
@@ -122,7 +126,7 @@ class GeneratorTests(unittest.TestCase):
 
     def test_minimal_templates_cover_repository_and_service_only_workflows(self):
         self.generate()
-        templates = self.root / ".tandem/templates"
+        templates = self.root / ".tandem/templates/instances"
         repo = templates / "repo-only"
         self.assertFalse((repo / "compose.yaml").exists())
         manifest = json.loads((repo / "tandem.json").read_text())
@@ -144,7 +148,7 @@ class GeneratorTests(unittest.TestCase):
 
     def test_minimal_addition_preserves_existing_fixtures_and_rejects_overwrites(self):
         self.generate()
-        for path in [self.root / "repo-only", *(self.root / ".tandem/templates" / name for name in MINIMAL_FIXTURES)]:
+        for path in [self.root / "repo-only", *(self.root / ".tandem/templates/instances" / name for name in MINIMAL_FIXTURES)]:
             shutil.rmtree(path)
         source = self.root / "guestbook/README.md"
         source.write_text("User work")
@@ -160,7 +164,7 @@ class GeneratorTests(unittest.TestCase):
 
     def test_guidance_addition_preserves_existing_repositories_and_seed_status(self):
         self.generate()
-        directory = self.root / ".tandem/templates/guidance-only"
+        directory = self.root / ".tandem/templates/instances/guidance-only"
         shutil.rmtree(directory)
         before = json.loads((self.root / "fixtures.json").read_text())
         head = git(self.root / "repo-only", "rev-parse", "HEAD")

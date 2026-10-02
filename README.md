@@ -79,11 +79,14 @@ file edits require manual Refresh or reopening Tandem. Refresh reads state; it d
 Resource rows show memory above CPU using Docker Engine one-shot samples through the selected local
 Unix socket (API 1.41+). CPU is averaged between samples and displays `—` until two valid samples exist.
 Sampling starts after container discovery, publishes memory, and takes a second reading after a
-one-second pause to establish CPU usage. Automatic resource sampling runs alongside runtime refreshes
-at one-minute intervals (normally every five minutes while unfocused); new or restarted containers
-are sampled on discovery. Manual Refresh bypasses the interval, publishes memory immediately after
-the first reading, and takes a second reading after one second for current CPU usage. Sampling requests
-are serialized, including both readings. Creating/starting instances show `—` until their operation
+one-second pause to establish CPU usage. Automatic resource sampling runs every five seconds,
+independently of terminal focus and the inventory schedule. The header publishes CPU temperature,
+available RAM, and combined Docker/OpenCode memory and CPU totals together for each resource batch.
+Temperature is shown when an Intel CPU package sensor is available. New or restarted containers
+establish their CPU baseline on the next sample. Manual Refresh bypasses the interval, publishes memory
+immediately after the first reading, and takes a second reading after one second for current CPU usage.
+Sampling requests are serialized, including both readings; slow collection can delay a batch.
+Creating/starting instances show `—` until their operation
 ends; a failed startup still permits metrics for surviving running containers. Paused containers retain
 memory readings with CPU `— · paused`. Collapse, filtering and scrolling leave sampling/totals intact.
 Partial totals disclose missing coverage; stale readings retain their age and lose pressure coloring.
@@ -261,6 +264,138 @@ rejected. This is a configuration snapshot: keep local guidance current as repos
 change. To regenerate from the editable template, move the workspace file aside and launch OpenCode in the instance.
 Template-owned clone jobs and container-created files appear only after their own setup completes.
 
+## Events and developer providers
+
+**Events** is the second main tab. It shows the latest 200 accepted events in arrival order, with
+new arrivals at the bottom, using distinct message, ticket, system-event, and generic rows.
+Search by provider, stream, profile, summary, or event ID.
+Each event occupies two lines: a type glyph, provider identity, and profile-specific fields above the
+message text, ticket title, system description, or generic summary. The glyphs are `` message,
+`` ticket, `` system event, and `` generic; Providers uses the same glyphs. The glyph is green
+when the latest processing attempt is handled and uses the normal text color otherwise.
+Message headers mark nonblank thread references with `󱡠`; ticket headers omit missing or blank
+assignees. System headers show resource, optional environment, signal, and severity in that order.
+Environment aliases `prod`, `dev`, and `stage` display as `production`, `development`, and `staging`;
+custom labels remain intact. Separators and secondary fields are muted; severity colors only its label.
+Press Enter to inspect the normalized payload, metadata, supporting context, and the latest 50
+processing attempts. The feed starts on its newest event with bottom-following enabled. Selecting
+the last row enables following; moving to an older row pauses it and retains that event during updates.
+The `G` toggle controls following. `Shift+G` in the DataView selects the newest matching event and
+resumes following. `Shift+H` opens the Sessions overview from any main tab, including during search.
+It clears searches and filters on every page and selects each DataView's first item, except Events,
+which selects the newest event at the bottom and resumes following.
+With OpenCode integration disabled, it opens the Instances overview.
+Press `.` for the highlighted event's action menu with hotkeys; `p` selects its source in Providers.
+The provider multiselect at the top (`P`) filters by exact provider names. Enter toggles an option,
+Ctrl+J/Ctrl+K moves through options, and Ctrl+Enter applies the selection. An empty selection shows
+all providers. Providers' **Events** action selects only that provider in the filter. The `T` toggle
+shows only events handed over to Tandem instances; manual acknowledgments do not qualify. The count
+at the right shows displayed events out of the full retained history. Instance dispatch is pending,
+so the handover-only feed is empty. Changing a provider or handover filter selects the newest matching
+event and focuses the DataView. Escape or Ctrl+[ from the filters or toggles returns to the DataView.
+
+Events start **pending**. `h` manually marks the current attempt **handled**; this records a user
+acknowledgment, not proof of agent-task completion. `r` replays a handled event as a new pending
+attempt while preserving its original event ID and history. A pending attempt must be acknowledged
+before replay. Rules, automatic instance creation, and assignment/task-completion notifications are
+outside this developer slice.
+
+**Providers** is the third main tab. Tandem discovers packages under `provider_templates_root`.
+Each row shows its provider identity, handed-over/total event count, and runtime status. Handover counts
+are zero while instance dispatch is pending; totals cover full retained history for the manifest's
+provider identity. Select a provider and press `.` for its action menu: **Start**/**Stop** (`s`),
+**Pause**/**Resume** (`a`), **Restart** (`r`), **Logs** (`l`), and **Events** (`e`). The hotkeys choose
+the action for the observed state and also work directly on the row; unavailable menu actions are muted.
+Enter inspects its configuration and runtime state. Lifecycle actions ask for approval because they
+execute trusted Docker code.
+
+The right-side controls are **Pause all**/**Resume all** (`A`), **Start all**/**Stop all** (`S`), and
+**Restart all** (`R`). Start/Stop shows Stop when every provider is running or paused, and Start for a
+mixed state. Pause/Resume shows Resume when every provider is paused, and Pause otherwise. Bulk actions
+confirm the eligible, idle providers before running; unavailable providers are skipped. Search input
+retains uppercase letters without triggering these actions.
+
+Start provisions private credentials, starts
+the Tandem-owned sidecar, builds the image, and verifies the owned collector is running.
+There is one installation per package in each namespace. Manifest identities are unique and fixed
+for installed packages. CLI/MCP Start on a running provider preserves its configuration; apply template
+edits by stopping and starting it. Running proves container liveness, not successful source collection.
+
+Stop preserves checkpoint volumes and event history. Stop and Pause discard incoming events as soon
+as their operation starts, before Docker work; discarded events create no history or feedback.
+Failed Stop/Pause operations keep ingestion disabled; unavailable actions preserve the prior gate.
+Start, Resume, and Restart enable ingestion before collector work and restore the prior gate on failure.
+Pause freezes collection and feedback; Resume continues the same container. Restart restarts an
+existing collector with its current configuration and checkpoints, including a stopped or paused
+collector; it ensures the sidecar and verifies the collector is running and unpaused.
+Lifecycle actions verify namespace, provider, Compose project, and
+collector-service ownership before mutation. Retained launch snapshots permit Stop and Logs even
+when a package directory is removed. Build/start failures and Docker observation failures remain
+visible; unavailable Docker is not evidence that a provider is stopped.
+
+Tandem owns one detached sidecar per home/namespace, separate from MCP. It chooses a loopback port
+and passes that address to collectors. A private process lease and identity probe prevent duplicate
+workers and verify readiness. Providers and collection continue after the TUI closes. Opening Tandem
+supervises the sidecar for active providers; Start, Resume, and Restart repair an interrupted sidecar,
+retaining its recorded address so collectors reconnect without changing event identities.
+Private worker diagnostics live at `$TANDEM_HOME/provider-sidecar.log`. Provider process logs are
+available through the Providers tab. Normal operation needs no Compose command, token setup, or
+manual sidecar startup.
+
+Provider ingestion and feedback require a provider-scoped `Authorization: Bearer <token>` header;
+browser-origin requests are rejected. The owned sidecar has no MCP route. Its read-only
+`/v1/identity` probe contains process identity, not credentials. The HTTP transport has no TLS and
+managed collectors use Linux Docker host networking. `serve-events` is an optional foreground
+protocol-testing server, independent of the owned lifecycle.
+
+| Endpoint | Contract |
+| --- | --- |
+| `POST /v1/events` | JSON object with an `events` array of 1–100 events; atomic acceptance returns `receipts` with event ID, local sequence, and duplicate flag. Disabled ingestion returns HTTP 200 with empty `receipts` and a `discarded` array containing the batch's event IDs. |
+| `GET /v1/notifications` | Returns up to 100 unacknowledged notifications for the authenticated provider, oldest first. |
+| `POST /v1/notifications/{id}/ack` | Idempotently acknowledges that provider's notification; returns 204. |
+
+Each event has `schema_version: 1`, a stable `event_id`, `stream`, namespaced `type`, `summary`,
+`profile`, and normalized `data`. Optional fields are `occurred_at` (RFC 3339), `subject`, `body`,
+`url`, `people`, `attachments`, `relations`, `context`, and object-valued `metadata`.
+
+| Profile | Required normalized data | Optional normalized data |
+| --- | --- | --- |
+| `message` | `author`, `channel`, `text` | `thread` |
+| `ticket` | `key`, `title`, `status` | `assignee` |
+| `system_event` | `resource`, `signal`, `severity`, `description` | `environment`, `severity_color` |
+| `generic` | Any JSON object | — |
+
+System severity is nonblank free text up to 80 bytes; optional environment is free text up to 200 bytes.
+Both reject control characters. Source labels are preserved in storage; blank environments are omitted
+from rows. Optional `severity_color` selects `plain`, `info`, `warning`, `error`, or `success` and takes
+precedence over automatic coloring. Without an override, exact trimmed, case-insensitive labels select
+the color: info/information/informational/notice/debug/trace use info; warn/warning/caution use warning;
+err/error/critical/crit/fatal/severe/emergency/emerg/alert use error;
+success/successful/ok/okay/done/complete/completed/passed/resolved/healthy use success.
+Unknown labels use normal text color. Severity coloring is independent of the processing attempt.
+
+People contain `id`, `name`, and `role`; attachments contain `name`, `url`, and optional `media_type`;
+relations contain `kind`, `subject`, and optional `url`. Attachment references are displayed without
+fetching their contents.
+The developer packages provide complete examples, including thread context and custom metadata.
+
+Events are bounded to 64 KiB each and requests to 1 MiB. Deduplication is scoped by namespace,
+provider installation, and provider event ID. During acceptance, a matching ID with different content
+rejects the whole batch with 409. Providers must persist a batch before sending it and advance
+checkpoints only after receiving its acceptance receipts or matching discarded IDs.
+A discard acknowledgment is terminal, not a storage receipt; providers must not retry those events
+after resuming. While ingestion is enabled,
+historical observations and distinct events in a burst are all accepted; source timestamps do not
+suppress them. Stored history has no automatic pruning in this developer slice.
+
+Tandem durably queues `received`, `replayed`, and `acknowledged` feedback with stable notification
+IDs, original event IDs, local sequences, and processing-attempt IDs. Providers poll and acknowledge
+these notifications. Delivery retries and sidecar restarts preserve the queue; providers must
+deduplicate notifications and reconcile their external side effects before acknowledgment.
+
+See [developer provider setup](projects-generators/README.md#event-providers) for the four Docker
+images and isolated verification commands.
+
 ## Statuses
 
 Services show their runtime/health status; instance summaries include running/expected counts and
@@ -298,7 +433,10 @@ with the same template/name after correcting the cause. Docker failures do not m
 
 The MCP tools are `get_instructions`, `list_templates`, `get_template`, `create_template`, `update_template_manifest`,
 `list_instances`, `create_instance`, `get_operation`, `stop_instance`, `delete_instance`, `start_service`,
-`stop_service`, `restart_instance`, `restart_service`, and `get_status`.
+`stop_service`, `restart_instance`, `restart_service`, `list_providers`, `provider_action`, and `get_status`.
+Provider actions are `start`, `stop`, `pause`, `resume`, and `logs`; lifecycle actions require
+`confirmed=true`. CLI equivalents are `tandem list-providers` and `tandem provider <action> <name>`;
+they use the same service boundary and perform the sidecar/credential setup themselves.
 List tools return objects with `templates` or `instances` arrays. Mutating instance tools require
 `confirmed=true` after user approval; create waits for readiness by default, or accepts `wait=false`.
 `get_operation` reports in-process progress, elapsed time, and `running`/`succeeded`/`failed` outcomes.
@@ -342,7 +480,7 @@ edit its dedicated directory to add capabilities. Existing instances retain thei
 kind; use a new instance name to switch between workspace-only and container-backed execution.
 
 ```text
-<TANDEM_HOME>/templates/website/
+<TANDEM_HOME>/templates/instances/website/
   tandem.json
   compose.yaml                   # optional services
   tandem-agents.md                # optional template guidance
@@ -353,6 +491,11 @@ kind; use a new instance name to switch between workspace-only and container-bac
 
 Relative mounts, builds, env files, and scripts resolve against the template directory.
 Generated configuration and instance records live in Tandem's private local storage.
+Tandem uses the nested instance catalog when `templates/instances/` exists. Flat instance catalogs
+remain supported and are preserved; mixing flat and nested instance recipes fails initialization.
+Fresh developer fixtures put instance and provider packages in `templates/instances/` and
+`templates/providers/`, sharing the Git repository at `templates/`. `get_instructions` returns the
+effective instance root, provider root, and shared repository root.
 
 `tandem-files/` seeds each instance workspace with its contents, including nested directories, hidden
 files, binary files, and file permissions. Copying runs before workspace guidance generation, any
@@ -619,8 +762,10 @@ Workspace matching includes repository
 subdirectories and selects the closest owning workspace.
 
 The top **Sessions** tab groups conversations beneath instance rows and outside-Tandem
-directory groups. The **Instances** tab shows the template and instance tree. Click either tab
-or press `[` / `]` from any main-view control to switch left / right while retaining control focus.
+directory groups. **Events** is second, **Providers** third, and **Instances** shows the template and
+instance tree. With OpenCode disabled, the tabs are **Instances**, **Events**, and **Providers**. Click a tab or
+press `[` / `]` from any main-view control to switch left / right. Instance/session switches retain
+control focus; entering Events or Providers focuses its DataView.
 The tab header stays visually active; dialogs and action menus own their keyboard input.
 The **󰈈 show-all toggle** (`Shift+A`) reveals inactive instances, empty templates, and known
 OpenCode folders without open clients. It is off at startup and resets to off with `Shift+H`.

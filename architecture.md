@@ -21,6 +21,7 @@ Presentation layers adapt input and output. `AppService` is the sole application
 - `main.rs` installs diagnostics and enters the selected interface.
 - `lib.rs` initializes one `AppService` per process and wires long-running interfaces.
 - `cli.rs`, `mcp.rs`, and `app.rs` translate their transports into service calls. They contain no domain rules or infrastructure I/O.
+- `events_http.rs` adapts authenticated provider ingestion and feedback to service calls on a listener separate from MCP.
 - `service.rs` and `service/` coordinate use cases, workers, persistence, and external adapters.
 - `environments/` owns Docker, Compose, gateway, repository, filesystem, and process integration.
 - `store/<domain>/` owns domain types, validation, state transitions, and pure summaries.
@@ -61,6 +62,8 @@ participate in the migration gate. Detached workers require their parent's compl
 ## Background work and refresh
 
 A serial refresh worker coalesces inventory requests and uses persisted revision counters to observe changes from other Tandem processes. Resource collection augments inventory snapshots but does not determine lifecycle or health. Sampling failures retain valid prior readings with error provenance.
+
+Resource collection runs on a five-second cadence independently of the inventory schedule and terminal focus. Each batch publishes host memory and CPU temperature atomically with container usage. The TUI header incorporates the latest OpenCode usage only when a resource batch publishes; activity and inventory projections retain their own cadence. Initial CPU warm-up and manual refresh may publish sooner.
 
 Long-running mutations publish progress through operation records. Completion is based on fresh observations of the targeted resources, not command exit alone. External commands run with bounded lifetimes and keep their output away from terminal and MCP protocol streams.
 
@@ -137,6 +140,68 @@ Optional `tandem-files/` contents seed the workspace root before repository prov
 preserves existing regular files and rejects symlinks, special files, reserved workspace paths, and
 repository-target overlap. Template snapshots include the recursive file tree and metadata; the
 background template observer detects additions, edits, removals, and folder deletion for every interface.
+
+The shared template repository can contain `instances/` and `providers/` catalogs. Instance discovery
+uses `instances/` when present; flat catalogs are supported without relocation, and mixed instance
+layouts fail initialization. MCP guidance reports the shared repository and effective catalog paths.
+Writable-mount protection covers the entire shared repository, including sibling provider packages.
+
+## Provider events
+
+`store/events` defines versioned envelopes, four typed profiles, processing attempts, and feedback
+messages. `environments/events` owns namespace/provider-scoped SQLite identities and transactional
+ingestion, attempts, and notification queues in the private application database. Acceptance creates
+an event, pending attempt, and `received` notification atomically. Matching redeliveries retain their
+receipt; conflicting content rejects the batch. Provider credentials authorize only their own
+ingestion and feedback, independently of event-supplied metadata.
+System-event severity and optional environment/color hints retain source values; a pure projection
+selects the semantic tone from an explicit hint or an exact common label. Missing optional fields are
+omitted from serialization so canonical retained events remain compatible with duplicate redelivery.
+
+`service/events` schedules blocking database work and single-flight feed observation. Every TUI
+process reads durable events through background snapshots, including when a separate sidecar owns
+the listener. Failed observations retain prior data with error provenance. The event DataView and
+profile renderers are pure presentation; the root coordinator retains modal/focus routing while
+capability-specific event logic lives in `app/events`.
+
+The developer slice records manual acknowledgment as handled and supports explicit replay of handled
+events with separate, idempotent attempt identities. Feedback is `received`, `replayed`, or
+`acknowledged`, polled and acknowledged by providers. Durable records survive sidecar/provider
+disconnects; external provider side effects still require idempotency or reconciliation. Agent
+assignment and task-completion transitions belong to the future dispatch capability.
+
+Developer provider packages have independent Docker build contexts, read-only private token mounts,
+and named checkpoint volumes. Their sample Python runtime is a fixture dependency; the provider
+contract is language-independent HTTP. Provider containers have lifecycle ownership separate from
+application instances. The sidecar defaults to loopback, rejects browser origins, and exposes no MCP
+transport. Events are retained durably while the feed and attempt-history projections are bounded.
+
+`store/providers` owns manifest, action, and runtime projections. `environments/providers` discovers
+packages, snapshots validated launches in SQLite, materializes private Compose files, and operates
+only positively owned collectors and volumes. Namespace-scoped locks serialize conflicting work;
+fresh Docker evidence verifies lifecycle completion. Stopping preserves checkpoints and source
+identities. Launch snapshots preserve source identity and permit lifecycle inspection after package
+deletion. `service/providers` coordinates bounded blocking operations and snapshot observation;
+`app/providers`, CLI, and MCP adapt that contract without owning lifecycle I/O.
+Lifecycle completion publishes the targeted collector's verified state and clears its operation
+before any full-inventory refresh. Observation revisions prevent an older in-flight snapshot from
+overwriting a completed action. The background observer owns full provider discovery and refresh.
+
+Provider lifecycle persists a namespace/source-scoped ingestion gate before Docker work. Stop and
+Pause disable ingestion; authenticated batches receive discarded IDs without events, attempts, or
+feedback. The ingestion transaction reads the gate so detached sidecars share the same cutoff.
+Failed Stop/Pause operations keep ingestion disabled; unavailable actions restore the prior gate.
+Start, Resume, and Restart enable ingestion before collector work and restore the prior gate on failure.
+
+Provider Start prepares its private token and ensures a detached native sidecar. Restart operates the
+existing owned collector with its saved configuration and checkpoints, unpauses it when needed, and
+verifies it is running and unpaused. The sidecar worker owns a namespace lease, binds loopback, and
+publishes a private receipt with an independently probed process identity. Its recorded address survives
+restart. The TUI supervises it for active collectors; Start, Resume, and Restart also ensure readiness.
+Sidecar and collector lifetimes are independent of open terminal clients. MCP remains a separate
+transport. An optional foreground `serve-events` mode supports
+protocol tests. Providers is the third tab, with lifecycle approval, bounded logs, and exact source
+links to the second Events tab.
 
 ## Growth rules
 
