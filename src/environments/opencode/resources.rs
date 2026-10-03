@@ -21,7 +21,7 @@ pub(super) fn collect(
         .map(|process| (process.pid, process))
         .collect();
     let mut latest = BTreeMap::<u32, &Presence>::new();
-    for presence in presences {
+    for presence in presences.iter().filter(|presence| presence.active) {
         if latest
             .get(&presence.pid)
             .is_none_or(|current| presence.observed_at > current.observed_at)

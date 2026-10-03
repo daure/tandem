@@ -10,7 +10,7 @@
 ## OpenCode live verification
 
 After changing `src/environments/opencode/bridge.mjs`, install the rebuilt companion at the path
-used by `~/.config/opencode/tui.json`:
+used by `~/.config/opencode/cli.json` (V1: `tui.json`):
 
 ```bash
 cargo build --bin tandem
@@ -28,7 +28,7 @@ development-only check and obtain user approval before running it:
 python3 src/environments/opencode/tests/live.py
 ```
 
-Requires Linux with Python 3, OpenCode (verified with 1.18.29), and Zellij 0.45 or later on `PATH`.
+Requires Linux with Python 3, OpenCode (verified with 1.18.29 and 2.0.22), and Zellij 0.45 or later on `PATH`.
 It starts temporary servers and terminal clients with isolated configuration, sends no model
 prompts, and cleans up its test resources. Passing checks cover companion loading, conversation
 switches, exact stacked-pane focus, and client-close detection.

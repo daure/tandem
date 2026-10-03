@@ -132,19 +132,6 @@ impl AppService {
         receiver
     }
 
-    pub(crate) fn mark_event_handled(
-        &self,
-        sequence: i64,
-        attempt: i64,
-    ) -> oneshot::Receiver<Result<i64, Error>> {
-        let store = self.events.store.clone();
-        let (sender, receiver) = oneshot::channel();
-        self.runtime.spawn_blocking(move || {
-            let _ = sender.send(store.mark_handled(sequence, attempt).map(|()| attempt));
-        });
-        receiver
-    }
-
     pub(crate) fn setup_developer_providers(&self) -> Result<String, Error> {
         self.events
             .store

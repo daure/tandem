@@ -77,20 +77,37 @@ automatic retry. Other lifecycle actions retain their existing execution scope.
 
 ## OpenCode observation
 
-`service/opencode` owns a cancellable, single-flight observer and navigation tasks, gated by the
+`service/opencode` owns a cancellable, single-flight event-driven observer and navigation tasks, gated by the
 persisted `integrations.opencode` setting. `environments/opencode` reads client-presence and
 station-daemon receipts, queries loopback OpenCode HTTP endpoints, and invokes bounded Zellij
 commands. `store/opencode` owns session state, overlapping counts, and workspace matching;
 the TUI projects these snapshots into instance summaries, an outside-Tandem workspace group,
 and conversation/pane children.
 
-The bundled OpenCode TUI companion runs in each client and publishes its current route's
-conversation ID with PID, heartbeat, server, and Zellij identity. Server processes are shared
+Filesystem notifications discover receipt changes and servers. One authenticated live-event
+subscription per local server requests coalesced reconciliation reads; startup and reconnect request
+a baseline because subscriptions have no replay. Client-local receipt changes update attachment,
+metadata, and tab positions without server reads. Unchanged heartbeats leave the snapshot untouched.
+Stream failures mark affected state stale and retry with bounded backoff. Stale visibility uses elapsed
+time rather than event count. The five-second process-sampling timer also checks client liveness and
+presence expiry. Watchers and subscriptions are disposed when the integration is disabled.
+
+The bundled OpenCode TUI companion runs in each client and publishes its current route and open
+session tabs with PID, heartbeat, server, and Zellij identity. Native reactive computations track
+routes, tab order, and cached session metadata; server-event listeners cover cache changes. All open
+tabs attach to the same client pane and retain their native positions; navigation selects the requested
+OpenCode tab before focusing that pane. Server processes are shared
 across directories and do not own client attachment identity. Fresh receipts and live panes
 establish attachment and authorize navigation or closure of that exact pane. Observed conversations
 can be resumed in their recorded directory on their loopback server, including external workspaces.
 New clients target an instance workspace or an observed directory. Prepared instance workspaces receive
 validated guidance preparation, while external directories remain outside Tandem provisioning.
+The TUI's new-session action reuses a V2 client through an authenticated loopback companion endpoint
+advertised in its private presence receipt. The companion focuses the first open idle tab in native
+order whose directory matches and whose synchronized messages, queued input, and forms are empty,
+or creates a session tab when none qualifies. Fresh receipts and live Zellij inventory authorize that
+exact client. Failed requests surface uncertain
+creation without launching a second client. Clientless workspaces and V1 clients use pane launching.
 During instance creation, the detached startup worker validates the workspace and clears history,
 copies template seed files, and generates workspace guidance before launching a requested client.
 The client launches before repository provisioning and Compose rendering. Early guidance uses declared
@@ -103,7 +120,7 @@ owned panes from the external aggregate. With integration enabled, instance purg
 clients under the instance lock after ownership validation and before resource deletion. Verified local
 ownership records allow client closure before Docker inspection. Group pane closures run concurrently;
 fresh receipts authorize exact-pane closure and live pane inventory verifies completion. Closure
-failures preserve that instance's resources. Directory-scoped server status and pending question requests
+failures preserve that instance's resources. Version-specific server status and directory-scoped forms/questions
 establish activity. Awaiting an answer pauses busy timing and triggers completion feedback once on
 the transition from busy. Titles are presentation data.
 Unknown observations stay explicit, and disabling the integration discards its cache and cancels
@@ -164,11 +181,14 @@ the listener. Failed observations retain prior data with error provenance. The e
 profile renderers are pure presentation; the root coordinator retains modal/focus routing while
 capability-specific event logic lives in `app/events`.
 
-The developer slice records manual acknowledgment as handled and supports explicit replay of handled
-events with separate, idempotent attempt identities. Feedback is `received`, `replayed`, or
-`acknowledged`, polled and acknowledged by providers. Durable records survive sidecar/provider
-disconnects; external provider side effects still require idempotency or reconciliation. Agent
-assignment and task-completion transitions belong to the future dispatch capability.
+The developer slice stores pending/accepted attempts and supports explicit replay of accepted
+events with separate, idempotent attempt identities. Acceptance means a rule matched and triggered
+an action; rule execution is pending, so newly received events remain pending. Retained terminal
+processing history preserves its identities and timestamps through an atomic schema migration.
+Feedback is `received` or `replayed`; retained `acknowledged` notifications remain readable. Providers
+poll and acknowledge notifications independently of event acceptance. Durable records survive
+sidecar/provider disconnects; external provider side effects require idempotency or reconciliation.
+Agent assignment, prompt delivery, and task completion are distinct future dispatch transitions.
 
 Developer provider packages have independent Docker build contexts, read-only private token mounts,
 and named checkpoint volumes. Their sample Python runtime is a fixture dependency; the provider

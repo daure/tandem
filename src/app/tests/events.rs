@@ -110,20 +110,20 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
             };
             assert_eq!(span.style.fg, Some(color), "{}", span.content);
         }
-        let mut handled = row.clone();
-        handled.attempts[0].status = crate::store::events::ProcessingStatus::Handled;
-        let handled_text = crate::app::events::row_text(&handled);
-        assert_eq!(handled_text.lines.len(), 2);
+        let mut accepted = row.clone();
+        accepted.attempts[0].status = crate::store::events::ProcessingStatus::Accepted;
+        let accepted_text = crate::app::events::row_text(&accepted);
+        assert_eq!(accepted_text.lines.len(), 2);
         assert_eq!(
-            handled_text.lines[0].spans[0].style.fg,
+            accepted_text.lines[0].spans[0].style.fg,
             Some(theme.success_fg())
         );
-        assert_eq!(handled_text.lines[0].spans[1..], text.lines[0].spans[1..]);
-        assert_eq!(handled_text.lines[1], text.lines[1]);
-        handled.attempts.insert(0, row.attempts[0].clone());
-        assert_eq!(crate::app::events::row_text(&handled), text);
-        handled.attempts.clear();
-        assert_eq!(crate::app::events::row_text(&handled), text);
+        assert_eq!(accepted_text.lines[0].spans[1..], text.lines[0].spans[1..]);
+        assert_eq!(accepted_text.lines[1], text.lines[1]);
+        accepted.attempts.insert(0, row.attempts[0].clone());
+        assert_eq!(crate::app::events::row_text(&accepted), text);
+        accepted.attempts.clear();
+        assert_eq!(crate::app::events::row_text(&accepted), text);
     }
     for width in [40, 130] {
         let (layout, text) = render(&mut app, width);
@@ -182,7 +182,6 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     let text = render(&mut app, 130).1;
     for (label, key) in [
         ("View details", "Enter"),
-        ("Mark handled", "h"),
         ("Replay", "r"),
         ("Go to provider", "p"),
     ] {
@@ -403,96 +402,6 @@ fn severity_override_colors_only_the_supplied_label_and_event_text_is_sanitized(
     let text = crate::app::events::row_text(&generic);
     assert_eq!(text.lines[0].to_string(), " sensor · sample .observed");
     assert_eq!(text.lines[1].to_string(), "A summary");
-}
-
-#[test]
-fn manual_acknowledgment_colors_the_latest_glyph_and_replay_restores_plain_through_app_service() {
-    use crate::store::events::ProcessingStatus;
-
-    init_ui();
-    let service = AppService::for_tests();
-    let token = service.register_provider_for_tests("sample");
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    runtime
-        .block_on(service.ingest_events(
-            token,
-            Batch {
-                events: vec![crate::environments::events::tests::event(
-                    "acknowledge-replay",
-                )],
-            },
-        ))
-        .unwrap();
-    let mut app = crate::app::root(service.clone());
-    app.update_snapshot(snapshot());
-    refresh_events(&mut app, 1);
-    app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Char(']'))),
-        &mut EventCtx::default(),
-    );
-    let (layout, _) = render(&mut app, 130);
-    let target = layout
-        .focus_targets()
-        .iter()
-        .find(|target| target.id.as_str() == crate::app::events::FOCUS)
-        .unwrap();
-    let route = EventRoute::new(target.path.clone());
-    let pending = service.event_snapshot().records.remove(0);
-    let before = crate::app::events::row_text(&pending);
-    assert_eq!(
-        before.lines[0].spans[0].style.fg,
-        Some(tuicore::theme().text_fg())
-    );
-    let mut ctx = EventCtx::default();
-    app.dispatch_event(
-        &route,
-        &TuiEvent::Key(KeyEvent::from(Key::Char('h'))),
-        &mut ctx,
-    );
-    assert!(
-        matches!(ctx.messages(), [Msg::HandleEvent(sequence, attempt)] if *sequence == pending.sequence && *attempt == pending.attempts[0].id)
-    );
-    for message in ctx.drain_messages() {
-        app.handle_message(message, &mut EventCtx::default());
-    }
-    refresh_events_until(&mut app, |snapshot| {
-        snapshot.records[0].attempts[0].status == ProcessingStatus::Handled
-    });
-    assert!(app.event_action.is_none());
-    let handled = service.event_snapshot().records.remove(0);
-    let after = crate::app::events::row_text(&handled);
-    assert_eq!(after.lines.len(), 2);
-    assert_eq!(
-        after.lines[0].spans[0].style.fg,
-        Some(tuicore::theme().success_fg())
-    );
-    assert_eq!(after.lines[0].spans[1..], before.lines[0].spans[1..]);
-    assert_eq!(after.lines[1], before.lines[1]);
-    let mut ctx = EventCtx::default();
-    app.dispatch_event(
-        &route,
-        &TuiEvent::Key(KeyEvent::from(Key::Char('r'))),
-        &mut ctx,
-    );
-    assert!(
-        matches!(ctx.messages(), [Msg::ReplayEvent(sequence)] if *sequence == pending.sequence)
-    );
-    for message in ctx.drain_messages() {
-        app.handle_message(message, &mut EventCtx::default());
-    }
-    refresh_events_until(&mut app, |snapshot| snapshot.records[0].attempts.len() == 2);
-    assert!(app.event_action.is_none());
-    let replayed = service.event_snapshot().records.remove(0);
-    assert_eq!(replayed.attempts[0].status, ProcessingStatus::Pending);
-    assert!(replayed.attempts[0].replay);
-    assert_eq!(replayed.attempts[1].status, ProcessingStatus::Handled);
-    assert_eq!(replayed.event, pending.event);
-    assert_eq!(crate::app::events::row_text(&replayed), before);
-    assert!(
-        render(&mut app, 130)
-            .1
-            .contains(" sample · Alex · development · 󱡠")
-    );
 }
 
 #[test]
@@ -727,20 +636,20 @@ fn events_navigation_repairs_focus_and_remains_available_without_opencode() {
 }
 
 #[test]
-fn handover_toggle_excludes_manual_acknowledgments_and_preserves_provider_filter_on_refresh() {
+fn handover_toggle_requires_assignment_and_preserves_provider_filter_on_refresh() {
     init_ui();
     let mut app = root(AppService::for_tests());
     let record = crate::store::events::Record {
         sequence: 1,
         provider: "alpha".into(),
         received_at: "now".into(),
-        event: crate::environments::events::tests::event("acknowledged-event"),
+        event: crate::environments::events::tests::event("accepted-event"),
         attempts: vec![crate::store::events::Attempt {
             id: 1,
-            status: crate::store::events::ProcessingStatus::Handled,
+            status: crate::store::events::ProcessingStatus::Accepted,
             replay: false,
             created_at: "now".into(),
-            handled_at: Some("now".into()),
+            accepted_at: Some("now".into()),
         }],
     };
     let mut other = record.clone();

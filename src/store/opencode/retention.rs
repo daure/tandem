@@ -1,13 +1,16 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use super::Snapshot;
 
-const STALE_OBSERVATION_LIMIT: u8 = 3;
+const STALE_GRACE: Duration = Duration::from_secs(6);
 
 #[derive(Default)]
 pub(crate) struct Retention {
-    sessions: BTreeMap<String, u8>,
-    clients: BTreeMap<(String, u32), u8>,
+    sessions: BTreeMap<String, Instant>,
+    clients: BTreeMap<(String, u32), Instant>,
 }
 
 impl Retention {
@@ -17,8 +20,12 @@ impl Retention {
             .iter()
             .filter(|session| session.stale)
             .map(|session| {
-                let attempts = self.sessions.get(&session.id).copied().unwrap_or(0);
-                (session.id.clone(), attempts.saturating_add(1))
+                let since = self
+                    .sessions
+                    .get(&session.id)
+                    .copied()
+                    .unwrap_or_else(Instant::now);
+                (session.id.clone(), since)
             })
             .collect();
         self.clients = snapshot
@@ -27,44 +34,44 @@ impl Retention {
             .filter(|client| client.stale)
             .map(|client| {
                 let key = (client.pane.session.clone(), client.pane.id);
-                let attempts = self.clients.get(&key).copied().unwrap_or(0);
-                (key, attempts.saturating_add(1))
+                let since = self.clients.get(&key).copied().unwrap_or_else(Instant::now);
+                (key, since)
             })
             .collect();
     }
 
     pub fn visible_snapshot(&self, snapshot: &Snapshot) -> Snapshot {
         let mut snapshot = snapshot.clone();
-        snapshot.sessions.retain(|session| {
-            !session.stale
-                || self.sessions.get(&session.id).copied().unwrap_or(0) < STALE_OBSERVATION_LIMIT
-        });
+        snapshot
+            .sessions
+            .retain(|session| !session.stale || within_grace(self.sessions.get(&session.id)));
         snapshot.clients.retain(|client| {
             !client.stale
-                || self
-                    .clients
-                    .get(&(client.pane.session.clone(), client.pane.id))
-                    .copied()
-                    .unwrap_or(0)
-                    < STALE_OBSERVATION_LIMIT
+                || within_grace(
+                    self.clients
+                        .get(&(client.pane.session.clone(), client.pane.id)),
+                )
         });
         snapshot.resources.retain(|resource| {
             if resource.session_id.is_empty() {
                 resource.pane_id.is_none_or(|pane_id| {
-                    self.clients
-                        .get(&(resource.zellij_session.clone(), pane_id))
-                        .copied()
-                        .unwrap_or(0)
-                        < STALE_OBSERVATION_LIMIT
+                    within_grace(
+                        self.clients
+                            .get(&(resource.zellij_session.clone(), pane_id)),
+                    )
                 })
             } else {
-                self.sessions
-                    .get(&resource.session_id)
-                    .copied()
-                    .unwrap_or(0)
-                    < STALE_OBSERVATION_LIMIT
+                within_grace(self.sessions.get(&resource.session_id))
             }
         });
         snapshot
     }
 }
+
+fn within_grace(since: Option<&Instant>) -> bool {
+    since.is_none_or(|since| since.elapsed() < STALE_GRACE)
+}
+
+#[cfg(test)]
+#[path = "../tests/opencode_retention.rs"]
+mod tests;

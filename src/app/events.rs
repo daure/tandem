@@ -14,7 +14,7 @@ use tuicore::{
 };
 
 use super::Msg;
-use crate::store::events::{ProcessingStatus, Record, Snapshot};
+use crate::store::events::{Record, Snapshot};
 
 mod rows;
 pub(super) use rows::{profile_icon, row_text};
@@ -160,7 +160,7 @@ impl Events {
             .records
             .iter()
             .filter(|row| self.sources.is_empty() || self.sources.contains(&row.provider))
-            // Manual acknowledgment does not establish an instance handover; dispatch has no assignments.
+            // Acceptance alone does not establish an instance handover; dispatch has no assignments.
             .filter(|_| !handovers_only)
             .cloned()
             .collect();
@@ -328,13 +328,6 @@ impl Events {
             }
         } else if KeySpec::plain('r').matches(*key) {
             ctx.emit(Msg::ReplayEvent(id));
-        } else if KeySpec::plain('h').matches(*key) {
-            let Some(attempt) = self.row(id).and_then(|row| row.attempts.first()) else {
-                return false;
-            };
-            if attempt.status == ProcessingStatus::Pending {
-                ctx.emit(Msg::HandleEvent(id, attempt.id));
-            }
         } else {
             return false;
         }

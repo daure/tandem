@@ -222,7 +222,7 @@ fn validate_text(name: &str, value: &str, maximum: usize) -> Result<(), Error> {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ProcessingStatus {
     Pending,
-    Handled,
+    Accepted,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -231,7 +231,7 @@ pub(crate) struct Attempt {
     pub status: ProcessingStatus,
     pub replay: bool,
     pub created_at: String,
-    pub handled_at: Option<String>,
+    pub accepted_at: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

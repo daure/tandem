@@ -20,12 +20,20 @@ impl EventStore {
             path: config.home.join("settings.sqlite3"),
             namespace: config.namespace.clone(),
         };
-        store
-            .connection()?
-            .execute_batch(include_str!("../../migrations/0006_events.sql"))?;
-        store
-            .connection()?
-            .execute_batch(include_str!("../../migrations/0008_provider_ingestion.sql"))?;
+        let mut connection = store.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute_batch(include_str!("../../migrations/0006_events.sql"))?;
+        transaction.execute_batch(include_str!("../../migrations/0008_provider_ingestion.sql"))?;
+        let legacy: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('event_attempts') WHERE name = 'handled_at')",
+            [],
+            |row| row.get(0),
+        )?;
+        if legacy {
+            transaction
+                .execute_batch(include_str!("../../migrations/0009_event_acceptance.sql"))?;
+        }
+        transaction.commit()?;
         Ok(store)
     }
 
@@ -275,21 +283,21 @@ impl EventStore {
         })? {
             let (sequence, provider, received_at, payload) = result?;
             let mut attempts = transaction.prepare(
-                "SELECT id, status, replay, created_at, handled_at FROM event_attempts
+                "SELECT id, status, replay, created_at, accepted_at FROM event_attempts
                  WHERE event_sequence = ?1 ORDER BY id DESC LIMIT 50",
             )?;
             let attempts = attempts
                 .query_map([sequence], |row| {
                     Ok(Attempt {
                         id: row.get(0)?,
-                        status: if row.get::<_, String>(1)? == "handled" {
-                            ProcessingStatus::Handled
+                        status: if row.get::<_, String>(1)? == "accepted" {
+                            ProcessingStatus::Accepted
                         } else {
                             ProcessingStatus::Pending
                         },
                         replay: row.get(2)?,
                         created_at: row.get(3)?,
-                        handled_at: row.get(4)?,
+                        accepted_at: row.get(4)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -334,9 +342,9 @@ impl EventStore {
             [sequence],
             |row| row.get(0),
         )?;
-        if status != "handled" {
+        if status != "accepted" {
             return Err(Error::Conflict(
-                "mark the current attempt handled before replaying".into(),
+                "the current attempt must be accepted before replaying".into(),
             ));
         }
         let attempt = add_attempt(&transaction, sequence, true, Some(request_id), &now())?;
@@ -350,41 +358,6 @@ impl EventStore {
         )?;
         transaction.commit()?;
         Ok(attempt)
-    }
-
-    pub(crate) fn mark_handled(&self, sequence: i64, attempt: i64) -> Result<(), Error> {
-        let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (provider, event_id) = self.source(&transaction, sequence)?;
-        let changed = transaction.execute(
-            "UPDATE event_attempts SET status = 'handled', handled_at = ?3
-             WHERE event_sequence = ?1 AND id = ?2 AND status = 'pending'",
-            params![sequence, attempt, now()],
-        )?;
-        if changed != 0 {
-            self.notify(
-                &transaction,
-                &provider,
-                &event_id,
-                sequence,
-                attempt,
-                NotificationKind::Acknowledged,
-            )?;
-        } else {
-            let exists = transaction
-                .query_row(
-                    "SELECT 1 FROM event_attempts WHERE event_sequence = ?1 AND id = ?2",
-                    params![sequence, attempt],
-                    |_| Ok(()),
-                )
-                .optional()?
-                .is_some();
-            if !exists {
-                return Err(Error::NotFound);
-            }
-        }
-        transaction.commit()?;
-        Ok(())
     }
 
     fn source(&self, connection: &Connection, sequence: i64) -> Result<(String, String), Error> {

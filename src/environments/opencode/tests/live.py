@@ -37,6 +37,10 @@ def main():
     opencode = shutil.which("opencode")
     zellij = shutil.which("zellij")
     assert opencode and zellij, "OpenCode and Zellij must be installed"
+    version = subprocess.check_output([os.environ.get("OPENCODE_V2_TEST_BINARY", opencode), "--version"], text=True).strip()
+    if version.startswith(("opencode v2.", "2.")):
+        from live_v2 import main as native_main
+        return native_main()
     plugin = Path(__file__).resolve().parents[1] / "bridge.mjs"
     with tempfile.TemporaryDirectory(prefix="tandem-live-") as temporary:
         root = Path(temporary)

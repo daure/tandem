@@ -1,10 +1,13 @@
 mod conversation;
+pub(crate) mod events;
 mod history;
 mod navigation;
 mod purge;
 mod resources;
 mod server;
+mod tabs;
 mod transport;
+mod v2;
 
 pub(crate) use conversation::load as conversation;
 pub(crate) use history::clear as clear_history;
@@ -32,7 +35,7 @@ pub(crate) struct Observer {
     pub zellij: PathBuf,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 struct Presence {
     pid: u32,
     observed_at: u64,
@@ -40,6 +43,7 @@ struct Presence {
     title: String,
     directory: String,
     server: String,
+    tab_control: Option<tabs::Control>,
     last_question: Option<String>,
     activity: Activity,
     agent: Option<String>,
@@ -52,6 +56,15 @@ struct Presence {
     context_limit: Option<u64>,
     zellij_session: String,
     pane_id: Option<u32>,
+    #[serde(default)]
+    tabs: Vec<Presence>,
+    #[serde(default = "presence_active")]
+    active: bool,
+    tab_index: Option<usize>,
+}
+
+fn presence_active() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -121,7 +134,8 @@ impl Observer {
                     .is_some_and(|extension| extension == "json")
             })
             .filter_map(|path| {
-                let presence: Presence = serde_json::from_str(&read_small(&path)?).ok()?;
+                let presence: Presence =
+                    serde_json::from_str(&read_bounded(&path, 1_048_576)?).ok()?;
                 if now.abs_diff(presence.observed_at) > 10_000
                     || presence.pid == 0
                     || !Path::new(&presence.directory).is_absolute()
@@ -131,6 +145,24 @@ impl Observer {
                     return None;
                 }
                 Some(presence)
+            })
+            .flat_map(|mut presence| {
+                let tabs = std::mem::take(&mut presence.tabs)
+                    .into_iter()
+                    .filter(|tab| valid_id(&tab.id) && Path::new(&tab.directory).is_absolute())
+                    .map(|mut tab| {
+                        tab.pid = presence.pid;
+                        tab.observed_at = presence.observed_at;
+                        tab.server = presence.server.clone();
+                        tab.zellij_session = presence.zellij_session.clone();
+                        tab.pane_id = presence.pane_id;
+                        tab.tab_control = presence.tab_control.clone();
+                        tab.tabs.clear();
+                        tab.active = false;
+                        tab
+                    })
+                    .collect::<Vec<_>>();
+                std::iter::once(presence).chain(tabs)
             })
             .collect()
     }
@@ -167,6 +199,17 @@ impl Observer {
     }
 
     pub async fn observe(&self, roots: &[String], previous: Snapshot) -> Result<Snapshot, String> {
+        let mut snapshot = self.observe_changes(roots, previous, true).await?;
+        snapshot.resources = self.sample_resources(snapshot.resources).await?;
+        Ok(snapshot)
+    }
+
+    pub(crate) async fn observe_changes(
+        &self,
+        roots: &[String],
+        previous: Snapshot,
+        remote: bool,
+    ) -> Result<Snapshot, String> {
         let observed_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -208,9 +251,12 @@ impl Observer {
             .into_iter()
             .map(|mut session| {
                 session.panes.clear();
-                session.stale = true;
-                session.activity = Activity::Unknown;
-                session.approval_pending = None;
+                session.tab_position = None;
+                if remote {
+                    session.stale = true;
+                    session.activity = Activity::Unknown;
+                    session.approval_pending = None;
+                }
                 (session.id.clone(), session)
             })
             .collect();
@@ -226,6 +272,9 @@ impl Observer {
         let mut question_refresh = BTreeSet::new();
         let mut server_tasks = tokio::task::JoinSet::new();
         for (server, directories) in servers {
+            if !remote {
+                continue;
+            }
             let candidates = presences
                 .iter()
                 .filter(|presence| local_server(&presence.server).as_ref() == Some(&server))
@@ -413,7 +462,7 @@ impl Observer {
         let observer = self.clone();
         let (presences, mut resources) = tokio::task::spawn_blocking(move || {
             let presences = observer.presences();
-            let resources = resources::collect(&presences, previous_resources);
+            let resources = previous_resources;
             (presences, resources)
         })
         .await
@@ -512,6 +561,20 @@ impl Observer {
                 session.server = server;
             }
             if let Some(pane) = pane {
+                if let Some(index) = presence.tab_index {
+                    let position = crate::store::opencode::TabPosition {
+                        zellij_session: pane.session.clone(),
+                        pane_id: pane.id,
+                        index,
+                    };
+                    if session
+                        .tab_position
+                        .as_ref()
+                        .is_none_or(|current| position < *current)
+                    {
+                        session.tab_position = Some(position);
+                    }
+                }
                 tracked.insert((presence.zellij_session.clone(), pane.id));
                 if !session.panes.contains(&pane) {
                     session.panes.push(pane);
@@ -567,6 +630,7 @@ impl Observer {
         }
         let mut questions: Vec<_> = sessions
             .values()
+            .filter(|_| remote)
             .filter(|session| question_refresh.contains(&session.id) || !session.question_observed)
             .filter(|session| !session.saved())
             .map(|session| {
@@ -644,6 +708,16 @@ impl Observer {
             error: (!errors.is_empty()).then(|| errors.into_iter().collect::<Vec<_>>().join("\n")),
         })
     }
+
+    pub(crate) async fn sample_resources(
+        &self,
+        previous: Vec<crate::store::opencode::resources::ProcessResource>,
+    ) -> Result<Vec<crate::store::opencode::resources::ProcessResource>, String> {
+        let observer = self.clone();
+        tokio::task::spawn_blocking(move || resources::collect(&observer.presences(), previous))
+            .await
+            .map_err(|error| error.to_string())
+    }
 }
 
 fn entries(path: &Path) -> impl Iterator<Item = PathBuf> {
@@ -656,16 +730,20 @@ fn entries(path: &Path) -> impl Iterator<Item = PathBuf> {
 }
 
 fn read_small(path: &Path) -> Option<String> {
+    read_bounded(path, 16_384)
+}
+
+fn read_bounded(path: &Path, limit: u64) -> Option<String> {
     if !fs::symlink_metadata(path).ok()?.is_file() {
         return None;
     }
     let mut text = String::new();
     fs::File::open(path)
         .ok()?
-        .take(16_385)
+        .take(limit + 1)
         .read_to_string(&mut text)
         .ok()?;
-    (text.len() <= 16_384).then_some(text)
+    (text.len() as u64 <= limit).then_some(text)
 }
 
 fn belongs(directory: &str, roots: &[String]) -> bool {
@@ -756,9 +834,12 @@ pub(crate) fn install(home: &Path) -> Result<String, String> {
     super::config::private_file(&directory.join("bridge.mjs"), false)
         .and_then(|mut file| file.write_all(include_bytes!("bridge.mjs")))
         .map_err(|error| error.to_string())?;
+    super::config::private_file(&directory.join("tui.js"), false)
+        .and_then(|mut file| file.write_all(b"export { default } from './bridge.mjs'\n"))
+        .map_err(|error| error.to_string())?;
     Ok(format!(
-        "Add this entry to the plugin array in your OpenCode tui.json, then reopen OpenCode clients:\n{}",
-        serde_json::to_string(&directory.join("bridge.mjs").display().to_string())
+        "Add this directory to the plugins array in your OpenCode cli.json (V1: bridge.mjs in tui.json), then reopen OpenCode clients:\n{}",
+        serde_json::to_string(&directory.display().to_string())
             .map_err(|error| error.to_string())?
     ))
 }

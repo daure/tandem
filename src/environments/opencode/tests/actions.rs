@@ -61,7 +61,8 @@ fn new_sessions_attach_without_resuming_and_stack_in_the_observed_tab() {
             .lock()
             .unwrap()
             .iter()
-            .all(|request| request.starts_with("GET /global/health "))
+            .all(|request| request.starts_with("GET /global/health ")
+                || request.starts_with("GET /api/info "))
     );
 }
 
@@ -79,13 +80,9 @@ fn new_sessions_start_opencode_in_a_named_tab_without_a_known_server() {
         ("main", 100, 9)
     );
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
-    let command = navigation::client_command(&[
-        "env".into(),
-        "TANDEM_INITIAL_PROMPT=".into(),
-        "opencode".into(),
-        directory.into(),
-    ])
-    .join(" ");
+    let mut client = vec!["env".into(), "TANDEM_INITIAL_PROMPT=".into()];
+    client.extend(navigation::new_client_command(directory));
+    let command = navigation::client_command(&client).join(" ");
     assert!(
         calls.contains(&format!(
             "new-tab --name workspace --cwd {directory} -- {command}\n"
@@ -112,13 +109,9 @@ fn new_tab_returns_the_command_pane_with_an_application_owned_title_in_a_multi_p
     let root = tempfile::tempdir().unwrap();
     let observer = observer(root.path());
     let directory = root.path().to_str().unwrap();
-    let command = navigation::client_command(&[
-        "env".into(),
-        "TANDEM_INITIAL_PROMPT=".into(),
-        "opencode".into(),
-        directory.into(),
-    ])
-    .join(" ");
+    let mut client = vec!["env".into(), "TANDEM_INITIAL_PROMPT=".into()];
+    client.extend(navigation::new_client_command(directory));
+    let command = navigation::client_command(&client).join(" ");
     fs::write(root.path().join("panes.json"), json!([
         {"id":100,"is_plugin":false,"exited":false,"tab_id":9,"tab_name":"workspace","terminal_command":"sleep 60"},
         {"id":101,"is_plugin":false,"exited":false,"tab_id":9,"tab_name":"workspace","terminal_command":command}

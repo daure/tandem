@@ -31,6 +31,7 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
 libc = "0.2"
+notify = "8"
 ratatui = "0.30"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"] }
 rmcp = { version = "0.12", features = ["server", "macros", "transport-async-rw", "transport-io", "transport-streamable-http-server"] }

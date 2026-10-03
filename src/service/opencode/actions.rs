@@ -133,6 +133,12 @@ impl AppService {
                     .await
                     .map_err(|error| error.to_string())??;
                 }
+                if let Some(pane) = observer
+                    .new_session_tab(&directory, &current, destination.as_ref())
+                    .await?
+                {
+                    return Ok(pane);
+                }
                 observer
                     .new_session(&directory, &name, &current, destination.as_ref(), None)
                     .await

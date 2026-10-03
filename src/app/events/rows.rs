@@ -19,11 +19,11 @@ pub(crate) fn row_text(row: &Record) -> Text<'static> {
     let theme = tuicore::theme();
     let normal = Style::default().fg(theme.text_fg());
     let muted = Style::default().fg(theme.muted_fg());
-    let handled = row
+    let accepted = row
         .attempts
         .first()
-        .is_some_and(|attempt| attempt.status == ProcessingStatus::Handled);
-    let glyph_style = if handled {
+        .is_some_and(|attempt| attempt.status == ProcessingStatus::Accepted);
+    let glyph_style = if accepted {
         Style::default().fg(theme.success_fg())
     } else {
         normal

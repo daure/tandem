@@ -12,6 +12,16 @@ pub(super) fn client_command(command: &[String]) -> Vec<String> {
     launch
 }
 
+pub(super) fn new_client_command(directory: &str) -> Vec<String> {
+    vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        "case \"$(opencode --version)\" in 'opencode v2.'*|2.*) if command -v opencode-station >/dev/null 2>&1; then exec opencode-station run; else exec opencode \"$1\" --standalone --auto; fi;; *) exec opencode \"$1\";; esac".into(),
+        "tandem-opencode-client".into(),
+        directory.into(),
+    ]
+}
+
 #[cfg(test)]
 #[path = "tests/direnv.rs"]
 mod direnv_tests;
@@ -57,22 +67,27 @@ impl Observer {
         let expected_id = session_id.map(str::to_owned);
         let id = expected_id.clone();
         let target = pane.clone();
-        let still_attached = tokio::task::spawn_blocking(move || {
-            observer.inventory().0.iter().any(|presence| {
-                id.as_ref().is_none_or(|id| presence.id == *id)
-                    && presence.zellij_session == target.session
-                    && presence.pane_id == Some(target.id)
-            })
+        let attachment = tokio::task::spawn_blocking(move || {
+            observer
+                .inventory()
+                .0
+                .into_iter()
+                .find(|presence| {
+                    id.as_ref().is_none_or(|id| presence.id == *id)
+                        && presence.zellij_session == target.session
+                        && presence.pane_id == Some(target.id)
+                })
+                .map(|presence| presence.tab_control)
         })
         .await
         .map_err(|error| error.to_string())?;
-        if !still_attached {
+        let Some(control) = attachment else {
             return Err(if expected_id.is_some() {
                 "The pane changed conversation or closed; refresh and try again".into()
             } else {
                 "The OpenCode pane closed or changed; refresh and try again".into()
             });
-        }
+        };
         let panes = self.list_panes(&pane.session).await?;
         let actual = panes
             .iter()
@@ -80,6 +95,16 @@ impl Observer {
             .ok_or("OpenCode pane has closed; refresh and try again")?;
         if current.is_empty() {
             return Err("Run Tandem inside Zellij to jump to a pane".into());
+        }
+        if let (Some(id), Some(control)) = (expected_id.as_deref(), control) {
+            let selected = control
+                .request("/tabs/focus", serde_json::json!({"sessionID": id}))
+                .await?;
+            if selected != id {
+                return Err(
+                    "OpenCode selected a different conversation; refresh and try again".into(),
+                );
+            }
         }
         self.focus_pane(
             current,
@@ -92,7 +117,12 @@ impl Observer {
         .await
     }
 
-    async fn focus_pane(&self, current: &str, pane: &Pane, floating: bool) -> Result<(), String> {
+    pub(super) async fn focus_pane(
+        &self,
+        current: &str,
+        pane: &Pane,
+        floating: bool,
+    ) -> Result<(), String> {
         if current != pane.session {
             self.set_floating_visibility(&pane.session, pane.tab_id, floating)
                 .await?;
@@ -244,13 +274,19 @@ impl Observer {
         }
         let server = local_server(&session.server)
             .ok_or("The OpenCode server is unavailable; start its server and retry")?;
-        let _: serde_json::Value = get(&transport::client()?, &server, "/global/health").await?;
-        self.launch_panel(
-            &session.directory,
-            instance_name,
-            current,
-            destination,
-            &[
+        let client = transport::client()?;
+        let _: serde_json::Value = get(&client, &server, "/global/health").await?;
+        let command = if transport::is_v2(&client, &server).await? {
+            vec![
+                "opencode-station".into(),
+                "connect".into(),
+                server,
+                session.directory.clone(),
+                "--session".into(),
+                session.id.clone(),
+            ]
+        } else {
+            vec![
                 "opencode".into(),
                 "attach".into(),
                 server,
@@ -258,7 +294,14 @@ impl Observer {
                 session.directory.clone(),
                 "--session".into(),
                 session.id.clone(),
-            ],
+            ]
+        };
+        self.launch_panel(
+            &session.directory,
+            instance_name,
+            current,
+            destination,
+            &command,
         )
         .await
         .map(|_| ())
@@ -297,17 +340,27 @@ impl Observer {
             ),
         ];
         command.extend(if let Some(server) = server {
-            let _: serde_json::Value =
-                get(&transport::client()?, &server, "/global/health").await?;
-            vec![
-                "opencode".into(),
-                "attach".into(),
-                server,
-                "--dir".into(),
-                directory.into(),
-            ]
+            let client = transport::client()?;
+            let _: serde_json::Value = get(&client, &server, "/global/health").await?;
+            if transport::is_v2(&client, &server).await? {
+                vec![
+                    "opencode-station".into(),
+                    "connect".into(),
+                    server,
+                    directory.into(),
+                ]
+            } else {
+                vec![
+                    "opencode".into(),
+                    "attach".into(),
+                    server,
+                    "--dir".into(),
+                    directory.into(),
+                ]
+            }
         } else {
-            vec!["opencode".into(), directory.into()]
+            // Select the adapter inside the pane, after direnv resolves its station and PATH.
+            new_client_command(directory)
         });
         self.launch_panel(directory, name, current, destination, &command)
             .await

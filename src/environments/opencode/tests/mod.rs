@@ -2,12 +2,15 @@ use super::*;
 mod actions;
 mod attachments;
 mod destinations;
+mod events;
 mod folders;
 mod history;
 mod history_server;
 mod purge;
 mod questions;
 mod startup;
+mod tabs;
+mod v2;
 use serde_json::json;
 use std::{
     io::{BufRead, BufReader, Write},

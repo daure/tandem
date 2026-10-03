@@ -156,7 +156,6 @@ pub(crate) enum Msg {
     Submit,
     OpenEvent(Box<crate::store::events::Record>),
     ReplayEvent(i64),
-    HandleEvent(i64, i64),
     ProviderAction(String, crate::store::providers::Action),
     ProviderBulkAction(crate::store::providers::Action),
     ProviderDetails(Box<crate::store::providers::Provider>),
@@ -596,11 +595,6 @@ impl App {
             Msg::ReplayEvent(sequence) => {
                 if self.event_action.is_none() {
                     self.event_action = Some(self.service.replay_event(sequence));
-                }
-            }
-            Msg::HandleEvent(sequence, attempt) => {
-                if self.event_action.is_none() {
-                    self.event_action = Some(self.service.mark_event_handled(sequence, attempt));
                 }
             }
             Msg::SetOpencodeIntegration(enabled) => {

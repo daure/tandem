@@ -71,9 +71,83 @@ async fn request<T: DeserializeOwned>(
     path: &str,
     method: reqwest::Method,
 ) -> Result<Option<T>, String> {
+    if is_v2(client, server).await? {
+        let value = if method == reqwest::Method::DELETE {
+            let path = path.split('?').next().unwrap_or(path);
+            raw(client, server, &format!("/api{path}"), method).await?
+        } else {
+            super::v2::read(client, server, path).await?
+        };
+        return value
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| "Invalid OpenCode V2 response".into());
+    }
+    raw(client, server, path, method)
+        .await?
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| "Invalid OpenCode response".into())
+}
+
+pub(super) async fn is_v2(client: &reqwest::Client, server: &str) -> Result<bool, String> {
+    Ok(raw(client, server, "/api/info", reqwest::Method::GET)
+        .await?
+        .is_some_and(|value| {
+            value["version"]
+                .as_str()
+                .is_some_and(|version| version.starts_with("2."))
+        }))
+}
+
+pub(super) fn password(server: &str) -> Option<String> {
+    let state = dirs::state_dir()?;
+    let daemons = std::env::var_os("OC_DAEMON_STATE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| state.join("opencode-daemon"));
+    let port = reqwest::Url::parse(server).ok()?.port()?;
+    for directory in super::entries(&daemons) {
+        if super::read_small(&directory.join("port"))
+            .and_then(|text| text.trim().parse::<u16>().ok())
+            == Some(port)
+            && let Some(secret) = private_text(&directory.join("password"))
+        {
+            return Some(secret.trim().to_owned());
+        }
+    }
+    if let Some(text) = private_text(&state.join("opencode/service.json"))
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
+        && value["url"].as_str().and_then(local_server).as_deref() == Some(server)
+        && let Some(password) = value["password"].as_str()
+    {
+        return Some(password.into());
+    }
+    std::env::var("OPENCODE_PASSWORD")
+        .or_else(|_| std::env::var("OPENCODE_SERVER_PASSWORD"))
+        .ok()
+}
+
+fn private_text(path: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file()
+        || metadata.mode() & 0o077 != 0
+        || metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return None;
+    }
+    super::read_small(path)
+}
+
+pub(super) async fn raw(
+    client: &reqwest::Client,
+    server: &str,
+    path: &str,
+    method: reqwest::Method,
+) -> Result<Option<serde_json::Value>, String> {
     let server = local_server(server).ok_or("OpenCode server must be local HTTP")?;
     let mut request = client.request(method, format!("{server}{path}"));
-    if let Ok(password) = std::env::var("OPENCODE_SERVER_PASSWORD") {
+    if let Some(password) = password(&server) {
         request = request.basic_auth(
             std::env::var("OPENCODE_SERVER_USERNAME").unwrap_or_else(|_| "opencode".into()),
             Some(password),
@@ -84,6 +158,9 @@ async fn request<T: DeserializeOwned>(
         .await
         .map_err(|_| format!("{server}: unavailable"))?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
         return Ok(None);
     }
     let mut response = response

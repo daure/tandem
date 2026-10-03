@@ -218,6 +218,7 @@ esac
 "#;
 
 const OPENCODE: &str = r#"#!/bin/sh
+if [ "$1" = --version ]; then printf '1.18.29\n'; exit 0; fi
 if [ "$EXPECT_PREPARED_GUIDANCE" = 1 ]; then
   test ! -e app || exit 27
   test -f AGENTS.md || exit 28

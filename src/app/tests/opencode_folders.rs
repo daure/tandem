@@ -247,7 +247,7 @@ fn agents_keep_all_known_folders_and_put_open_clients_first_independently_of_his
 }
 
 #[test]
-fn folder_activity_uses_clients_outside_the_conversation_display_window() {
+fn folder_activity_keeps_open_clients_alongside_the_history_window() {
     init_ui();
     let mut observation = observation();
     observation.sessions.extend((1..=21).map(|index| Session {
@@ -259,8 +259,7 @@ fn folder_activity_uses_clients_outside_the_conversation_display_window() {
     }));
     let rows = project(&observation, true);
     assert!(
-        !rows
-            .iter()
+        rows.iter()
             .any(|row| row.id == "opencode:external:/work/z-busy:busy")
     );
     assert_eq!(roots(&rows)[2], "opencode-workspace:/work/z-busy");

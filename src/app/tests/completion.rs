@@ -107,7 +107,7 @@ fn completion_gutter_pulses_twice_then_rises_and_fades_over_20_seconds() {
             .iter()
             .position(|line| line.contains("Idle neighbour"))
             .unwrap() as u16;
-        assert!(usize::from(y) < previous_y);
+        assert_eq!(usize::from(y), previous_y);
         let mut elapsed = 0;
         for (milliseconds, strength, marker_strength) in [
             (0, 0.0, 0.0),

@@ -170,8 +170,9 @@ are not needed. Ownership mismatches and concurrent instance operations are reje
 Quote multiline or multiword prompts; use `--opencode="--text"` for text beginning with a hyphen.
 Without the flag, creation opens no client. `--description` (also `-d`) sets the new instance description.
 OpenCode launches require Tandem to run inside Zellij with the OpenCode integration enabled.
-The TUI's **New OpenCode session** and CLI use the same pane placement and launch logic: an observed
-instance pane supplies a tab for a stacked pane, otherwise Tandem creates an instance-named tab.
+CLI client launches use an observed instance pane's tab for a stacked pane, otherwise Tandem creates
+an instance-named tab. The TUI's **New OpenCode session** opens a session tab in an existing V2 client;
+without a tab-capable client, it uses this pane placement and launch logic.
 A known workspace server is reused; otherwise OpenCode starts in the workspace.
 Client launches run through `direnv exec .` when `direnv` is on the pane's `PATH`, loading the
 workspace's approved environment, including inherited station configuration. Without direnv,
@@ -188,7 +189,7 @@ Client lifetime does not delay CLI exit. Launch failures make the CLI fail after
 or immediately for an existing instance; prepared workspaces remain available.
 
 Initial prompts require the bundled Tandem TUI companion. The release shell installer refreshes it and
-prints its OpenCode `tui.json` plugin entry; after source or manual updates, run `tandem opencode-setup`.
+prints its OpenCode `cli.json` plugin directory (V1: `bridge.mjs` in `tui.json`); after source or manual updates, run `tandem opencode-setup`.
 Ensure the printed entry is in the plugin array. Each new client receives
 `TANDEM_INITIAL_PROMPT`; the companion consumes and clears it, waits for readiness, creates a fresh
 conversation, navigates only that client, and submits the text once through the server API.
@@ -266,13 +267,13 @@ Template-owned clone jobs and container-created files appear only after their ow
 
 ## Events and developer providers
 
-**Events** is the second main tab. It shows the latest 200 accepted events in arrival order, with
+**Events** is the second main tab. It shows the latest 200 received events in arrival order, with
 new arrivals at the bottom, using distinct message, ticket, system-event, and generic rows.
 Search by provider, stream, profile, summary, or event ID.
 Each event occupies two lines: a type glyph, provider identity, and profile-specific fields above the
 message text, ticket title, system description, or generic summary. The glyphs are `` message,
 `` ticket, `` system event, and `` generic; Providers uses the same glyphs. The glyph is green
-when the latest processing attempt is handled and uses the normal text color otherwise.
+when the latest processing attempt is accepted and uses the normal text color otherwise.
 Message headers mark nonblank thread references with `󱡠`; ticket headers omit missing or blank
 assignees. System headers show resource, optional environment, signal, and severity in that order.
 Environment aliases `prod`, `dev`, and `stage` display as `production`, `development`, and `staging`;
@@ -289,16 +290,18 @@ Press `.` for the highlighted event's action menu with hotkeys; `p` selects its 
 The provider multiselect at the top (`P`) filters by exact provider names. Enter toggles an option,
 Ctrl+J/Ctrl+K moves through options, and Ctrl+Enter applies the selection. An empty selection shows
 all providers. Providers' **Events** action selects only that provider in the filter. The `T` toggle
-shows only events handed over to Tandem instances; manual acknowledgments do not qualify. The count
+shows only events handed over to Tandem instances; acceptance alone does not establish assignment. The count
 at the right shows displayed events out of the full retained history. Instance dispatch is pending,
 so the handover-only feed is empty. Changing a provider or handover filter selects the newest matching
 event and focuses the DataView. Escape or Ctrl+[ from the filters or toggles returns to the DataView.
 
-Events start **pending**. `h` manually marks the current attempt **handled**; this records a user
-acknowledgment, not proof of agent-task completion. `r` replays a handled event as a new pending
-attempt while preserving its original event ID and history. A pending attempt must be acknowledged
-before replay. Rules, automatic instance creation, and assignment/task-completion notifications are
-outside this developer slice.
+Events start **pending**. **Accepted** means a rule matched the event and triggered its action;
+instance startup, prompt delivery, and task completion have separate outcomes. Acceptance belongs
+to automatic rule processing. `r` replays an accepted event as a new pending attempt while preserving
+its original event ID and history. Replay requires an accepted current attempt. Rules, automatic
+instance creation, and assignment/task-completion notifications are pending, so newly received
+events stay pending in this developer slice. Schema upgrades require existing Tandem clients and
+sidecars to be stopped; retained processing history keeps its identities and timestamps.
 
 **Providers** is the third main tab. Tandem discovers packages under `provider_templates_root`.
 Each row shows its provider identity, handed-over/total event count, and runtime status. Handover counts
@@ -669,25 +672,29 @@ and navigation tasks. Existing OpenCode servers, conversations, panes, and works
 remain under their current owners. Re-enable it to request a fresh observation.
 
 The release shell installer installs the companion after placing the Tandem binary and prints the
-`tui.json` plugin entry. For source builds or manual refreshes, install it with:
+OpenCode plugin directory. For source builds or manual refreshes, install it with:
 
 ```bash
 tandem opencode-setup
 ```
 
 The command writes the bundled TUI companion under `$TANDEM_HOME/opencode-plugin` and prints
-its absolute path. Add that path to the `plugin` array in your OpenCode **`tui.json`**, preserving
-other entries, then reopen OpenCode clients. With managed dotfiles, edit the managed source and
+its absolute path. Add that directory to the `plugins` array in OpenCode V2 **`cli.json`**;
+V1 uses its `bridge.mjs` file in the `plugin` array of **`tui.json`**. Preserve other entries,
+then reopen OpenCode clients. With managed dotfiles, edit the managed source and
 apply it. The command leaves your OpenCode configuration untouched. The companion requires the
-OpenCode TUI plugin API (verified with OpenCode 1.18.29); navigation requires Zellij 0.45 or later.
+OpenCode TUI plugin API (verified with OpenCode 1.18.29 and 2.0.22); navigation requires Zellij 0.45 or later.
 
-The companion reports each client's current conversation, including switches through the session
-picker. Tandem joins those reports to live Zellij panes and local OpenCode server status:
+The V2 companion reports each client's current route and open session tabs reactively. Tandem
+watches these receipts and subscribes to local server events for activity and history updates.
+Reconnects request a fresh snapshot because the event stream has no replay. A five-second companion
+heartbeat maintains navigation freshness; unchanged heartbeats do not request server snapshots.
+Tandem joins the reports to live Zellij panes:
 
 | Child-row state | Meaning | Navigation action |
 | --- | --- | --- |
-| attached · busy | A pane displays a conversation that is working or retrying | Goto panel |
-| attached · idle | A pane displays an idle conversation | Goto panel |
+| attached · busy | A client has an open conversation that is working or retrying | Goto panel |
+| attached · idle | A client has an open idle conversation | Goto panel |
 | detached · busy | A conversation is working without an observed pane | Open panel |
 | saved | An idle conversation has no observed pane | Open panel |
 
@@ -706,11 +713,13 @@ Pending questions use the **awaiting answer** activity state.
 Sessions and clients whose directories do not belong to a Tandem instance appear under **Other
 OpenCode workspaces** at the top of the instance tree, grouped by their exact directory. Tandem can
 display their details and conversations, create a session, open or jump to a conversation, and close
-observed panes. Each directory shows its 20 most
-recent applicable conversations; a muted final row directs users to OpenCode when more are available.
+observed panes. Open conversations follow their native tab positions, independently of activity.
+When one conversation is open in multiple clients, its first Zellij-session/pane identity determines
+its position. Every open tab is shown; detached conversations use a 20-item recent-history window
+per directory with a muted final row when more are available. Saved history follows open conversations.
 
 CPU and memory columns include observed client processes. Tandem reads each distinct client PID's
-Linux `/proc` counters in its background observer, at most once every two seconds. Memory is RSS;
+Linux `/proc` counters on a five-second sampling timer. Memory is RSS;
 CPU averages the interval between readings, with 100% representing one fully occupied core.
 Memory appears on the first reading; CPU needs two readings for the same process lifetime.
 Shared servers and child processes are outside this scope, so detached conversations without a
@@ -737,18 +746,24 @@ the **`.`** menu exposes the same row actions:
 
 `n` uses the instance workspace from an instance or Sessions group, and the exact directory from an
 external group or OpenCode child. The top-level **Other OpenCode workspaces** group has no creation
-action because it spans directories. New sessions open a blank OpenCode client without sending a
-prompt: they attach to a known local server after checking its health, or start OpenCode in the
-directory when no server is known. Created panes have the fixed Zellij title **OpenCode**. Creation
-immediately selects the new client, including when its destination is another tab or Zellij session.
-If the destination pane or its Zellij session has closed, creation opens a fresh tab in the current
-Zellij session. Live destinations keep their stacking behavior.
+action because it spans directories. With a running V2 client and the Tandem companion, `n` focuses
+an open empty session in the requested directory, or creates one when none is available, then focuses
+its exact Zellij pane. A reusable session is idle and has no messages, queued input, or pending forms;
+the companion verifies its cached data before selecting it. Eligible tabs are checked in native order.
+OpenCode session tabs must be enabled. A failed tab request reports an error; check the client before
+retrying because creation may be uncertain. Without a tab-capable client, creation launches a blank
+client without sending a prompt: it attaches to a healthy known local server, or starts OpenCode in
+the directory when no server is known. A live destination supplies a stacked pane; a closed or absent
+destination creates a named tab in the current Zellij session. Creation immediately focuses the client.
 The DataView selects that client's row when observation arrives and reveals its parent groups;
 conversation titles in the DataView remain independent of the pane title.
 
 Use **Enter → Actions** to jump to a specific pane or resume a conversation. **Goto panel** and
 **Open panel** use `o`; navigation works across tabs and Zellij sessions. Closing a pane preserves
-saved conversation history. Group closure includes observed panes hidden by filters or display
+saved conversation history and closes every OpenCode tab in that pane. With the V2 companion,
+all open session tabs appear as attached conversations, including background tabs when history is
+hidden. `o` selects the matching OpenCode tab before focusing its Zellij pane.
+Group closure includes observed panes hidden by filters or display
 limits; external-directory groups match their exact directory, and instance groups use workspace
 ownership. The external aggregate closes only outside-Tandem panes.
 Close and Close all hide the targeted rows immediately while pane closure runs; failures restore them
@@ -802,8 +817,8 @@ keeps these keys as text.
 Navigation stops at either end and leaves the tree unchanged when no eligible target exists.
 Active markers retain their remaining lifetime when switching tabs.
 
-New session and Open panel create a stacked pane in an observed tab for the instance or external
-directory, or create a named tab when there is no observed destination. Open panel attaches to the
+Open panel creates a stacked pane in an observed tab for the instance or external directory, or
+creates a named tab when there is no observed destination. It attaches to the
 conversation's running local server without sending a prompt. An unavailable known server produces
 an error; start that server before retrying.
 
@@ -815,9 +830,12 @@ The companion publishes once per second; Tandem polls about every two seconds wh
 Receipts require a live client PID and expire after ten seconds. The independently installed
 companion continues reporting while Tandem's integration is disabled.
 
-HTTP access is loopback-only, with redirects and proxies disabled. Authenticated servers use
-`OPENCODE_SERVER_PASSWORD` and optionally `OPENCODE_SERVER_USERNAME` from Tandem's environment.
-New OpenCode panes inherit Zellij's environment, which must also provide the server credentials.
+HTTP access is loopback-only, with redirects and proxies disabled. Credentials come from private
+station password files, matching native `service.json` registration, or `OPENCODE_PASSWORD`
+(V1: `OPENCODE_SERVER_PASSWORD` and optionally `OPENCODE_SERVER_USERNAME`). Credential files
+must be regular, current-user-owned, and inaccessible to group/other users. Presence receipts
+contain no credentials. V2 station resumptions use `opencode-station connect` to resolve the
+password inside the new pane without putting it in Zellij's command arguments.
 History requests the 21 most recent root conversations for each known directory so Tandem can
 detect when its 20-row display window is full; busy conversations are fetched separately when
 needed. Subagent conversations are excluded from the server inventory. Unavailable observations

@@ -240,7 +240,7 @@ fn totals_publish_client_usage_on_the_shared_resource_batch_and_survive_view_fil
 }
 
 #[test]
-fn session_display_limits_do_not_limit_parent_resource_totals() {
+fn all_open_sessions_contribute_to_parent_resource_totals() {
     init_ui();
     let (inventory, mut observation) = observations();
     for id in 100..125 {
@@ -260,7 +260,7 @@ fn session_display_limits_do_not_limit_parent_resource_totals() {
     }
     let mut rows = rows::from_snapshot(&inventory);
     projection::append_rows(&mut rows, &observation, false);
-    assert!(rows.iter().any(|row| row.id == "opencode-more:review"));
+    assert_eq!(rows.iter().filter(|row| row.parent.as_deref() == Some("sessions:review") && row.opencode.is_some()).count(), 27);
     assert_usage(&rows, "sessions:review", 60);
     assert_usage(&rows, "instance:review", 72);
     assert_usage(&rows, "template:/tmp/templates/website", 132);

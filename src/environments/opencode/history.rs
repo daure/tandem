@@ -41,14 +41,14 @@ pub(super) async fn clear_with(observer: &Observer, directory: &str) -> Result<(
         .filter_map(|(server, directories)| directories.contains(directory).then_some(server))
         .collect::<Vec<_>>();
     let mut temporary = if servers.is_empty() {
-        let (child, url) = server::start(directory).await?;
+        let (child, url, root, receipt) = server::start(directory).await?;
         servers.push(url);
-        Some(child)
+        Some((child, root, receipt))
     } else {
         None
     };
     let result = clear_servers(observer, directory, &servers).await;
-    if let Some(child) = &mut temporary {
+    if let Some((child, _, _)) = &mut temporary {
         child
             .kill()
             .await
@@ -234,6 +234,35 @@ async fn ensure_idle(
                 .any(|question| question.session_id == session.id)
     }) {
         return Err("workspace conversations are active or awaiting an answer".into());
+    }
+    if transport::is_v2(client, server).await? {
+        for session in sessions {
+            if transport::raw(
+                client,
+                server,
+                &format!("/api/session/{}", session.id),
+                reqwest::Method::GET,
+            )
+            .await?
+            .is_none()
+            {
+                continue;
+            }
+            for suffix in ["permission", "inbox"] {
+                let pending = super::v2::envelope(
+                    client,
+                    server,
+                    &format!("/api/session/{}/{suffix}", session.id),
+                )
+                .await?
+                .ok_or("OpenCode pending work unavailable")?;
+                if !pending.as_array().is_some_and(Vec::is_empty) {
+                    return Err(
+                        "workspace conversations have pending approval or queued work".into(),
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }

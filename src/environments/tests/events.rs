@@ -191,7 +191,7 @@ fn conflicting_or_invalid_events_roll_back_the_whole_batch() {
 }
 
 #[test]
-fn replay_preserves_handled_history_and_retries_keep_the_same_attempt() {
+fn replay_preserves_accepted_history_and_retries_keep_the_same_attempt() {
     let (_home, config, store, token) = setup();
     let sequence = store
         .ingest(
@@ -208,8 +208,14 @@ fn replay_preserves_handled_history_and_retries_keep_the_same_attempt() {
         store.replay(sequence, "premature"),
         Err(Error::Conflict(_))
     ));
-    store.mark_handled(sequence, initial).unwrap();
-    store.mark_handled(sequence, initial).unwrap();
+    store
+        .connection()
+        .unwrap()
+        .execute(
+            "UPDATE event_attempts SET status = 'accepted', accepted_at = ?2 WHERE id = ?1",
+            params![initial, now()],
+        )
+        .unwrap();
     let replay = store.replay(sequence, "replay-request").unwrap();
     assert_eq!(store.replay(sequence, "replay-request").unwrap(), replay);
     let store = EventStore::open(&config).unwrap();
@@ -218,7 +224,7 @@ fn replay_preserves_handled_history_and_retries_keep_the_same_attempt() {
     assert_eq!(attempts.len(), 2);
     assert!(attempts[0].replay);
     assert_eq!(attempts[0].status, ProcessingStatus::Pending);
-    assert_eq!(attempts[1].status, ProcessingStatus::Handled);
+    assert_eq!(attempts[1].status, ProcessingStatus::Accepted);
     assert!(
         store
             .ingest(
@@ -231,7 +237,83 @@ fn replay_preserves_handled_history_and_retries_keep_the_same_attempt() {
             .receipts[0]
             .duplicate
     );
-    assert_eq!(store.notifications(&token).unwrap().len(), 3);
+    assert_eq!(store.notifications(&token).unwrap().len(), 2);
+}
+
+#[test]
+fn event_schema_upgrade_preserves_attempt_identities_timestamps_and_replay_receipts() {
+    let home = tempfile::tempdir().unwrap();
+    let config = Config::at(home.path().into(), "events-test".into(), 9876).unwrap();
+    let connection = Connection::open(config.home.join("settings.sqlite3")).unwrap();
+    connection
+        .execute_batch(include_str!("../../../migrations/0006_events.sql"))
+        .unwrap();
+    let token = "a".repeat(64);
+    connection
+        .execute(
+            "INSERT INTO event_providers(namespace, name, token) VALUES (?1, 'sample', ?2)",
+            params![config.namespace, token],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO events(sequence, namespace, provider, event_id, payload, received_at)
+         VALUES (7, ?1, 'sample', 'one', ?2, 'received')",
+            params![
+                config.namespace,
+                serde_json::to_string(&event("one")).unwrap()
+            ],
+        )
+        .unwrap();
+    connection.execute_batch(
+        "INSERT INTO event_attempts(id, event_sequence, status, replay, request_id, created_at, handled_at)
+         VALUES (11, 7, 'handled', 0, NULL, 'created', 'processed'),
+                (12, 7, 'pending', 1, 'existing-replay', 'replayed', NULL);
+         UPDATE sqlite_sequence SET seq = 20 WHERE name = 'event_attempts';",
+    ).unwrap();
+    drop(connection);
+
+    for _ in 0..2 {
+        let store = EventStore::open(&config).unwrap();
+        let record = store.snapshot().unwrap().records.remove(0);
+        assert_eq!(record.sequence, 7);
+        assert_eq!(record.event, event("one"));
+        assert_eq!(record.attempts[0].id, 12);
+        assert_eq!(record.attempts[0].status, ProcessingStatus::Pending);
+        assert_eq!(record.attempts[0].accepted_at, None);
+        assert_eq!(record.attempts[1].id, 11);
+        assert_eq!(record.attempts[1].status, ProcessingStatus::Accepted);
+        assert_eq!(record.attempts[1].created_at, "created");
+        assert_eq!(record.attempts[1].accepted_at.as_deref(), Some("processed"));
+        assert_eq!(store.replay(7, "existing-replay").unwrap(), 12);
+        let serialized = serde_json::to_value(&record.attempts[1]).unwrap();
+        assert_eq!(serialized["status"], "accepted");
+        assert_eq!(serialized["accepted_at"], "processed");
+    }
+
+    let store = EventStore::open(&config).unwrap();
+    assert!(
+        store
+            .ingest(
+                &token,
+                Batch {
+                    events: vec![event("one")]
+                }
+            )
+            .unwrap()
+            .receipts[0]
+            .duplicate
+    );
+    assert_eq!(store.snapshot().unwrap().records[0].attempts.len(), 2);
+    assert!(
+        matches!(store.replay(7, "pending-replay"), Err(Error::Conflict(message))
+        if message == "the current attempt must be accepted before replaying")
+    );
+    store.connection().unwrap().execute(
+        "UPDATE event_attempts SET status = 'accepted', accepted_at = 'processed' WHERE id = 12",
+        [],
+    ).unwrap();
+    assert_eq!(store.replay(7, "next-replay").unwrap(), 21);
 }
 
 #[test]

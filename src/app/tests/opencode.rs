@@ -1,6 +1,6 @@
 use super::super::rows::Tone;
 use super::*;
-use crate::store::opencode::{Activity, Client, Pane, Session, Snapshot};
+use crate::store::opencode::{Activity, Client, Pane, Session, Snapshot, TabPosition};
 
 #[test]
 fn conversation_details_show_fresh_pending_approvals() {
@@ -279,7 +279,7 @@ fn attached_view_promotes_external_directories_to_workspace_rows() {
 }
 
 #[test]
-fn session_views_show_twenty_recent_sessions_per_directory_then_a_muted_more_row() {
+fn session_views_keep_every_open_tab_per_directory() {
     init_ui();
     let pane = Pane {
         session: "main".into(),
@@ -307,7 +307,7 @@ fn session_views_show_twenty_recent_sessions_per_directory_then_a_muted_more_row
             .iter()
             .filter(|row| row.parent.as_deref() == Some(parent))
             .collect::<Vec<_>>();
-        assert_eq!(children.len(), 21);
+        assert_eq!(children.len(), 22);
         let sessions = children
             .iter()
             .filter(|row| {
@@ -317,19 +317,15 @@ fn session_views_show_twenty_recent_sessions_per_directory_then_a_muted_more_row
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(sessions.len(), 20);
-        for omitted in 0..2 {
-            let id = format!("ses_{}_{omitted}", directory.replace('/', "_"));
-            assert!(sessions.iter().all(|row| !row.id.ends_with(&id)));
+        assert_eq!(sessions.len(), 22);
+        for attached in 0..2 {
+            let id = format!("ses_{}_{attached}", directory.replace('/', "_"));
+            assert!(sessions.iter().any(|row| row.id.ends_with(&id)));
         }
-        let more = children.last().unwrap();
-        assert_eq!(more.id, format!("opencode-more:{scope}"));
-        assert_eq!(more.label, "(see more sessions in opencode)");
-        assert_eq!(more.tone, Tone::Muted);
-        assert!(more.informational);
-        assert_eq!(
-            more.text("", None).lines[0].spans[0].style.fg,
-            Some(tuicore::theme().muted_fg())
+        assert!(
+            !children
+                .iter()
+                .any(|row| row.id == format!("opencode-more:{scope}"))
         );
     };
 
@@ -362,40 +358,66 @@ fn session_views_show_twenty_recent_sessions_per_directory_then_a_muted_more_row
         "external:/work/external",
         "/work/external",
     );
+    for directory in ["/tmp/workspaces/review/repo", "/work/external"] {
+        observation.sessions.extend((0..22).map(|updated| Session {
+            id: format!("saved_{}_{updated}", directory.replace('/', "_")),
+            directory: directory.into(),
+            activity: Activity::Idle,
+            updated,
+            ..Default::default()
+        }));
+    }
+    let mut overview = rows::from_snapshot(&snapshot());
+    super::super::opencode::append_rows(&mut overview, &observation, true);
+    for parent in ["sessions:review", "opencode-workspace:/work/external"] {
+        let children = overview
+            .iter()
+            .filter(|row| row.parent.as_deref() == Some(parent))
+            .collect::<Vec<_>>();
+        assert_eq!(children.len(), 43);
+        let more = children.last().unwrap();
+        assert_eq!(more.label, "(see more sessions in opencode)");
+        assert_eq!(more.tone, Tone::Muted);
+        assert!(more.informational);
+    }
 }
 
 #[test]
-fn session_views_put_recent_completions_first_and_recent_starts_last() {
+fn session_views_follow_native_tab_positions_across_activity_changes() {
     let pane = Pane {
         session: "main".into(),
         id: 7,
         tab_id: 4,
         tab_name: "review".into(),
     };
-    let session = |id: &str, activity, updated, started| Session {
+    let session = |id: &str, activity, updated, index| Session {
         id: id.into(),
         title: id.into(),
         directory: "/tmp/workspaces/review".into(),
         activity,
-        activity_started_at_milliseconds: started,
+        tab_position: Some(TabPosition {
+            zellij_session: "main".into(),
+            pane_id: 7,
+            index,
+        }),
         panes: vec![pane.clone()],
         updated,
         ..Default::default()
     };
-    let observation = Snapshot {
+    let mut observation = Snapshot {
         sessions: vec![
-            session("ses_busy_new", Activity::Busy, 400, Some(200)),
-            session("ses_done_old", Activity::Idle, 300, None),
-            session("ses_busy_old", Activity::Busy, 500, Some(100)),
-            session("ses_done_new", Activity::Idle, 600, None),
+            session("ses_busy_new", Activity::Busy, 400, 2),
+            session("ses_done_old", Activity::Idle, 300, 0),
+            session("ses_busy_old", Activity::Busy, 500, 1),
+            session("ses_done_new", Activity::Idle, 600, 3),
         ],
         ..Default::default()
     };
     let expected = [
-        "ses_done_new".to_owned(),
         "ses_done_old".to_owned(),
         "ses_busy_old".to_owned(),
         "ses_busy_new".to_owned(),
+        "ses_done_new".to_owned(),
     ];
     let ids = |rows: &[rows::Row]| {
         rows.iter()
@@ -411,6 +433,13 @@ fn session_views_put_recent_completions_first_and_recent_starts_last() {
     super::super::opencode::append_rows(&mut overview, &observation, false);
     assert_eq!(ids(&overview), expected);
 
+    let attached =
+        super::super::opencode::attached_rows(rows::from_snapshot(&snapshot()), &observation);
+    assert_eq!(ids(&attached), expected);
+    for session in &mut observation.sessions {
+        session.activity = Activity::AwaitingAnswer;
+        session.updated += 1000;
+    }
     let attached =
         super::super::opencode::attached_rows(rows::from_snapshot(&snapshot()), &observation);
     assert_eq!(ids(&attached), expected);
@@ -478,9 +507,9 @@ fn saved_sessions_follow_live_sessions_and_clients_in_every_workspace() {
             children,
             [
                 format!("ses_{scope}_attached"),
+                format!("ses_{scope}_busy"),
                 format!("ses_{scope}_unknown"),
                 "client".into(),
-                format!("ses_{scope}_busy"),
                 format!("ses_{scope}_saved"),
             ]
         );

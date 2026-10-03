@@ -9,6 +9,7 @@ use crate::{
 };
 
 mod actions;
+mod observation;
 
 pub(super) use actions::launch_workspace_opencode;
 
@@ -26,6 +27,8 @@ struct State {
     navigation: Option<tokio::task::JoinHandle<()>>,
     conversation: Option<tokio::task::JoinHandle<()>>,
     next: Instant,
+    changes: Option<Arc<opencode::events::Signal>>,
+    roots: Vec<String>,
     generation: u64,
 }
 
@@ -47,6 +50,8 @@ impl Integration {
                 navigation: None,
                 conversation: None,
                 next: Instant::now(),
+                changes: None,
+                roots: Vec::new(),
                 generation: 0,
             }),
         }
@@ -67,6 +72,8 @@ impl Integration {
         state.snapshot = Snapshot::default();
         state.retention = Retention::default();
         state.next = Instant::now();
+        state.changes = None;
+        state.roots.clear();
     }
 }
 
@@ -150,61 +157,40 @@ impl super::AppService {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if Instant::now() < state.next
-            || state.task.as_ref().is_some_and(|task| !task.is_finished())
-        {
-            return;
-        }
-        let roots: Vec<_> = self
+        let mut roots: Vec<_> = self
             .environments
             .snapshot()
             .instances
             .into_iter()
             .map(|instance| instance.workspace)
             .collect();
-        state.next = Instant::now() + Duration::from_secs(2);
+        roots.sort();
+        if roots != state.roots {
+            state.roots = roots;
+            if let Some(signal) = &state.changes {
+                signal.send(opencode::events::REMOTE);
+            }
+        }
+        if Instant::now() < state.next
+            || state.task.as_ref().is_some_and(|task| !task.is_finished())
+        {
+            return;
+        }
+        // Retry only a failed worker startup; healthy workers wait on external events.
+        state.next = Instant::now() + Duration::from_secs(5);
         let generation = state.generation;
-        let previous = state.snapshot.clone();
         let observer = self.opencode.observer.clone();
         let integration = Arc::downgrade(&self.opencode);
         let settings = Arc::clone(&self.settings);
-        state.task = Some(self.runtime.spawn(async move {
-            let result =
-                tokio::time::timeout(Duration::from_secs(15), observer.observe(&roots, previous))
-                    .await
-                    .unwrap_or_else(|_| Err("OpenCode observation timed out".into()));
-            let Some(integration) = integration.upgrade() else {
-                return;
-            };
-            let mut state = integration
-                .state
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            if state.generation != generation || !settings.opencode_enabled() {
-                return;
-            }
-            match result {
-                Ok(snapshot) => state.snapshot = snapshot,
-                Err(error) => {
-                    for resource in &mut state.snapshot.resources {
-                        resource.mark_stale(error.clone());
-                    }
-                    for session in &mut state.snapshot.sessions {
-                        session.stale = true;
-                    }
-                    for client in &mut state.snapshot.clients {
-                        client.stale = true;
-                    }
-                    state.snapshot.error = Some(error);
-                }
-            }
-            let State {
-                snapshot,
-                retention,
-                ..
-            } = &mut *state;
-            retention.observe(snapshot);
-        }));
+        let signal = Arc::new(opencode::events::Signal::default());
+        state.changes = Some(Arc::clone(&signal));
+        state.task = Some(self.runtime.spawn(observation::run(
+            observer,
+            integration,
+            settings,
+            generation,
+            signal,
+        )));
     }
 
     pub(crate) fn open_opencode(

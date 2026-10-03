@@ -337,16 +337,9 @@ fn append_rows_for_owners(
         let ordered_children = sessions
             .iter()
             .copied()
-            .filter(|session| session.activity != Activity::Busy && !session.saved())
+            .filter(|session| !session.saved())
             .map(SessionChild::Session)
             .chain(clients.into_iter().map(SessionChild::Client))
-            .chain(
-                sessions
-                    .iter()
-                    .copied()
-                    .filter(|session| session.activity == Activity::Busy)
-                    .map(SessionChild::Session),
-            )
             .chain(
                 sessions
                     .iter()
@@ -663,16 +656,9 @@ fn append_external_rows(
         let ordered_children = sessions
             .iter()
             .copied()
-            .filter(|session| session.activity != Activity::Busy && !session.saved())
+            .filter(|session| !session.saved())
             .map(SessionChild::Session)
             .chain(clients.into_iter().map(SessionChild::Client))
-            .chain(
-                sessions
-                    .iter()
-                    .copied()
-                    .filter(|session| session.activity == Activity::Busy)
-                    .map(SessionChild::Session),
-            )
             .chain(
                 sessions
                     .iter()
@@ -804,8 +790,15 @@ fn recent_sessions_per_directory<'a>(
     let mut truncated = false;
     for sessions in by_directory.values_mut() {
         sessions.sort_by(|a, b| b.updated.cmp(&a.updated).then_with(|| a.id.cmp(&b.id)));
-        truncated |= sessions.len() > SESSION_DISPLAY_LIMIT;
-        recent.extend(sessions.iter().take(SESSION_DISPLAY_LIMIT).copied());
+        recent.extend(
+            sessions
+                .iter()
+                .filter(|session| session.attached())
+                .copied(),
+        );
+        let detached = sessions.iter().filter(|session| !session.attached());
+        truncated |= detached.clone().count() > SESSION_DISPLAY_LIMIT;
+        recent.extend(detached.take(SESSION_DISPLAY_LIMIT).copied());
     }
     (recent, truncated)
 }
@@ -839,28 +832,27 @@ fn group_tone(rows: &[Row]) -> (Tone, bool) {
 fn compare_sessions(a: &Session, b: &Session) -> std::cmp::Ordering {
     session_order(a)
         .cmp(&session_order(b))
-        .then_with(|| match a.activity {
-            Activity::Busy => a
-                .activity_started_at_milliseconds
-                .unwrap_or(a.updated)
-                .cmp(&b.activity_started_at_milliseconds.unwrap_or(b.updated)),
-            Activity::Idle | Activity::AwaitingAnswer | Activity::Unknown => {
-                b.updated.cmp(&a.updated)
-            }
+        .then_with(|| match (&a.tab_position, &b.tab_position) {
+            (Some(a), Some(b)) => a.cmp(b),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) if a.attached() && b.attached() => a
+                .panes
+                .first()
+                .map(|pane| (&pane.session, pane.id))
+                .cmp(&b.panes.first().map(|pane| (&pane.session, pane.id))),
+            (None, None) => b.updated.cmp(&a.updated),
         })
         .then_with(|| a.id.cmp(&b.id))
 }
 
 fn session_order(session: &Session) -> u8 {
-    if session.saved() {
-        return 3;
-    }
-    match (session.activity, session.attached()) {
-        (Activity::AwaitingAnswer, _) => 0,
-        (Activity::Idle, true) => 0,
-        (Activity::Idle, false) => 1,
-        (Activity::Unknown, _) => 1,
-        (Activity::Busy, _) => 2,
+    if session.attached() {
+        0
+    } else if session.saved() {
+        2
+    } else {
+        1
     }
 }
 

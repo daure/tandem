@@ -55,12 +55,20 @@ pub(crate) struct Session {
     pub context_tokens: Option<u64>,
     pub context_limit: Option<u64>,
     pub panes: Vec<Pane>,
+    pub tab_position: Option<TabPosition>,
     pub updated: u64,
     pub last_question: Option<String>,
     pub question_observed: bool,
     #[serde(skip)]
     pub approval_pending: Option<bool>,
     pub stale: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+pub(crate) struct TabPosition {
+    pub zellij_session: String,
+    pub pane_id: u32,
+    pub index: usize,
 }
 
 impl Session {

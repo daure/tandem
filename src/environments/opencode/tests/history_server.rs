@@ -13,6 +13,9 @@ use std::{
 
 #[derive(Default)]
 pub struct Data {
+    pub v2: bool,
+    pub approval: bool,
+    pub queued: bool,
     pub sessions: BTreeMap<String, Value>,
     pub deleted: Vec<String>,
     pub busy: bool,
@@ -66,8 +69,13 @@ impl Server {
                     .find(|(key, _)| key == "directory")
                     .map(|(_, value)| value.into_owned())
                     .unwrap_or_default();
-                let (status, body) =
-                    respond(&mut shared.lock().unwrap(), method, url.path(), &directory);
+                let mut data = shared.lock().unwrap();
+                let (status, body) = if data.v2 {
+                    respond_v2(&mut data, method, &url)
+                } else {
+                    respond(&mut data, method, url.path(), &directory)
+                };
+                drop(data);
                 let body = body.to_string();
                 let _ = write!(
                     stream,
@@ -91,6 +99,100 @@ impl Server {
                 "id": id, "directory": directory, "parentID": parent
             }),
         );
+    }
+}
+
+fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static str, Value) {
+    let query = |name| {
+        url.query_pairs()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into_owned())
+    };
+    let native = |mut session: Value| {
+        session["location"] = json!({"directory": session["directory"]});
+        session["title"] = json!("Fixture");
+        session["time"] = json!({"updated": 1});
+        session.as_object_mut().unwrap().remove("directory");
+        session
+    };
+    match url.path() {
+        "/api/info" => ("200 OK", json!({"version":"2.0.22"})),
+        "/api/session/active" if data.status_failure => ("503 Service Unavailable", json!({})),
+        "/api/session/active" => (
+            "200 OK",
+            json!({"data": if data.busy { json!({"ses_old":{"type":"running"}}) } else { json!({}) }}),
+        ),
+        "/api/form" => (
+            "200 OK",
+            json!({"data": if data.awaiting_answer { json!([{"sessionID":"ses_old"}]) } else { json!([]) }}),
+        ),
+        "/api/permission/request" => ("200 OK", json!({"data":[]})),
+        "/api/session" => {
+            let limit = query("limit")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(50);
+            let offset = query("cursor")
+                .and_then(|value| {
+                    value
+                        .strip_prefix("opaque_")
+                        .and_then(|value| value.parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            let directory = query("directory");
+            let parent = query("parentID");
+            let found = data
+                .sessions
+                .values()
+                .filter(|session| {
+                    directory.as_ref().is_none_or(|directory| {
+                        data.unfiltered_list || session["directory"] == *directory
+                    }) && parent
+                        .as_ref()
+                        .is_none_or(|parent| session["parentID"] == *parent)
+                })
+                .cloned()
+                .map(native)
+                .collect::<Vec<_>>();
+            let next = (offset + limit < found.len()).then(|| format!("opaque_{}", offset + limit));
+            (
+                "200 OK",
+                json!({"data": found.iter().skip(offset).take(limit).collect::<Vec<_>>(), "cursor": {"next":next}}),
+            )
+        }
+        path if path.ends_with("/permission") => (
+            "200 OK",
+            json!({"data":if data.approval { json!([{"sessionID":"ses_old"}]) } else { json!([]) }}),
+        ),
+        path if path.ends_with("/inbox") => (
+            "200 OK",
+            json!({"data":if data.queued { json!([{"id":"msg_parked"}]) } else { json!([]) }}),
+        ),
+        path if path.ends_with("/export") => (
+            "200 OK",
+            json!({"data":{"messages":[
+                {"id":"msg_1","type":"user","text":"Native question","time":{"created":1}},
+                {"id":"msg_2","type":"assistant","agent":"tracer","model":{"providerID":"openai","id":"test","variant":"high"},"content":[{"type":"text","text":"Native answer"}],"time":{"created":2}}
+            ]}}),
+        ),
+        path => {
+            let Some(id) = path.strip_prefix("/api/session/") else {
+                return ("404 Not Found", json!({}));
+            };
+            if method == "DELETE" {
+                if data.delete_failure {
+                    return ("500 Internal Server Error", json!({}));
+                }
+                data.deleted.push(id.into());
+                if !data.delete_lies {
+                    data.sessions.remove(id);
+                }
+                return ("204 No Content", Value::Null);
+            }
+            match data.sessions.get(id) {
+                Some(session) => ("200 OK", json!({"data":native(session.clone())})),
+                None => ("404 Not Found", json!({})),
+            }
+        }
     }
 }
 
