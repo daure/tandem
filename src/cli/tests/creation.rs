@@ -18,7 +18,9 @@ mod history;
 mod inspection;
 mod lifecycle;
 mod opencode;
+mod preparation;
 mod providers;
+mod rules;
 mod startup;
 mod workspaces;
 

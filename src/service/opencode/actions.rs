@@ -84,6 +84,9 @@ impl AppService {
             return Err("OpenCode integration is disabled".into());
         }
         let snapshot = self.opencode_snapshot();
+        if snapshot.missing_directory(directory) {
+            return Err("OpenCode workspace directory is unavailable".into());
+        }
         let instances = self.environments.snapshot().instances;
         let owner = |directory: &str| {
             workspace_owner(
@@ -114,6 +117,7 @@ impl AppService {
             .map(str::to_owned)
             .unwrap_or_else(|| directory_name(directory));
         let workspace = owned.map(|instance| instance.workspace.clone());
+        let instance_name = instance.map(str::to_owned);
         let directory = directory.to_owned();
         let environments = Arc::clone(&self.environments);
         let observer = self.opencode.observer.clone();
@@ -125,6 +129,11 @@ impl AppService {
                 if !settings.opencode_enabled() {
                     return Err("OpenCode integration is disabled".into());
                 }
+                let instructions = if let Some(instance) = instance_name {
+                    Some(super::instance_guidance(Arc::clone(&environments), instance).await?)
+                } else {
+                    None
+                };
                 if let Some(workspace) = workspace {
                     let instance = name.clone();
                     tokio::task::spawn_blocking(move || {
@@ -134,13 +143,20 @@ impl AppService {
                     .map_err(|error| error.to_string())??;
                 }
                 if let Some(pane) = observer
-                    .new_session_tab(&directory, &current, destination.as_ref())
+                    .new_session_tab(&directory, &current, destination.as_ref(), instructions)
                     .await?
                 {
                     return Ok(pane);
                 }
                 observer
-                    .new_session(&directory, &name, &current, destination.as_ref(), None)
+                    .new_session(
+                        &directory,
+                        &name,
+                        &current,
+                        destination.as_ref(),
+                        None,
+                        instructions,
+                    )
                     .await
             },
         )
@@ -171,10 +187,19 @@ pub(in crate::service) async fn launch_instance_opencode(
     validate_launch(settings, integration)?;
     let target = workspace.to_owned();
     let instance = name.to_owned();
+    let instructions = super::instance_guidance(Arc::clone(&environments), name.to_owned()).await?;
     tokio::task::spawn_blocking(move || environments.prepare_workspace_open(&target, &instance))
         .await
         .map_err(|error| error.to_string())??;
-    launch_workspace_opencode(settings, integration, workspace, name, initial_prompt).await
+    launch_workspace_opencode(
+        settings,
+        integration,
+        workspace,
+        name,
+        initial_prompt,
+        Some(instructions),
+    )
+    .await
 }
 
 pub(in crate::service) async fn launch_workspace_opencode(
@@ -183,6 +208,7 @@ pub(in crate::service) async fn launch_workspace_opencode(
     workspace: &str,
     name: &str,
     initial_prompt: Option<&str>,
+    instructions: Option<&str>,
 ) -> Result<(), String> {
     validate_launch(settings, integration)?;
     // A short-lived CLI has no TUI observation cache yet.
@@ -207,6 +233,7 @@ pub(in crate::service) async fn launch_workspace_opencode(
             current,
             destination.as_ref(),
             initial_prompt,
+            instructions,
         )
         .await
         .map(|_| ())

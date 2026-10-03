@@ -41,6 +41,8 @@ Presentation layers adapt input and output. `AppService` is the sole application
 ## State ownership
 
 - Docker labels and inspected containers are authoritative for container-backed runtime inventory.
+- Successfully prepared service instances with no containers retain their service execution kind and
+  launch topology in SQLite. Their inventory reports Not started; fresh Docker observations take precedence.
 - SQLite owns local instance identity and ownership, preparation outcomes, launch snapshots, lifecycle receipts,
   retained activities, startup requests/outcomes, settings, timing history, and cross-process refresh revisions.
   Records are keyed by namespace and case-normalized instance name; state writes publish revisions in the same transaction.
@@ -88,9 +90,26 @@ Filesystem notifications discover receipt changes and servers. One authenticated
 subscription per local server requests coalesced reconciliation reads; startup and reconnect request
 a baseline because subscriptions have no replay. Client-local receipt changes update attachment,
 metadata, and tab positions without server reads. Unchanged heartbeats leave the snapshot untouched.
-Stream failures mark affected state stale and retry with bounded backoff. Stale visibility uses elapsed
-time rather than event count. The five-second process-sampling timer also checks client liveness and
-presence expiry. Watchers and subscriptions are disposed when the integration is disabled.
+Stream failures mark affected state stale and retry with bounded backoff. Unverifiable conversations
+and clients stay hidden during three verification checks, spaced by one and two seconds. Exhaustion
+removes their active tracking and writes one diagnostic entry per source. Meaningful receipt changes
+or newly listening daemon sources allow rediscovery; heartbeats and server events do not reset an
+active retry budget. Known unfinished work in definitely missing folders remains visible with warning
+glyphs, while detached confirmed-idle history in those folders stays hidden. Existing clients remain
+navigable and closable through fresh receipt and live-pane verification; creating or resuming a client
+requires an existing directory. Scoped observation warnings accompany visible affected work, while
+unscoped infrastructure failures remain explicit. The five-second process-sampling timer also checks
+client liveness, presence expiry, and Zellij tab positions without server reads. Open Sessions workspace groups follow
+their earliest attached Zellij tab within each ownership group, with stable fallback ordering when
+positions are unavailable. Failed tab queries retain the last trustworthy positions. Watchers and
+subscriptions are disposed when the integration is disabled.
+Daemon port records require an IPv4 loopback listener or a fresh client receipt before observation.
+Saved idle history alone does not trigger requests to stopped servers. The liveness check discovers listener
+changes, so retained records become observable when their server starts and release subscriptions
+when it stops without dependent work. Dormant records remain owned by their launcher.
+Observation skips definitely missing directories without fresh clients or unfinished work, even
+when their shared server listens. Filesystem access errors retain uncertainty. Failed directory
+status reads preserve cached conversations subject to verification retention.
 
 The bundled OpenCode TUI companion runs in each client and publishes its current route and open
 session tabs with PID, heartbeat, server, and Zellij identity. Native reactive computations track
@@ -115,6 +134,11 @@ repositories and previewed services; preparation refreshes verified mappings bef
 only if the file created by that startup remains unchanged. Existing guidance and client edits are preserved.
 The worker retains the launch outcome separately from instance readiness; launch failures permit
 provisioning to continue. Seed-copying or guidance-generation failures block the requested launch.
+Creation requests persist a default-on service-start flag. Prepare-only requests complete workspace,
+repository and Compose preparation while skipping Compose up, gateway startup and readiness waits.
+New instance sessions receive state-aware guidance before initial input; session opening leaves container
+state unchanged. V2 uses durable session instruction entries. V1 appends synthetic no-reply context.
+Rule launches set their model/variant at session creation and send task input after attaching guidance.
 Bulk closure selects observed panes by instance ownership or exact external directory and excludes
 owned panes from the external aggregate. With integration enabled, instance purge closes associated
 clients under the instance lock after ownership validation and before resource deletion. Verified local
@@ -158,7 +182,7 @@ preserves existing regular files and rejects symlinks, special files, reserved w
 repository-target overlap. Template snapshots include the recursive file tree and metadata; the
 background template observer detects additions, edits, removals, and folder deletion for every interface.
 
-The shared template repository can contain `instances/` and `providers/` catalogs. Instance discovery
+The shared template repository can contain `instances/`, `providers/`, and `rules/` catalogs. Instance discovery
 uses `instances/` when present; flat catalogs are supported without relocation, and mixed instance
 layouts fail initialization. MCP guidance reports the shared repository and effective catalog paths.
 Writable-mount protection covers the entire shared repository, including sibling provider packages.
@@ -167,7 +191,7 @@ Writable-mount protection covers the entire shared repository, including sibling
 
 `store/events` defines versioned envelopes, four typed profiles, processing attempts, and feedback
 messages. `environments/events` owns namespace/provider-scoped SQLite identities and transactional
-ingestion, attempts, and notification queues in the private application database. Acceptance creates
+ingestion, attempts, and notification queues in the private application database. Receipt creates
 an event, pending attempt, and `received` notification atomically. Matching redeliveries retain their
 receipt; conflicting content rejects the batch. Provider credentials authorize only their own
 ingestion and feedback, independently of event-supplied metadata.
@@ -181,14 +205,56 @@ the listener. Failed observations retain prior data with error provenance. The e
 profile renderers are pure presentation; the root coordinator retains modal/focus routing while
 capability-specific event logic lives in `app/events`.
 
-The developer slice stores pending/accepted attempts and supports explicit replay of accepted
-events with separate, idempotent attempt identities. Acceptance means a rule matched and triggered
-an action; rule execution is pending, so newly received events remain pending. Retained terminal
-processing history preserves its identities and timestamps through an atomic schema migration.
-Feedback is `received` or `replayed`; retained `acknowledged` notifications remain readable. Providers
+Confirmed event deletion removes namespace-scoped events, processing history, pending rule work,
+and associated feedback atomically under the rule-worker lease. Provisioning or launching actions
+block deletion. Instances, sessions, provider credentials, and rule definitions are preserved.
+Dispatch admission history is namespace-owned and survives event deletion to enforce rate limits.
+
+Processing attempts are pending or accepted. Acceptance means a rule matched and durably triggered
+an independent action. Explicit replay of any retained event uses current enabled rules with a separate,
+idempotent attempt identity. Retained processing history preserves identities and timestamps through
+atomic schema migration. Feedback is `received`, `replayed`, or `assigned`; retained `acknowledged`
+notifications remain readable. Providers
 poll and acknowledge notifications independently of event acceptance. Durable records survive
 sidecar/provider disconnects; external provider side effects require idempotency or reconciliation.
-Agent assignment, prompt delivery, and task completion are distinct future dispatch transitions.
+Agent assignment, session launch, prompt delivery, and task completion remain separate facts.
+
+`store/rules` defines versioned rule snapshots, bounded boolean-only Rhai predicates, in-memory
+Handlebars prompt rendering, and independent per-rule/per-attempt acceptances. Scripts expose no
+host I/O. Prompt templates use strict field interpolation and literal event text without HTML
+escaping. Rendering bounds output to 64 KiB, nesting to 32 levels, and template evaluations to 50,000;
+budgeted block execution also bounds empty loops and inline-partial recursion.
+`environments/rules` owns shared definitions in `templates/rules/<name>/rule.json` and namespace-local
+activation, Zellij targets, optimistic revisions, cached definitions, pinned evaluations, acceptances,
+dispatch admission history, and assignment feedback in SQLite. A shared catalog lock precedes write
+transactions for rule saves, discovery, receipt, and replay. New files are inactive; external definition
+edits invalidate local activation. File removal hides the rule and disables future matches, retaining
+its revision identity and pinned history. Invalid files fail closed. Receipt/replay transactions reconcile
+the catalog before selecting rules and
+pin every enabled rule revision; completed evaluations survive redelivery and recovery. Match errors
+and false results are separate outcomes. A match atomically creates its acceptance and assigned
+instance identity before external actions, regardless of sibling outcomes.
+
+`service/rules` owns authorization, previews, recovery, and dispatch.
+TUI activation captures its process's current Zellij session; MCP can supply an explicit live target.
+Activation verifies the target. Dispatch rechecks it before preparation and before its durable launch
+marker. A missing target is a pre-launch failure requiring reactivation; accepted revisions retain their
+pinned destination, including across retries.
+A private namespace file lease serializes background cycles across TUI and owned event-sidecar
+processes. Admission permits four
+active actions and ten starts per minute, counting retries. Each action provisions a fresh instance
+through the existing detached startup contract. Successful preparation and requested service readiness
+gate model/prompt launch; each pinned rule revision owns its default-on service-start flag.
+The launch marker is durable before contacting Zellij; an interrupted or uncertain launch is surfaced
+without automatic resend. Observed exact workspace/pane linkage records the session and `launched`
+outcome, which does not certify prompt delivery or task completion. Confirmed pre-launch retries keep
+the assigned instance; replay intentionally creates new actions. Assignment and its originating-provider
+notification commit together. The sidecar polls automation independently of open UI/MCP clients.
+
+`app/rules` projects two-row rule/acceptance DataViews and editable bottom dialogs through tuicore.
+Event details retain all acceptances; rule histories filter by rule identity. Exact history navigation
+loads retained events beyond the feed and clears conflicting filters. MCP shares the same service
+contract for definitions, previews, event inspection, replay, and restricted retries.
 
 Developer provider packages have independent Docker build contexts, read-only private token mounts,
 and named checkpoint volumes. Their sample Python runtime is a fixture dependency; the provider
@@ -207,21 +273,57 @@ Lifecycle completion publishes the targeted collector's verified state and clear
 before any full-inventory refresh. Observation revisions prevent an older in-flight snapshot from
 overwriting a completed action. The background observer owns full provider discovery and refresh.
 
-Provider lifecycle persists a namespace/source-scoped ingestion gate before Docker work. Stop and
-Pause disable ingestion; authenticated batches receive discarded IDs without events, attempts, or
-feedback. The ingestion transaction reads the gate so detached sidecars share the same cutoff.
-Failed Stop/Pause operations keep ingestion disabled; unavailable actions restore the prior gate.
-Start, Resume, and Restart enable ingestion before collector work and restore the prior gate on failure.
+Provider manifests optionally declare streams and cooperative stream-control capability. Namespace/source/
+stream-scoped SQLite records own desired collection state and monotonic control revisions. The authenticated
+sidecar exposes only the credential's controls and accepts acknowledgments of the current exact revision
+and desired state. Collectors acknowledge after applying collection changes and refresh that evidence;
+five-second expiry leaves uncertain collection explicit. Stream lifecycle serializes with collector lifecycle,
+waits up to ten seconds for acknowledgment, and rechecks the owned collector before reporting completion.
+Collector startup enables all declared streams and invalidates prior evidence; collector Stop invalidates
+stream evidence before Docker work. Stream Stop blocks ingestion as a race guard, but successful completion
+requires the collector to cancel its stream work and discard buffered events. Resume is live-only; source
+checkpoint recovery and backfill are outside the contract. Sibling streams and the control loop keep running.
+An individual stream start provisions or resumes a stopped collector with only that stream enabled;
+running-collector changes preserve siblings. Stopping the last enabled stream stops the collector under
+the same lifecycle lock. Stream completion publishes verified collector and stream states together.
+Durable control-request timestamps project enabled streams as Starting for up to ten seconds while awaiting
+their first acknowledgment. Errors, timeouts and expired acknowledgments remain unverified; readiness does
+not depend on source events.
+The Providers DataView projects provider parents and stream children with stable identities, independent
+details, scoped menus, retained-history counts, and exact provider/stream event links. Observed streams without
+declared control capability remain inspectable without claiming collection state or offering lifecycle actions.
 
-Provider Start prepares its private token and ensures a detached native sidecar. Restart operates the
-existing owned collector with its saved configuration and checkpoints, unpauses it when needed, and
-verifies it is running and unpaused. The sidecar worker owns a namespace lease, binds loopback, and
+Provider lifecycle persists a namespace/source-scoped ingestion gate before Docker work. Stop
+disables ingestion; authenticated batches receive discarded IDs without events, attempts, or
+feedback. The ingestion transaction reads the gate so detached sidecars share the same cutoff.
+Failed Stop operations keep ingestion disabled; unavailable actions restore the prior gate.
+Start enables ingestion before collector work and restores the prior gate on failure.
+
+Provider lifecycle offers Start and Stop. Start prepares its private token and ensures a detached
+native sidecar. It unpauses owned paused collectors and verifies startup is running and unpaused.
+The sidecar worker owns a namespace lease, binds loopback, and
 publishes a private receipt with an independently probed process identity. Its recorded address survives
-restart. The TUI supervises it for active collectors; Start, Resume, and Restart also ensure readiness.
+restart. The TUI supervises it for active collectors; Start and rule activation also ensure readiness.
+On Linux, readiness compares the receiver's executable device/inode with the installed executable.
+Replacement holds the namespace startup gate, pins the verified process with a pidfd, rechecks its
+receipt identity, requests graceful shutdown and waits for lease release before binding the retained
+address. Open clients whose executable was unlinked resolve its installed path for receiver startup
+and freshness checks. Unverifiable ownership or incomplete shutdown blocks replacement.
 Sidecar and collector lifetimes are independent of open terminal clients. MCP remains a separate
 transport. An optional foreground `serve-events` mode supports
-protocol tests. Providers is the third tab, with lifecycle approval, bounded logs, and exact source
+protocol tests. Providers is the fourth tab, with lifecycle approval, bounded logs, and exact source
 links to the second Events tab.
+
+Provider deletion is an explicitly confirmed MCP service operation. An exclusive package lock excludes
+cross-namespace lifecycle work; namespace/provider and source locks exclude collection changes and
+identity reuse. The rule-worker lease gates dispatch admission. Durable deletion markers block queued
+dispatch and collection restarts across failures and process restarts. Positive Docker labels authorize
+collector/checkpoint removal; canonical package/runtime/credential paths bound filesystem cleanup.
+Instance purge rechecks the originating startup identity under the instance lock before closing clients,
+deleting workspace OpenCode history and removing resources. External failures retain launch/event
+identity for retry. Successful cleanup atomically removes provider credentials, streams, events and
+dependent history, launch records and the deletion marker. Shared rules, sidecars, namespace admission
+history and Docker caches remain independently owned.
 
 ## Growth rules
 

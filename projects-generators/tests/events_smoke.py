@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify four provider profiles against an isolated Tandem sidecar, optionally in Docker."""
+"""Verify five fixture streams and six rules against an isolated sidecar, optionally in Docker."""
 
 import argparse
 import importlib.util
@@ -16,7 +16,12 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from providers import PROFILES, create_providers
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src/mcp/tests"))
+from providers import PROFILES, PROVIDERS, create_providers
+from stdio_smoke import Client
+
+BATCH_SIZE = 18
+EVENT_COUNT = BATCH_SIZE * len(PROVIDERS)
 
 
 def wait_for(check, message, seconds=30):
@@ -42,7 +47,9 @@ def verify(binary, docker):
         root = Path(directory)
         packages = create_providers(root)
         home = root / ".tandem"
-        (home / "templates/instances").mkdir()
+        guidance = home / "templates/instances/guidance-only"
+        guidance.mkdir(parents=True)
+        (guidance / "tandem.json").write_text("{}")
         with socket.socket() as socket_:
             socket_.bind(("127.0.0.1", 0))
             port = socket_.getsockname()[1]
@@ -50,20 +57,25 @@ def verify(binary, docker):
         namespace = "events-smoke-" + root.name.removeprefix("tandem-events-smoke-").replace("_", "-")
         environment = {**os.environ, "TANDEM_HOME": str(home), "TANDEM_NAMESPACE": namespace,
                        "TANDEM_EVENTS_URL": origin, "TANDEM_PROVIDER_INTERVAL": "3600",
-                       "TANDEM_PROVIDER_BATCH": "10"}
+                       "TANDEM_PROVIDER_BATCH": str(BATCH_SIZE), "XDG_STATE_HOME": str(root / "state")}
         setup = subprocess.run([str(binary), "providers-setup"], env=environment, check=True,
                                text=True, capture_output=True)
         credentials = Path(setup.stdout.strip())
         assert credentials == home / "provider-credentials" / namespace / "providers.env"
         assert credentials.stat().st_mode & 0o777 == 0o600
-        tokens = {f"TANDEM_PROVIDER_{profile.upper()}_TOKEN":
-                  (credentials.parent / f"dev-{profile.replace('_', '-')}.token").read_text()
-                  for profile in PROFILES}
+        tokens = {name: (credentials.parent / f"{name}.token").read_text()
+                  for name in PROVIDERS.values()}
+        rules = json.loads(subprocess.run(
+            [str(binary), "rules-setup", "--model", "openai/test"], env=environment,
+            check=True, text=True, capture_output=True,
+        ).stdout)
+        assert len(rules) == 6 and all(not rule["definition"]["enabled"] for rule in rules)
         compose = ["docker", "compose", "-p", namespace + "-providers", "--env-file", str(credentials),
                    "-f", str(packages / "compose.providers.yaml")]
         log = (root / "sidecar.log").open("wb")
         server = None
         clients = []
+        mcp = None
         containers_started = False
 
         def start():
@@ -74,7 +86,7 @@ def verify(binary, docker):
             if server.poll() is not None:
                 raise RuntimeError("sidecar exited before becoming ready")
             try:
-                request(origin, tokens["TANDEM_PROVIDER_MESSAGE_TOKEN"], "/v1/notifications")
+                request(origin, tokens["slack"], "/v1/notifications")
                 return True
             except (URLError, TimeoutError):
                 return False
@@ -91,34 +103,62 @@ def verify(binary, docker):
                 subprocess.run([*compose, "up", "-d", "--build"], env=environment, check=True,
                                capture_output=True, text=True, timeout=180)
             else:
-                source = packages / "message/src/provider.py"
+                source = packages / "slack/src/provider.py"
                 specification = importlib.util.spec_from_file_location("sample_provider", source)
                 module = importlib.util.module_from_spec(specification)
                 specification.loader.exec_module(module)
-                for profile in PROFILES:
-                    package = packages / profile.replace("_", "-")
+                for profile, name in PROVIDERS.items():
+                    package = packages / name
                     provider = module.Provider(root / f"{profile}.sqlite3", json.loads((package / "sample.json").read_text()),
-                                               origin, tokens[f"TANDEM_PROVIDER_{profile.upper()}_TOKEN"], 10)
+                                               origin, tokens[name], BATCH_SIZE)
                     clients.append(provider)
                     provider.deliver()
                     provider.receive_feedback()
-            wait_for(lambda: rows("SELECT count(*) FROM events")[0][0] == 40, "all four provider batches were not accepted")
-            wait_for(lambda: rows("SELECT count(*) FROM provider_notifications WHERE acknowledged = 1")[0][0] == 40,
+            wait_for(lambda: rows("SELECT count(*) FROM events")[0][0] == EVENT_COUNT, "all four provider batches were not accepted")
+            wait_for(lambda: rows("SELECT count(*) FROM provider_notifications WHERE acknowledged = 1")[0][0] == EVENT_COUNT,
                      "providers did not consume and acknowledge their feedback")
             assert {json.loads(payload)["profile"] for (payload,) in rows("SELECT payload FROM events")} == set(PROFILES)
+            assert {json.loads(payload)["stream"] for (payload,) in rows("SELECT payload FROM events")} == {
+                "messages", "reactions", "backlog", "production-gateway-issue", "releases"}
+            expected_rules = {
+                ("slack", "messages"): {"slack-pr-request", "slack-support-query"},
+                ("slack", "reactions"): {"slack-message-reaction"},
+                ("jira", "backlog"): {"jira-ticket-triage"},
+                ("datadog", "production-gateway-issue"): {"datadog-gateway-issue"},
+                ("github", "releases"): {"github-release-notes"},
+            }
+            mcp = Client(binary, environment)
+            mcp.tool("get_instructions")
+            matched_sequences = {name: set() for names in expected_rules.values() for name in names}
+            for sequence, provider, payload in rows("SELECT sequence, provider, payload FROM events ORDER BY sequence"):
+                event = json.loads(payload)
+                stream_sequence = event["metadata"]["stream_sequence"]
+                expected = expected_rules[(provider, event["stream"])] if stream_sequence % 3 == 0 else set()
+                matched = set()
+                for rule in rules:
+                    preview = mcp.tool("preview_rule", {"definition": rule["definition"], "event_sequence": sequence})
+                    if preview["matched"]:
+                        name = rule["definition"]["name"]
+                        matched.add(name)
+                        matched_sequences[name].add(stream_sequence)
+                        assert event["event_id"] in preview["resolved_prompt"]
+                assert matched == expected, (provider, event["stream"], stream_sequence, matched, expected)
+            assert all({3, 6, 9} <= sequences for sequences in matched_sequences.values()), matched_sequences
+            assert rows("SELECT count(*) FROM rule_acceptances")[0][0] == 0
             provider, payload = rows("SELECT provider, payload FROM events ORDER BY sequence LIMIT 1")[0]
-            variable = provider.removeprefix("dev-").replace("-", "_").upper()
-            receipt = request(origin, tokens[f"TANDEM_PROVIDER_{variable}_TOKEN"], "/v1/events", {"events": [json.loads(payload)]})
+            receipt = request(origin, tokens[provider], "/v1/events", {"events": [json.loads(payload)]})
             assert receipt["receipts"][0]["duplicate"] is True
-            assert rows("SELECT count(*) FROM events")[0][0] == 40
+            assert rows("SELECT count(*) FROM events")[0][0] == EVENT_COUNT
             server.terminate()
             server.wait(timeout=10)
             server = start()
             wait_for(ready, "sidecar did not restart")
-            assert rows("SELECT count(*) FROM events")[0][0] == 40
-            assert rows("SELECT count(*) FROM event_attempts WHERE status = 'pending'")[0][0] == 40
-            print("PASS: four profiles, 40 durable events, feedback acknowledgment, duplicate IDs, sidecar restart")
+            assert rows("SELECT count(*) FROM events")[0][0] == EVENT_COUNT
+            assert rows("SELECT count(*) FROM event_attempts WHERE status = 'pending'")[0][0] == EVENT_COUNT
+            print(f"PASS: four profiles, five streams, six disabled rules matching every third stream event, {EVENT_COUNT} durable events, feedback acknowledgment, duplicate IDs, sidecar restart; no model prompts")
         finally:
+            if mcp is not None:
+                mcp.close()
             for client in clients:
                 client.close()
             try:

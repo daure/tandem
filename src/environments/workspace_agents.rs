@@ -84,7 +84,7 @@ pub(super) fn prepare(
     }
     let mut markdown = markdown(config, instance, repositories)?;
     if pending {
-        markdown.push_str("\n\n## Preparation\n\nInstance creation may still be preparing repository checkouts and services. Wait for instance readiness before working in repositories or using services; reread this file for verified mappings after preparation.\n");
+        markdown.push_str("\n\n## Preparation\n\nRepository checkouts and service mappings may still be preparing. Explore available code while preparation runs; wait for required checkouts before editing them. Follow the session's startup instructions and verify service readiness only when the work needs services. Reread this file for verified mappings after preparation.\n");
     }
     let file = temporary(workspace, &markdown)?;
     match file.persist_noclobber(workspace.join("AGENTS.md")) {
@@ -166,7 +166,7 @@ fn markdown(
         .any(|service| service.url.is_some())
     {
         (
-            "Use the exposed URLs for API and browser testing against the running application.\n"
+            "Use the configured URLs for API and browser testing when services are required and their readiness is verified.\n"
                 .into(),
             format!(
                 "\n\n## HTTP URLs\n\n{http_urls}\n\nThese URLs use a shared gateway; container ports are internal."

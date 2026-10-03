@@ -44,6 +44,11 @@ fn blank_sessions_clear_inherited_prompts() {
         ""
     );
     let calls = fs::read_to_string(fixture.home.join("zellij-calls")).unwrap();
+    assert!(
+        fs::read_to_string(fixture.home.join("opened-instructions"))
+            .unwrap()
+            .contains("Services are starting automatically")
+    );
     assert!(calls.contains("new-tab --name review"), "{calls}");
     assert!(calls.contains("focus-pane-id terminal_100"), "{calls}");
 }
@@ -232,6 +237,7 @@ if [ -f app/file.txt ]; then
   git -C app branch --show-current > "$TANDEM_HOME/branch"
 fi
 printf '%s' "$TANDEM_INITIAL_PROMPT" > "$TANDEM_HOME/opened-parameters"
+printf '%s' "$TANDEM_SESSION_INSTRUCTIONS" > "$TANDEM_HOME/opened-instructions"
 printf '%s\0' "$@" > "$TANDEM_HOME/opencode-args"
 printf '%s\n' "$PWD" >> "$TANDEM_HOME/opened"
 "#;

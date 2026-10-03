@@ -39,7 +39,11 @@ pub(super) async fn start(
         .env("OPENCODE_DISABLE_MODELS_FETCH", "1")
         .env("OPENCODE_PASSWORD", &password)
         .env("OPENCODE_SERVER_PASSWORD", &password)
-        .current_dir(directory)
+        .current_dir(if std::path::Path::new(directory).is_dir() {
+            std::path::Path::new(directory)
+        } else {
+            root.path()
+        })
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

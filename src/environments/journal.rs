@@ -15,7 +15,8 @@ use crate::store::environments::{
 mod launch;
 mod workspaces;
 pub(super) use workspaces::{
-    checkout, forget, prepare, recorded, workspace_instance, workspace_ready, workspaces,
+    checkout, forget, prepare, prepared_ready, recorded, workspace_instance, workspace_ready,
+    workspaces,
 };
 
 #[derive(Default, Deserialize, Serialize)]
@@ -311,6 +312,11 @@ pub(super) fn enrich(config: &Config, instances: &mut [Instance]) -> Result<Vec<
             instance.runtime.topology_known = true;
             instance.description.clone_from(&expected.description);
             instance.runtime.workspace_ready = expected.runtime.workspace_ready;
+            instance.runtime.prepared_only = expected.runtime.prepared_only
+                && instance
+                    .services
+                    .iter()
+                    .all(|service| service.container_id.is_empty());
             for service in &mut instance.services {
                 service.runtime.unexpected = !expected.services.iter().any(|slot| {
                     slot.name == service.name
@@ -327,6 +333,7 @@ pub(super) fn enrich(config: &Config, instances: &mut [Instance]) -> Result<Vec<
                 let mut missing = expected.clone();
                 missing.status = "missing".into();
                 missing.runtime.state = ContainerState::Missing;
+                missing.runtime.prepared_only = instance.runtime.prepared_only;
                 missing.runtime.waiting = record.activity.as_ref().is_some_and(|activity| {
                     activity.active() && activity.action == "create_instance"
                 });
@@ -343,7 +350,11 @@ pub(super) fn enrich(config: &Config, instances: &mut [Instance]) -> Result<Vec<
             .activity
             .as_ref()
             .and_then(|activity| activity.error.clone());
-        if instance.workspace_only
+        for service in &mut instance.services {
+            service.runtime.prepared_only =
+                instance.runtime.prepared_only && service.container_id.is_empty();
+        }
+        if (instance.workspace_only || instance.runtime.prepared_only)
             && !fs::symlink_metadata(&instance.workspace)
                 .is_ok_and(|metadata| metadata.file_type().is_dir())
         {

@@ -75,4 +75,6 @@ fn native_inventory_follows_opaque_cursors_and_projects_complete_transcripts() {
         .unwrap();
     assert!(transcript.contains("Native question"));
     assert!(transcript.contains("Native answer"));
+    assert!(transcript.contains("### Reasoning\n\nNative reasoning"));
+    assert!(transcript.contains("Tool: shell (completed)"));
 }

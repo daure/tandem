@@ -267,6 +267,7 @@ pub(super) struct Row {
     pub service: Option<(String, String)>,
     pub service_name: Option<String>,
     pub workspace: Option<String>,
+    pub workspace_missing: bool,
     pub alternate_background: bool,
     pub gateway_url: Option<String>,
     pub details: Vec<Property>,
@@ -327,6 +328,7 @@ impl Row {
                 Style::default().fg(self.tone.color()),
             ));
         }
+        let title_index = first_line.len();
         if let Some(status) = &self.status {
             let name = first.strip_suffix(status).unwrap_or(first);
             first_line.push(Span::raw(name.to_owned()));
@@ -374,6 +376,16 @@ impl Row {
         }
         if let Some(metadata) = &self.opencode_metadata {
             metadata.append_to(&mut first_line);
+        }
+        if let Some(width) = available_width.filter(|_| self.is_session_row()) {
+            let line_width: usize = first_line.iter().map(Span::width).sum();
+            let title = &mut first_line[title_index];
+            let reserved_width = line_width - title.width();
+            title.content = truncate_with_ellipsis(
+                &title.content,
+                usize::from(width).saturating_sub(reserved_width),
+            )
+            .into();
         }
         let mut text = vec![Line::from(first_line)];
         if self.instance.is_some() {
@@ -994,6 +1006,7 @@ fn from_snapshot_with_operations_and_totals(
             service: None,
             service_name: None,
             workspace: Some(instance.workspace.clone()),
+            workspace_missing: false,
             alternate_background: false,
             gateway_url: None,
             details: details::instance(instance),
@@ -1099,6 +1112,7 @@ fn from_snapshot_with_operations_and_totals(
                 service_name: Some(service.name.clone()),
                 description: String::new(),
                 workspace: Some(instance.workspace.clone()),
+                workspace_missing: false,
                 alternate_background: false,
                 gateway_url: service.url.clone(),
                 details: details::service(service),

@@ -32,6 +32,7 @@ fn new_sessions_use_a_fresh_tab_when_the_cached_destination_is_not_live() {
                 "main",
                 Some(&destination("main")),
                 None,
+                None,
             ))
             .unwrap();
         assert_eq!(
@@ -81,6 +82,7 @@ esac
                 "main",
                 Some(&destination("old")),
                 None,
+                None,
             ));
         let calls = fs::read_to_string(root.path().join("calls")).unwrap();
         if session_alive {
@@ -129,6 +131,7 @@ esac
                 "workspace",
                 "main",
                 Some(&destination("main")),
+                None,
                 None,
             ))
             .unwrap_err();

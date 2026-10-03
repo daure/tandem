@@ -9,18 +9,20 @@ use crate::{
 };
 
 mod actions;
+mod guidance;
 mod observation;
 
 pub(super) use actions::launch_workspace_opencode;
+pub(super) use guidance::instance_guidance;
 
 pub(super) struct Integration {
     state: Mutex<State>,
     pub(super) observer: Observer,
-    current_zellij: String,
+    pub(super) current_zellij: String,
 }
 
 struct State {
-    // Keep retry evidence when rows expire, including each client's startup grace period.
+    // Quarantined evidence supports bounded verification independently of visible rows.
     snapshot: Snapshot,
     retention: Retention,
     task: Option<tokio::task::JoinHandle<()>>,
@@ -212,6 +214,12 @@ impl super::AppService {
             && !session.panes.contains(pane)
         {
             return Err("OpenCode pane is unavailable".into());
+        }
+        if pane.is_none() && snapshot.missing_directory(&session.directory) {
+            return Err(
+                "The workspace folder is missing; only an existing OpenCode client can be opened"
+                    .into(),
+            );
         }
         let settings = Arc::clone(&self.settings);
         let current = self.opencode.current_zellij.clone();

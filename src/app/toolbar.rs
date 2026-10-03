@@ -27,6 +27,7 @@ pub(super) struct State {
     pub opencode_enabled: bool,
     pub show_saved: bool,
     pub completion_sound: bool,
+    pub event_acceptance_sound: bool,
 }
 
 impl State {
@@ -65,6 +66,7 @@ impl State {
             opencode_enabled: false,
             show_saved: false,
             completion_sound: false,
+            event_acceptance_sound: false,
         }
     }
 }

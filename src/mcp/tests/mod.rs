@@ -7,6 +7,7 @@ use super::{McpServer, StdioHandshakeBuffer};
 
 mod manifests;
 mod providers;
+mod rules;
 
 #[test]
 fn stdio_handshake_defers_early_requests_until_initialized() {
@@ -82,6 +83,7 @@ fn template_tools_return_object_payloads_and_mutations_require_confirmation() {
                 name: "review".into(),
                 confirmed: false,
                 wait: true,
+                start_instance: true,
                 timeout_seconds: 60,
             }))
             .await

@@ -41,6 +41,7 @@ type StartupHistory = BTreeMap<(String, StartupKind), Vec<u64>>;
 pub(super) enum FeedbackSetting {
     FadeSeconds,
     Sound,
+    EventAcceptanceSound,
 }
 
 impl FeedbackSetting {
@@ -48,13 +49,14 @@ impl FeedbackSetting {
         match self {
             Self::FadeSeconds => "completion.fade_seconds",
             Self::Sound => "completion.sound",
+            Self::EventAcceptanceSound => "events.acceptance_sound",
         }
     }
 
     fn default_value(self) -> &'static str {
         match self {
             Self::FadeSeconds => "20",
-            Self::Sound => "",
+            Self::Sound | Self::EventAcceptanceSound => "",
         }
     }
 }
@@ -62,7 +64,7 @@ impl FeedbackSetting {
 pub(super) struct Settings {
     branch_instances: AtomicBool,
     opencode: Arc<[AtomicBool; 2]>,
-    feedback: Arc<[RwLock<String>; 2]>,
+    feedback: Arc<[RwLock<String>; 3]>,
     startup_history: Arc<RwLock<StartupHistory>>,
     commands: mpsc::Sender<SettingsRequest>,
 }
@@ -104,6 +106,10 @@ impl Settings {
         let feedback = Arc::new([
             RwLock::new(read_feedback(&connection, FeedbackSetting::FadeSeconds)?),
             RwLock::new(read_feedback(&connection, FeedbackSetting::Sound)?),
+            RwLock::new(read_feedback(
+                &connection,
+                FeedbackSetting::EventAcceptanceSound,
+            )?),
         ]);
         let opencode = Arc::new([
             AtomicBool::new(read_opencode(&connection, OpencodeSetting::Integration)?),
@@ -167,7 +173,11 @@ impl Settings {
     }
 
     pub(super) fn refresh(&self) -> Result<(), String> {
-        for kind in [FeedbackSetting::FadeSeconds, FeedbackSetting::Sound] {
+        for kind in [
+            FeedbackSetting::FadeSeconds,
+            FeedbackSetting::Sound,
+            FeedbackSetting::EventAcceptanceSound,
+        ] {
             self.feedback_request(kind, None)?
                 .blocking_recv()
                 .map_err(|_| "settings worker stopped")??;
@@ -304,7 +314,7 @@ fn read_startup_table(
 fn persist_settings(
     connection: Connection,
     receiver: mpsc::Receiver<SettingsRequest>,
-    feedback: Arc<[RwLock<String>; 2]>,
+    feedback: Arc<[RwLock<String>; 3]>,
     startup_history: Arc<RwLock<StartupHistory>>,
     opencode: Arc<[AtomicBool; 2]>,
 ) {
@@ -411,7 +421,7 @@ fn finish_feedback(
 ) {
     match &result {
         Ok(value) => *cache.write().unwrap_or_else(|error| error.into_inner()) = value.clone(),
-        Err(error) => crate::diagnostics::record_error("completion settings failed", error),
+        Err(error) => crate::diagnostics::record_error("feedback settings failed", error),
     }
     let _ = reply.send(result.map_err(|error| error.to_string()));
 }
@@ -479,6 +489,11 @@ impl AppService {
         self.settings.feedback(FeedbackSetting::Sound)
     }
 
+    pub(crate) fn event_acceptance_sound_choice(&self) -> String {
+        self.settings
+            .feedback(FeedbackSetting::EventAcceptanceSound)
+    }
+
     pub(crate) fn set_completion_fade_seconds(
         &self,
         value: String,
@@ -495,10 +510,25 @@ impl AppService {
         &self,
         value: String,
     ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
+        self.set_sound_choice(FeedbackSetting::Sound, value)
+    }
+
+    pub(crate) fn set_event_acceptance_sound_choice(
+        &self,
+        value: String,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
+        self.set_sound_choice(FeedbackSetting::EventAcceptanceSound, value)
+    }
+
+    fn set_sound_choice(
+        &self,
+        kind: FeedbackSetting,
+        value: String,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
         if !self.sound_choices.iter().any(|sound| sound.id == value) {
             return Err("The selected sound is unavailable".into());
         }
-        let saved = self.set_feedback(FeedbackSetting::Sound, value.clone())?;
+        let saved = self.set_feedback(kind, value.clone())?;
         self.play_sound(value);
         Ok(saved)
     }

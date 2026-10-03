@@ -14,6 +14,7 @@ fn opencode_creation_is_rejected_before_admission_when_integration_is_disabled()
             "website".into(),
             "Review\nenvironment".into(),
             Some(prompt),
+            true,
         );
         assert!(matches!(result, Err(error) if error == "OpenCode integration is disabled"));
         assert!(service.operations().is_empty());

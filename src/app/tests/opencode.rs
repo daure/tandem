@@ -905,6 +905,73 @@ fn a_starting_client_is_green_while_saved_history_stays_hidden() {
 }
 
 #[test]
+fn session_titles_leave_room_for_the_model_variant() {
+    use crate::app::instances::{self, Instances};
+
+    init_ui();
+    let observation = Snapshot {
+        sessions: vec![Session {
+            id: "ses_long_title".into(),
+            title: "Create the release summary 界 ".repeat(12),
+            directory: "/tmp/workspaces/review".into(),
+            activity: Activity::Busy,
+            activity_elapsed_milliseconds: Some(14_000),
+            context_tokens: Some(19_000),
+            context_limit: Some(400_000),
+            agent: Some("tracer".into()),
+            model_name: Some("GPT-6.1 Sol Fast".into()),
+            provider_name: Some("OpenAI".into()),
+            variant: Some("high".into()),
+            last_question: Some("Write the release summary".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut projected = rows::from_snapshot(&snapshot());
+    super::super::opencode::append_rows(&mut projected, &observation, true);
+    let row = projected
+        .iter()
+        .find(|row| row.id == "opencode:review:ses_long_title")
+        .unwrap();
+    let suffix = " · 14s · 19K (5%) · Tracer · GPT-6.1 Sol Fast OpenAI · high";
+    for width in [80, 100, 130] {
+        let line = row.text("", Some(width)).lines.remove(0);
+        assert!(line.width() <= usize::from(width), "{line}");
+        assert!(
+            line.to_string().ends_with(&format!("...{suffix}")),
+            "{line}"
+        );
+        let variant = line.spans.last().unwrap();
+        assert_eq!(variant.content, "high");
+        assert_eq!(variant.style.fg, Some(tuicore::theme().accent_fg()));
+        assert!(
+            variant
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD)
+        );
+    }
+
+    let mut tree = Instances::new(instances::state(projected));
+    tree.expand_for_tests("instance:review");
+    tree.expand_for_tests("sessions:review");
+    for width in [90, 130, 180] {
+        let area = Rect::new(0, 0, width, 30);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        tree.layout(area, &mut tuicore::LayoutCtx::new());
+        terminal
+            .draw(|frame| {
+                let mut ctx = RenderCtx::new();
+                tree.render(frame, area, &mut ctx);
+                ctx.flush(frame);
+            })
+            .unwrap();
+        let rendered = rendered_lines(&terminal, area).join("\n");
+        assert!(rendered.contains(&format!("...{suffix}")), "{rendered}");
+    }
+}
+
+#[test]
 fn latest_question_uses_ascii_ellipsis_at_the_available_width() {
     let mut observation = Snapshot::default();
     observation.sessions.push(Session {
@@ -1473,10 +1540,7 @@ fn enter_opens_a_bottom_conversation_dialog_without_jumping_to_the_pane() {
         );
         let text = lines.join("\n");
         assert!(text.contains("Conversation"), "{text}");
-        assert!(
-            text.contains("Details") && text.contains("Actions"),
-            "{text}"
-        );
+        assert!(text.contains("Details"), "{text}");
         let route = EventRoute::new(tuicore::TreePath::from_keys([tuicore::ChildKey::second()]));
         let mut close = EventCtx::new(AnimationSettings::default());
         app.dispatch_event(

@@ -33,6 +33,7 @@ fn fixture() -> (tempfile::TempDir, Config, Record) {
         operation,
         description: Some("Review workspace".into()),
         branch_instances: false,
+        start_instance: true,
         kind: StartupKind::Cold,
         started_at: journal::now(),
         timeout: 60,

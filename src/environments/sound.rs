@@ -109,7 +109,10 @@ pub(crate) fn play_completion(selection: &str, cancelled: impl Fn() -> bool) -> 
     if failures.is_empty() {
         Err("no supported desktop audio player was found".into())
     } else {
-        Err(format!("completion sound failed: {}", failures.join("; ")))
+        Err(format!(
+            "notification sound failed: {}",
+            failures.join("; ")
+        ))
     }
 }
 

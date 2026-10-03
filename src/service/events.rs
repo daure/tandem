@@ -92,6 +92,23 @@ impl AppService {
             .await
     }
 
+    pub(crate) async fn provider_stream_controls(
+        &self,
+        token: String,
+    ) -> Result<Vec<crate::store::providers::StreamControl>, Error> {
+        self.event_request(move |store| store.stream_controls(&token))
+            .await
+    }
+
+    pub(crate) async fn acknowledge_provider_stream(
+        &self,
+        token: String,
+        control: crate::store::providers::StreamControl,
+    ) -> Result<(), Error> {
+        self.event_request(move |store| store.acknowledge_stream(&token, &control))
+            .await
+    }
+
     pub(crate) async fn ingest_events(
         &self,
         token: String,
@@ -99,6 +116,26 @@ impl AppService {
     ) -> Result<Ingestion, Error> {
         self.event_request(move |store| store.ingest(&token, batch))
             .await
+    }
+
+    pub(crate) async fn list_events(&self) -> Result<Snapshot, String> {
+        self.event_request(|store| store.snapshot())
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) async fn replay_event_request(
+        &self,
+        sequence: i64,
+        request_id: String,
+        confirmed: bool,
+    ) -> Result<i64, String> {
+        if !confirmed {
+            return Err("confirmation_required: replay evaluates current rules and can create fresh instances and model prompts".into());
+        }
+        self.event_request(move |store| store.replay(sequence, &request_id))
+            .await
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) async fn provider_notifications(
@@ -128,6 +165,26 @@ impl AppService {
         );
         self.runtime.spawn_blocking(move || {
             let _ = sender.send(store.replay(sequence, &request));
+        });
+        receiver
+    }
+
+    pub(crate) fn delete_events(
+        &self,
+        sequence: Option<i64>,
+    ) -> oneshot::Receiver<Result<i64, Error>> {
+        let service = self.clone();
+        let (sender, receiver) = oneshot::channel();
+        self.runtime.spawn_blocking(move || {
+            let result = (|| {
+                let _lease = service
+                    .rules
+                    .store
+                    .lease()?
+                    .ok_or_else(|| Error::Conflict("rule worker is busy; try again".into()))?;
+                service.events.store.delete(sequence)
+            })();
+            let _ = sender.send(result);
         });
         receiver
     }

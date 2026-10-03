@@ -1,8 +1,9 @@
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod conversation;
+pub(crate) mod observation;
 pub(crate) mod resources;
 pub(crate) mod retention;
 
@@ -113,8 +114,10 @@ pub(crate) struct Snapshot {
     pub directories: Vec<String>,
     pub sessions: Vec<Session>,
     pub clients: Vec<Client>,
+    pub zellij_tabs: BTreeMap<String, BTreeMap<u32, usize>>,
     pub resources: Vec<resources::ProcessResource>,
     pub error: Option<String>,
+    pub observation: observation::Evidence,
 }
 
 impl Snapshot {

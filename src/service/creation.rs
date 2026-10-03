@@ -17,12 +17,15 @@ impl AppService {
         let writer = startup.writer.clone();
         let runtime = self.runtime.handle().clone();
         let name = name.to_owned();
+        let environments = std::sync::Arc::clone(&self.environments);
         startup.before_repositories = Some(Box::new(move |workspace, deadline| {
             settings.refresh()?;
             if let Some(writer) = &writer {
                 writer.progress("Launching OpenCode before repository preparation".into());
             }
             let result = runtime.block_on(async {
+                let instructions =
+                    super::opencode::instance_guidance(environments, name.clone()).await?;
                 tokio::time::timeout(
                     deadline.saturating_duration_since(std::time::Instant::now()),
                     super::opencode::launch_workspace_opencode(
@@ -31,6 +34,7 @@ impl AppService {
                         workspace,
                         &name,
                         prompt.as_deref(),
+                        Some(instructions),
                     ),
                 )
                 .await
@@ -52,6 +56,7 @@ impl AppService {
         template: String,
         opencode: Option<Option<String>>,
         description: Option<String>,
+        start_instance: bool,
     ) -> Result<NewInstanceOutcome, String> {
         let (existing, instance_lock) = self.environments.admit_new_instance(name, &template)?;
         if opencode.is_some() {
@@ -79,6 +84,7 @@ impl AppService {
             operation,
             600,
             Startup {
+                start_instance,
                 instance_lock: Some(instance_lock),
                 description: description.clone(),
                 opencode,

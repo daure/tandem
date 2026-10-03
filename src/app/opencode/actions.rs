@@ -51,6 +51,13 @@ impl App {
         let Some(directory) = new_session_directory(row) else {
             return false;
         };
+        if row.workspace_missing {
+            ctx.notify(Notification::warning(
+                "Cannot create OpenCode session",
+                "The workspace folder is missing",
+            ));
+            return true;
+        }
         if self.opencode_action.is_some() {
             return true;
         }

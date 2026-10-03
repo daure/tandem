@@ -11,11 +11,25 @@ pub(crate) struct Manifest {
     pub protocol: String,
     #[serde(default)]
     pub feedback: Vec<String>,
+    #[serde(default)]
+    pub streams: Vec<String>,
+    #[serde(default)]
+    pub stream_control: bool,
 }
 
 impl Manifest {
     pub(crate) fn validate(&self) -> Result<(), String> {
         crate::store::environments::validate_name(&self.name)?;
+        let mut streams = std::collections::BTreeSet::new();
+        for stream in &self.streams {
+            validate_stream(stream)?;
+            if !streams.insert(stream) {
+                return Err("provider stream names must be unique".into());
+            }
+        }
+        if self.stream_control && self.streams.is_empty() {
+            return Err("stream control requires declared streams".into());
+        }
         if self.schema_version != 1
             || self.protocol != "tandem-events-v1"
             || !["message", "ticket", "system_event", "generic"].contains(&self.profile.as_str())
@@ -33,6 +47,7 @@ impl Manifest {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Status {
     NotStarted,
+    Starting,
     Running,
     Stopped,
     Paused,
@@ -44,9 +59,6 @@ pub(crate) enum Status {
 pub(crate) enum Action {
     Start,
     Stop,
-    Pause,
-    Resume,
-    Restart,
     Logs,
 }
 
@@ -62,6 +74,12 @@ pub(crate) struct ActionOutcome {
     pub runtime: Option<RuntimeObservation>,
 }
 
+pub(crate) struct StreamActionOutcome {
+    pub message: String,
+    pub runtime: RuntimeObservation,
+    pub streams: Vec<Stream>,
+}
+
 impl Action {
     pub(crate) fn unavailable_reason(
         self,
@@ -75,21 +93,8 @@ impl Action {
             return Some("Provider has no collector container; use Start first");
         }
         match (self, status) {
-            (Self::Start, Status::Paused) => Some("Provider is paused; use Resume"),
             (Self::Stop, Status::Stopped) => {
                 Some("Provider is already stopped; use Start to run it")
-            }
-            (Self::Pause, Status::Paused) => {
-                Some("Provider is already paused; use Resume to continue")
-            }
-            (Self::Resume, Status::Running) => {
-                Some("Provider is already running; Pause it before using Resume")
-            }
-            (Self::Pause, status) if status != Status::Running => {
-                Some("Only a running provider can be paused; use Start to run it")
-            }
-            (Self::Resume, status) if status != Status::Paused => {
-                Some("Only a paused provider can be resumed; use Start for a stopped provider")
             }
             _ => None,
         }
@@ -135,20 +140,112 @@ pub(crate) struct Provider {
     pub container_id: Option<String>,
     pub error: Option<String>,
     pub operation: Option<Action>,
+    #[serde(default)]
+    pub streams: Vec<Stream>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct Stream {
+    pub name: String,
+    pub controllable: bool,
+    pub enabled: bool,
+    pub status: Status,
+    pub operation: Option<Action>,
+    pub error: Option<String>,
+    pub total: u64,
+    pub handovers: u64,
+}
+
+impl Stream {
+    pub(crate) fn start_stop_action(&self, provider: &Provider) -> Action {
+        if provider.status == Status::Running && self.enabled {
+            Action::Stop
+        } else {
+            Action::Start
+        }
+    }
+
+    pub(crate) fn action_unavailable(
+        &self,
+        provider: &Provider,
+        action: Action,
+    ) -> Option<&'static str> {
+        if !self.controllable {
+            return Some("Provider does not support controls for this stream");
+        }
+        if provider.operation.is_some()
+            || self.operation.is_some()
+            || provider
+                .streams
+                .iter()
+                .any(|stream| stream.operation.is_some())
+        {
+            return Some("A provider or stream operation is already in progress");
+        }
+        if action == Action::Logs {
+            return Some("Logs belong to the provider collector");
+        }
+        if provider.status == Status::Unknown {
+            return Some("Provider runtime state is unknown; wait for a successful refresh");
+        }
+        if action == Action::Start
+            && matches!(provider.status, Status::Stopped | Status::NotStarted)
+            && !provider.available
+        {
+            return Some("Provider package is unavailable; restore a valid package before Start");
+        }
+        if action == Action::Stop && provider.status != Status::Running {
+            return Some("Stream is already stopped or its provider is paused");
+        }
+        match (action, self.status) {
+            (Action::Start, Status::Running | Status::Starting)
+                if provider.status == Status::Running =>
+            {
+                Some("Stream is already running or starting")
+            }
+            (Action::Stop, Status::Stopped) => Some("Stream is already stopped"),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) fn validate_stream(name: &str) -> Result<(), String> {
+    if name.trim().is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
+        return Err("stream names require 1–80 bytes without control characters".into());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StreamControl {
+    pub stream: String,
+    pub enabled: bool,
+    pub revision: i64,
 }
 
 impl Provider {
     pub(crate) fn action_unavailable(&self, action: Action) -> Option<&'static str> {
-        if self.operation.is_some() {
+        if self.operation.is_some() || self.streams.iter().any(|stream| stream.operation.is_some())
+        {
             return Some("A provider operation is already in progress; wait for it to finish");
         }
         if let Some(reason) = action.unavailable_reason(self.status, self.container_id.is_some()) {
             return Some(reason);
         }
-        if action == Action::Start && self.status == Status::Running {
+        if action == Action::Start
+            && self.status == Status::Running
+            && !self
+                .streams
+                .iter()
+                .any(|stream| stream.controllable && !stream.enabled)
+        {
             return Some("Provider is already running; use Stop to stop it");
         }
-        if action == Action::Start && self.status != Status::Running && !self.available {
+        if action == Action::Start
+            && !matches!(self.status, Status::Running | Status::Paused)
+            && !self.available
+        {
             return Some("Provider package is unavailable; restore a valid package before Start");
         }
         None
@@ -163,28 +260,14 @@ pub(crate) struct Snapshot {
 
 impl Snapshot {
     pub(crate) fn start_stop_action(&self) -> Action {
-        if !self.providers.is_empty()
-            && self
-                .providers
-                .iter()
-                .all(|provider| matches!(provider.status, Status::Running | Status::Paused))
+        if self
+            .providers
+            .iter()
+            .any(|provider| matches!(provider.status, Status::Running | Status::Paused))
         {
             Action::Stop
         } else {
             Action::Start
-        }
-    }
-
-    pub(crate) fn pause_resume_action(&self) -> Action {
-        if !self.providers.is_empty()
-            && self
-                .providers
-                .iter()
-                .all(|provider| provider.status == Status::Paused)
-        {
-            Action::Resume
-        } else {
-            Action::Pause
         }
     }
 

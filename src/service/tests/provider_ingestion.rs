@@ -2,6 +2,9 @@ use super::*;
 use crate::store::providers::{Provider, RuntimeObservation};
 use crate::{environments::events::EventStore, store::events::Batch};
 
+#[path = "provider_streams.rs"]
+mod streams;
+
 #[test]
 fn sidecar_acknowledges_discarded_batches_without_receipts_or_feedback() {
     let service = AppService::for_tests();
@@ -53,6 +56,7 @@ fn provider(name: &str, status: Status) -> Provider {
         container_id: Some(format!("{name}-id")),
         error: Some("prior failure".into()),
         operation: None,
+        streams: vec![],
     }
 }
 
@@ -69,7 +73,7 @@ fn verified_completion_updates_only_its_provider_and_preserves_other_pending_act
     };
     *integration.operations.lock().unwrap() = [
         ("message".into(), Action::Stop),
-        ("ticket".into(), Action::Pause),
+        ("ticket".into(), Action::Stop),
     ]
     .into();
     integration.complete_action(
@@ -92,7 +96,7 @@ fn verified_completion_updates_only_its_provider_and_preserves_other_pending_act
     assert_eq!(snapshot.providers[0].error, None);
     assert_eq!(snapshot.providers[0].operation, None);
     assert_eq!(snapshot.providers[1].status, Status::Running);
-    assert_eq!(snapshot.providers[1].operation, Some(Action::Pause));
+    assert_eq!(snapshot.providers[1].operation, Some(Action::Stop));
     assert_eq!(
         snapshot.providers[1].error.as_deref(),
         Some("prior failure")
@@ -145,7 +149,7 @@ fn failed_lifecycle_completion_stays_unverified_and_logs_preserve_runtime_state(
         providers: vec![provider("message", Status::Running)],
         error: None,
     };
-    for action in [Action::Logs, Action::Pause] {
+    for action in [Action::Logs, Action::Stop] {
         let error = if action == Action::Logs {
             ActionError::Failed("logs unavailable".into())
         } else {

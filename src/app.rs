@@ -38,6 +38,7 @@ mod refresh;
 mod route_menu;
 mod row_actions;
 mod rows;
+mod rules;
 mod toolbar;
 mod yank_menu;
 use action_menu::ActionMenu;
@@ -134,9 +135,11 @@ pub(crate) enum Msg {
     NameChanged(String),
     DescriptionChanged(String),
     InitialPromptChanged(String),
+    StartInstanceChanged(bool),
     OpenSettings,
     CompletionFadeChanged(String),
     CompletionSoundSelected(String),
+    EventAcceptanceSoundSelected(String),
     NewTemplate,
     Refresh,
     StopAll,
@@ -145,10 +148,10 @@ pub(crate) enum Msg {
     SetBranchInstances(bool),
     SetOpencodeIntegration(bool),
     SetClearOpencodeHistory(bool),
-    OpenOpencode(String, Option<crate::store::opencode::Pane>),
     SetOpencodeHistory(bool),
     SetAttachedSessionsOnly(bool),
     SetCompletionSound(bool),
+    SetEventAcceptanceSound(bool),
     CopyName,
     CopyDescription,
     CopyWorkspace,
@@ -156,11 +159,27 @@ pub(crate) enum Msg {
     Submit,
     OpenEvent(Box<crate::store::events::Record>),
     ReplayEvent(i64),
+    ReplayEventConfirmed(i64),
+    DeleteEvents(Option<i64>),
+    DeleteEventsConfirmed(Option<i64>),
+    OpenRule(Box<crate::store::rules::Rule>),
+    SaveRule(Box<crate::store::rules::Rule>),
+    RuleBulkAction(bool),
+    SaveRules(Vec<crate::store::rules::Rule>),
+    RuleDraftChanged(Rc<RefCell<rules::Draft>>),
+    RuleDraftEnabled(Rc<RefCell<rules::Draft>>, bool),
+    RuleDraftStartInstance(Rc<RefCell<rules::Draft>>, bool),
+    FocusEvent(i64),
+    FocusRule(String),
+    AcceptanceInstance(String),
+    AcceptanceSession(Box<crate::store::rules::Acceptance>),
     ProviderAction(String, crate::store::providers::Action),
+    ProviderStreamAction(String, String, crate::store::providers::Action),
+    ProviderStreamDetails(String, Box<crate::store::providers::Stream>),
+    ProviderStreamEvents(String, String),
     ProviderBulkAction(crate::store::providers::Action),
     ProviderDetails(Box<crate::store::providers::Provider>),
     ShowProvider(String),
-    ProviderEvents(String),
     OpenRowMenu(row_actions::Target),
 }
 
@@ -240,7 +259,7 @@ pub(crate) struct App {
     name: String,
     description: String,
     creation: creation::Creation,
-    settings_sound_choice: Rc<RefCell<Option<String>>>,
+    settings_sound_choice: Rc<RefCell<Option<Msg>>>,
     settings_save: Option<tokio::sync::oneshot::Receiver<Result<String, String>>>,
     description_save: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
     area: Rect,
@@ -252,13 +271,29 @@ pub(crate) struct App {
     opencode_history: bool,
     attached_sessions_only: bool,
     completion_sound: bool,
+    event_acceptance_sound: bool,
+    event_acceptance_count: Option<u64>,
     opencode_action: Option<opencode::PendingAction>,
     events_active: bool,
     providers_active: bool,
+    rules_active: bool,
     provider_actions: Vec<providers::PendingAction>,
     provider_confirmation: Option<(String, crate::store::providers::Action)>,
+    provider_stream_confirmation: Option<(String, String, crate::store::providers::Action)>,
     provider_bulk_confirmation: Option<(Vec<String>, crate::store::providers::Action)>,
     event_action: Option<tokio::sync::oneshot::Receiver<Result<i64, crate::store::events::Error>>>,
+    event_deletion: Option<Option<i64>>,
+    rule_save: Option<tokio::sync::oneshot::Receiver<Result<crate::store::rules::Rule, String>>>,
+    rule_saves: Vec<crate::store::rules::Rule>,
+    rule_editor: Option<Rc<RefCell<rules::Draft>>>,
+    rule_toggle: Option<Rc<RefCell<rules::Draft>>>,
+    rule_autosave: Option<Rc<RefCell<rules::Draft>>>,
+    rule_autosaves: Vec<Rc<RefCell<rules::Draft>>>,
+    event_focus_action: Option<
+        tokio::sync::oneshot::Receiver<
+            Result<crate::store::events::Record, crate::store::events::Error>,
+        >,
+    >,
 }
 
 pub(crate) fn root(service: AppService) -> App {
@@ -269,6 +304,7 @@ pub(crate) fn root(service: AppService) -> App {
     let snapshot = service.environment_snapshot();
     let opencode_enabled = service.opencode_enabled();
     let opencode_snapshot = service.opencode_snapshot();
+    let event_acceptance_count = service.event_snapshot().accepted_attempts;
     let states = [false, true].map(|sessions| {
         let state = instances::state(opencode::project_rows(
             &snapshot,
@@ -363,13 +399,25 @@ pub(crate) fn root(service: AppService) -> App {
         opencode_history: false,
         attached_sessions_only: opencode_enabled,
         completion_sound: false,
+        event_acceptance_sound: false,
+        event_acceptance_count,
         opencode_action: None,
         events_active: false,
         providers_active: false,
+        rules_active: false,
         provider_actions: Vec::new(),
         provider_confirmation: None,
+        provider_stream_confirmation: None,
         provider_bulk_confirmation: None,
         event_action: None,
+        event_deletion: None,
+        rule_save: None,
+        rule_saves: Vec::new(),
+        rule_editor: None,
+        rule_toggle: None,
+        rule_autosave: None,
+        rule_autosaves: Vec::new(),
+        event_focus_action: None,
     }
 }
 
@@ -380,6 +428,7 @@ impl App {
         if tabs_changed {
             let events_active = self.events_active;
             let providers_active = self.providers_active;
+            let rules_active = self.rules_active;
             self.select_overview(self.attached_sessions_only && opencode_enabled);
             *self.tabs_mut() = overview_tabs(opencode_enabled, self.attached_sessions_only);
             if events_active {
@@ -388,9 +437,15 @@ impl App {
                 self.pages_mut().select_events();
             }
             if providers_active {
-                self.tabs_mut().select_index(2);
+                self.tabs_mut().select_index(3);
                 self.providers_active = true;
                 self.pages_mut().select_providers();
+            }
+            if rules_active {
+                let index = self.rules_tab_index();
+                self.tabs_mut().select_index(index);
+                self.rules_active = true;
+                self.pages_mut().select_rules();
             }
             self.toolbar_state.borrow_mut().opencode_enabled = opencode_enabled;
         }
@@ -432,13 +487,14 @@ impl App {
         toolbar_state.opencode_enabled = opencode_enabled;
         toolbar_state.show_saved = self.opencode_history;
         toolbar_state.completion_sound = self.completion_sound;
+        toolbar_state.event_acceptance_sound = self.event_acceptance_sound;
         *self.toolbar_state.borrow_mut() = toolbar_state;
         self.snapshot = snapshot;
         snapshot_changed || rows_changed || totals_changed || tabs_changed
     }
 
     fn selected(&self) -> Option<Row> {
-        if self.events_active || self.providers_active {
+        if self.events_active || self.providers_active || self.rules_active {
             return None;
         }
         instances::selected(&self.instances)
@@ -463,6 +519,7 @@ impl App {
     fn select_overview(&mut self, sessions: bool) {
         self.events_active = false;
         self.providers_active = false;
+        self.rules_active = false;
         self.attached_sessions_only = sessions;
         self.instances = self.pages_mut().select(sessions);
     }
@@ -564,7 +621,7 @@ impl App {
             }
             Msg::ShowProvider(identity) => {
                 if self.pages_mut().highlight_provider(&identity) {
-                    self.tabs_mut().select_index(2);
+                    self.tabs_mut().select_index(3);
                     self.providers_active = true;
                     self.events_active = false;
                     self.pages_mut().select_providers();
@@ -579,22 +636,106 @@ impl App {
                     ));
                 }
             }
-            Msg::ProviderEvents(identity) => {
+            Msg::ProviderStreamEvents(provider, stream) => {
+                self.rules_active = false;
                 self.tabs_mut().select_index(1);
                 self.events_active = true;
                 self.providers_active = false;
                 self.pages_mut().select_events();
-                self.pages_mut().filter_events(identity);
+                self.pages_mut().filter_event_stream(provider, stream);
                 ctx.focus(tuicore::FocusRequest::Target(FocusId::new(events::FOCUS)));
                 ctx.request_layout();
             }
             Msg::ProviderAction(name, action) => self.request_provider_action(name, action, ctx),
+            Msg::ProviderStreamAction(name, stream, action) => {
+                self.request_provider_stream_action(name, stream, action, ctx)
+            }
+            Msg::ProviderStreamDetails(name, stream) => {
+                self.open_provider_stream_details(&name, &stream, ctx)
+            }
             Msg::ProviderBulkAction(action) => self.request_provider_bulk_action(action, ctx),
             Msg::ProviderDetails(provider) => self.open_provider_details(&provider, ctx),
             Msg::OpenEvent(row) => self.open_event(&row, ctx),
+            Msg::DeleteEvents(sequence) => self.confirm_delete_events(sequence, ctx),
+            Msg::DeleteEventsConfirmed(sequence) => {
+                if self.event_action.is_none() {
+                    self.event_action = Some(self.service.delete_events(sequence));
+                    self.event_deletion = Some(sequence);
+                }
+                self.handle_message(Msg::Close, ctx);
+            }
             Msg::ReplayEvent(sequence) => {
+                let modal = dialogs::dialog("Replay event")
+                    .actions([
+                        tuicore::DialogAction::new("Ok").hotkey(KeySpec::plain('o')).on_trigger(move || Msg::ReplayEventConfirmed(sequence)),
+                        tuicore::DialogAction::new("Cancel").hotkey(KeySpec::plain('c')).on_trigger(|| Msg::Close),
+                    ])
+                    .host(Flex::column().child("approval", tuicore::Paragraph::new("Re-run enabled rules? Matches may create new instances and send prompts."), tuicore::FlexItem::fit_content()));
+                self.details_open = false;
+                self.open(Box::new(modal), ctx);
+            }
+            Msg::ReplayEventConfirmed(sequence) => {
                 if self.event_action.is_none() {
                     self.event_action = Some(self.service.replay_event(sequence));
+                }
+                self.handle_message(Msg::Close, ctx);
+            }
+            Msg::OpenRule(rule) => self.open_rule(*rule, ctx),
+            Msg::SaveRule(rule) => self.request_save_rule(*rule, ctx),
+            Msg::RuleBulkAction(enabled) => self.request_rule_bulk_action(enabled, ctx),
+            Msg::SaveRules(rules) => {
+                self.handle_message(Msg::Close, ctx);
+                self.save_rules(rules, ctx);
+            }
+            Msg::RuleDraftChanged(draft) => self.autosave_rule_draft(draft),
+            Msg::RuleDraftEnabled(draft, enabled) => {
+                self.set_rule_draft_enabled(draft, enabled, ctx);
+            }
+            Msg::RuleDraftStartInstance(draft, start) => {
+                self.set_rule_draft_start_instance(draft, start, ctx);
+            }
+            Msg::FocusEvent(sequence) => {
+                self.event_focus_action = Some(self.service.retained_event(sequence));
+                self.handle_message(Msg::Close, ctx);
+            }
+            Msg::FocusRule(name) => {
+                if self.pages_mut().highlight_rule(&name) {
+                    self.handle_message(Msg::Close, ctx);
+                    let index = self.rules_tab_index();
+                    self.tabs_mut().select_index(index);
+                    self.sync_overview_tab(ctx);
+                    ctx.focus(tuicore::FocusRequest::Target(FocusId::new(rules::FOCUS)));
+                    ctx.request_layout();
+                } else {
+                    ctx.notify(Notification::warning("Rule unavailable", name));
+                }
+            }
+            Msg::AcceptanceInstance(name) => {
+                self.handle_message(Msg::Close, ctx);
+                self.select_overview(false);
+                let index = if self.service.opencode_enabled() {
+                    4
+                } else {
+                    0
+                };
+                self.tabs_mut().select_index(index);
+                self.running_only = false;
+                self.update_snapshot(self.snapshot.clone());
+                instances::request_view_reset(&self.instances);
+                instances::select_instance(&self.instances, &name);
+                ctx.focus(initial_focus());
+                ctx.request_layout();
+            }
+            Msg::AcceptanceSession(row) => {
+                if let Some(id) = row.session_id {
+                    self.submit_opencode(&id, row.pane, ctx);
+                } else if let Some(pane) = row.pane {
+                    self.submit_opencode_client(pane, ctx);
+                } else {
+                    ctx.notify(Notification::warning(
+                        "Session pending",
+                        "This acceptance has no session yet",
+                    ));
                 }
             }
             Msg::SetOpencodeIntegration(enabled) => {
@@ -603,7 +744,6 @@ impl App {
                     Err(error) => ctx.notify(Notification::error("Cannot save settings", error)),
                 }
             }
-            Msg::OpenOpencode(id, pane) => self.submit_opencode(&id, pane, ctx),
             Msg::SetOpencodeHistory(show_saved) => {
                 if self.service.opencode_enabled() {
                     self.opencode_history = show_saved;
@@ -618,7 +758,7 @@ impl App {
                 let enabled = enabled && opencode_enabled;
                 self.select_overview(enabled);
                 self.tabs_mut().select_index_with_settings(
-                    if opencode_enabled && !enabled { 3 } else { 0 },
+                    if opencode_enabled && !enabled { 4 } else { 0 },
                     ctx.animation(),
                 );
                 self.update_snapshot(self.snapshot.clone());
@@ -630,8 +770,16 @@ impl App {
                 self.toolbar_state.borrow_mut().completion_sound = enabled;
                 ctx.request_redraw();
             }
+            Msg::SetEventAcceptanceSound(enabled) => {
+                self.event_acceptance_count = self.service.event_snapshot().accepted_attempts;
+                self.event_acceptance_sound = enabled;
+                self.toolbar_state.borrow_mut().event_acceptance_sound = enabled;
+                ctx.request_redraw();
+            }
             Msg::Close => {
+                self.rule_editor = None;
                 self.provider_confirmation = None;
+                self.provider_stream_confirmation = None;
                 self.provider_bulk_confirmation = None;
                 self.service.cancel_opencode_conversation();
                 self.settings_save = None;
@@ -640,6 +788,8 @@ impl App {
                     tuicore::FocusRequest::Target(FocusId::new(providers::FOCUS))
                 } else if self.events_active {
                     tuicore::FocusRequest::Target(FocusId::new(events::FOCUS))
+                } else if self.rules_active {
+                    tuicore::FocusRequest::Target(FocusId::new(rules::FOCUS))
                 } else {
                     initial_focus()
                 });
@@ -650,6 +800,7 @@ impl App {
             Msg::NameChanged(name) => self.name = name,
             Msg::DescriptionChanged(description) => self.description = description,
             Msg::InitialPromptChanged(prompt) => self.creation.prompt = prompt,
+            Msg::StartInstanceChanged(start) => self.creation.start_instance = start,
             Msg::OpenSettings => self.open_settings(ctx),
             Msg::CompletionFadeChanged(value) => {
                 match self.service.set_completion_fade_seconds(value) {
@@ -659,6 +810,12 @@ impl App {
             }
             Msg::CompletionSoundSelected(value) => {
                 match self.service.set_completion_sound_choice(value) {
+                    Ok(reply) => self.settings_save = Some(reply),
+                    Err(error) => ctx.notify(Notification::error("Cannot select sound", error)),
+                }
+            }
+            Msg::EventAcceptanceSoundSelected(value) => {
+                match self.service.set_event_acceptance_sound_choice(value) {
                     Ok(reply) => self.settings_save = Some(reply),
                     Err(error) => ctx.notify(Notification::error("Cannot select sound", error)),
                 }
@@ -692,6 +849,13 @@ impl App {
                 self.copy_gateway_url(ctx);
             }
             Msg::Submit => {
+                if let Some((name, stream, action)) = self.provider_stream_confirmation.take() {
+                    self.start_provider_stream_action(name, stream, action);
+                    self.handle_message(Msg::Close, ctx);
+                    ctx.request_layout();
+                    ctx.request_redraw();
+                    return;
+                }
                 if let Some((names, action)) = self.provider_bulk_confirmation.take() {
                     for name in names {
                         self.start_provider_action(name, action, true);
@@ -749,6 +913,7 @@ impl App {
                             template.clone(),
                             self.description.clone(),
                             self.creation.opencode(),
+                            self.creation.start_instance,
                         ) {
                             Ok(crate::service::CreateInstanceOutcome::Existing) => {
                                 self.sync_environment();
@@ -847,6 +1012,7 @@ impl App {
             self.block_operation(ctx);
             return;
         }
+        self.rule_editor = None;
         self.details_open = false;
         self.template_details = None;
         self.view.replace_layer(modal, ctx);
@@ -987,7 +1153,10 @@ impl App {
                 self.service.clear_opencode_history(),
                 self.service.completion_fade_seconds(),
                 self.service.completion_sound_choices(),
-                &self.service.completion_sound_choice(),
+                [
+                    &self.service.completion_sound_choice(),
+                    &self.service.event_acceptance_sound_choice(),
+                ],
                 Rc::clone(&self.settings_sound_choice),
             ),
             ctx,
@@ -1033,6 +1202,7 @@ impl App {
                 cleanup: row.cleanup_target.is_some(),
                 new_opencode,
                 close_opencode_group,
+                workspace_missing: row.workspace_missing,
                 opencode_session: row
                     .opencode
                     .as_ref()
@@ -1449,6 +1619,7 @@ impl App {
         let event = TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit("shift+h".into()));
         self.running_only = true;
         self.opencode_history = false;
+        self.event_acceptance_sound = false;
         self.select_overview(self.service.opencode_enabled());
         self.tabs_mut()
             .select_index_with_settings(0, ctx.animation());
@@ -1456,6 +1627,7 @@ impl App {
             let mut toolbar = self.toolbar_state.borrow_mut();
             toolbar.running_only = true;
             toolbar.show_saved = false;
+            toolbar.event_acceptance_sound = false;
         }
         let operations = self.service.operations();
         self.update_overview_rows(&self.snapshot.clone(), &operations, false);
@@ -1478,9 +1650,9 @@ impl App {
             return false;
         }
         let count = if self.service.opencode_enabled() {
-            4
+            5
         } else {
-            3
+            4
         };
         let current = self.tabs_mut().selected_index();
         let next = if bindings.tabs().previous_matches(*key) {
@@ -1518,7 +1690,7 @@ impl App {
         if self.transient_menu_active() || self.view.is_active() {
             return false;
         }
-        if self.events_active || self.providers_active {
+        if self.events_active || self.providers_active || self.rules_active {
             return false;
         }
         if instances::is_searching(&self.instances) {
@@ -1613,7 +1785,7 @@ impl App {
     fn after_event(&mut self, ctx: &mut EventCtx<Msg>) {
         let sound = self.settings_sound_choice.borrow_mut().take();
         if let Some(sound) = sound {
-            self.handle_message(Msg::CompletionSoundSelected(sound), ctx);
+            self.handle_message(sound, ctx);
         }
         self.sync_overview_tab(ctx);
         self.drain_action_menu(ctx);
@@ -1751,12 +1923,15 @@ impl TuiNode<Msg> for App {
         outcome
     }
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
+        self.service.poll_rules();
+        let rules = self.service.rule_snapshot();
+        let rules_changed = self.pages_mut().update_rules(rules);
         self.service.poll_providers();
         let providers = self.service.provider_snapshot();
         let providers_changed = self.pages_mut().update_providers(providers);
         self.service.poll_events();
         let events = self.service.event_snapshot();
-        let events_changed = self.pages_mut().update_events(events);
+        let events_changed = self.update_event_snapshot(events);
         let fade = self.service.completion_fade_seconds();
         for state in self.pages_mut().states() {
             instances::set_completion_fade(&state, fade);
@@ -1770,6 +1945,9 @@ impl TuiNode<Msg> for App {
         let mut changed = self.sync_environment();
         changed |= events_changed;
         changed |= providers_changed;
+        changed |= rules_changed;
+        changed |= self.poll_rule_save();
+        changed |= self.poll_event_focus();
         let provider_action_changed = self.poll_provider_action();
         changed |= provider_action_changed;
         changed |= self.poll_event_action();
@@ -1849,12 +2027,13 @@ fn overview_tabs(opencode_enabled: bool, sessions: bool) -> Tabs<Msg> {
         pages.push(Tab::text("Instances", ""));
     }
     pages.push(Tab::text("Events", ""));
+    pages.push(Tab::text("Rules", ""));
     pages.push(Tab::text("Providers", ""));
     if opencode_enabled {
         pages.push(Tab::text("Instances", ""));
     }
     let mut tabs = Tabs::new(pages)
-        .selected(if opencode_enabled && !sessions { 3 } else { 0 })
+        .selected(if opencode_enabled && !sessions { 4 } else { 0 })
         .focused(true)
         .variant(TabsVariant::OneRow)
         .tab_stop(false)

@@ -135,6 +135,7 @@ pub(super) struct Target {
     pub external_opencode: bool,
     pub new_opencode: bool,
     pub close_opencode_group: bool,
+    pub workspace_missing: bool,
 }
 
 impl ActionMenu {
@@ -263,6 +264,7 @@ impl ActionMenu {
                 Action::Start | Action::StartService => target.capabilities.0,
                 Action::Stop | Action::StopService => target.capabilities.1,
                 Action::RestartInstance | Action::RestartService => target.capabilities.2,
+                Action::NewSession | Action::OpenPanel => !target.workspace_missing,
                 _ => true,
             })
             .collect();
@@ -308,9 +310,22 @@ impl ActionMenu {
         (self.enabled.borrow().contains(&action)
             || matches!(
                 self.row_target,
-                Some(super::row_actions::Target::Provider(_))
+                Some(super::row_actions::Target::Provider(_) | super::row_actions::Target::Stream(_))
             ))
         .then_some(action)
+    }
+
+    fn delete_hotkey(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
+        if matches!(self.row_target, Some(super::row_actions::Target::Event(_)))
+            && self.dropdown.search_query().is_empty()
+            && matches!(event, TuiEvent::Key(key) if KeySpec::plain('x').matches(*key))
+        {
+            *self.selected.borrow_mut() = Some(Action::Row(super::row_actions::Command::Delete));
+            self.dropdown.cancel();
+            ctx.stop_propagation();
+            return true;
+        }
+        false
     }
 }
 
@@ -389,6 +404,9 @@ impl TuiNode<Msg> for ActionMenu {
     }
 
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
+        if self.delete_hotkey(event, ctx) {
+            return EventOutcome::Handled;
+        }
         self.dropdown.event(event, ctx)
     }
 
@@ -398,6 +416,9 @@ impl TuiNode<Msg> for ActionMenu {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
+        if self.delete_hotkey(event, ctx) {
+            return EventOutcome::Handled;
+        }
         self.dropdown.dispatch_event(route, event, ctx)
     }
 
@@ -465,6 +486,7 @@ mod tests {
             external_opencode: true,
             new_opencode: true,
             close_opencode_group: false,
+            workspace_missing: false,
         };
 
         menu.open(target((true, false)), &mut ctx);

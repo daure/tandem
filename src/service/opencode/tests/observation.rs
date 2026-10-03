@@ -9,6 +9,82 @@ use std::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[test]
+fn unverified_clients_retry_quietly_stop_tracking_and_recover_on_receipt_changes() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let observer = Observer {
+            presence: root.path().join("presence"),
+            daemons: root.path().join("daemons"),
+            zellij: root.path().join("zellij"),
+            excluded: Default::default(),
+        };
+        fs::create_dir(&observer.presence).unwrap();
+        fs::write(&observer.zellij, r#"#!/bin/sh
+root=$(dirname "$0")
+case "$*" in
+list-sessions*) echo main ;;
+*list-panes*)
+  echo check >> "$root/checks"
+  if [ -f "$root/fail" ]; then echo unavailable >&2; exit 1; fi
+  echo '[{"id":7,"is_plugin":false,"exited":false,"tab_id":4,"tab_name":"test"}]' ;;
+*list-tabs*) echo '[{"tab_id":4,"position":0}]' ;;
+esac
+"#).unwrap();
+        fs::set_permissions(&observer.zellij, fs::Permissions::from_mode(0o700)).unwrap();
+        let receipt = observer.presence.join("one.json");
+        let mut value = json!({"pid":std::process::id(),"observed_at":SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
+            "id":"ses_one","title":"Client","directory":root.path(),"server":"","activity":"idle","zellij_session":"main","pane_id":7});
+        fs::write(&receipt, value.to_string()).unwrap();
+        let settings = Arc::new(crate::service::settings::Settings::open(root.path().join("settings.sqlite3")).unwrap());
+        let owner = Arc::new(Integration::new());
+        let signal = Arc::new(Signal::default());
+        let worker = tokio::spawn(run(observer, Arc::downgrade(&owner), settings, 0, Arc::clone(&signal)));
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if !owner.state.lock().unwrap().snapshot.sessions.is_empty() { break; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.unwrap();
+        fs::write(root.path().join("fail"), "").unwrap();
+        signal.send(REMOTE);
+        tokio::time::timeout(Duration::from_secs(7), async {
+            loop {
+                let done = {
+                    let state = owner.state.lock().unwrap();
+                    let visible = state.retention.visible_snapshot(&state.snapshot);
+                    if state.snapshot.sessions.iter().any(|session| session.stale) {
+                        assert!(visible.sessions.is_empty());
+                        assert_eq!(visible.error, None);
+                    }
+                    state.retention.exclusions().sessions.contains("ses_one") && state.retention.next_retry().is_none()
+                };
+                if done { break; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.unwrap();
+        let checks = fs::read_to_string(root.path().join("checks")).unwrap().lines().count();
+        value["observed_at"] = json!(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64);
+        fs::write(&receipt, value.to_string()).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(fs::read_to_string(root.path().join("checks")).unwrap().lines().count(), checks);
+        assert!(owner.state.lock().unwrap().snapshot.sessions.is_empty());
+
+        fs::remove_file(root.path().join("fail")).unwrap();
+        value["title"] = json!("Recovered client");
+        fs::write(&receipt, value.to_string()).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if owner.state.lock().unwrap().snapshot.sessions.iter().any(|session| session.title == "Recovered client" && !session.stale) { break; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.unwrap();
+        assert_eq!(json!(serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&receipt).unwrap()).unwrap()), value);
+        worker.abort();
+    });
+}
+
+#[test]
 fn live_events_refresh_state_and_idle_sampling_does_not_query_the_server() {
     let root = tempfile::tempdir().unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -60,10 +136,17 @@ fn live_events_refresh_state_and_idle_sampling_does_not_query_the_server() {
                 });
             }
         });
-        let observer = Observer { presence: root.path().join("presence"), daemons: root.path().join("daemons"), zellij: root.path().join("zellij") };
+        let observer = Observer { presence: root.path().join("presence"), daemons: root.path().join("daemons"), zellij: root.path().join("zellij"), excluded: Default::default() };
         fs::create_dir(&observer.presence).unwrap();
         fs::create_dir(&observer.daemons).unwrap();
-        fs::write(&observer.zellij, "#!/bin/sh\nif [ \"$1\" = list-sessions ]; then echo main; else echo '[{\"id\":7,\"is_plugin\":false,\"exited\":false,\"tab_id\":4,\"tab_name\":\"test\"}]'; fi\n").unwrap();
+        let dormant = tokio::net::TcpSocket::new_v4().unwrap();
+        dormant.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let dormant_record = observer.daemons.join("dormant");
+        fs::create_dir_all(dormant_record.join("dirs")).unwrap();
+        fs::write(dormant_record.join("port"), dormant.local_addr().unwrap().port().to_string()).unwrap();
+        fs::write(dormant_record.join("dirs/work.dir"), &address).unwrap();
+        fs::write(root.path().join("tabs.json"), "[{\"tab_id\":4,\"position\":0}]").unwrap();
+        fs::write(&observer.zellij, "#!/bin/sh\ncase \"$*\" in\nlist-sessions*) echo main ;;\n*list-tabs*) cat \"$(dirname \"$0\")/tabs.json\" ;;\n*) echo '[{\"id\":7,\"is_plugin\":false,\"exited\":false,\"tab_id\":4,\"tab_name\":\"test\"}]' ;;\nesac\n").unwrap();
         fs::set_permissions(&observer.zellij, fs::Permissions::from_mode(0o755)).unwrap();
         let receipt = observer.presence.join("one.json");
         let value = json!({"pid":std::process::id(),"observed_at":SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
@@ -99,11 +182,16 @@ fn live_events_refresh_state_and_idle_sampling_does_not_query_the_server() {
             }
         }).await.unwrap();
         let before = requests.load(Ordering::SeqCst);
+        assert_eq!(owner.state.lock().unwrap().snapshot.error, None);
+        assert!(signal.errors().is_empty());
+        assert_eq!(owner.state.lock().unwrap().snapshot.zellij_tabs["main"][&4], 0);
+        fs::write(root.path().join("tabs.json"), "[{\"tab_id\":4,\"position\":1}]").unwrap();
         // Cross the sampling deadline while keeping the source quiet.
         tokio::time::sleep(Duration::from_millis(5100)).await;
         assert_eq!(requests.load(Ordering::SeqCst), before, "stream connections: {}; snapshot: {:?}", connections.load(Ordering::SeqCst), owner.state.lock().unwrap().snapshot);
         assert_eq!(connections.load(Ordering::SeqCst), 1);
         assert_eq!(owner.state.lock().unwrap().snapshot.resources.len(), 1);
+        assert_eq!(owner.state.lock().unwrap().snapshot.zellij_tabs["main"][&4], 1);
         busy.store(true, Ordering::SeqCst);
         let started = Instant::now();
         events.send(Some(json!({"type":"session.execution.started"}).to_string())).unwrap();

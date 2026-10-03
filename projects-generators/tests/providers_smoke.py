@@ -14,7 +14,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from providers import PROFILES, create_providers
+from providers import PROVIDERS, create_providers
 
 
 def verify(binary):
@@ -50,7 +50,7 @@ def verify(binary):
                 assert exit_code == "0", f"Provider {name} did not exit cleanly: {exit_code}"
             return result
 
-        def count(name="dev-message"):
+        def count(name="slack"):
             with sqlite3.connect(home / "settings.sqlite3") as database:
                 return database.execute("SELECT count(*) FROM events WHERE provider = ?", (name,)).fetchone()[0]
 
@@ -68,63 +68,44 @@ def verify(binary):
             assert len(discovered) == 4
             assert all(provider["status"] == "not_started" for provider in discovered.values())
             assert not (home / "provider-credentials").exists()
-            for profile in PROFILES:
-                action("start", profile.replace("_", "-"))
+            for name in PROVIDERS.values():
+                action("start", name)
             assert all(provider["status"] == "running" for provider in providers().values())
-            wait(lambda: all(count("dev-" + profile.replace("_", "-")) > 0 for profile in PROFILES), "providers did not send events")
+            wait(lambda: all(count(name) > 0 for name in PROVIDERS.values()), "providers did not send events")
             first_receipt = json.loads(receipt_path.read_text())
-            action("pause", "message")
-            assert providers()["message"]["status"] == "paused"
-            time.sleep(1)
+            assert "delivered" in action("logs", "slack")
+            with sqlite3.connect(home / "settings.sqlite3") as database:
+                event_id = database.execute("SELECT event_id FROM events WHERE provider = 'slack' ORDER BY sequence LIMIT 1").fetchone()[0]
+            epoch = event_id.rsplit(":", 1)[0]
+            action("stop", "slack")
+            assert providers()["slack"]["status"] == "stopped"
             before = count()
             time.sleep(4)
             assert count() == before
-            action("resume", "message")
-            wait(lambda: count() > before, "resumed provider did not collect again")
-            assert "delivered" in action("logs", "message")
-            with sqlite3.connect(home / "settings.sqlite3") as database:
-                event_id = database.execute("SELECT event_id FROM events WHERE provider = 'dev-message' ORDER BY sequence LIMIT 1").fetchone()[0]
-            epoch = event_id.rsplit(":", 1)[0]
-            container_id = providers()["message"]["container_id"]
-            for state in ["running", "paused", "stopped"]:
-                if state == "paused":
-                    action("pause", "message")
-                elif state == "stopped":
-                    action("stop", "message")
-                before = count()
-                action("restart", "message")
-                restarted = providers()["message"]
-                assert restarted["status"] == "running"
-                assert restarted["container_id"] == container_id
-                wait(lambda: count() > before, "provider Restart did not resume collection")
-            action("stop", "message")
-            assert providers()["message"]["status"] == "stopped"
-            before = count()
-            action("start", "message")
+            action("start", "slack")
             wait(lambda: count() > before, "restarted provider did not collect again")
             with sqlite3.connect(home / "settings.sqlite3") as database:
-                latest = database.execute("SELECT event_id FROM events WHERE provider = 'dev-message' ORDER BY sequence DESC LIMIT 1").fetchone()[0]
+                latest = database.execute("SELECT event_id FROM events WHERE provider = 'slack' ORDER BY sequence DESC LIMIT 1").fetchone()[0]
                 assert latest.rsplit(":", 1)[0] == epoch
                 assert database.execute("SELECT count(*) FROM provider_notifications WHERE acknowledged = 1").fetchone()[0] > 0
             os.kill(first_receipt["pid"], signal.SIGTERM)
             time.sleep(0.5)
-            action("start", "message")
+            action("start", "slack")
             next_receipt = json.loads(receipt_path.read_text())
             assert next_receipt["identity"] != first_receipt["identity"]
             assert next_receipt["origin"] == first_receipt["origin"]
             before = count()
             wait(lambda: count() > before, "provider did not recover its sidecar connection")
-            shutil.rmtree(home / "templates/providers/message")
-            assert not providers()["message"]["available"]
-            action("stop", "message")
-            assert providers()["message"]["status"] == "stopped"
+            shutil.rmtree(home / "templates/providers/slack")
+            assert not providers()["slack"]["available"]
+            action("stop", "slack")
+            assert providers()["slack"]["status"] == "stopped"
             assert count() > 0
-            print("PASS: discovery, automatic sidecar/credentials, four Docker providers, pause/resume, restart from running/paused/stopped, logs, stop/start checkpoints, sidecar recovery, template-independent stop")
+            print("PASS: discovery, automatic sidecar/credentials, four Docker providers, logs, stop/start checkpoints, sidecar recovery, template-independent stop")
             print(f"Provider Stop completed in {min(stop_times):.3f}–{max(stop_times):.3f}s; all collectors exited cleanly")
         finally:
             try:
-                for profile in PROFILES:
-                    name = profile.replace("_", "-")
+                for name in PROVIDERS.values():
                     runtime = home / "runtime" / namespace / "providers" / name / "compose.json"
                     if runtime.exists():
                         subprocess.run(["docker", "compose", "-p", f"{namespace}-provider-{name}", "-f", str(runtime),

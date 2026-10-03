@@ -123,6 +123,7 @@ async function promptClient(t, prompt, ready = true) {
         return { data: { id: "ses_new" } }
       },
       async promptAsync(input, options) { calls.push(["prompt", input, options]) },
+      async prompt(input, options) { calls.push(["context", input, options]) },
     } },
     ui: { toast: (input) => calls.push(["toast", input]) },
     lifecycle: { onDispose: (fn) => { dispose = fn } },
@@ -184,6 +185,23 @@ test("absent and blank prompts leave the client on its home route", async (t) =>
       assert.deepEqual(client.calls, [])
       assert.equal(process.env.TANDEM_INITIAL_PROMPT, undefined)
       assert.equal((await client.receipt()).id, "")
+    })
+  }
+})
+
+test("V1 instructions are persisted without a model reply before initial task input", async (t) => {
+  for (const text of [undefined, "Explore the code"]) {
+    await t.test(String(text), async (t) => {
+      const client = await promptClient(t, text)
+      process.env.TANDEM_SESSION_INSTRUCTIONS = "Services won't start automatically"
+      t.after(() => { delete process.env.TANDEM_SESSION_INSTRUCTIONS })
+      await client.start()
+      assert.deepEqual(client.calls.map(([kind]) => kind), text ? ["create", "context", "navigate", "prompt"] : ["create", "context", "navigate"])
+      assert.deepEqual(client.calls[1][1], {
+        directory: "/work/review", sessionID: "ses_new", noReply: true,
+        parts: [{ type: "text", text: "Services won't start automatically", synthetic: true }],
+      })
+      assert.equal(process.env.TANDEM_SESSION_INSTRUCTIONS, undefined)
     })
   }
 })

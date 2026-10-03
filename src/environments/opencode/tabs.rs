@@ -66,6 +66,7 @@ impl Observer {
         directory: &str,
         current: &str,
         destination: Option<&Pane>,
+        instructions: Option<&str>,
     ) -> Result<Option<Pane>, String> {
         let Some(destination) = destination else {
             return Ok(None);
@@ -99,7 +100,10 @@ impl Observer {
             .find(|pane| pane.id == destination.id && !pane.is_plugin && !pane.exited)
             .ok_or("OpenCode pane has closed; refresh and try again")?;
         control
-            .request("/tabs", serde_json::json!({"directory": directory}))
+            .request(
+                "/tabs",
+                serde_json::json!({"directory": directory, "instructions": instructions}),
+            )
             .await?;
         let pane = Pane {
             tab_id: actual.tab_id,

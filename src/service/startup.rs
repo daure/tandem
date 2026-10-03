@@ -104,6 +104,7 @@ impl AppService {
                 Startup {
                     instance_lock: Some(claimed.instance_lock.borrowed()?),
                     branch_instances: claimed.record.branch_instances,
+                    start_instance: claimed.record.start_instance,
                     description: claimed.record.description.clone(),
                     opencode,
                     writer: Some(Arc::clone(&claimed.writer)),

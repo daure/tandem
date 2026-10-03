@@ -49,6 +49,7 @@ fn new_instance_accepts_long_short_and_mixed_options() {
             template,
             opencode,
             description,
+            start_instance,
         }) = parse(&arguments).unwrap().command
         else {
             panic!("expected new-instance");
@@ -60,6 +61,7 @@ fn new_instance_accepts_long_short_and_mixed_options() {
             expected_opencode
         );
         assert_eq!(description.as_deref(), expected_description);
+        assert!(start_instance);
     }
 }
 

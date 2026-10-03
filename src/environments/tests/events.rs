@@ -23,10 +23,32 @@ fn setup() -> (tempfile::TempDir, Config, EventStore, String) {
 }
 
 #[test]
+fn opening_stream_controls_preserves_state_and_supports_declaration_tracking() {
+    let (_home, config, store, _token) = setup();
+    let connection = store.connection().unwrap();
+    connection.execute_batch(
+        "ALTER TABLE provider_streams DROP COLUMN active;
+         ALTER TABLE provider_streams DROP COLUMN requested_at;
+         INSERT INTO provider_streams(namespace, provider, stream, enabled, revision, applied_revision, applied_at)
+         VALUES ('events-test', 'sample', 'samples', 0, 7, 7, 123);",
+    ).unwrap();
+    for _ in 0..2 {
+        let store = EventStore::open(&config).unwrap();
+        let state: (bool, bool, i64, i64, i64, Option<i64>) = store.connection().unwrap().query_row(
+            "SELECT active, enabled, revision, applied_revision, applied_at, requested_at FROM provider_streams
+             WHERE namespace = 'events-test' AND provider = 'sample' AND stream = 'samples'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        ).unwrap();
+        assert_eq!(state, (true, false, 7, 7, 123, None));
+    }
+}
+
+#[test]
 fn developer_credentials_are_private_namespace_scoped_files_outside_templates() {
     let (_home, mut config, store, _token) = setup();
     let path = store.setup_developer_credentials().unwrap();
-    let token_path = path.parent().unwrap().join("dev-message.token");
+    let token_path = path.parent().unwrap().join("slack.token");
     let token = fs::read_to_string(&token_path).unwrap();
     assert_eq!(token.len(), 64);
     assert!(!fs::read_to_string(&path).unwrap().contains(&token));
@@ -140,9 +162,28 @@ fn provider_totals_cover_retained_history_beyond_the_feed_and_keep_namespaces_se
             },
         )
         .unwrap();
+    for scoped in [&store, &foreign] {
+        scoped
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE event_attempts SET status = 'accepted'
+                 WHERE event_sequence = (SELECT min(sequence) FROM events WHERE namespace = ?1)",
+                [&scoped.namespace],
+            )
+            .unwrap();
+    }
     let snapshot = store.snapshot().unwrap();
     assert_eq!(snapshot.records.len(), FEED_LIMIT);
     assert_eq!(snapshot.total, 301);
+    assert_eq!(snapshot.accepted_attempts, Some(1));
+    assert!(snapshot.records.iter().all(|record| {
+        record
+            .attempts
+            .iter()
+            .all(|attempt| attempt.status == ProcessingStatus::Pending)
+    }));
+    assert_eq!(foreign.snapshot().unwrap().accepted_attempts, Some(1));
     assert_eq!(
         snapshot.provider_totals,
         [("sample".into(), 300), ("other".into(), 1)].into()
@@ -191,6 +232,58 @@ fn conflicting_or_invalid_events_roll_back_the_whole_batch() {
 }
 
 #[test]
+fn event_deletion_removes_history_and_feedback_only_in_its_namespace() {
+    let (_home, mut config, store, token) = setup();
+    let receipts = store
+        .ingest(
+            &token,
+            Batch {
+                events: vec![event("one"), event("two")],
+            },
+        )
+        .unwrap()
+        .receipts;
+    store.replay(receipts[0].sequence, "again").unwrap();
+    config.namespace = "other".into();
+    let other = EventStore::open(&config).unwrap();
+    let other_token = other.register_provider("sample").unwrap();
+    let foreign = other
+        .ingest(
+            &other_token,
+            Batch {
+                events: vec![event("one")],
+            },
+        )
+        .unwrap()
+        .receipts[0]
+        .sequence;
+    assert!(matches!(store.delete(Some(foreign)), Err(Error::NotFound)));
+    assert_eq!(store.delete(Some(receipts[0].sequence)).unwrap(), 1);
+    assert!(matches!(
+        store.record(receipts[0].sequence),
+        Err(Error::NotFound)
+    ));
+    assert_eq!(store.snapshot().unwrap().total, 1);
+    let notifications = store.notifications(&token).unwrap();
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].sequence, receipts[1].sequence);
+    assert_eq!(store.delete(None).unwrap(), 1);
+    assert_eq!(store.delete(None).unwrap(), 0);
+    assert_eq!(
+        EventStore::open(&config).unwrap().snapshot().unwrap().total,
+        1
+    );
+    assert_eq!(other.notifications(&other_token).unwrap().len(), 1);
+    assert!(store.notifications(&token).unwrap().is_empty());
+    store.authenticate(&token).unwrap();
+    let connection = store.connection().unwrap();
+    let attempts: i64 = connection
+        .query_row("SELECT count(*) FROM event_attempts", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(attempts, 1);
+}
+
+#[test]
 fn replay_preserves_accepted_history_and_retries_keep_the_same_attempt() {
     let (_home, config, store, token) = setup();
     let sequence = store
@@ -204,10 +297,6 @@ fn replay_preserves_accepted_history_and_retries_keep_the_same_attempt() {
         .receipts[0]
         .sequence;
     let initial = store.snapshot().unwrap().records[0].attempts[0].id;
-    assert!(matches!(
-        store.replay(sequence, "premature"),
-        Err(Error::Conflict(_))
-    ));
     store
         .connection()
         .unwrap()
@@ -305,15 +394,9 @@ fn event_schema_upgrade_preserves_attempt_identities_timestamps_and_replay_recei
             .duplicate
     );
     assert_eq!(store.snapshot().unwrap().records[0].attempts.len(), 2);
-    assert!(
-        matches!(store.replay(7, "pending-replay"), Err(Error::Conflict(message))
-        if message == "the current attempt must be accepted before replaying")
-    );
-    store.connection().unwrap().execute(
-        "UPDATE event_attempts SET status = 'accepted', accepted_at = 'processed' WHERE id = 12",
-        [],
-    ).unwrap();
-    assert_eq!(store.replay(7, "next-replay").unwrap(), 21);
+    assert_eq!(store.replay(7, "pending-replay").unwrap(), 21);
+    assert_eq!(store.replay(7, "pending-replay").unwrap(), 21);
+    assert_eq!(store.replay(7, "next-replay").unwrap(), 22);
 }
 
 #[test]

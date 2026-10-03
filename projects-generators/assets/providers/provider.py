@@ -19,8 +19,11 @@ class Provider:
             raise ValueError("TANDEM_PROVIDER_BATCH must be between 1 and 100")
         self.origin = origin.rstrip("/")
         self.token = token
-        self.template = template
+        self.templates = template if isinstance(template, list) else [template]
+        if not self.templates:
+            raise ValueError("sample.json must contain at least one event")
         self.batch_size = batch_size
+        self.enabled_streams = {event["stream"] for event in self.templates}
         self.db = sqlite3.connect(state)
         self.db.execute("CREATE TABLE IF NOT EXISTS checkpoint (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS feedback (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)")
@@ -47,12 +50,24 @@ class Provider:
             sequence = int(self.value("sequence"))
             epoch = self.value("epoch")
             events = []
-            for offset in range(self.batch_size):
-                event = copy.deepcopy(self.template)
-                event["event_id"] = f"{event['profile']}:{epoch}:{sequence + offset}"
+            if not self.enabled_streams:
+                return
+            for offset in range(self.batch_size * len(self.templates)):
+                event_sequence = sequence + offset
+                cycle, position = divmod(event_sequence, len(self.templates))
+                if self.templates[position]["stream"] not in self.enabled_streams:
+                    continue
+                event = copy.deepcopy(self.templates[position])
+                event["event_id"] = f"{event['profile']}:{epoch}:{event_sequence}"
                 event["occurred_at"] = datetime.now(timezone.utc).isoformat()
-                event["metadata"]["sample_sequence"] = sequence + offset
+                event["metadata"]["sample_sequence"] = event_sequence
+                event["metadata"]["stream_sequence"] = (
+                    cycle * sum(sample["stream"] == event["stream"] for sample in self.templates)
+                    + sum(sample["stream"] == event["stream"] for sample in self.templates[:position + 1])
+                )
                 events.append(event)
+                if len(events) == self.batch_size:
+                    break
             pending = json.dumps({"events": events})
             with self.db:
                 self.db.execute("INSERT INTO checkpoint VALUES ('pending', ?)", (pending,))
@@ -61,17 +76,54 @@ class Provider:
         receipts = response.get("receipts", [])
         discarded = response.get("discarded", [])
         pending_ids = [event["event_id"] for event in batch["events"]]
-        if discarded:
-            if receipts or discarded != pending_ids:
-                raise ValueError("discarded IDs do not match the pending batch")
-        elif [receipt.get("event_id") for receipt in receipts] != pending_ids:
+        received = [receipt.get("event_id") for receipt in receipts]
+        if (len(received) + len(discarded) != len(pending_ids)
+                or set(received) & set(discarded)
+                or set(received) | set(discarded) != set(pending_ids)
+                or received != [identifier for identifier in pending_ids if identifier in received]
+                or discarded != [identifier for identifier in pending_ids if identifier in discarded]):
             raise ValueError("receipt IDs do not match the pending batch")
         with self.db:
             self.db.execute("UPDATE checkpoint SET value = ? WHERE key = 'sequence'",
-                            (str(int(self.value("sequence")) + len(batch["events"])),))
+                             (str(max(int(self.value("sequence")),
+                                      max(event["metadata"]["sample_sequence"] for event in batch["events"]) + 1)),))
             self.db.execute("DELETE FROM checkpoint WHERE key = 'pending'")
         outcome = "discarded" if discarded else "delivered"
-        print(f"{outcome} {len(batch['events'])} {self.template['profile']} events", flush=True)
+        print(f"{outcome} {len(batch['events'])} {self.templates[0]['profile']} events", flush=True)
+
+    def receive_controls(self):
+        controls = self.request("/v1/streams")["streams"]
+        known = {event["stream"] for event in self.templates}
+        for control in controls:
+            stream = control["stream"]
+            if stream not in known or type(control["enabled"]) is not bool:
+                raise ValueError("unsupported stream control")
+            if control["enabled"]:
+                self.enabled_streams.add(stream)
+            else:
+                self.enabled_streams.discard(stream)
+                self.drop_pending_stream(stream)
+            # Acknowledge only after this single-threaded collector has stopped stream work.
+            self.request("/v1/streams/ack", control)
+
+    def drop_pending_stream(self, stream):
+        pending = self.value("pending")
+        if pending is None:
+            return
+        batch = json.loads(pending)
+        events = batch["events"]
+        remaining = [event for event in events if event["stream"] != stream]
+        if len(remaining) == len(events):
+            return
+        with self.db:
+            self.db.execute("UPDATE checkpoint SET value = ? WHERE key = 'sequence'",
+                            (str(max(int(self.value("sequence")),
+                                     max(event["metadata"]["sample_sequence"] for event in events) + 1)),))
+            if remaining:
+                self.db.execute("UPDATE checkpoint SET value = ? WHERE key = 'pending'",
+                                (json.dumps({"events": remaining}),))
+            else:
+                self.db.execute("DELETE FROM checkpoint WHERE key = 'pending'")
 
     def receive_feedback(self):
         for notification in self.request("/v1/notifications")["notifications"]:
@@ -109,6 +161,7 @@ def main():
     try:
         while True:
             try:
+                provider.receive_controls()
                 if time.monotonic() >= next_event:
                     provider.deliver()
                     next_event = time.monotonic() + interval

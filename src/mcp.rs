@@ -69,6 +69,9 @@ struct OperationInput {
 #[serde(deny_unknown_fields)]
 struct ProviderActionInput {
     name: String,
+    /// Omit to control the whole provider; set to a declared stream for live-only collection control.
+    #[serde(default)]
+    stream: Option<String>,
     action: crate::store::providers::Action,
     #[serde(default)]
     confirmed: bool,
@@ -80,6 +83,59 @@ struct ProviderActionOutput {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DeleteProviderInput {
+    /// Provider package name returned by list_providers.
+    name: String,
+    /// Approval to delete the shared package, collector, checkpoints, credentials, events,
+    /// stream controls, and event-created instances, workspaces and associated OpenCode sessions.
+    #[serde(default)]
+    confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SaveRuleInput {
+    definition: crate::store::rules::Definition,
+    /// Omit for creation; updates require the revision returned by get_rule/list_rules.
+    expected_revision: Option<i64>,
+    /// Target terminal session; defaults to Tandem's current Zellij session and must be live when enabled.
+    zellij_session: Option<String>,
+    /// Approval for automatic trusted template execution and model prompts whenever this enabled revision matches.
+    #[serde(default)]
+    confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PreviewRuleInput {
+    definition: crate::store::rules::Definition,
+    event_sequence: i64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct EventInput {
+    sequence: i64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ReplayEventInput {
+    sequence: i64,
+    /// Stable identity for this deliberate replay; repeated requests return the same processing attempt.
+    request_id: String,
+    #[serde(default)]
+    confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct RetryAcceptanceInput {
+    id: i64,
+    #[serde(default)]
+    confirmed: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct CreateInstanceInput {
     /// Name of an editable template directory from list_templates.
     template: String,
@@ -88,9 +144,12 @@ struct CreateInstanceInput {
     /// Approval for host Git, trusted Compose privileges, and permanent OpenCode history cleanup when enabled (default on).
     #[serde(default)]
     confirmed: bool,
-    /// Wait for content readiness (default true); false returns an operation to poll.
+    /// Wait for preparation and requested service readiness (default true); false returns an operation to poll.
     #[serde(default = "default_wait")]
     wait: bool,
+    /// Start configured services and verify readiness (default true); false prepares without starting containers.
+    #[serde(default = "crate::store::environments::Instance::default_start_instance")]
+    start_instance: bool,
     /// Startup/readiness budget, 5–900 seconds; defaults to 600.
     #[serde(default = "default_timeout")]
     timeout_seconds: u64,
@@ -234,8 +293,131 @@ impl Transport<RoleServer> for TolerantStdioTransport {
     }
 }
 
+fn json_object(
+    value: impl Serialize,
+) -> Result<Json<serde_json::Map<String, serde_json::Value>>, String> {
+    let value = serde_json::to_value(value).map_err(|error| error.to_string())?;
+    serde_json::from_value(value)
+        .map(Json)
+        .map_err(|error| error.to_string())
+}
+
 #[tool_router]
 impl McpServer {
+    #[tool(
+        description = "List Rhai rules, per-rule/per-attempt acceptances with instance/session links and dispatch status, and recent evaluation errors. Does not execute rules."
+    )]
+    async fn list_rules(&self) -> Result<Json<serde_json::Map<String, serde_json::Value>>, String> {
+        json_object(self.service.list_rules().await?)
+    }
+
+    #[tool(
+        description = "Get one rule's definition/revision and only its acceptance history. Events can appear in several rule histories."
+    )]
+    async fn get_rule(
+        &self,
+        Parameters(input): Parameters<NameInput>,
+    ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, String> {
+        let snapshot = self.service.list_rules().await?;
+        let rule = snapshot
+            .rules
+            .into_iter()
+            .find(|rule| rule.definition.name == input.name)
+            .ok_or("rule not found")?;
+        let acceptances: Vec<_> = snapshot
+            .acceptances
+            .into_iter()
+            .filter(|row| row.rule_name == input.name)
+            .collect();
+        json_object(serde_json::json!({"rule": rule, "acceptances": acceptances}))
+    }
+
+    #[tool(
+        description = "Validate and save a namespace-local Rhai rule. matches(event) must return a boolean; event contains profile, data, metadata, provider and shared context. Prompts use Handlebars paths, if/each blocks and inline partials; {{event}} or {{json event}} inserts JSON. Event text stays literal without HTML escaping; missing interpolated fields fail rendering. Enabling/editing an enabled revision requires confirmed=true and a target Zellij session; approval authorizes every future match. Enablement is prospective; queued actions retain their applied revision."
+    )]
+    async fn save_rule(
+        &self,
+        Parameters(input): Parameters<SaveRuleInput>,
+    ) -> Result<Json<crate::store::rules::Rule>, String> {
+        self.service
+            .save_rule(
+                input.definition,
+                input.expected_revision,
+                input.zellij_session,
+                input.confirmed,
+            )
+            .await
+            .map_err(|_| "rule worker stopped")?
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Preview a Rhai predicate and resolved initial prompt against a retained event. Runs bounded pure script evaluation only; creates no instance and contacts no agent."
+    )]
+    async fn preview_rule(
+        &self,
+        Parameters(input): Parameters<PreviewRuleInput>,
+    ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, String> {
+        json_object(
+            self.service
+                .preview_rule(input.definition, input.event_sequence)
+                .await?,
+        )
+    }
+
+    #[tool(
+        description = "List the latest 200 received events with four normalized profiles, arbitrary metadata, processing attempts and per-rule acceptances. Does not execute work."
+    )]
+    async fn list_events(
+        &self,
+    ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, String> {
+        json_object(self.service.list_events().await?)
+    }
+
+    #[tool(
+        description = "Get an exact retained event, including events outside the bounded feed, and all of its per-rule acceptance records."
+    )]
+    async fn get_event(
+        &self,
+        Parameters(input): Parameters<EventInput>,
+    ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, String> {
+        let event = self
+            .service
+            .retained_event(input.sequence)
+            .await
+            .map_err(|_| "event worker stopped")?
+            .map_err(|error| error.to_string())?;
+        json_object(event)
+    }
+
+    #[tool(
+        description = "Deliberately replay a retained event in any processing state using current enabled rules under a new processing attempt. Preview first, then obtain approval for fresh instances/model prompts and set confirmed=true. Stable request_id makes repeated submission idempotent; historical acceptances remain intact."
+    )]
+    async fn replay_event(
+        &self,
+        Parameters(input): Parameters<ReplayEventInput>,
+    ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, String> {
+        let attempt = self
+            .service
+            .replay_event_request(input.sequence, input.request_id, input.confirmed)
+            .await?;
+        json_object(serde_json::json!({"attempt_id": attempt}))
+    }
+
+    #[tool(
+        description = "Retry one failed acceptance's assigned instance after approval. Preserves successful sibling acceptances and instance identity. Only confirmed pre-launch failures can retry; uncertain session/prompt outcomes require inspection and deliberate replay."
+    )]
+    async fn retry_acceptance(
+        &self,
+        Parameters(input): Parameters<RetryAcceptanceInput>,
+    ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, String> {
+        json_object(
+            self.service
+                .retry_acceptance(input.id, input.confirmed)
+                .await?,
+        )
+    }
+
     #[tool(
         description = "Read bundled core_guidance and editable markdown guidance, absolute instructions/template/workspace paths, and the generated tandem.json manifest_schema. Call this before using Tandem."
     )]
@@ -294,18 +476,18 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Prepare an instance from a trusted template after user approval. New instances permanently clear exact-workspace OpenCode history when integration and creation cleanup are enabled (default on); active clients or cleanup failures block creation. Workspace-only templates prepare guidance and declared repositories without Docker; blank and guidance-only templates require no Git. Service templates start Compose and the gateway and verify readiness. Startup survives client disconnection. With wait=false, poll get_operation; the latest startup attempt remains available after reconnecting."
+        description = "Prepare an instance from a trusted template after user approval. New instances permanently clear exact-workspace OpenCode history when integration and creation cleanup are enabled (default on); active clients or cleanup failures block creation. Workspace-only templates prepare guidance and declared repositories without Docker; blank and guidance-only templates require no Git. start_instance defaults to true: service templates start Compose and the gateway and verify readiness. With false, prepare repositories, guidance and Compose configuration without container startup or readiness waits. Preparation survives client disconnection. With wait=false, poll get_operation; the latest attempt remains available after reconnecting."
     )]
     async fn create_instance(
         &self,
         Parameters(input): Parameters<CreateInstanceInput>,
     ) -> Result<Json<Operation>, String> {
-        let operation = self.service.submit_operation(
-            "create_instance",
+        let operation = self.service.submit_instance_creation(
             &input.name,
-            Some(input.template),
+            input.template,
             input.timeout_seconds,
             input.confirmed,
+            input.start_instance,
         )?;
         if input.wait {
             self.service.wait_operation(&operation.id).await.map(Json)
@@ -402,22 +584,42 @@ impl McpServer {
     }
 
     #[tool(
-        description = "List provider packages, owned containers, paused/running state and retained failures. Does not start providers."
+        description = "List provider packages, owned containers, individual streams, collection control capability, event counts and retained failures. Does not start providers."
     )]
     async fn list_providers(&self) -> Result<Json<crate::store::providers::Snapshot>, String> {
         self.service.list_providers().await.map(Json)
     }
 
     #[tool(
-        description = "Run start, stop, pause, resume, restart, or bounded logs for one provider. Lifecycle requires confirmed=true and trusted Docker approval. Start prepares credentials and sidecar; Stop preserves checkpoints and history. Restart preserves the existing collector, configuration, and checkpoints; verifies running/unpaused state."
+        description = "Permanently delete a provider and its shared package, owned collector and checkpoint volume, credentials, all stream controls, events, processing/feedback history, and verifiably event-created instances, workspaces and associated OpenCode sessions. Requires confirmed=true. Refuses active rule actions, unsafe ownership, and packages installed in another namespace. Partial failures preserve identity/history for retry; ingestion stays disabled. Shared rules, sidecar and Docker caches remain."
+    )]
+    async fn delete_provider(
+        &self,
+        Parameters(input): Parameters<DeleteProviderInput>,
+    ) -> Result<Json<ProviderActionOutput>, String> {
+        let output = self
+            .service
+            .delete_provider(input.name, input.confirmed)
+            .await
+            .map_err(|_| "provider deletion worker stopped")??;
+        Ok(Json(ProviderActionOutput { output }))
+    }
+
+    #[tool(
+        description = "Run start, stop, or bounded logs for one provider, or start/stop its optional stream. Lifecycle requires confirmed=true. Provider Start runs the collector and all declared streams; Stop stops the collector. Stream Start starts a stopped or uninstalled compatible collector with only that stream enabled; running-provider changes preserve siblings. Stopping the last enabled stream also stops the collector. Stream actions wait for acknowledgment; resume is live-only with no catch-up. Logs are provider-scoped."
     )]
     async fn provider_action(
         &self,
         Parameters(input): Parameters<ProviderActionInput>,
     ) -> Result<Json<ProviderActionOutput>, String> {
-        let output = self
-            .service
-            .provider_action(input.name, input.action, input.confirmed)
+        let receiver = if let Some(stream) = input.stream {
+            self.service
+                .provider_stream_action(input.name, stream, input.action, input.confirmed)
+        } else {
+            self.service
+                .provider_action(input.name, input.action, input.confirmed)
+        };
+        let output = receiver
             .await
             .map_err(|_| "provider worker stopped")?
             .map_err(|error| error.to_string())?;

@@ -62,6 +62,8 @@ pub(crate) fn router(service: AppService) -> Router {
         .route("/v1/events", post(ingest))
         .route("/v1/notifications", get(notifications))
         .route("/v1/notifications/{id}/ack", post(acknowledge))
+        .route("/v1/streams", get(streams))
+        .route("/v1/streams/ack", post(acknowledge_stream))
         .layer(DefaultBodyLimit::max(1_048_576))
         .route_layer(middleware::from_fn_with_state(
             service.clone(),
@@ -86,6 +88,14 @@ pub(crate) async fn run_owned(
         origin,
         identity: lease.identity.clone(),
     };
+    let worker = service.clone();
+    let automation = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        loop {
+            interval.tick().await;
+            worker.poll_rules();
+        }
+    });
     let app = router(service).route("/v1/identity", get(move || async move { Json(identity) }));
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
@@ -93,6 +103,7 @@ pub(crate) async fn run_owned(
         })
         .await?;
     drop(lease);
+    automation.abort();
     Ok(())
 }
 
@@ -131,6 +142,25 @@ async fn acknowledge(
 ) -> Result<impl IntoResponse, Error> {
     service
         .acknowledge_provider_notification(token(&headers)?, id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn streams(
+    State(service): State<AppService>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, Error> {
+    let streams = service.provider_stream_controls(token(&headers)?).await?;
+    Ok(Json(json!({"streams": streams})))
+}
+
+async fn acknowledge_stream(
+    State(service): State<AppService>,
+    headers: HeaderMap,
+    Json(control): Json<crate::store::providers::StreamControl>,
+) -> Result<impl IntoResponse, Error> {
+    service
+        .acknowledge_provider_stream(token(&headers)?, control)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

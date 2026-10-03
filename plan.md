@@ -1,6 +1,6 @@
 # Plan: Stream providers and event-driven work
 
-Status: developer ingestion and provider lifecycle are implemented and verified. Catalog migration and production contract validation are partial; rules, instance mapping, dispatch, and handlers are pending. Checkboxes below track delivered work separately from deferred extensions.
+Status: developer ingestion, provider lifecycle, rule previews, per-rule acceptance history, and guarded instance/session dispatch are implemented. Catalog migration, production-source validation, prompt-delivery acknowledgment, and future handlers remain follow-ups. Checkboxes distinguish implementation evidence from live model execution.
 
 ## Goal
 
@@ -17,26 +17,27 @@ Initial examples: Slack messages, Jira ticket changes, and observations from a p
 5. Support four profiles: message, ticket, system event, and generic.
 6. Every newly received provider event is eligible for enabled rules, including historical imports and batches. Providers decide what to emit and when; stable event IDs identify redeliveries.
 7. Persist evaluation status, acceptance, and action history so delivery retries skip evaluated work and users can explicitly replay retained events. Accepted means a rule matched and triggered its action; startup, prompt delivery, and task completion have separate outcomes.
+   Record acceptance per rule and processing attempt. One event can be accepted by several rules, each with its own instance/session and dispatch outcome.
 8. Send lifecycle feedback to the originating provider, starting with an assignment notification so provider code can respond in its source system.
 9. Keep instance and provider templates in one disk-backed, Git-shareable catalog rooted at `templates/`, with separate `instances/` and `providers/` directories.
 
-Existing-instance routing and ticket/thread-based instance reuse are outside the first-version scope. The v1 profiles are implemented; richer profile semantics, rule authorization, and prompt delivery timing remain open. Acceptance is automatic and has no manual action.
+Existing-instance routing and ticket/thread-based instance reuse are outside the first-version scope. Enabled revisions authorize automatic execution; dispatch waits for successful instance readiness. Richer profile semantics and verified prompt-delivery acknowledgment remain open. Acceptance is automatic.
 
 ## Conceptual model
 
-### Implemented developer slice
+### Implemented workflow
 
 The second main tab is Events, with distinct DataView rows for all four typed profiles, source
 metadata/context inspection, and durable provider-scoped event IDs. Ingestion atomically creates
-a pending processing attempt and receipt feedback. Explicit replay of an accepted event creates a
+a pending processing attempt and receipt feedback. Explicit replay of any retained event creates a
 separate pending attempt and preserves history. The stored pending/accepted model and schema migration
-preserve retained terminal processing records; they do not invent rule matches or instance assignments.
-Newly received events remain pending until automatic rule processing is implemented.
+preserve retained processing records. Legacy acceptances retain their history without fabricated rule matches.
+New attempts pin enabled rule revisions; all matching predicates create independent acceptance records.
 
 A separate authenticated HTTP sidecar supports batch ingestion and provider polling/acknowledgment
-of `received`, `replayed`, and `acknowledged` notifications. Tandem owns a detached sidecar per
-home/namespace and starts it as part of provider startup. Agent assignment, handlers, rules, and automatic
-instance creation remain later work.
+of `received`, `replayed`, and `assigned` notifications; retained `acknowledged` notifications remain
+readable. Tandem owns a detached sidecar per home/namespace and ensures it on provider startup or
+rule authorization. It runs guarded automation independently of open TUI/MCP clients.
 
 Developer fixtures provide four Docker packages with durable checkpoints and private token mounts.
 Providers is the third tab: approved Start, Stop, Pause, Resume, bounded Logs, configuration inspection,
@@ -65,7 +66,7 @@ Providers ingest and normalize. Tandem owns event storage, inspection, rule eval
 
 **Confirmed direction:** one versioned event envelope with a declared profile for its normalized payload: `message`, `ticket`, `system_event`, or `generic`.
 
-Providers normalize their source into the chosen profile and place custom fields in metadata. Implemented v1 payloads require message author/channel/text, ticket key/title/status, system resource/signal/severity/description, or an object-valued generic payload. Message thread and ticket assignee are optional. Future rules will inspect normalized fields and metadata; the richer field groups below remain proposals.
+Providers normalize their source into the chosen profile and place custom fields in metadata. Implemented v1 payloads require message author/channel/text, ticket key/title/status, system resource/signal/severity/description, or an object-valued generic payload. Message thread and ticket assignee are optional. Rules inspect normalized fields and metadata; the richer field groups below remain proposals.
 
 Profiles share ingestion, persistence, filtering, and dispatch semantics. Each predicate receives the same envelope with a declared `message`, `ticket`, `system_event`, or `generic` profile, normalized `data`, and an arbitrary JSON-object `metadata` field. Start with one chronological feed and profile-aware event details; dedicated message or board views can follow separately.
 
@@ -121,7 +122,7 @@ Tandem assigns the authenticated installation identity, receipt timestamp, and l
 
 Every newly received event is eligible for enabled rules regardless of its source timestamp or whether it arrived in a historical import or batch. Ten distinct events in one submission must all be accounted for; Tandem may queue their actions under concurrency limits, but must not silently sample, merge, or discard them. Nonmatching events remain visible without creating instances or becoming accepted.
 
-Providers own the decision to emit backfill, repeated observations, or actual changes. To redeliver the same observation, reuse its ID; to report a separately actionable change, supply a new ID even when the subject is unchanged. Checkpoint advancement must follow durable receipt, and identifiers must survive provider restart. Rule enablement is prospective by default as a proposal; scanning already received events under a new rule needs an explicit policy.
+Providers own the decision to emit backfill, repeated observations, or actual changes. To redeliver the same observation, reuse its ID; to report a separately actionable change, supply a new ID even when the subject is unchanged. Checkpoint advancement must follow durable receipt, and identifiers must survive provider restart. Rule enablement is prospective. Confirmed replay of any retained event pins current enabled revisions; bulk scanning remains outside this slice.
 
 ## Provider contract and lifecycle
 
@@ -175,13 +176,13 @@ Providers poll and acknowledge their own feedback queue. Tandem prepares private
 
 ### Lifecycle feedback to providers
 
-Providers consume `received` and `replayed` notifications as well as producing source events; retained `acknowledged` notifications remain readable. The next automation notification is proposed as `assigned`: a specific action has been durably bound to a Tandem instance whose startup has been admitted. Assignment does not imply instance readiness, prompt delivery, or task completion; its transition remains to be implemented with dispatch.
+Providers consume `received`, `replayed`, and `assigned` notifications as well as producing source events; retained `acknowledged` notifications remain readable. Assignment means a specific action has been durably bound to a Tandem instance and a startup operation admitted. It does not imply instance readiness, prompt delivery, or task completion.
 
 A Slack provider could add a reaction or thread reply linking the work; a ticket provider could add a comment or update a field. Source-specific responses belong in provider code and use explicitly configured source permissions. Tandem defines the notification contract rather than embedding Slack or Jira behavior.
 
-Proposed notification fields: contract version, stable `notification_id`, original provider `event_id`, processing-attempt ID, dispatch ID, rule identity/revision, lifecycle type, instance identity, and transition timestamp. Send only the originating installation's notifications and keep credentials out of notification payloads. Multiple matched actions or explicit replay can produce separate assignments for the same source event; delivery retries keep the same notification ID.
+Notification fields include stable `notification_id`, original provider `event_id`, local sequence, processing-attempt ID, lifecycle kind, and creation timestamp. Assigned feedback adds dispatch ID, rule name/revision, and instance. Only the originating installation can read it. Multiple matched actions or explicit replay can produce separate assignments for the same source event; delivery retries keep the same notification ID.
 
-Record the assignment transition and notification outbox entry in the same transaction. Deliver asynchronously with at-least-once semantics, acknowledgment, bounded retry backoff, and visible failed/undelivered status. A notification-delivery failure must not undo the assignment or cause another instance to be created. Provider handlers need durable notification-ID deduplication and source-operation idempotency or reconciliation where available; acknowledgment alone cannot guarantee exactly-once external updates.
+Assignment and its notification outbox entry commit together. Authenticated provider polling delivers at least once until acknowledgment. Polling cadence/backoff and source-operation reconciliation belong to providers; delivery failures do not undo assignment or recreate instances. Provider handlers need durable notification-ID deduplication; acknowledgment cannot guarantee exactly-once source-system updates. TUI feedback-delivery diagnostics remain a follow-up.
 
 Feedback uses authenticated provider polling and idempotent acknowledgment. Notifications survive provider/Tandem restart and remain queued until acknowledgment. Production feedback retention and callback delivery, if needed, are future decisions.
 
@@ -191,31 +192,41 @@ Reserve later lifecycle notifications for independently verified transitions. `a
 
 ## Inspection and automation
 
-### Implemented TUI and future automation
+### Implemented TUI and automation
 
 Events is second and Providers third. Events renders distinct profile rows, details, metadata/context, pending/accepted attempts, and replay. Providers exposes approved lifecycle controls, fresh Docker state, errors, details, and bounded logs. Source links select the matching provider or apply an exact event-source filter. Rendering sanitizes external text and arrival updates preserve selection while the event remains in the bounded feed.
 
-The pending Rules main tab lists rules in a DataView with two rendered rows per rule and an on/off control. Enter opens the standard bottom-docked dialog with these tabs:
+The two-row Events layout displays `Accepted · 3 rules` for an event accepted by three distinct rules in its latest processing attempt. Its bottom dialog includes an **Acceptances** tab listing each matched rule, acceptance timestamp, processing attempt, instance/session links, and dispatch status. Replay history retains its separate acceptance records.
 
-1. **Accepted events:** retained events that triggered this rule, linked to their processing attempt and action outcome. Enter switches to the main Events tab and focuses the exact event; history navigation must load retained events outside the latest-200 feed and clear conflicting filters. Several rules can list the same event.
-2. **Script:** the rule's Rhai predicate source.
-3. **Settings:** tuicore form controls for the rule's metadata, enabled state, session model, initial prompt template, and instance handler template.
+The Rules main tab lists rules in a DataView with two rendered rows per rule. `.` opens the shared action menu with hotkey labels. `a` activates or deactivates the selected rule; Space also toggles it. A top-right button above the DataView uses `A`: Activate all targets inactive rules, while Deactivate all appears when every rule is active. Bulk confirmation pins eligible saved revisions and authorizes each activation; failed saves preserve successful sibling outcomes. Enter opens the standard bottom-docked dialog with these tabs:
+
+1. **Accepted events:** only retained events that triggered this particular rule, linked to their processing attempt and action outcome. Enter switches to the main Events tab and focuses the exact event; history navigation must load retained events outside the latest-200 feed and clear conflicting filters. Several rules can list the same event.
+2. **Script:** the rule's Rhai predicate source with Rust syntax highlighting.
+3. **Settings:** tuicore form controls for the rule's description, enabled state, session model, initial prompt template, and instance handler template.
+
+Valid field edits persist automatically and keep the editor open. Invalid drafts retain the last
+saved values and show an error. Editing pauses an enabled rule before draft validation; enabling
+its saved revision requires authorization. Queued writes retain the latest edits across dialog
+closure. The outer dialog owns close chrome. Predicates inspect custom provider fields through
+the incoming event's metadata.
 
 MCP creates, reads, validates, updates, and enables/disables rules. Match and resolved-prompt previews perform no instance creation or agent contact.
 
-### Rule proposal
+### Rule execution
 
 A rule contains a Rhai function `matches(event)` returning a boolean. It may inspect the normalized event envelope, profile-specific data, shared context, and metadata. Predicates are pure: expose no filesystem, network, process, or domain-mutation capabilities, and enforce operation, recursion, and allocation limits. Compilation errors, runtime errors, and nonboolean results are visible evaluation failures, not false matches; one failure must not prevent evaluation of the other rules.
 
-For each new event, evaluate every enabled rule per processing attempt against a pinned rule revision and persist its result for recovery. Every true result produces an independent action with the rule's model, resolved initial prompt, and instance handler template. Persist that trigger and action identity atomically before marking the event accepted. Acceptance does not short-circuit other predicates or depend on their action outcomes. Disabled predicates do not run. Rule definition storage and revision/authorization mechanics remain to be designed.
+Each receipt/replay transaction pins enabled revisions in namespace-local SQLite evaluation rows. Workers evaluate every pinned predicate and persist matched, no-match, or failed outcomes independently. Every true result atomically creates an acceptance/action with its unique assigned instance identity and marks that attempt accepted. Acceptance does not short-circuit siblings or depend on dispatch outcomes. Disabled predicates do not run. Optimistic revisions reject stale saves; enabled saves require authorization for automatic future actions.
+
+Acceptance identity includes the rule and processing attempt, with the applied revision pinned in the record. Retry resumes that acceptance's assigned instance/session; replay creates acceptances under a new attempt. One rule's failed launch must neither hide another acceptance nor repeat another rule's successful action.
 
 Each matched action creates a fresh instance. Persist a unique action identity and its assigned instance name before creation so delivery retries and worker restarts cannot create extra instances for the same action.
 
-The initial prompt starts a new agent conversation in the created instance's workspace using the rule's selected model. Specify when dispatch may proceed: workspace preparation, complete instance readiness, or another explicit gate. Tandem can launch a client before provisioning finishes, so client presence alone cannot prove the selected gate passed. Failed preparation or launch needs a visible dispatch outcome while the triggering event remains accepted.
+Dispatch waits for successful detached instance startup, including repository and service readiness, before requesting a fresh conversation. Model and optional variant are passed with the resolved prompt as literal arguments. The launch marker commits before contacting Zellij; observed exact workspace/pane linkage establishes the session and launched state. Failed preparation or uncertain launch remains visible while the event stays accepted. Session presence does not verify prompt delivery or task completion.
 
-Missing or invalid templates/models must surface a per-rule error; define validation and revalidation before authorizing a rule and before dispatch.
+Authoring validates scripts, prompt bounds, model syntax, and the referenced template. Provisioning revalidates the current template; OpenCode resolves model availability and credentials. Failures remain scoped to their acceptance. A model-capability preflight and verified prompt acknowledgment remain follow-ups.
 
-Provide match and prompt previews before users authorize a rule. Whether authorization covers subsequent automatic actions or each action needs approval remains open. Stream text is untrusted task input, not authorization or higher-priority instructions. Prompts must reference bounded event content without exposing provider credentials.
+Match and prompt previews perform pure evaluation only. Authorizing an enabled revision covers subsequent automatic template execution, host credentials, model prompts/costs, and creation-history cleanup when enabled. Stream text is untrusted task input, not authorization or higher-priority instructions. Prompts use single-pass event-field interpolation with a 64 KiB resolved limit and never expose provider credentials.
 
 ### Durable processing and replay
 
@@ -223,17 +234,17 @@ Persist a rule match before external side effects. Deduplicate delivery retries 
 
 Receipt and acceptance are separate facts. Atomically store a newly received event and its initial pending processing attempt before acknowledging receipt. A duplicate provider delivery returns the existing receipt and leaves processing status intact: it neither resets accepted work nor removes pending work.
 
-The implemented attempt states are `pending` and `accepted`. Automatic evaluation needs a separate completion/outcome record, including `no_match`, so nonmatching events are not accepted or repeatedly evaluated. Per-action states must distinguish queued, provisioning, launched, failed, and uncertain outcomes independently of acceptance. Processing claims need cross-process ownership and recoverable leases; an expired claim requires reconciliation with persisted side effects before another worker proceeds.
+Attempt states are `pending` and `accepted`; completed evaluation outcomes are independently retained, including `no_match`. Dispatch states are queued, provisioning, launching, launched, failed, and uncertain. A private namespace file lease serializes workers; recovery observes the persisted startup identity and pane before advancing, preserving successful sibling actions.
 
 Workers select attempts with unfinished evaluation and skip completed evaluations. Record a completed evaluation with no matching rules as `no_match`, without accepting the event. For matched events, retain each rule's action separately; partial success must not cause successful actions to run again when a failed action is retried. An accepted event can still have unfinished evaluation or failed actions, so acceptance alone must not suppress the remaining predicates or their recovery.
 
-Explicit replay creates a new attempt referencing the same immutable event and preserves previous attempts, statuses, and instance/session links. It must not require the provider to invent a new event ID or clear deduplication records. Preview the chosen rules and side effects before authorized execution; choose whether replay uses the original rule snapshot or current rules explicitly. Repeated submission of one replay request must resolve to the same attempt.
+Confirmed replay creates a new attempt against current enabled revisions for the same immutable event. It preserves previous acceptances, statuses, and instance/session links without changing provider identity or deduplication. Preview first. Repeated submission of one replay request resolves to the same attempt; historical-snapshot replay is outside this slice.
 
 Retry and replay are different operations. Retry reconciles or resumes an existing failed action with its assigned instance identity; replay intentionally allows fresh actions and instances. Uncertain external outcomes need reconciliation or explicit user resolution before either operation can safely repeat the affected side effect.
 
-The implemented inbox records pending/accepted attempts. Replay requires the current attempt to be accepted, then creates an independently identified pending attempt without erasing history. Automated processing, failed/uncertain action states, rule snapshots, and dispatch-side replay semantics remain pending. Explicit reevaluation of a previously nonmatching event needs its own policy.
+Replay accepts any retained event and requires explicit approval. Each replay can trigger the same rule again with a fresh instance. Restricted retry accepts only pre-launch failures with a resolved prompt and preserves the assigned instance identity. An uncertain launch requires inspection and deliberate user resolution; automation never resends it.
 
-Define behavior for concurrent instance creation, provisioning and agent-launch failures, and restart recovery. Apply concurrency limits and loop prevention before automatic execution. An uncertain prompt-send result must remain uncertain rather than being blindly retried.
+Dispatch admits four active actions and ten starts per namespace per minute, counting retries. Startup ownership mismatches fail closed; failed preparations preserve work for explicit retry. Provider-side source exclusions must prevent feedback loops; rate limits bound bursts but do not prove loop freedom.
 
 Redelivery of a received event ID must not create a new processing attempt. Local replay should default to inspection or match preview; deliberate execution needs explicit authorization and a new attempt identity. Retention must preserve enough ingestion and dispatch identity to prevent old redeliveries from becoming new work. Replay requires a retained payload; compact deduplication receipts can still prevent duplicate processing after payload expiration.
 
@@ -241,9 +252,9 @@ Redelivery of a received event ID must not create a new processing attempt. Loca
 
 All provider lifecycle, ingestion, storage, rules, and dispatch operations enter through `AppService`. TUI, CLI, and MCP remain adapters. Provider runtime and ingestion I/O belong in environment adapters; typed events and rules belong in domain stores.
 
-SQLite stores durable events, attempts, provider credentials, launch snapshots/errors, and notification queues in the private application database. Rule revisions and dispatch state are future tables. Production volume and retention need validation.
+SQLite stores durable events, attempts, provider credentials, rule revisions/snapshots, independent acceptances, dispatch admission history, startup outcomes, and notification queues in the private application database. Production volume and retention need validation.
 
-Tandem initializes an application service per process. Provider lifecycle uses namespace/package locks and positive Docker ownership; the detached sidecar holds a namespace lease with identity/readiness verification. Cross-process ownership for future rule evaluation and dispatch remains to be designed before background execution.
+Tandem initializes an application service per process. Provider lifecycle uses namespace/package locks and positive Docker ownership; the detached sidecar holds an identity-verified namespace lease. Rule workers hold a separate namespace file lease through each evaluation/dispatch cycle and reconcile persisted startup/session identities after process interruption.
 
 Provider containers should have ownership separate from instance containers. Stopping or deleting a target instance must not implicitly stop unrelated collection. Reuse established ownership and lifecycle safeguards without assuming an application instance is the right provider abstraction.
 
@@ -253,7 +264,7 @@ Update runtime agent guidance when the approved provider-authoring and automatio
 
 ## Delivery checklist
 
-Checked tasks have implementation and verification evidence. Unchecked tasks remain work; mixed tasks are split so partial delivery is visible. Phase 3 is the next feature slice. Catalog migration and real-source contract validation are independent follow-ups, not claims of completed automation.
+Checked tasks have implementation and automated evidence. Unchecked tasks remain work; catalog migration, real-source validation, and live model execution are independent follow-ups.
 
 ### 0. Establish the shared template catalogs — partial
 
@@ -274,7 +285,7 @@ Checked tasks have implementation and verification evidence. Unchecked tasks rem
 - [x] Implement sidecar worker leases/identity probes, package-scoped Docker ownership, private atomic credential files, and read-only token mounts.
 - [x] Enforce 64 KiB events, 1 MiB requests, 100-event batches, and bounded feed/history projections.
 - [ ] Validate richer profile semantics against real source observations, including edits, deletions, ordering, and context completeness.
-- [ ] Confirm and implement the `assigned` transition with dispatch.
+- [x] Implement `assigned` feedback atomically with instance/startup admission and preserve notification identities across retry.
 - [ ] Specify production rate/backpressure and retention policies.
 
 - [ ] **Checkpoint:** real Slack, Jira, and polled-system examples map into v1 or an approved extension without losing inspection or routing information.
@@ -285,7 +296,7 @@ Checked tasks have implementation and verification evidence. Unchecked tasks rem
 - [x] Deliver four Docker sample providers with normalized payloads, shared context/metadata, durable delivery, and feedback consumption.
 - [x] Provision credentials, start/verify the owned sidecar, build images, save launch snapshots, and verify collector runtime state without manual shell setup.
 - [x] Preserve checkpoint volumes and events across Stop/Start; freeze and resume collection without rebuilding.
-- [x] Persist pending attempts atomically with events and replay accepted events with idempotent request identities and preserved history; retain pending/accepted identities and timestamps across schema upgrades.
+- [x] Persist pending attempts atomically with events and replay any retained event with idempotent request identities and preserved history; retain pending/accepted identities and timestamps across schema upgrades.
 - [x] Render Events second and Providers third with profile-specific rows, runtime/error state, details, logs, selection preservation, and exact source links/filters.
 - [x] Verify source and sidecar restarts preserve received events/checkpoints; recover the sidecar at its recorded address without duplicate ownership.
 - [x] Stop an owned installation after its package directory is removed using retained identity and fresh Docker evidence.
@@ -293,25 +304,29 @@ Checked tasks have implementation and verification evidence. Unchecked tasks rem
 
 - [x] **Automated checkpoint:** four profiles deliver 40 distinct Docker events with acknowledged feedback; redelivery/restart retain identities; adapter tests preserve acceptance/replay history; lifecycle tests prove Pause/Resume, Stop/Start, sidecar recovery, Logs, and Stop after package deletion.
 
-### 3. Preview rules against normalized events — pending
+### 3. Preview rules against normalized events — implemented
 
-- [ ] Add bounded, pure Rhai predicates over all four normalized profiles and arbitrary metadata, with each rule selecting a handler template, session model, and initial prompt.
-- [ ] Add the two-row Rules DataView, on/off controls, and bottom-docked Accepted events / Script / Settings dialog using tuicore components.
-- [ ] Link each rule's accepted-event history to exact event focus in the Events tab, including retained events outside the bounded feed.
-- [ ] Expose rule authoring, validation, enablement, and inspection through MCP via `AppService`.
-- [ ] Preview matches and rendered prompts without creating instances or contacting agents.
-- [ ] Resolve rule authorization, model/template validation, definition storage, and rule enablement/replay policy; verify every enabled predicate runs and every match produces an independent action.
+- [x] Add bounded, pure Rhai predicates over all four normalized profiles and arbitrary metadata, with each rule selecting a handler template, session model, and initial prompt.
+- [x] Add the two-row Rules DataView, on/off controls, and bottom-docked Accepted events / Script / Settings dialog using tuicore components.
+- [x] Link each rule's accepted-event history to exact event focus in the Events tab, including retained events outside the bounded feed.
+- [x] Render the latest-attempt accepted-rule count in Events and expose all per-rule/per-attempt records in the event dialog's Acceptances tab with timestamps, instance/session links, and dispatch status.
+- [x] Expose rule authoring, validation, enablement, and inspection through MCP via `AppService`.
+- [x] Preview matches and rendered prompts without creating instances or contacting agents.
+- [x] Define revision authorization, local validation/storage, prospective enablement, and current-revision replay; verify all predicates and independent matches.
+- [ ] Preflight configured OpenCode model capabilities and credentials before automatic admission.
 
 - [ ] **Checkpoint:** representative Slack and Jira events match the intended rules and display the selected template and resolved initial prompt.
 
-### 4. Create a fresh instance and start agent work — pending
+### 4. Create a fresh instance and start agent work — implemented, live prompt proof pending
 
-- [ ] Persist versioned rule matches, per-rule acceptance history, and action identities atomically before creating fresh instances through `AppService`.
-- [ ] Deliver the initial prompt to a new conversation using the rule's selected model at the agreed preparation/readiness gate, under the chosen authorization policy.
-- [ ] Add bounded concurrency, loop controls, and visible provisioning, launch, and uncertain-send outcomes.
-- [ ] Link events to instances and sessions; verify duplicate delivery and worker recovery cannot silently create repeated work.
-- [ ] Persist accepted/no-match evaluation outcomes and separate per-action failures; verify completed evaluations are skipped, all matching actions survive partial failure, retries preserve successful actions, and authorized replay records fresh actions separately.
-- [ ] Persist `assigned` notifications atomically with durably admitted instance assignment and deliver them to the originating provider with retry and deduplication support.
+- [x] Persist versioned rule matches, per-rule acceptance history, and action identities atomically before creating fresh instances through `AppService`.
+- [x] Launch the configured model/variant and literal prompt after successful instance readiness, under enabled-revision authorization.
+- [x] Add bounded concurrency/start-rate admission and visible provisioning, launch, and uncertain outcomes.
+- [x] Link events to instances and sessions; verify duplicate delivery and interrupted-launch recovery preserve successful siblings.
+- [x] Persist matched/no-match/failed evaluations and independent action failures; preserve historical acceptance records through current-rule replay.
+- [x] Persist `assigned` notifications atomically with admitted instance assignment and deliver through the originating provider's authenticated retry queue.
+- [ ] Verify actual model prompt delivery and add an acknowledgment distinct from session/pane linkage.
+- [ ] Verify source-specific feedback exclusions and external side-effect reconciliation prevent loops.
 
 - [ ] **Checkpoint:** a matching event creates a fresh instance from its rule's template, starts its initial prompt, and produces correlated assignment feedback to its provider; notification retries preserve the assignment, and explicit replay records a distinct action and notification.
 
@@ -320,9 +335,10 @@ Checked tasks have implementation and verification evidence. Unchecked tasks rem
 - [x] Verify distinct batch events are retained, identical redelivery is deduplicated, conflicting content rolls back the batch, and receipt loss preserves identical provider retry payloads.
 - [x] Verify durable notification retry/acknowledgment and sample-provider notification-ID deduplication.
 - [ ] Exercise sustained real-source volume, collector health/source freshness, production backpressure, history retention, and arbitrary log/payload secret handling.
-- [ ] Verify historical imports and deliberate replay through the future rule/dispatch authorization policy.
+- [x] Verify current-rule replay pins a fresh attempt and retains independent historical actions.
+- [ ] Exercise real-source historical imports under enabled-rule authorization.
 - [ ] Prevent feedback-driven source-system update loops and verify external side-effect reconciliation.
-- [ ] Document and verify rule authoring, instance mapping, dispatch, and replay through MCP.
+- [x] Document rule authoring, instance mapping, dispatch, and replay; verify MCP contracts and authorization.
 
 - [ ] **Checkpoint:** a chosen real source runs unattended within its limits, and users can explain every automated action from retained event and dispatch records.
 
@@ -340,13 +356,13 @@ These are implementation-time results; rerun relevant checks after subsequent ed
 
 1. **Shared context and profile fields:** what should Tandem normalize for people, attachments, relations, threads, work-item changes, and operational signals?
 2. **Context delivery:** provider-supplied snapshots or later authorized resolution of thread context and attachments?
-3. **Authorization:** authorize automatic execution when enabling a rule, or approve each matched action?
-4. **Prompt gate:** start after workspace preparation or wait for full instance readiness?
+3. **Authorization — implemented:** enabled revisions authorize automatic future actions; editing an enabled revision requires approval.
+4. **Prompt gate — implemented:** wait for successful full instance readiness; prompt acknowledgment is a separate follow-up.
 5. **Multiple matches — confirmed:** evaluate every enabled predicate; create one independent action and fresh instance per matching rule.
 6. **Provider packaging:** Docker image/build only, or Compose recipes for providers needing multiple services?
-7. **Dispatch ownership:** how should future rule evaluation and dispatch acquire cross-process ownership and recover uncertain outcomes? Provider HTTP transport and sidecar ownership are implemented.
-8. **Rule enablement and replay:** prospective matches only, or an explicit scan of already received events when enabling a rule, including previous `no_match` evaluations?
+7. **Dispatch ownership — implemented:** namespace file lease, pinned identities, startup reconciliation, and explicit uncertain outcomes without automatic resend.
+8. **Rule enablement — implemented:** prospective matches; scanning retained nonmatching events remains outside this slice.
 9. **Concrete example:** which event, condition, template, and initial prompt should prove the first end-to-end workflow?
 10. **Acceptance boundary — confirmed:** a rule matched and durably triggered its action; acceptance is automatic, and startup, prompt delivery, and task completion remain separate outcomes.
-11. **Replay rules:** evaluate current rules or rerun the original rule snapshots, and how should users select the scope of a replay?
-12. **Assignment feedback:** confirm the assignment boundary, outcomes, and correlation with rule revisions/actions; extend the implemented polling queue.
+11. **Replay rules — implemented:** confirmed replay pins current enabled revisions; historical-snapshot replay is a later extension.
+12. **Assignment feedback — implemented:** durable startup operation admission plus correlated rule/action/instance feedback through authenticated polling.

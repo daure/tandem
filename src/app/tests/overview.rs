@@ -54,7 +54,7 @@ fn switch(app: &mut App) {
             }),
         );
         render(app);
-        if !app.events_active && !app.providers_active {
+        if !app.events_active && !app.providers_active && !app.rules_active {
             break;
         }
     }

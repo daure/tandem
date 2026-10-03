@@ -5,6 +5,7 @@ use ratatui::{
 
 use super::clean;
 use crate::store::events::{Payload, ProcessingStatus, Record, SeverityColor};
+use crate::store::rules::DispatchStatus;
 
 pub(crate) fn profile_icon(profile: &str) -> &'static str {
     match profile {
@@ -33,6 +34,7 @@ pub(crate) fn row_text(row: &Record) -> Text<'static> {
         Span::styled(" ", normal),
         Span::styled(clean(&row.provider), normal.add_modifier(Modifier::BOLD)),
     ];
+    field(&mut header, &format!("#{}", row.sequence), muted, muted);
     let body = match &row.event.payload {
         Payload::Message(message) => {
             field(&mut header, &message.author, normal, muted);
@@ -76,6 +78,62 @@ pub(crate) fn row_text(row: &Record) -> Text<'static> {
             &row.event.summary
         }
     };
+    let count = row
+        .acceptances
+        .iter()
+        .map(|acceptance| &acceptance.rule_name)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    if count > 0 {
+        field(
+            &mut header,
+            &format!("{count} {}", if count == 1 { "rule" } else { "rules" }),
+            normal,
+            muted,
+        );
+        for (status, singular, plural, color) in [
+            (
+                DispatchStatus::Launched,
+                "launch",
+                "launches",
+                theme.success_fg(),
+            ),
+            (
+                DispatchStatus::Uncertain,
+                "uncertain",
+                "uncertain",
+                theme.error_fg(),
+            ),
+            (DispatchStatus::Queued, "queued", "queued", theme.info_fg()),
+            (
+                DispatchStatus::Provisioning,
+                "provisioning",
+                "provisioning",
+                theme.info_fg(),
+            ),
+            (
+                DispatchStatus::Launching,
+                "launching",
+                "launching",
+                theme.info_fg(),
+            ),
+            (DispatchStatus::Failed, "failed", "failed", theme.error_fg()),
+        ] {
+            let count = row
+                .acceptances
+                .iter()
+                .filter(|acceptance| acceptance.status == status)
+                .count();
+            if count > 0 {
+                field(
+                    &mut header,
+                    &format!("{count} {}", if count == 1 { singular } else { plural }),
+                    Style::default().fg(color),
+                    muted,
+                );
+            }
+        }
+    }
     Text::from(vec![
         Line::from(header),
         Line::from(Span::styled(clean(body), normal)),

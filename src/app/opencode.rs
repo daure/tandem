@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::Path};
 
-use tuicore::{Button, EventCtx, Flex, FlexItem, Notification};
+use tuicore::{EventCtx, Notification};
 
 use super::{
     App, Msg, initial_focus,
@@ -23,6 +23,7 @@ const FINISHED_ICON: &str = "";
 const NEW_SESSION_ICON: &str = "";
 const UNKNOWN_ICON: &str = "";
 const STALE_ICON: &str = "";
+const MISSING_WORKSPACE_ICON: &str = "";
 const SESSION_DISPLAY_LIMIT: usize = 20;
 
 enum SessionChild<'a> {
@@ -161,7 +162,8 @@ pub(super) fn attached_rows_for_owners(
     append_rows_for_owners(&mut rows, snapshot, show_saved, false, owners, false);
     let visible_session = |row: &Row| {
         row.opencode.as_ref().is_some_and(|target| {
-            target.attached() || show_saved && matches!(target, Target::Session { .. })
+            target.attached()
+                || (show_saved || row.workspace_missing) && matches!(target, Target::Session { .. })
         })
     };
     let known_instances = folders::known_instances(snapshot, owners);
@@ -293,7 +295,10 @@ fn append_rows_for_owners(
         let (mut sessions, sessions_truncated) =
             recent_sessions_per_directory(owned_sessions.filter(|session| {
                 (!session.saved() || show_saved)
-                    && (group_sessions || show_saved || session.attached())
+                    && (group_sessions
+                        || show_saved
+                        || session.attached()
+                        || snapshot.unfinished_missing_workspace(session))
             }));
         let mut clients: Vec<_> = snapshot
             .clients
@@ -352,10 +357,23 @@ fn append_rows_for_owners(
                 let SessionChild::Client(client) = child else {
                     unreachable!();
                 };
-                children.push(client_row(&session_parent, instance, client, false));
+                children.push(client_row(
+                    &session_parent,
+                    instance,
+                    client,
+                    false,
+                    snapshot,
+                ));
                 continue;
             };
-            append_session_rows(&mut children, &session_parent, instance, session, true);
+            append_session_rows(
+                &mut children,
+                &session_parent,
+                instance,
+                session,
+                true,
+                snapshot,
+            );
         }
         if sessions_truncated {
             children.push(see_more_row(&session_parent, instance));
@@ -394,20 +412,27 @@ fn append_session_rows(
     scope: &str,
     session: &Session,
     owned: bool,
+    snapshot: &Snapshot,
 ) {
     let id = format!("opencode:{scope}:{}", session.id);
-    let status = if session.stale {
+    let missing = snapshot.missing_directory(&session.directory);
+    let status = if missing {
+        "workspace missing"
+    } else if session.stale {
         "observation stale"
     } else {
         session.label()
     };
     let attached = session.attached();
     let saved = session.saved();
-    let new_session = !saved
+    let new_session = !missing
+        && !saved
         && session.activity != Activity::AwaitingAnswer
         && session.last_question.is_none()
         && session.question_observed;
-    let (secondary_icon, secondary_tone) = if session.stale {
+    let (secondary_icon, secondary_tone) = if missing {
+        (MISSING_WORKSPACE_ICON, Tone::Warning)
+    } else if session.stale {
         (STALE_ICON, Tone::Warning)
     } else if new_session {
         (NEW_SESSION_ICON, Tone::Subtle)
@@ -428,6 +453,7 @@ fn append_session_rows(
         session
             .last_question
             .as_deref()
+            .or_else(|| missing.then_some("Workspace folder missing"))
             .or_else(|| session.question_observed.then_some("(new session)"))
     };
     let elapsed = (!saved)
@@ -439,6 +465,14 @@ fn append_session_rows(
         |secondary| format!("{}\n{secondary}", session.title),
     );
     let mut details = vec![Property::new("Session", &session.id)];
+    if missing {
+        details.push(Property::new("Workspace", "Folder missing").tone(Tone::Warning));
+    }
+    if session.stale
+        && let Some(error) = &snapshot.error
+    {
+        details.push(Property::new("OpenCode observation", error).tone(Tone::Warning));
+    }
     if !session.stale && session.approval_pending == Some(true) {
         details.push(Property::new("Approval", "Pending"));
     }
@@ -467,15 +501,15 @@ fn append_session_rows(
     }
     rows.push(Row {
         id: id.clone(),
-        opencode_activity: (!session.stale).then_some(session.activity),
+        opencode_activity: (!session.stale && !missing).then_some(session.activity),
         parent: Some(parent.to_owned()),
         label,
-        icon: if session.activity == Activity::AwaitingAnswer {
+        icon: if session.activity == Activity::AwaitingAnswer && !missing {
             "󱚟"
         } else {
             "󰚩"
         },
-        tone: if session.stale {
+        tone: if session.stale || missing {
             Tone::Warning
         } else if session.activity == Activity::Busy {
             Tone::Info
@@ -487,8 +521,11 @@ fn append_session_rows(
         secondary_icon: secondary.map_or("", |_| secondary_icon),
         secondary_tone,
         secondary_text_tone: new_session.then_some(Tone::Subtle),
-        secondary_loading: session.activity == Activity::Busy && !session.stale && !new_session,
-        activity_timer: (session.activity == Activity::Busy && !session.stale)
+        secondary_loading: session.activity == Activity::Busy
+            && !session.stale
+            && !missing
+            && !new_session,
+        activity_timer: (session.activity == Activity::Busy && !session.stale && !missing)
             .then_some(
                 session
                     .activity_started_at_milliseconds
@@ -514,6 +551,7 @@ fn append_session_rows(
         hide_resources: true,
         details,
         workspace: Some(session.directory.clone()),
+        workspace_missing: missing,
         opencode: Some(Target::Session {
             id: session.id.clone(),
             pane: session.panes.first().cloned(),
@@ -530,6 +568,7 @@ fn append_session_rows(
                 icon: "▣",
                 hide_resources: true,
                 workspace: Some(session.directory.clone()),
+                workspace_missing: missing,
                 opencode: Some(Target::Session {
                     id: session.id.clone(),
                     pane: Some(pane.clone()),
@@ -599,7 +638,10 @@ fn append_external_rows(
     for session in snapshot.sessions.iter().filter(|session| {
         outside_tandem(&session.directory)
             && (!session.saved() || show_saved)
-            && (overview || show_saved || session.attached())
+            && (overview
+                || show_saved
+                || session.attached()
+                || snapshot.unfinished_missing_workspace(session))
     }) {
         workspaces
             .entry(session.directory.clone())
@@ -622,7 +664,9 @@ fn append_external_rows(
         let live_directories = snapshot
             .sessions
             .iter()
-            .filter(|session| session.live() && !session.stale)
+            .filter(|session| {
+                session.live() && !session.stale || snapshot.unfinished_missing_workspace(session)
+            })
             .map(|session| session.directory.as_str())
             .chain(
                 snapshot
@@ -668,11 +712,16 @@ fn append_external_rows(
             );
         for child in ordered_children {
             match child {
-                SessionChild::Session(session) => {
-                    append_session_rows(&mut children, &workspace_id, &scope, session, false)
-                }
+                SessionChild::Session(session) => append_session_rows(
+                    &mut children,
+                    &workspace_id,
+                    &scope,
+                    session,
+                    false,
+                    snapshot,
+                ),
                 SessionChild::Client(client) => {
-                    children.push(client_row(&workspace_id, &scope, client, true));
+                    children.push(client_row(&workspace_id, &scope, client, true, snapshot));
                 }
             }
         }
@@ -696,6 +745,7 @@ fn append_external_rows(
             tone,
             loading,
             workspace: Some(directory.clone()),
+            workspace_missing: snapshot.missing_directory(&directory),
             hide_resources: true,
             details: vec![
                 Property::new("Ownership", "Outside Tandem"),
@@ -724,6 +774,9 @@ fn append_external_rows(
         counts.live += clients.len();
         counts.attached += clients.len();
         let incomplete = snapshot.error.is_some()
+            || sessions
+                .iter()
+                .any(|session| snapshot.unfinished_missing_workspace(session))
             || sessions.iter().any(|session| session.stale)
             || clients.iter().any(|client| client.stale);
         projected.insert(
@@ -894,15 +947,26 @@ fn client_row_id(scope: &str, client: &Client) -> String {
     )
 }
 
-fn client_row(parent: &str, scope: &str, client: &Client, external: bool) -> Row {
-    let status = if client.stale {
+fn client_row(
+    parent: &str,
+    scope: &str,
+    client: &Client,
+    external: bool,
+    snapshot: &Snapshot,
+) -> Row {
+    let missing = snapshot.missing_directory(&client.directory);
+    let status = if missing {
+        "workspace missing"
+    } else if client.stale {
         "observation stale"
     } else if client.awaiting_presence_since.is_some() {
         "starting · awaiting companion"
     } else {
         "attached · no conversation"
     };
-    let secondary = if client.stale {
+    let secondary = if missing {
+        "Workspace folder missing"
+    } else if client.stale {
         "Observation stale"
     } else {
         "(new session)"
@@ -912,24 +976,27 @@ fn client_row(parent: &str, scope: &str, client: &Client, external: bool) -> Row
         parent: Some(parent.to_owned()),
         label: format!("{}\n{secondary}", client.title),
         icon: "󰚩",
-        tone: if client.stale {
+        tone: if client.stale || missing {
             Tone::Warning
         } else {
             Tone::Success
         },
-        secondary_icon: if client.stale {
+        secondary_icon: if missing {
+            MISSING_WORKSPACE_ICON
+        } else if client.stale {
             STALE_ICON
         } else {
             NEW_SESSION_ICON
         },
-        secondary_tone: if client.stale {
+        secondary_tone: if client.stale || missing {
             Tone::Warning
         } else {
             Tone::Subtle
         },
-        secondary_text_tone: (!client.stale).then_some(Tone::Subtle),
+        secondary_text_tone: (!client.stale && !missing).then_some(Tone::Subtle),
         hide_resources: true,
         workspace: Some(client.directory.clone()),
+        workspace_missing: missing,
         details: [external.then(|| Property::new("Ownership", "Outside Tandem"))]
             .into_iter()
             .flatten()
@@ -971,12 +1038,19 @@ pub(super) fn project_rows(
             template_directory: instance.template_directory.clone(),
         })
         .collect::<Vec<_>>();
-    if sessions {
+    let mut projected = if sessions {
         attached_rows_for_owners(rows, opencode, &owners, show_saved, running_only)
     } else {
         append_rows_for_owners(&mut rows, opencode, show_saved, true, &owners, true);
         rows
+    };
+    for row in &mut projected {
+        row.workspace_missing = row
+            .workspace
+            .as_deref()
+            .is_some_and(|directory| opencode.missing_directory(directory));
     }
+    projected
 }
 
 impl App {
@@ -1003,24 +1077,22 @@ impl App {
         if !self.service.opencode_enabled() {
             return true;
         }
-        let Some(session) = self
+        if !self
             .opencode_snapshot
             .sessions
             .iter()
-            .find(|session| session.id == *id)
-            .cloned()
-        else {
+            .any(|session| session.id == *id)
+        {
             return true;
-        };
+        }
         let history = conversation::Conversation::new(self.service.opencode_conversation(id));
-        let mut tabs = vec![
+        let tabs = vec![
             tuicore::Tab::new("Conversation", history),
             tuicore::Tab::new(
                 "Details",
                 super::properties::Properties::new(row.details.clone()),
             ),
         ];
-        tabs.push(tuicore::Tab::new("Actions", navigation_buttons(&session)));
         let tabs = tuicore::Tabs::dialog(tabs)
             .variant(tuicore::TabsVariant::OneRow)
             .edge_borders(ratatui::widgets::Borders::TOP)
@@ -1038,6 +1110,13 @@ impl App {
             return false;
         };
         if !self.service.opencode_enabled() {
+            return true;
+        }
+        if row.workspace_missing && matches!(target, Target::Session { pane: None, .. }) {
+            ctx.notify(Notification::warning(
+                "Cannot open OpenCode",
+                "The workspace folder is missing and no client pane is attached",
+            ));
             return true;
         }
         match target {
@@ -1071,7 +1150,7 @@ impl App {
         }
     }
 
-    fn submit_opencode_client(&mut self, pane: Pane, ctx: &mut EventCtx<Msg>) {
+    pub(super) fn submit_opencode_client(&mut self, pane: Pane, ctx: &mut EventCtx<Msg>) {
         if self.opencode_action.is_some() {
             return;
         }
@@ -1097,7 +1176,14 @@ impl App {
                 ..
             }) => (Some(id.as_str()), pane),
             Some(Target::Client { pane }) => (None, pane),
-            Some(Target::Workspace | Target::Session { pane: None, .. }) | None => return false,
+            Some(Target::Session { pane: None, .. }) => {
+                ctx.notify(Notification::warning(
+                    "Cannot close OpenCode session",
+                    "There is no attached client pane to close",
+                ));
+                return true;
+            }
+            Some(Target::Workspace) | None => return false,
         };
         if self.opencode_action.is_some() {
             return true;
@@ -1235,35 +1321,4 @@ impl App {
             }
         }
     }
-}
-
-fn navigation_buttons(session: &Session) -> Flex<Msg> {
-    let mut body = Flex::column();
-    if session.panes.is_empty() {
-        let id = session.id.clone();
-        body = body.child(
-            "attach",
-            Button::new(if session.activity == Activity::Busy {
-                "Attach to conversation"
-            } else {
-                "Resume conversation"
-            })
-            .on_press(move || Msg::OpenOpencode(id.clone(), None)),
-            FlexItem::fit_content(),
-        );
-    } else {
-        for (index, pane) in session.panes.iter().cloned().enumerate() {
-            let id = session.id.clone();
-            body = body.child(
-                format!("pane-{index}"),
-                Button::new(format!(
-                    "Jump to {} / {} · pane {}",
-                    pane.session, pane.tab_name, pane.id
-                ))
-                .on_press(move || Msg::OpenOpencode(id.clone(), Some(pane.clone()))),
-                FlexItem::fit_content(),
-            );
-        }
-    }
-    body
 }

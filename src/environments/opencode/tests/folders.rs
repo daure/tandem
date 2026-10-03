@@ -26,14 +26,16 @@ fn daemon_directory_receipts_expose_workspaces_with_no_conversations() {
     server.busy.store(false, Ordering::Relaxed);
     let observer = observer(root.path());
     let station = observer.daemons.join("station");
+    let workspace = root.path().join("empty");
+    fs::create_dir(&workspace).unwrap();
     fs::create_dir_all(station.join("dirs")).unwrap();
     fs::write(station.join("port"), server.url.rsplit(':').next().unwrap()).unwrap();
-    fs::write(station.join("dirs/empty.dir"), "/work/empty\n").unwrap();
+    fs::write(station.join("dirs/empty.dir"), workspace.to_str().unwrap()).unwrap();
     let snapshot = tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(observer.observe(&[], Snapshot::default()))
         .unwrap();
     assert!(snapshot.sessions.is_empty());
     assert!(snapshot.clients.is_empty());
-    assert_eq!(snapshot.directories, ["/work/empty"]);
+    assert_eq!(snapshot.directories, [workspace.to_str().unwrap()]);
 }

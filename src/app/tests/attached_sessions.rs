@@ -253,7 +253,7 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
     app.service.set_opencode_snapshot_for_tests(observation());
     app.update_snapshot(inventory.clone());
     let mut ctx = EventCtx::new(AnimationSettings::default());
-    for key in ['O', '[', '[', '['] {
+    for key in ['O', '[', '[', '[', '['] {
         app.event(&TuiEvent::Key(KeyEvent::from(Key::Char(key))), &mut ctx);
     }
     assert!(app.attached_sessions_only && app.running_only && app.opencode_history);
@@ -364,7 +364,7 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
         &click(Rect::new(column, 0, 1, 1)),
         &mut activation,
     );
-    assert_eq!(app.tabs_mut().selected_index(), 3);
+    assert_eq!(app.tabs_mut().selected_index(), 4);
     assert!(!app.attached_sessions_only);
     assert!(app.running_only && !app.opencode_history);
     let (layout, lines) = render(&mut app, 130);

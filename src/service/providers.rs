@@ -15,6 +15,8 @@ use crate::{
     store::providers::{Action, ActionError, ActionOutcome, Snapshot, Status},
 };
 
+mod deletion;
+
 pub(super) struct Integration {
     manager: Providers,
     config: Config,
@@ -74,6 +76,19 @@ impl Integration {
                         provider.status = runtime.status;
                         provider.container_id = Some(runtime.container_id.clone());
                         provider.error = None;
+                        for stream in &mut provider.streams {
+                            stream.status = if runtime.status == Status::Running {
+                                if stream.controllable {
+                                    stream.enabled = true;
+                                    stream.error = None;
+                                    Status::Starting
+                                } else {
+                                    Status::Unknown
+                                }
+                            } else {
+                                runtime.status
+                            };
+                        }
                     }
                 }
                 Err(ActionError::Failed(error)) if action != Action::Logs => {
@@ -113,6 +128,12 @@ impl AppService {
         let mut snapshot = snapshot.clone();
         for provider in &mut snapshot.providers {
             provider.operation = operations.get(&provider.name).copied();
+            for stream in &mut provider.streams {
+                stream.operation = operations
+                    .get(&format!("{}/{}", provider.name, stream.name))
+                    .copied()
+                    .or(provider.operation.filter(|_| stream.controllable));
+            }
             if provider.error.is_none() {
                 provider.error = snapshot.error.clone();
             }
@@ -172,7 +193,10 @@ impl AppService {
                 .operations
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            if operations.contains_key(&name) {
+            if operations
+                .keys()
+                .any(|key| key == &name || key.starts_with(&format!("{name}/")))
+            {
                 let _ = sender.send(Err(ActionError::Unavailable(
                     "A provider operation is already in progress; wait for it to finish",
                 )));
@@ -183,6 +207,80 @@ impl AppService {
         self.runtime.spawn_blocking(move || {
             let result = integration.manager.action(&name, action);
             integration.complete_action(&name, action, &result);
+            let _ = sender.send(result.map(|outcome| outcome.message));
+        });
+        receiver
+    }
+
+    pub(crate) fn provider_stream_action(
+        &self,
+        name: String,
+        stream: String,
+        action: Action,
+        confirmed: bool,
+    ) -> oneshot::Receiver<Result<String, ActionError>> {
+        let (sender, receiver) = oneshot::channel();
+        if !confirmed {
+            let _ = sender.send(Err(
+                "confirmation_required: stream lifecycle controls trusted provider collection"
+                    .into(),
+            ));
+            return receiver;
+        }
+        let integration = Arc::clone(&self.providers);
+        let key = format!("{name}/{stream}");
+        {
+            let mut operations = integration
+                .operations
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if operations
+                .keys()
+                .any(|key| key == &name || key.starts_with(&format!("{name}/")))
+            {
+                let _ = sender.send(Err(ActionError::Unavailable(
+                    "A provider or stream operation is already in progress",
+                )));
+                return receiver;
+            }
+            operations.insert(key.clone(), action);
+        }
+        self.runtime.spawn_blocking(move || {
+            let result = integration.manager.stream_action(&name, &stream, action);
+            let mut snapshot = integration
+                .snapshot
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Some(provider) = snapshot
+                .providers
+                .iter_mut()
+                .find(|provider| provider.name == name)
+            {
+                match &result {
+                    Ok(outcome) => {
+                        provider.status = outcome.runtime.status;
+                        provider.container_id = Some(outcome.runtime.container_id.clone());
+                        provider.error = None;
+                        provider.streams = outcome.streams.clone();
+                    }
+                    Err(ActionError::Failed(error)) => {
+                        if let Some(row) =
+                            provider.streams.iter_mut().find(|row| row.name == stream)
+                        {
+                            row.status = Status::Unknown;
+                            row.error = Some(error.clone());
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+            integration.revision.fetch_add(1, Ordering::AcqRel);
+            integration
+                .operations
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(&key);
+            drop(snapshot);
             let _ = sender.send(result.map(|outcome| outcome.message));
         });
         receiver

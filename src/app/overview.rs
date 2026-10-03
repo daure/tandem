@@ -14,12 +14,15 @@ use super::{
 };
 
 pub(super) struct Pages {
-    pages: [ChildSlot<Box<dyn TuiNode<Msg>>, Msg>; 4],
+    pages: [ChildSlot<Box<dyn TuiNode<Msg>>, Msg>; 5],
     states: [SharedState; 2],
     active: usize,
     events: super::events::SharedState,
     providers: super::providers::SharedState,
     event_filter: super::events::FilterState,
+    rules: super::rules::SharedState,
+    event_focus: super::events::FocusState,
+    rule_focus: super::rules::FocusState,
 }
 
 impl Pages {
@@ -35,8 +38,23 @@ impl Pages {
         let providers =
             std::rc::Rc::new(std::cell::RefCell::new(super::providers::State::default()));
         let event_filter = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let rules = std::rc::Rc::new(std::cell::RefCell::new(
+            crate::store::rules::Snapshot::default(),
+        ));
+        let event_focus = std::rc::Rc::new(std::cell::RefCell::new(
+            super::events::FocusRequest::default(),
+        ));
+        let rule_focus = std::rc::Rc::new(std::cell::RefCell::new(None));
         let pages = std::array::from_fn(|index| {
-            let (key, page): (&str, Box<dyn TuiNode<Msg>>) = if index == 3 {
+            let (key, page): (&str, Box<dyn TuiNode<Msg>>) = if index == 4 {
+                (
+                    "rules-page",
+                    Box::new(
+                        super::rules::Rules::new(rules.clone(), keys)
+                            .with_focus_request(rule_focus.clone()),
+                    ),
+                )
+            } else if index == 3 {
                 (
                     "providers-page",
                     Box::new(super::providers::Providers::new(
@@ -51,6 +69,8 @@ impl Pages {
                         events.clone(),
                         event_filter.clone(),
                         providers.clone(),
+                        event_focus.clone(),
+                        toolbar.clone(),
                     )),
                 )
             } else {
@@ -91,6 +111,9 @@ impl Pages {
             events,
             providers,
             event_filter,
+            rules,
+            event_focus,
+            rule_focus,
         }
     }
 
@@ -111,8 +134,76 @@ impl Pages {
         self.active = 3;
     }
 
-    pub(super) fn filter_events(&mut self, provider: String) {
-        *self.event_filter.borrow_mut() = Some(vec![provider]);
+    pub(super) fn select_rules(&mut self) {
+        self.active = 4;
+    }
+    pub(super) fn rules_state(&self) -> super::rules::SharedState {
+        self.rules.clone()
+    }
+    pub(super) fn update_rules(&mut self, snapshot: crate::store::rules::Snapshot) -> bool {
+        if *self.rules.borrow() == snapshot {
+            return false;
+        }
+        *self.rules.borrow_mut() = snapshot;
+        true
+    }
+    pub(super) fn focus_event(&mut self, record: crate::store::events::Record) {
+        self.event_focus.borrow_mut().record = Some(record);
+    }
+    pub(super) fn forget_event(&mut self, sequence: Option<i64>) {
+        let mut request = self.event_focus.borrow_mut();
+        request.deletion = Some(sequence);
+        if request
+            .record
+            .as_ref()
+            .is_some_and(|row| sequence.is_none_or(|id| id == row.sequence))
+        {
+            request.record = None;
+        }
+    }
+    pub(super) fn highlight_rule(&mut self, name: &str) -> bool {
+        if !self
+            .rules
+            .borrow()
+            .rules
+            .iter()
+            .any(|rule| rule.definition.name == name)
+        {
+            return false;
+        }
+        *self.rule_focus.borrow_mut() = Some(name.into());
+        true
+    }
+
+    pub(super) fn filter_event_stream(&mut self, provider: String, stream: String) {
+        *self.event_filter.borrow_mut() =
+            Some(vec![super::events::StreamKey::new(provider, stream)]);
+        self.event_focus.borrow_mut().reset_filters = true;
+    }
+
+    pub(super) fn provider_stream_action_unavailable(
+        &self,
+        name: &str,
+        stream: &str,
+        action: crate::store::providers::Action,
+    ) -> Option<&'static str> {
+        let state = self.providers.borrow();
+        let Some(provider) = state
+            .snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.name == name)
+        else {
+            return Some("Provider is unavailable; refresh the provider list");
+        };
+        provider
+            .streams
+            .iter()
+            .find(|row| row.name == stream)
+            .map_or(
+                Some("Stream is unavailable; refresh the provider list"),
+                |stream| stream.action_unavailable(provider, action),
+            )
     }
 
     pub(super) fn highlight_provider(&mut self, identity: &str) -> bool {
@@ -178,6 +269,12 @@ impl Pages {
     }
 
     pub(super) fn retain_control_focus(&self, route: &EventRoute, ctx: &mut EventCtx<Msg>) {
+        if self.active == 4 {
+            ctx.focus(tuicore::FocusRequest::Target(FocusId::new(
+                super::rules::FOCUS,
+            )));
+            return;
+        }
         if self.active == 3 {
             ctx.focus(tuicore::FocusRequest::Target(FocusId::new(
                 super::providers::FOCUS,
@@ -190,12 +287,12 @@ impl Pages {
             )));
             return;
         }
-        if route
-            .path
-            .keys()
-            .iter()
-            .any(|key| matches!(key.as_str(), "events-page" | "providers-page"))
-        {
+        if route.path.keys().iter().any(|key| {
+            matches!(
+                key.as_str(),
+                "events-page" | "providers-page" | "rules-page"
+            )
+        }) {
             ctx.focus(super::initial_focus());
             return;
         }

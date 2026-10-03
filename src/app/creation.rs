@@ -3,10 +3,20 @@ use tuicore::Notification;
 
 use super::App;
 
-#[derive(Default)]
 pub(super) struct Creation {
     pub prompt: String,
+    pub start_instance: bool,
     pub launches: Vec<(String, Receiver<Result<(), String>>)>,
+}
+
+impl Default for Creation {
+    fn default() -> Self {
+        Self {
+            prompt: String::new(),
+            start_instance: true,
+            launches: Vec::new(),
+        }
+    }
 }
 
 impl Creation {
@@ -16,6 +26,7 @@ impl Creation {
 
     pub fn reset_form(&mut self) {
         self.prompt.clear();
+        self.start_instance = true;
     }
 }
 

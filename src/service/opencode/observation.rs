@@ -9,11 +9,11 @@ use crate::{
         Observer,
         events::{Changes, LOCAL, REMOTE, Signal},
     },
-    store::opencode::Snapshot,
+    store::opencode::{Snapshot, observation::Failure},
 };
 
 pub(super) async fn run(
-    observer: Observer,
+    mut observer: Observer,
     integration: Weak<Integration>,
     settings: Arc<crate::service::settings::Settings>,
     generation: u64,
@@ -36,17 +36,36 @@ pub(super) async fn run(
     samples.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     signal.send(REMOTE);
     loop {
+        let Some(owner) = integration.upgrade() else {
+            return;
+        };
+        let deadline = owner
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retention
+            .next_retry();
+        drop(owner);
         let flags = tokio::select! {
             flags = signal.wait() => flags,
+            _ = async {
+                if let Some(deadline) = deadline {
+                    tokio::time::sleep_until(deadline.into()).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => REMOTE,
             _ = samples.tick() => {
                 let Some(owner) = integration.upgrade() else { return; };
                 if !settings.opencode_enabled() { return; }
-                let previous = owner.state.lock().unwrap_or_else(|error| error.into_inner()).snapshot.resources.clone();
+                let mut snapshot = owner.state.lock().unwrap_or_else(|error| error.into_inner()).snapshot.clone();
                 drop(owner);
-                let result = observer.sample_resources(previous).await;
+                let result = observer.sample_resources(snapshot.resources.clone()).await;
+                observer.refresh_tab_order(&mut snapshot).await;
                 let Some(owner) = integration.upgrade() else { return; };
                 let mut state = owner.state.lock().unwrap_or_else(|error| error.into_inner());
                 if state.generation != generation || !settings.opencode_enabled() { return; }
+                state.snapshot.zellij_tabs = snapshot.zellij_tabs;
                 match result {
                     Ok(resources) => state.snapshot.resources = resources,
                     Err(error) => for resource in &mut state.snapshot.resources { resource.mark_stale(error.clone()); },
@@ -72,6 +91,7 @@ pub(super) async fn run(
             if state.generation != generation {
                 return;
             }
+            observer.excluded = state.retention.exclusions();
             (state.roots.clone(), state.snapshot.clone())
         };
         drop(owner);
@@ -82,26 +102,47 @@ pub(super) async fn run(
                 return;
             }
         };
+        let rediscover = changes.evidence_changed();
+        if rediscover {
+            let Some(owner) = integration.upgrade() else {
+                return;
+            };
+            owner
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .retention
+                .rediscover();
+            observer.excluded = Default::default();
+            if let Err(error) = changes.sync(&observer, &previous).await {
+                publish(&integration, generation, Err(error));
+                return;
+            }
+        }
         if flags & REMOTE == 0 && !local {
             continue;
         }
         let mut result = tokio::time::timeout(
             Duration::from_secs(15),
-            observer.observe_changes(&roots, previous, flags & REMOTE != 0),
+            observer.observe_changes(&roots, previous, flags & REMOTE != 0 || rediscover),
         )
         .await
         .unwrap_or_else(|_| Err("OpenCode observation timed out".into()));
         if let Ok(snapshot) = &mut result {
-            let errors = signal.errors();
+            let errors = changes.errors();
             for session in &mut snapshot.sessions {
                 session.stale |= errors.contains_key(&session.server);
             }
             for client in &mut snapshot.clients {
                 client.stale |= errors.contains_key(&client.server);
             }
-            if !errors.is_empty() {
-                snapshot.error = Some(errors.values().cloned().collect::<Vec<_>>().join("\n"));
+            for (server, error) in errors {
+                snapshot
+                    .observation
+                    .failures
+                    .push(Failure::server(&server, error));
             }
+            snapshot.error = snapshot.observation_error();
         }
         if !settings.opencode_enabled() {
             return;
@@ -128,6 +169,7 @@ fn publish(integration: &Weak<Integration>, generation: u64, result: Result<Snap
     match result {
         Ok(snapshot) => state.snapshot = snapshot,
         Err(error) => {
+            state.snapshot.observation.verified_panes.clear();
             for resource in &mut state.snapshot.resources {
                 resource.mark_stale(error.clone());
             }
@@ -137,6 +179,7 @@ fn publish(integration: &Weak<Integration>, generation: u64, result: Result<Snap
             for client in &mut state.snapshot.clients {
                 client.stale = true;
             }
+            state.snapshot.observation.failures = vec![Failure::global(error.clone())];
             state.snapshot.error = Some(error);
         }
     }
@@ -145,5 +188,17 @@ fn publish(integration: &Weak<Integration>, generation: u64, result: Result<Snap
         retention,
         ..
     } = &mut *state;
-    retention.observe(snapshot);
+    let abandoned = retention.observe(snapshot);
+    retention.discard_abandoned(snapshot);
+    drop(state);
+    if !abandoned.is_empty() {
+        tokio::task::spawn_blocking(move || {
+            for message in abandoned {
+                crate::diagnostics::record_error(
+                    "OpenCode observation",
+                    &std::io::Error::other(message),
+                );
+            }
+        });
+    }
 }

@@ -226,6 +226,13 @@ pub(super) fn instance_entry(
                     "initial-prompt",
                     prompt,
                     FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
+                )
+                .child(
+                    "start-instance",
+                    Toggle::new("Start instance")
+                        .checked(creation.start_instance)
+                        .on_change(Msg::StartInstanceChanged),
+                    FlexItem::fit_content(),
                 ),
         ),
     )
@@ -257,9 +264,9 @@ pub(super) fn settings(
     opencode: bool,
     clear_opencode_history: bool,
     fade_seconds: u64,
-    mut sounds: Vec<crate::store::completion::SoundChoice>,
-    selected_sound: &str,
-    sound_choice: Rc<RefCell<Option<String>>>,
+    sounds: Vec<crate::store::completion::SoundChoice>,
+    selected_sounds: [&str; 2],
+    sound_choice: Rc<RefCell<Option<Msg>>>,
 ) -> Modal {
     let mut input = TextInput::new()
         .numbers_only(true)
@@ -268,23 +275,20 @@ pub(super) fn settings(
     input.set_value(fade_seconds.to_string());
     input.set_insert_mode(false);
     input.move_cursor_to_end();
-    if !sounds.iter().any(|sound| sound.id == selected_sound) {
-        sounds.push(crate::store::completion::SoundChoice {
-            id: selected_sound.into(),
-            label: format!("Unavailable: {selected_sound} (using system default)"),
-        });
-    }
-    let sound = Dropdown::single(
+    let sound = sound_dropdown(
+        "Completion sound",
+        sounds.clone(),
+        selected_sounds[0],
+        sound_choice.clone(),
+        Msg::CompletionSoundSelected,
+    );
+    let event_sound = sound_dropdown(
+        "Event acceptance sound",
         sounds,
-        |sound| sound.id.clone(),
-        |sound| sound.label.clone(),
-    )
-    .variant(tuicore::DropdownVariant::Bordered)
-    .label("Completion sound")
-    .selected_one(selected_sound.to_owned())
-    .commit_mode(DropdownCommitMode::Explicit)
-    .max_popup_height(12)
-    .on_select(move |selected| *sound_choice.borrow_mut() = selected.into_iter().next());
+        selected_sounds[1],
+        sound_choice,
+        Msg::EventAcceptanceSoundSelected,
+    );
     Box::new(
         dialog("Settings")
             .actions([DialogAction::new("Close")
@@ -323,9 +327,42 @@ pub(super) fn settings(
                         "completion-sound",
                         sound,
                         FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
+                    )
+                    .child(
+                        "event-acceptance-sound",
+                        event_sound,
+                        FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
                     ),
             ),
     )
+}
+
+fn sound_dropdown(
+    label: &str,
+    mut sounds: Vec<crate::store::completion::SoundChoice>,
+    selected_sound: &str,
+    sound_choice: Rc<RefCell<Option<Msg>>>,
+    selected_message: fn(String) -> Msg,
+) -> Dropdown<crate::store::completion::SoundChoice, String> {
+    if !sounds.iter().any(|sound| sound.id == selected_sound) {
+        sounds.push(crate::store::completion::SoundChoice {
+            id: selected_sound.into(),
+            label: format!("Unavailable: {selected_sound} (using system default)"),
+        });
+    }
+    Dropdown::single(
+        sounds,
+        |sound| sound.id.clone(),
+        |sound| sound.label.clone(),
+    )
+    .variant(tuicore::DropdownVariant::Bordered)
+    .label(label)
+    .selected_one(selected_sound.to_owned())
+    .commit_mode(DropdownCommitMode::Explicit)
+    .max_popup_height(12)
+    .on_select(move |selected| {
+        *sound_choice.borrow_mut() = selected.into_iter().next().map(selected_message);
+    })
 }
 
 pub(super) fn confirm_stop(name: &str) -> Modal {

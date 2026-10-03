@@ -18,6 +18,7 @@ fn purge_operations_close_clients_before_removing_workspaces() {
             presence: home.join("presence"),
             daemons: home.join("daemons"),
             zellij: home.join("zellij"),
+            excluded: Default::default(),
         };
         fs::create_dir(&observer.presence).unwrap();
         fs::write(

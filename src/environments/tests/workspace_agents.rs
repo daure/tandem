@@ -74,9 +74,10 @@ fn workspace_guidance_lists_declared_and_discovered_repositories_and_service_acc
         "use `docker compose -p 'test-review' ps --all` when container discovery or status is needed.",
         "For replicated services, use `exec --index N` to select a replica.",
         "Building or recreating services also requires the instance's rendered Compose configuration.",
-        "Run tools and tests locally when their dependencies are available; use the service containers when commands need the environment’s runtime or dependencies.",
-        "Use the exposed URLs for API and browser testing against the running application.",
-        "Verify the running services with their tools and healthchecks, inspect relevant logs and data, then refine and recheck changes.",
+        "Follow the session's Tandem startup instructions to distinguish automatic startup from intentionally stopped services.",
+        "Run tools and tests locally when their dependencies are available; use service containers when they are running and commands need the environment’s runtime or dependencies.",
+        "Use the configured URLs for API and browser testing when services are required and their readiness is verified.",
+        "When services are required for the work, verify their readiness with their tools and healthchecks, inspect relevant logs and data, then refine and recheck changes.",
     ] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
@@ -104,14 +105,14 @@ fn workspace_guidance_omits_http_content_when_no_service_has_a_url() {
     generate(&config, &instance, &[]).unwrap();
     let text = fs::read_to_string(Path::new(&instance.workspace).join("AGENTS.md")).unwrap();
     assert!(!text.contains("## HTTP URLs"));
-    assert!(!text.contains("Use the exposed URLs"));
+    assert!(!text.contains("Use the configured URLs"));
     assert!(!text.contains("These URLs use a shared gateway"));
     assert!(!text.contains("contains application repositories"));
     assert!(!text.contains("Edit source files"));
     assert!(text.contains("## Services"));
     assert!(text.contains("| — | `db` | — | — |"));
     assert!(text.contains("docker compose -p 'test-review' exec -T -w CODE_PATH SERVICE COMMAND"));
-    assert!(text.contains("dependencies.\n\nVerify the running services"));
+    assert!(text.contains("dependencies.\n\nWhen services are required for the work"));
     assert!(text.contains("Building or recreating services also requires the instance's rendered Compose configuration.\n"));
 }
 

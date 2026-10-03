@@ -8,10 +8,14 @@ use crate::store::events::{
     ProviderNotification, Receipt, Record, Snapshot,
 };
 
+mod provider_deletion;
+mod streams;
+
 #[derive(Clone)]
 pub(crate) struct EventStore {
     path: PathBuf,
     namespace: String,
+    config: Config,
 }
 
 impl EventStore {
@@ -19,11 +23,33 @@ impl EventStore {
         let store = Self {
             path: config.home.join("settings.sqlite3"),
             namespace: config.namespace.clone(),
+            config: config.clone(),
         };
         let mut connection = store.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute_batch(include_str!("../../migrations/0006_events.sql"))?;
         transaction.execute_batch(include_str!("../../migrations/0008_provider_ingestion.sql"))?;
+        transaction.execute_batch(include_str!("../../migrations/0013_provider_streams.sql"))?;
+        transaction.execute_batch(include_str!("../../migrations/0014_provider_deletions.sql"))?;
+        let stream_declarations: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('provider_streams') WHERE name = 'active')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !stream_declarations {
+            transaction.execute_batch(
+                "ALTER TABLE provider_streams ADD COLUMN active INTEGER NOT NULL DEFAULT 1;",
+            )?;
+        }
+        let stream_start_times: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('provider_streams') WHERE name = 'requested_at')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !stream_start_times {
+            transaction
+                .execute_batch("ALTER TABLE provider_streams ADD COLUMN requested_at INTEGER;")?;
+        }
         let legacy: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('event_attempts') WHERE name = 'handled_at')",
             [],
@@ -33,11 +59,22 @@ impl EventStore {
             transaction
                 .execute_batch(include_str!("../../migrations/0009_event_acceptance.sql"))?;
         }
+        transaction.execute_batch(include_str!("../../migrations/0010_rules.sql"))?;
+        transaction.execute_batch(include_str!("../../migrations/0011_rule_definitions.sql"))?;
+        let scoped_dispatch_history: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('rule_dispatch_starts') WHERE name = 'namespace')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !scoped_dispatch_history {
+            transaction
+                .execute_batch(include_str!("../../migrations/0012_dispatch_history.sql"))?;
+        }
         transaction.commit()?;
         Ok(store)
     }
 
-    fn connection(&self) -> Result<Connection, Error> {
+    pub(super) fn connection(&self) -> Result<Connection, Error> {
         match private_file(&self.path, true) {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -115,12 +152,7 @@ impl EventStore {
 
     pub(crate) fn setup_developer_credentials(&self) -> Result<PathBuf, Error> {
         let directory = self.credentials_directory()?;
-        for name in [
-            "dev-message",
-            "dev-ticket",
-            "dev-system-event",
-            "dev-generic",
-        ] {
+        for name in ["slack", "jira", "datadog", "github"] {
             self.provider_credential_file(name)?;
         }
         let path = directory.join("providers.env");
@@ -163,6 +195,9 @@ impl EventStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let previous = self.ingestion_enabled(&transaction, name)?;
+        if enabled {
+            self.ensure_provider_not_deleting(&transaction, name)?;
+        }
         transaction.execute(
             "INSERT INTO provider_ingestion(namespace, name, enabled) VALUES (?1, ?2, ?3)
              ON CONFLICT(namespace, name) DO UPDATE SET enabled = excluded.enabled",
@@ -184,6 +219,7 @@ impl EventStore {
     }
 
     pub(crate) fn ingest(&self, token: &str, batch: Batch) -> Result<Ingestion, Error> {
+        let _lock = super::rules::catalog::lock(&self.config)?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let provider = self.provider(&transaction, token)?;
@@ -203,9 +239,19 @@ impl EventStore {
                     .collect(),
             });
         }
+        super::rules::catalog::synchronize(&self.config, &transaction)?;
         let mut receipts = Vec::with_capacity(batch.events.len());
+        let mut discarded = Vec::new();
         for event in batch.events {
             event.validate()?;
+            let enabled = transaction.query_row(
+                "SELECT enabled FROM provider_streams WHERE namespace = ?1 AND provider = ?2 AND stream = ?3 AND active = 1",
+                params![self.namespace, provider, event.stream], |row| row.get::<_, bool>(0),
+            ).optional()?.unwrap_or(true);
+            if !enabled {
+                discarded.push(event.event_id);
+                continue;
+            }
             let payload =
                 serde_json::to_string(&event).map_err(|error| Error::Invalid(error.to_string()))?;
             let existing: Option<(i64, String)> = transaction.query_row(
@@ -250,11 +296,22 @@ impl EventStore {
         transaction.commit()?;
         Ok(Ingestion {
             receipts,
-            discarded: Vec::new(),
+            discarded,
         })
     }
 
     pub(crate) fn snapshot(&self) -> Result<Snapshot, Error> {
+        self.snapshot_for(None)
+    }
+
+    pub(crate) fn record(&self, sequence: i64) -> Result<Record, Error> {
+        self.snapshot_for(Some(sequence))?
+            .records
+            .pop()
+            .ok_or(Error::NotFound)
+    }
+
+    fn snapshot_for(&self, sequence: Option<i64>) -> Result<Snapshot, Error> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let total = transaction.query_row(
@@ -268,19 +325,38 @@ impl EventStore {
             )?
             .query_map([&self.namespace], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<_, _>>()?;
+        let accepted_attempts = transaction.query_row(
+            "SELECT count(*) FROM event_attempts p JOIN events e ON e.sequence = p.event_sequence
+             WHERE e.namespace = ?1 AND p.status = 'accepted'",
+            [&self.namespace],
+            |row| row.get::<_, u64>(0),
+        )?;
+        let provider_handovers = transaction
+            .prepare(
+                "SELECT e.provider, count(DISTINCT e.sequence) FROM events e
+                 JOIN event_attempts p ON p.event_sequence = e.sequence
+                 JOIN rule_acceptances a ON a.attempt_id = p.id
+                 WHERE e.namespace = ?1 AND json_extract(a.payload, '$.operation_id') IS NOT NULL
+                 GROUP BY e.provider",
+            )?
+            .query_map([&self.namespace], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
         let mut statement = transaction.prepare(
             "SELECT sequence, provider, received_at, payload FROM events
-             WHERE namespace = ?1 ORDER BY sequence DESC LIMIT ?2",
+             WHERE namespace = ?1 AND (?3 IS NULL OR sequence = ?3) ORDER BY sequence DESC LIMIT ?2",
         )?;
         let mut records = Vec::new();
-        for result in statement.query_map(params![self.namespace, FEED_LIMIT as i64], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })? {
+        for result in statement.query_map(
+            params![self.namespace, FEED_LIMIT as i64, sequence],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )? {
             let (sequence, provider, received_at, payload) = result?;
             let mut attempts = transaction.prepare(
                 "SELECT id, status, replay, created_at, accepted_at FROM event_attempts
@@ -308,12 +384,19 @@ impl EventStore {
                 event: serde_json::from_str(&payload)
                     .map_err(|error| Error::Storage(error.to_string()))?,
                 attempts,
+                acceptances: super::rules::acceptances(
+                    &transaction,
+                    Some(sequence),
+                    &self.namespace,
+                )?,
             });
         }
         Ok(Snapshot {
             records,
             total,
+            accepted_attempts: Some(accepted_attempts),
             provider_totals,
+            provider_handovers,
             error: None,
         })
     }
@@ -324,6 +407,7 @@ impl EventStore {
                 "replay request ID must contain 1–200 bytes".into(),
             ));
         }
+        let _lock = super::rules::catalog::lock(&self.config)?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (provider, event_id) = self.source(&transaction, sequence)?;
@@ -337,16 +421,7 @@ impl EventStore {
         if let Some(id) = existing {
             return Ok(id);
         }
-        let status: String = transaction.query_row(
-            "SELECT status FROM event_attempts WHERE event_sequence = ?1 ORDER BY id DESC LIMIT 1",
-            [sequence],
-            |row| row.get(0),
-        )?;
-        if status != "accepted" {
-            return Err(Error::Conflict(
-                "the current attempt must be accepted before replaying".into(),
-            ));
-        }
+        super::rules::catalog::synchronize(&self.config, &transaction)?;
         let attempt = add_attempt(&transaction, sequence, true, Some(request_id), &now())?;
         self.notify(
             &transaction,
@@ -358,6 +433,66 @@ impl EventStore {
         )?;
         transaction.commit()?;
         Ok(attempt)
+    }
+
+    pub(crate) fn delete(&self, sequence: Option<i64>) -> Result<i64, Error> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(sequence) = sequence {
+            self.source(&transaction, sequence)?;
+        }
+        let deleting: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events e JOIN provider_deletions d
+             ON d.namespace = e.namespace AND d.source = e.provider
+             WHERE e.namespace = ?1 AND (?2 IS NULL OR e.sequence = ?2))",
+            params![self.namespace, sequence],
+            |row| row.get(0),
+        )?;
+        if deleting {
+            return Err(Error::Conflict(
+                "events belong to an incomplete provider deletion; retry delete_provider".into(),
+            ));
+        }
+        let active: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM rule_acceptances a
+             JOIN event_attempts p ON p.id = a.attempt_id JOIN events e ON e.sequence = p.event_sequence
+             WHERE e.namespace = ?1 AND (?2 IS NULL OR e.sequence = ?2)
+             AND json_extract(a.payload, '$.status') IN ('provisioning', 'launching'))",
+            params![self.namespace, sequence],
+            |row| row.get(0),
+        )?;
+        if active {
+            return Err(Error::Conflict(
+                "events have active rule actions; try again when they finish".into(),
+            ));
+        }
+        transaction.execute(
+            "DELETE FROM provider_notifications WHERE namespace = ?1
+             AND json_extract(payload, '$.sequence') IN
+             (SELECT sequence FROM events WHERE namespace = ?1 AND (?2 IS NULL OR sequence = ?2))",
+            params![self.namespace, sequence],
+        )?;
+        for table in ["rule_evaluations", "rule_acceptances"] {
+            transaction.execute(
+                &format!(
+                    "DELETE FROM {table} WHERE attempt_id IN
+                     (SELECT p.id FROM event_attempts p JOIN events e ON e.sequence = p.event_sequence
+                      WHERE e.namespace = ?1 AND (?2 IS NULL OR e.sequence = ?2))"
+                ),
+                params![self.namespace, sequence],
+            )?;
+        }
+        transaction.execute(
+            "DELETE FROM event_attempts WHERE event_sequence IN
+             (SELECT sequence FROM events WHERE namespace = ?1 AND (?2 IS NULL OR sequence = ?2))",
+            params![self.namespace, sequence],
+        )?;
+        let count = transaction.execute(
+            "DELETE FROM events WHERE namespace = ?1 AND (?2 IS NULL OR sequence = ?2)",
+            params![self.namespace, sequence],
+        )?;
+        transaction.commit()?;
+        Ok(count as i64)
     }
 
     fn source(&self, connection: &Connection, sequence: i64) -> Result<(String, String), Error> {
@@ -392,6 +527,10 @@ impl EventStore {
             attempt_id,
             kind,
             created_at: now(),
+            dispatch_id: None,
+            rule_name: None,
+            rule_revision: None,
+            instance: None,
         };
         transaction.execute(
             "UPDATE provider_notifications SET payload = ?2 WHERE id = ?1",
@@ -479,7 +618,9 @@ fn add_attempt(
          VALUES (?1, 'pending', ?2, ?3, ?4)",
         params![sequence, replay, request_id, timestamp],
     )?;
-    Ok(transaction.last_insert_rowid())
+    let attempt = transaction.last_insert_rowid();
+    super::rules::queue_attempt(transaction, attempt, sequence)?;
+    Ok(attempt)
 }
 
 #[cfg(test)]

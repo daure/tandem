@@ -54,6 +54,9 @@ fn creation_preserves_literal_prompts_and_resets_fields_between_dialogs() {
     let mut ctx = EventCtx::new(AnimationSettings::default());
     app.action(1, &mut ctx);
     assert_eq!(app.creation.opencode(), None);
+    assert!(app.creation.start_instance);
+    app.handle_message(Msg::StartInstanceChanged(false), &mut ctx);
+    assert!(!app.creation.start_instance);
     for prompt in ["", "   ", "\n\t\r\n", "\u{2003}\u{a0}"] {
         app.handle_message(Msg::InitialPromptChanged(prompt.into()), &mut ctx);
         assert_eq!(app.creation.opencode(), None);
@@ -67,6 +70,7 @@ fn creation_preserves_literal_prompts_and_resets_fields_between_dialogs() {
     app.action(1, &mut ctx);
     assert_eq!(app.creation.opencode(), None);
     assert!(app.creation.prompt.is_empty());
+    assert!(app.creation.start_instance);
     assert!(app.description.is_empty());
 }
 

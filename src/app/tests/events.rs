@@ -35,7 +35,7 @@ fn refresh_events_until(app: &mut App, ready: impl Fn(&crate::store::events::Sna
     );
 }
 
-fn render(app: &mut App, width: u16) -> (tuicore::LayoutCtx, String) {
+pub(super) fn render(app: &mut App, width: u16) -> (tuicore::LayoutCtx, String) {
     let area = Rect::new(0, 0, width, 30);
     let mut layout = tuicore::LayoutCtx::new();
     layout.with_overlay_bounds(area, |ctx| app.layout(area, ctx));
@@ -48,6 +48,23 @@ fn render(app: &mut App, width: u16) -> (tuicore::LayoutCtx, String) {
         })
         .unwrap();
     (layout, rendered_lines(&terminal, area).join("\n"))
+}
+
+pub(super) fn show_all_events(app: &mut App) {
+    let (layout, _) = render(app, 130);
+    let feed = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.id.as_str() == crate::app::events::FOCUS)
+        .unwrap();
+    app.dispatch_event(
+        &EventRoute::new(feed.path.clone()),
+        &TuiEvent::Key(KeyEvent {
+            code: Key::Char('T'),
+            modifiers: KeyModifiers::SHIFT,
+        }),
+        &mut EventCtx::default(),
+    );
 }
 
 #[test]
@@ -87,6 +104,7 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     );
     assert_eq!(app.tabs_mut().selected_index(), 1);
     assert!(app.events_active);
+    show_all_events(&mut app);
     let theme = tuicore::theme();
     for row in service.event_snapshot().records {
         let text = crate::app::events::row_text(&row);
@@ -100,8 +118,10 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
                 .contains(ratatui::style::Modifier::BOLD)
         );
         assert_eq!(text.lines[1].spans[0].style.fg, Some(theme.text_fg()));
+        assert_eq!(text.lines[0].spans[4].content, format!("#{}", row.sequence));
         for span in &text.lines[0].spans {
             let color = match span.content.as_ref() {
+                value if value == format!("#{}", row.sequence) => theme.muted_fg(),
                 " · " | "󱡠" | "Sam" | "production" | "sample.generic.observed" => {
                     theme.muted_fg()
                 }
@@ -134,16 +154,16 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
         if width == 130 {
             let lines: Vec<_> = text.lines().map(str::trim).collect();
             for (header, body) in [
-                (" sample · Alex · development · 󱡠", "A thread reply"),
+                (" sample · #1 · Alex · development · 󱡠", "A thread reply"),
                 (
-                    " sample · DEV-42 · In progress · Sam",
+                    " sample · #2 · DEV-42 · In progress · Sam",
                     "Build event ingestion",
                 ),
                 (
-                    " sample · api-server · production · health.failed · Error",
+                    " sample · #3 · api-server · production · health.failed · Error",
                     "The build failed",
                 ),
-                (" sample · sample.generic.observed", "A sensor sample"),
+                (" sample · #4 · sample.generic.observed", "A sensor sample"),
             ] {
                 let index = lines.iter().position(|line| *line == header).unwrap();
                 assert_eq!(lines[index + 1], body);
@@ -184,6 +204,7 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
         ("View details", "Enter"),
         ("Replay", "r"),
         ("Go to provider", "p"),
+        ("Delete", "x"),
     ] {
         let line = text
             .lines()
@@ -209,6 +230,10 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     assert_eq!(row.event.event_id, "event-3");
     let event_id = row.event.event_id.clone();
     app.handle_message(Msg::OpenEvent(row), &mut EventCtx::default());
+    app.event(
+        &TuiEvent::Key(Key::Char(']').into()),
+        &mut EventCtx::default(),
+    );
     let text = render(&mut app, 130).1;
     assert!(
         text.contains(&format!("\"event_id\": \"{event_id}\"")),
@@ -235,7 +260,7 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     );
     app.dispatch_event(
         &route,
-        &TuiEvent::Key(KeyEvent::from(Key::Up)),
+        &TuiEvent::Key(KeyEvent::from(Key::Down)),
         &mut EventCtx::default(),
     );
     let mut activation = EventCtx::default();
@@ -266,6 +291,153 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     assert!(matches!(activation.messages(), [Msg::OpenEvent(row)] if row.sequence == selected));
 }
 
+#[test]
+fn event_deletion_actions_require_ok_and_cancel_preserves_events() {
+    init_ui();
+    let service = AppService::for_tests();
+    let token = service.register_provider_for_tests("sample");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime
+        .block_on(service.ingest_events(
+            token,
+            Batch {
+                events: vec![
+                    crate::environments::events::tests::event("one"),
+                    crate::environments::events::tests::event("two"),
+                ],
+            },
+        ))
+        .unwrap();
+    let mut app = root(service.clone());
+    refresh_events(&mut app, 2);
+    app.handle_message(
+        Msg::ProviderStreamEvents("sample".into(), "samples".into()),
+        &mut EventCtx::default(),
+    );
+    show_all_events(&mut app);
+    app.pages_mut()
+        .focus_event(service.event_snapshot().records[0].clone());
+    app.pages_mut()
+        .tick(Duration::ZERO, AnimationSettings::default());
+
+    fn press(app: &mut App, key: KeyEvent) {
+        let mut ctx = EventCtx::default();
+        if app.view.is_active() || app.menu_layer().is_active() {
+            app.event(&TuiEvent::Key(key), &mut ctx);
+        } else {
+            let (layout, _) = render(app, 130);
+            let feed = layout
+                .focus_targets()
+                .iter()
+                .find(|target| target.id.as_str() == crate::app::events::FOCUS)
+                .unwrap();
+            app.dispatch_focus(feed, true, &mut tuicore::FocusCtx::default());
+            app.dispatch_event(
+                &EventRoute::new(feed.path.clone()),
+                &TuiEvent::Key(key),
+                &mut ctx,
+            );
+        }
+        for message in ctx.drain_messages() {
+            app.handle_message(message, &mut EventCtx::default());
+        }
+    }
+
+    let (layout, _) = render(&mut app, 130);
+    let feed = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.id.as_str() == crate::app::events::FOCUS)
+        .unwrap();
+    app.dispatch_focus(feed, true, &mut tuicore::FocusCtx::default());
+    for confirm in [false, true] {
+        press(&mut app, KeyEvent::from(Key::Char('.')));
+        assert!(app.menu_layer().is_active(), "confirmation: {confirm}");
+        render(&mut app, 130);
+        press(&mut app, KeyEvent::from(Key::Char('x')));
+        assert!(!app.menu_layer().is_active());
+        assert!(app.view.is_active());
+        let text = render(&mut app, 130).1;
+        for label in [
+            "Delete event",
+            "Delete this event and history?",
+            "Ok",
+            "Cancel",
+        ] {
+            assert!(text.contains(label), "{text}");
+        }
+        assert_eq!(runtime.block_on(service.list_events()).unwrap().total, 2);
+        press(
+            &mut app,
+            KeyEvent::from(Key::Char(if confirm { 'o' } else { 'c' })),
+        );
+        assert!(!app.view.is_active());
+        if confirm {
+            refresh_events(&mut app, 1);
+        } else {
+            assert!(app.event_action.is_none());
+            assert_eq!(runtime.block_on(service.list_events()).unwrap().total, 2);
+        }
+    }
+    assert_eq!(service.event_snapshot().records[0].event.event_id, "one");
+    assert!(render(&mut app, 130).1.contains("1 of 1 events"));
+
+    // An empty stream filter result still permits deleting the full retained history.
+    app.handle_message(
+        Msg::ProviderStreamEvents("missing".into(), "samples".into()),
+        &mut EventCtx::default(),
+    );
+    app.pages_mut()
+        .tick(Duration::ZERO, AnimationSettings::default());
+    render(&mut app, 130);
+    for confirm in [false, true] {
+        if confirm {
+            press(
+                &mut app,
+                KeyEvent {
+                    code: Key::Char('X'),
+                    modifiers: KeyModifiers::SHIFT,
+                },
+            );
+        } else {
+            let (layout, text) = render(&mut app, 130);
+            assert!(text.contains("Delete all events |X|"), "{text}");
+            let button = layout
+                .focus_targets()
+                .iter()
+                .find(|target| target.id.as_str() == "button" && target.area.y == 1)
+                .unwrap();
+            app.dispatch_focus(button, true, &mut tuicore::FocusCtx::default());
+            let mut ctx = EventCtx::default();
+            app.dispatch_event(
+                &EventRoute::new(button.path.clone()),
+                &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+                &mut ctx,
+            );
+            for message in ctx.drain_messages() {
+                app.handle_message(message, &mut EventCtx::default());
+            }
+        }
+        assert!(app.view.is_active());
+        assert!(
+            render(&mut app, 130)
+                .1
+                .contains("Delete all events and history?")
+        );
+        assert_eq!(runtime.block_on(service.list_events()).unwrap().total, 1);
+        press(
+            &mut app,
+            KeyEvent::from(Key::Char(if confirm { 'o' } else { 'c' })),
+        );
+        if confirm {
+            refresh_events(&mut app, 0);
+        } else {
+            assert!(app.event_action.is_none());
+        }
+    }
+    assert!(service.event_snapshot().records.is_empty());
+}
+
 fn record(provider: &str, payload: serde_json::Value) -> crate::store::events::Record {
     let mut event = crate::environments::events::tests::event("presentation");
     event.payload = serde_json::from_value(payload).unwrap();
@@ -275,6 +447,7 @@ fn record(provider: &str, payload: serde_json::Value) -> crate::store::events::R
         received_at: "now".into(),
         event,
         attempts: vec![],
+        acceptances: vec![],
     }
 }
 
@@ -290,7 +463,7 @@ fn optional_event_fields_omit_blank_values_and_environment_aliases_are_display_o
         );
         assert_eq!(
             crate::app::events::row_text(&message).lines[0].to_string(),
-            " slack-work · Alex · development"
+            " slack-work · #1 · Alex · development"
         );
         let ticket = record(
             "jira-work",
@@ -298,7 +471,7 @@ fn optional_event_fields_omit_blank_values_and_environment_aliases_are_display_o
         );
         assert_eq!(
             crate::app::events::row_text(&ticket).lines[0].to_string(),
-            " jira-work · DEV-42 · Open"
+            " jira-work · #1 · DEV-42 · Open"
         );
         let system = record(
             "build-monitor",
@@ -306,7 +479,7 @@ fn optional_event_fields_omit_blank_values_and_environment_aliases_are_display_o
         );
         assert_eq!(
             crate::app::events::row_text(&system).lines[0].to_string(),
-            " build-monitor · api-server · health.failed · odd label"
+            " build-monitor · #1 · api-server · health.failed · odd label"
         );
         assert_eq!(
             crate::app::events::row_text(&system).lines[0]
@@ -324,7 +497,7 @@ fn optional_event_fields_omit_blank_values_and_environment_aliases_are_display_o
     );
     assert_eq!(
         crate::app::events::row_text(&unknown).lines[0].to_string(),
-        " jira-work · DEV-42 · Open · Unknown"
+        " jira-work · #1 · DEV-42 · Open · Unknown"
     );
     for (value, label) in [
         (" PROD ", "production"),
@@ -344,7 +517,7 @@ fn optional_event_fields_omit_blank_values_and_environment_aliases_are_display_o
         let original = system.clone();
         assert_eq!(
             crate::app::events::row_text(&system).lines[0].to_string(),
-            format!(" build-monitor · api-server · {label} · health.failed · Info")
+            format!(" build-monitor · #1 · api-server · {label} · health.failed · Info")
         );
         assert_eq!(system, original);
     }
@@ -371,7 +544,7 @@ fn severity_override_colors_only_the_supplied_label_and_event_text_is_sanitized(
         assert_eq!(text.lines.len(), 2);
         assert_eq!(
             text.lines[0].to_string(),
-            " monitor   · api server · qa · health .failed · cUsToM label"
+            " monitor   · #1 · api server · qa · health .failed · cUsToM label"
         );
         assert_eq!(text.lines[1].to_string(), "Check now ");
         assert_eq!(text.lines[0].spans.last().unwrap().style.fg, Some(expected));
@@ -384,7 +557,10 @@ fn severity_override_colors_only_the_supplied_label_and_event_text_is_sanitized(
         json!({"profile":"message","data":{"author":"Alex\u{2066}","channel":"dev\nroom","text":"Hi\tthere","thread":"\u{202e}reply"}}),
     );
     let text = crate::app::events::row_text(&message);
-    assert_eq!(text.lines[0].to_string(), " slack  · Alex  · dev room · 󱡠");
+    assert_eq!(
+        text.lines[0].to_string(),
+        " slack  · #1 · Alex  · dev room · 󱡠"
+    );
     assert_eq!(text.lines[1].to_string(), "Hi there");
     let ticket = record(
         "jira",
@@ -393,19 +569,22 @@ fn severity_override_colors_only_the_supplied_label_and_event_text_is_sanitized(
     let text = crate::app::events::row_text(&ticket);
     assert_eq!(
         text.lines[0].to_string(),
-        " jira · DEV -42 · In progress · Sa m"
+        " jira · #1 · DEV -42 · In progress · Sa m"
     );
     assert_eq!(text.lines[1].to_string(), "Fix now");
     let mut generic = record("sensor", json!({"profile":"generic","data":{}}));
     generic.event.event_type = "sample\u{202a}.observed".into();
     generic.event.summary = "A\nsummary".into();
     let text = crate::app::events::row_text(&generic);
-    assert_eq!(text.lines[0].to_string(), " sensor · sample .observed");
+    assert_eq!(
+        text.lines[0].to_string(),
+        " sensor · #1 · sample .observed"
+    );
     assert_eq!(text.lines[1].to_string(), "A summary");
 }
 
 #[test]
-fn provider_dropdown_fits_its_label_and_popup_rows_within_terminal_bounds() {
+fn stream_dropdown_fits_its_label_and_popup_rows_within_terminal_bounds() {
     init_ui();
     let mut app = crate::app::root(AppService::for_tests());
     let providers = ["dev-system-event", "production-system-event-provider"];
@@ -418,6 +597,7 @@ fn provider_dropdown_fits_its_label_and_popup_rows_within_terminal_bounds() {
             received_at: "now".into(),
             event: crate::environments::events::tests::event(&format!("event-{index}")),
             attempts: vec![],
+            acceptances: vec![],
         })
         .collect();
     app.pages_mut()
@@ -445,7 +625,7 @@ fn provider_dropdown_fits_its_label_and_popup_rows_within_terminal_bounds() {
                     .any(|key| key.as_str() == "events-page")
         })
         .unwrap();
-    assert_eq!(field.area.width, 20);
+    assert_eq!(field.area.width, 18);
     app.dispatch_event(
         &EventRoute::new(field.path.clone()),
         &TuiEvent::Key(KeyEvent {
@@ -457,36 +637,49 @@ fn provider_dropdown_fits_its_label_and_popup_rows_within_terminal_bounds() {
     for width in [130, 40, 30] {
         let (layout, text) = render(&mut app, width);
         let popup = layout.overlays().last().unwrap();
-        assert_eq!(popup.area.width, (providers[1].len() as u16 + 2).min(width));
+        let label_width = providers[1].len() as u16 + " · samples".chars().count() as u16;
+        assert_eq!(popup.area.width, (label_width + 2).min(width));
         assert!(popup.area.right() <= width);
-        if width >= providers[1].len() as u16 + 2 {
+        if width >= label_width + 2 {
             for provider in providers {
-                assert!(text.contains(provider), "{text}");
+                assert!(text.contains(&format!("{provider} · samples")), "{text}");
             }
         }
     }
 }
 
 #[test]
-fn provider_multiselect_filters_exact_names_preserves_refresh_and_accepts_single_provider_links() {
+fn stream_multiselect_filters_exact_sources_preserves_refresh_and_accepts_stream_links() {
     init_ui();
     let mut app = crate::app::root(AppService::for_tests());
-    let records: Vec<_> = ["alpha", "alpha-other", "beta"]
-        .into_iter()
-        .enumerate()
-        .map(|(index, provider)| crate::store::events::Record {
+    let records: Vec<_> = [
+        ("alpha", "samples"),
+        ("alpha", "samples-other"),
+        ("alpha-other", "samples"),
+        ("beta", "samples"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (provider, stream))| {
+        let mut event = crate::environments::events::tests::event(&format!("event-{index}"));
+        event.stream = stream.into();
+        crate::store::events::Record {
             sequence: index as i64,
             provider: provider.into(),
             received_at: "now".into(),
-            event: crate::environments::events::tests::event(&format!("event-{index}")),
+            event,
             attempts: vec![],
-        })
-        .collect();
+            acceptances: vec![],
+        }
+    })
+    .collect();
     app.pages_mut()
         .update_events(crate::store::events::Snapshot {
             records: records.clone(),
-            total: 3,
+            total: 4,
+            accepted_attempts: None,
             provider_totals: Default::default(),
+            provider_handovers: Default::default(),
             error: None,
         });
     app.pages_mut()
@@ -495,8 +688,9 @@ fn provider_multiselect_filters_exact_names_preserves_refresh_and_accepts_single
         &TuiEvent::Key(KeyEvent::from(Key::Char(']'))),
         &mut EventCtx::default(),
     );
+    show_all_events(&mut app);
     let (layout, text) = render(&mut app, 130);
-    assert!(text.contains("All providers"), "{text}");
+    assert!(text.contains("All streams"), "{text}");
     let feed = layout
         .focus_targets()
         .iter()
@@ -538,6 +732,7 @@ fn provider_multiselect_filters_exact_names_preserves_refresh_and_accepts_single
         KeyEvent::from(Key::Enter),
         next,
         next,
+        next,
         KeyEvent::from(Key::Enter),
         KeyEvent {
             code: Key::Enter,
@@ -551,10 +746,13 @@ fn provider_multiselect_filters_exact_names_preserves_refresh_and_accepts_single
     }
     let text = render(&mut app, 130).1;
     assert!(
-        text.contains(" alpha · Alex") && text.contains(" beta · Alex"),
+        text.contains(" alpha · #0 · Alex") && text.contains(" beta · #3 · Alex"),
         "{text}"
     );
-    assert!(!text.contains(" alpha-other · Alex"), "{text}");
+    assert!(
+        !text.contains(" alpha-other · #2 · Alex") && !text.contains(" alpha · #1 · Alex"),
+        "{text}"
+    );
     let mut refreshed = records.clone();
     let mut later = records[0].clone();
     later.sequence = 4;
@@ -566,28 +764,35 @@ fn provider_multiselect_filters_exact_names_preserves_refresh_and_accepts_single
     app.pages_mut()
         .update_events(crate::store::events::Snapshot {
             records: refreshed,
-            total: 4,
+            total: 5,
+            accepted_attempts: None,
             provider_totals: Default::default(),
+            provider_handovers: Default::default(),
             error: None,
         });
     app.pages_mut()
         .tick(Duration::ZERO, AnimationSettings::default());
     let text = render(&mut app, 130).1;
     assert!(
-        text.contains("A later arrival") && text.contains(" beta · Alex"),
+        text.contains("A later arrival") && text.contains(" beta · #3 · Alex"),
         "{text}"
     );
-    assert!(!text.contains(" alpha-other · Alex"), "{text}");
+    assert!(
+        !text.contains(" alpha-other · #2 · Alex") && !text.contains(" alpha · #1 · Alex"),
+        "{text}"
+    );
     app.handle_message(
-        Msg::ProviderEvents("alpha".into()),
+        Msg::ProviderStreamEvents("alpha".into(), "samples".into()),
         &mut EventCtx::default(),
     );
     app.pages_mut()
         .tick(Duration::ZERO, AnimationSettings::default());
     let text = render(&mut app, 130).1;
-    assert!(text.contains(" alpha · Alex"), "{text}");
+    assert!(text.contains(" alpha · #0 · Alex"), "{text}");
     assert!(
-        !text.contains(" beta · Alex") && !text.contains(" alpha-other · Alex"),
+        !text.contains(" beta · #3 · Alex")
+            && !text.contains(" alpha-other · #2 · Alex")
+            && !text.contains(" alpha · #1 · Alex"),
         "{text}"
     );
 }
@@ -636,7 +841,7 @@ fn events_navigation_repairs_focus_and_remains_available_without_opencode() {
 }
 
 #[test]
-fn handover_toggle_requires_assignment_and_preserves_provider_filter_on_refresh() {
+fn handover_toggle_requires_assignment_and_preserves_stream_filter_on_refresh() {
     init_ui();
     let mut app = root(AppService::for_tests());
     let record = crate::store::events::Record {
@@ -651,42 +856,63 @@ fn handover_toggle_requires_assignment_and_preserves_provider_filter_on_refresh(
             created_at: "now".into(),
             accepted_at: Some("now".into()),
         }],
+        acceptances: vec![],
     };
     let mut other = record.clone();
     other.sequence = 2;
     other.provider = "beta".into();
     other.event.event_id = "other-event".into();
+    let mut assigned = record.clone();
+    assigned.sequence = 3;
+    assigned.event.event_id = "assigned-event".into();
+    assigned.acceptances = vec![super::rules::acceptance(
+        super::rules::rule("matching"),
+        1,
+        3,
+    )];
     let mut snapshot = crate::store::events::Snapshot {
-        records: vec![record, other],
+        records: vec![record, other, assigned],
         total: 662,
         ..Default::default()
     };
     app.pages_mut().update_events(snapshot.clone());
     app.handle_message(
-        Msg::ProviderEvents("alpha".into()),
+        Msg::ProviderStreamEvents("alpha".into(), "samples".into()),
         &mut EventCtx::default(),
     );
     app.pages_mut()
         .tick(Duration::ZERO, AnimationSettings::default());
+    let text = render(&mut app, 130).1;
+    assert!(text.contains("──●  |T|"), "{text}");
+    assert!(text.contains("1 of 662 events"), "{text}");
+    show_all_events(&mut app);
     for width in [40, 130] {
         let (layout, text) = render(&mut app, width);
         let header = text
             .lines()
-            .find(|line| line.contains("1 of 662 events"))
+            .find(|line| line.contains("2 of 662 events"))
             .unwrap();
-        assert!(header.trim_end().ends_with("1 of 662 events"), "{text}");
+        assert!(header.trim_end().ends_with("2 of 662 events"), "{text}");
         assert_eq!(
             header.trim_end().chars().count(),
             usize::from(width),
             "{text}"
         );
-        assert!(header.contains(""), "{text}");
+        assert!(text.contains(" |T|"), "{text}");
+        if width == 130 {
+            assert!(header.contains(""), "{text}");
+            assert!(
+                header.contains("Delete all events |X|  2 of 662 events"),
+                "{text}"
+            );
+        }
         let feed = layout
             .focus_targets()
             .iter()
             .find(|target| target.id.as_str() == crate::app::events::FOCUS)
             .unwrap();
         let route = EventRoute::new(feed.path.clone());
+        app.dispatch_focus(feed, true, &mut tuicore::FocusCtx::default());
         let toggle = TuiEvent::Key(KeyEvent {
             code: Key::Char('T'),
             modifiers: tuicore::KeyModifiers::SHIFT,
@@ -695,8 +921,16 @@ fn handover_toggle_requires_assignment_and_preserves_provider_filter_on_refresh(
         app.dispatch_event(&route, &toggle, &mut ctx);
         assert!(ctx.messages().is_empty());
         let (_, text) = render(&mut app, width);
-        assert!(text.contains("0 of 662 events"), "{text}");
-        assert!(text.contains("No events handed over"), "{text}");
+        assert!(text.contains("1 of 662 events"), "{text}");
+        let mut activation = EventCtx::default();
+        app.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut activation,
+        );
+        assert!(
+            matches!(activation.messages(), [Msg::OpenEvent(row)] if row.event.event_id == "assigned-event")
+        );
         snapshot.total += 1;
         app.pages_mut().update_events(snapshot.clone());
         app.pages_mut()
@@ -704,12 +938,12 @@ fn handover_toggle_requires_assignment_and_preserves_provider_filter_on_refresh(
         assert!(
             render(&mut app, width)
                 .1
-                .contains(&format!("0 of {} events", snapshot.total))
+                .contains(&format!("1 of {} events", snapshot.total))
         );
         app.dispatch_event(&route, &toggle, &mut EventCtx::default());
         let (_, text) = render(&mut app, width);
-        assert!(text.contains(" alpha · Alex"), "{text}");
-        assert!(!text.contains(" beta · Alex"), "{text}");
+        assert!(text.contains(" alpha · #1 · Alex"), "{text}");
+        assert!(!text.contains(" beta · #2 · Alex"), "{text}");
         snapshot.total = 662;
         app.pages_mut().update_events(snapshot.clone());
         app.pages_mut()

@@ -19,6 +19,7 @@ pub(crate) mod providers;
 mod removal;
 mod repositories;
 mod resources;
+pub(crate) mod rules;
 pub(crate) mod runtime_db;
 pub(crate) mod sound;
 pub(crate) mod startup;
@@ -299,7 +300,9 @@ impl Environments {
                         .iter_mut()
                         .find(|instance| instance.name == workspace.name)
                     {
-                        if instance.pending {
+                        if workspace.runtime.prepared_only && !instance.pending {
+                            continue;
+                        } else if instance.pending {
                             *instance = workspace;
                         } else {
                             instance.runtime.issue =
@@ -370,6 +373,9 @@ impl Environments {
                 .iter()
                 .any(|instance| instance.name == workspace.name)
             {
+                if workspace.runtime.prepared_only {
+                    continue;
+                }
                 return Err("instance record conflicts with Docker ownership".into());
             }
             instances.push(workspace);
@@ -453,6 +459,7 @@ impl Environments {
                 .join("templates/providers")
                 .display()
                 .to_string(),
+            rule_templates_root: self.config.home.join("templates/rules").display().to_string(),
             gateway_origin: self.config.origin(),
             manifest_schema: serde_json::to_value(schemars::schema_for!(
                 crate::store::environments::Manifest

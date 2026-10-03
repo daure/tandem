@@ -284,10 +284,7 @@ fn folder_activity_keeps_open_clients_alongside_the_history_window() {
     }
     app.service.set_opencode_snapshot_for_tests(observation);
     app.update_snapshot(snapshot());
-    assert_eq!(
-        roots(&app.project_rows(&snapshot(), &[])),
-        ["instance:review"]
-    );
+    assert!(roots(&app.project_rows(&snapshot(), &[])).is_empty());
 }
 
 #[test]

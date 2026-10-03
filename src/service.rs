@@ -12,6 +12,7 @@ mod lifecycle;
 mod opencode;
 mod providers;
 mod refresh;
+mod rules;
 mod settings;
 mod startup;
 
@@ -29,6 +30,7 @@ pub(crate) struct AppService {
     sound_choices: Arc<Vec<crate::store::completion::SoundChoice>>,
     events: Arc<events::Integration>,
     providers: Arc<providers::Integration>,
+    rules: Arc<rules::Integration>,
     #[cfg(not(test))]
     sound_playback: Arc<SoundPlayback>,
 }
@@ -68,6 +70,7 @@ impl AppService {
     fn from_config(config: crate::environments::config::Config) -> Result<Self, Box<dyn Error>> {
         let events = Arc::new(events::Integration::new(&config)?);
         let providers = Arc::new(providers::Integration::new(&config)?);
+        let rules = Arc::new(rules::Integration::new(&config)?);
         let settings = Arc::new(settings::Settings::open(
             config.home.join("settings.sqlite3"),
         )?);
@@ -85,6 +88,7 @@ impl AppService {
             sound_choices: Arc::new(crate::environments::sound::available()),
             events,
             providers,
+            rules,
             #[cfg(not(test))]
             sound_playback: Arc::new(SoundPlayback::default()),
             state: Arc::new(ServiceState {
@@ -131,7 +135,14 @@ impl AppService {
     }
 
     pub(crate) fn play_completion_sound(&self) {
-        let choice = self.completion_sound_choice();
+        self.play_selected_sound(self.completion_sound_choice());
+    }
+
+    pub(crate) fn play_event_acceptance_sound(&self) {
+        self.play_selected_sound(self.event_acceptance_sound_choice());
+    }
+
+    fn play_selected_sound(&self, choice: String) {
         let choice = if self.sound_choices.iter().any(|sound| sound.id == choice) {
             choice
         } else {
@@ -163,7 +174,7 @@ impl AppService {
                     playback.generation.load(Ordering::Acquire) != generation
                 }) {
                     crate::diagnostics::record_error(
-                        "could not play completion sound",
+                        "could not play notification sound",
                         &std::io::Error::other(error),
                     );
                 }

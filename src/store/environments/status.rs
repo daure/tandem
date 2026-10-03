@@ -208,6 +208,7 @@ impl Activity {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(default)]
 pub(crate) struct ServiceRuntime {
+    pub prepared_only: bool,
     pub state: ContainerState,
     pub health: HealthState,
     pub exit_code: Option<i64>,
@@ -229,6 +230,7 @@ pub(crate) struct ServiceRuntime {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(default)]
 pub(crate) struct InstanceRuntime {
+    pub prepared_only: bool,
     pub topology_known: bool,
     pub workspace_ready: bool,
     pub stale: bool,
@@ -352,6 +354,7 @@ impl InstanceService {
             ContainerState::Restarting => Status::Restarting,
             ContainerState::Removing => Status::Removing,
             ContainerState::Dead => Status::ContainerError,
+            ContainerState::Missing if self.runtime.prepared_only => Status::NotStarted,
             ContainerState::Missing if self.runtime.waiting => Status::Waiting,
             ContainerState::Missing => Status::Missing,
             ContainerState::Unknown => Status::Unknown,
@@ -423,6 +426,28 @@ impl InstanceService {
 }
 
 impl Instance {
+    pub fn session_instructions(&self) -> &'static str {
+        if self.workspace_only {
+            "This is a workspace-only instance; no service containers are configured. Work locally and ask the user if additional services are needed."
+        } else if self.runtime.stale {
+            "Service state is uncertain; check Tandem before relying on services. Do not wait indefinitely or start services without asking the user."
+        } else if self.is_starting() {
+            Self::startup_instructions(true)
+        } else if self.is_running() {
+            "Services are started; verify readiness if required for your work."
+        } else {
+            Self::startup_instructions(false)
+        }
+    }
+
+    pub fn startup_instructions(start: bool) -> &'static str {
+        if start {
+            "Services are starting automatically; explore the code while preparation runs, then wait for readiness before using services if they are required for the work you need to do."
+        } else {
+            "Services won't start automatically; don't wait for or start them. Ask the user if they're needed for your work."
+        }
+    }
+
     pub fn is_starting(&self) -> bool {
         matches!(
             self.status_summary().status,
@@ -522,6 +547,8 @@ impl Instance {
             } else {
                 Status::Failed
             }
+        } else if self.runtime.prepared_only {
+            Status::NotStarted
         } else if !self.runtime.topology_known
             || running.is_empty() && jobs.is_empty()
             || self.services.iter().any(|service| {

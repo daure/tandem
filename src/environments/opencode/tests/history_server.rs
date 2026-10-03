@@ -171,7 +171,11 @@ fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static st
             "200 OK",
             json!({"data":{"messages":[
                 {"id":"msg_1","type":"user","text":"Native question","time":{"created":1}},
-                {"id":"msg_2","type":"assistant","agent":"tracer","model":{"providerID":"openai","id":"test","variant":"high"},"content":[{"type":"text","text":"Native answer"}],"time":{"created":2}}
+                {"id":"msg_2","type":"assistant","agent":"tracer","model":{"providerID":"openai","id":"test","variant":"high"},"content":[
+                    {"type":"reasoning","text":"Native reasoning","state":{"itemId":"reasoning_1","reasoningEncryptedContent":"opaque"}},
+                    {"type":"tool","id":"call_1","name":"shell","state":{"status":"completed","input":{},"content":[{"type":"text","text":"Done"}]},"time":{"created":2}},
+                    {"type":"text","text":"Native answer","state":{"itemId":"text_1","phase":"final_answer"}}
+                ],"time":{"created":2}}
             ]}}),
         ),
         path => {

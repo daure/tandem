@@ -22,6 +22,8 @@ pub(crate) struct Record {
     pub operation: Operation,
     pub description: Option<String>,
     pub branch_instances: bool,
+    #[serde(default = "Instance::default_start_instance")]
+    pub start_instance: bool,
     pub kind: StartupKind,
     pub started_at: u64,
     pub timeout: u64,

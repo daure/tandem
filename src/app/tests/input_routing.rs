@@ -253,66 +253,76 @@ fn settings_duration_input_accepts_digits_and_persists_the_value() {
 #[test]
 fn sound_dropdown_previews_and_saves_only_when_a_choice_is_confirmed() {
     init_ui();
-    let mut service = AppService::for_tests();
-    service.set_sound_choices_for_tests(vec![
-        crate::store::completion::SoundChoice {
-            id: String::new(),
-            label: "System default".into(),
-        },
-        crate::store::completion::SoundChoice {
-            id: "/sounds/bell.oga".into(),
-            label: "Bell".into(),
-        },
-    ]);
-    let mut app = root(service);
-    let settings = AnimationSettings {
-        enabled: false,
-        ..Default::default()
-    };
-    app.handle_message(Msg::OpenSettings, &mut EventCtx::new(settings));
-    let area = Rect::new(0, 0, 130, 40);
-    let mut layout = LayoutEngine::new();
-    layout.layout(&mut app, area);
-    let field = layout
-        .focus_targets()
-        .iter()
-        .find(|target| {
-            target
-                .path
-                .keys()
-                .iter()
-                .any(|key| key.as_str() == "completion-sound")
-        })
-        .unwrap();
-    app.dispatch_focus(field, true, &mut tuicore::FocusCtx::default());
-    app.dispatch_event(
-        &EventRoute::new(field.path.clone()),
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
-        &mut EventCtx::new(settings),
-    );
-    let route = popup_route(&mut app, area);
-    app.dispatch_event(
-        &route,
-        &TuiEvent::Key(KeyEvent {
-            code: Key::Char('j'),
-            modifiers: KeyModifiers::CONTROL,
-        }),
-        &mut EventCtx::new(settings),
-    );
-    assert_eq!(app.service.completion_sound_count_for_tests(), 0);
-    assert_eq!(app.service.completion_sound_choice(), "");
-    app.dispatch_event(
-        &route,
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
-        &mut EventCtx::new(settings),
-    );
-    app.settings_save
-        .take()
-        .expect("confirming a new sound saves it")
-        .blocking_recv()
-        .unwrap()
-        .unwrap();
-    assert_eq!(app.service.completion_sound_choice(), "/sounds/bell.oga");
-    assert_eq!(app.service.completion_sound_count_for_tests(), 1);
-    assert!(!app.completion_sound);
+    for field_key in ["completion-sound", "event-acceptance-sound"] {
+        let mut service = AppService::for_tests();
+        service.set_sound_choices_for_tests(vec![
+            crate::store::completion::SoundChoice {
+                id: String::new(),
+                label: "System default".into(),
+            },
+            crate::store::completion::SoundChoice {
+                id: "/sounds/bell.oga".into(),
+                label: "Bell".into(),
+            },
+        ]);
+        let mut app = root(service);
+        let settings = AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        };
+        app.handle_message(Msg::OpenSettings, &mut EventCtx::new(settings));
+        let area = Rect::new(0, 0, 130, 40);
+        let mut layout = LayoutEngine::new();
+        layout.layout(&mut app, area);
+        let field = layout
+            .focus_targets()
+            .iter()
+            .find(|target| {
+                target
+                    .path
+                    .keys()
+                    .iter()
+                    .any(|key| key.as_str() == field_key)
+            })
+            .unwrap();
+        app.dispatch_focus(field, true, &mut tuicore::FocusCtx::default());
+        app.dispatch_event(
+            &EventRoute::new(field.path.clone()),
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut EventCtx::new(settings),
+        );
+        let route = popup_route(&mut app, area);
+        app.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('j'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut EventCtx::new(settings),
+        );
+        assert_eq!(app.service.completion_sound_count_for_tests(), 0);
+        assert_eq!(app.service.completion_sound_choice(), "");
+        assert_eq!(app.service.event_acceptance_sound_choice(), "");
+        app.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &mut EventCtx::new(settings),
+        );
+        app.settings_save
+            .take()
+            .expect("confirming a new sound saves it")
+            .blocking_recv()
+            .unwrap()
+            .unwrap();
+        let (completion, acceptance) = if field_key == "completion-sound" {
+            ("/sounds/bell.oga", "")
+        } else {
+            ("", "/sounds/bell.oga")
+        };
+        assert_eq!(app.service.completion_sound_choice(), completion);
+        assert_eq!(app.service.event_acceptance_sound_choice(), acceptance);
+        assert_eq!(app.service.completion_sound_count_for_tests(), 1);
+        assert!(!app.completion_sound);
+        assert!(!app.event_acceptance_sound);
+    }
 }

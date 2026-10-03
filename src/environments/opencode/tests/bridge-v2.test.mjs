@@ -21,6 +21,13 @@ test("V2 presence follows router forms and model metadata without exposing crede
   let route = { type: "session", sessionID: "ses_one" }
   let tabs = [{ sessionID: "ses_one" }, { sessionID: "ses_two" }]
   let forms = []
+  const messages = new Map(["ses_one", "ses_two"].map((id) => [id, [
+    { type: "user", id: `msg_${id}`, text: `Review ${id}`, time: { created: 1 } },
+    {
+      type: "assistant", agent: "tracer", model: { id: "test", providerID: "openai", variant: "high" },
+      tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 10, write: 0 } },
+    },
+  ]]))
   const context = {
     options: { presenceDirectory: root },
     location: { directory: "/work/review" },
@@ -30,11 +37,8 @@ test("V2 presence follows router forms and model metadata without exposing crede
         get: (id) => ({ title: `Native ${id}`, location: { directory: "/work/review" } }),
         status: () => "running",
         message: {
-          list: () => [{ type: "user", id: "msg_one", text: "Review this" }, {
-            type: "assistant", agent: "tracer", model: { id: "test", providerID: "openai", variant: "high" },
-            tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 10, write: 0 } },
-          }],
-          get: (id) => ({ type: "user", text: `Review ${id}` }),
+          list: (id) => messages.get(id) ?? [],
+          get: (sessionID, id) => messages.get(sessionID)?.find((message) => message.id === id),
         },
         form: { list: () => forms },
       },
@@ -68,6 +72,15 @@ test("V2 presence follows router forms and model metadata without exposing crede
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
   assert.equal((await receipt()).activity, "awaiting_answer")
+  messages.set("ses_one", Array.from({ length: 50 }, () => messages.get("ses_one").at(-1)))
+  messages.set("ses_two", [{ type: "user", id: "msg_followup", text: "Check the tests", time: { created: 2 } }])
+  reactive.flush()
+  for (let attempt = 0; attempt < 100 && (await receipt()).tabs[0].last_question !== "Check the tests"; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  assert.equal((await receipt()).last_question, "Review ses_one")
+  assert.equal((await receipt()).tabs[0].last_question, "Check the tests")
+  messages.set("ses_two", [{ type: "user", id: "msg_followup", text: "", time: { created: 2 } }])
   route = { type: "home" }
   reactive.flush()
   for (let attempt = 0; attempt < 100 && (await receipt()).id !== ""; attempt++) {
@@ -75,6 +88,7 @@ test("V2 presence follows router forms and model metadata without exposing crede
   }
   assert.equal((await receipt()).id, "")
   assert.deepEqual((await receipt()).tabs.map((tab) => tab.id), ["ses_one", "ses_two"])
+  assert.deepEqual((await receipt()).tabs.map((tab) => tab.last_question), ["Review ses_one", "Check the tests"])
   tabs = [{ sessionID: "ses_two" }]
   reactive.flush()
   for (let attempt = 0; attempt < 100 && (await receipt()).tabs.length !== 1; attempt++) {
@@ -89,36 +103,54 @@ test("V2 presence follows router forms and model metadata without exposing crede
   }
   assert.equal((await receipt()).tab_index, 1)
   assert.equal((await receipt()).tabs[0].tab_index, 0)
+  assert.equal((await receipt()).last_question, "Review ses_one")
+  route = { type: "session", sessionID: "ses_unseen" }
+  reactive.flush()
+  for (let attempt = 0; attempt < 100 && (await receipt()).id !== "ses_unseen"; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  assert.equal((await receipt()).id, "ses_unseen")
+  assert.equal((await receipt()).last_question, undefined)
   await dispose()
   await assert.rejects(readFile(join(root, `${process.pid}.json`)), { code: "ENOENT" })
 })
 
-test("V2 initial input uses native location and text contracts once", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "tandem-v2-prompt-"))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  const inherited = process.env.TANDEM_INITIAL_PROMPT
-  process.env.TANDEM_INITIAL_PROMPT = "Literal 'text'; $(not-a-shell)"
-  t.after(() => { if (inherited === undefined) delete process.env.TANDEM_INITIAL_PROMPT; else process.env.TANDEM_INITIAL_PROMPT = inherited })
-  let route = { type: "home" }
-  const calls = []
-  const context = {
-    options: { presenceDirectory: root }, location: { directory: "/work/review" },
-    client: {
-      server: { info: async () => ({ urls: ["http://127.0.0.1:4199"] }) },
-      session: {
-        create: async (input) => { calls.push(["create", input]); return { id: "ses_new" } },
-        prompt: async (input) => { calls.push(["prompt", input]) },
-      },
-    },
-    data: { session: {}, location: { provider: { list: () => [] }, model: { list: () => [] } } },
-    ui: { router: { current: () => route, navigate: (next) => { route = next; calls.push(["route", next]) } }, toast: { show: () => assert.fail("unexpected error") } },
+test("V2 attaches instructions before optional literal task input with the requested model", async (t) => {
+  for (const text of ["", "Literal 'text'; $(not-a-shell)"]) {
+    await t.test(text || "instructions only", async (t) => {
+      const root = await mkdtemp(join(tmpdir(), "tandem-v2-prompt-"))
+      t.after(() => rm(root, { recursive: true, force: true }))
+      const inherited = process.env.TANDEM_INITIAL_PROMPT
+      process.env.TANDEM_INITIAL_PROMPT = text
+      process.env.TANDEM_SESSION_INSTRUCTIONS = "Services won't start automatically"
+      process.env.TANDEM_SESSION_MODEL = "openai/test#fast"
+      t.after(() => { delete process.env.TANDEM_SESSION_INSTRUCTIONS; delete process.env.TANDEM_SESSION_MODEL })
+      t.after(() => { if (inherited === undefined) delete process.env.TANDEM_INITIAL_PROMPT; else process.env.TANDEM_INITIAL_PROMPT = inherited })
+      let route = { type: "home" }
+      const calls = []
+      const context = {
+        options: { presenceDirectory: root }, location: { directory: "/work/review" },
+        client: {
+          server: { info: async () => ({ urls: ["http://127.0.0.1:4199"] }) },
+          session: {
+            create: async (input) => { calls.push(["create", input]); return { id: "ses_new" } },
+            prompt: async (input) => { calls.push(["prompt", input]) },
+            instructions: { entry: { put: async (input) => { calls.push(["instructions", input]) } } },
+          },
+        },
+        data: { session: {}, location: { provider: { list: () => [] }, model: { list: () => [] } } },
+        ui: { router: { current: () => route, navigate: (next) => { route = next; calls.push(["route", next]) } }, toast: { show: () => assert.fail("unexpected error") } },
+      }
+      const dispose = await plugin.setup(context, reactiveForTest())
+      t.after(dispose)
+      const expected = [["create", { location: { directory: "/work/review" }, model: { providerID: "openai", id: "test", variant: "fast" } }],
+        ["instructions", { sessionID: "ses_new", key: "tandem.services", value: "Services won't start automatically" }],
+        ["route", { type: "session", sessionID: "ses_new" }]]
+      if (text) expected.push(["prompt", { sessionID: "ses_new", text }])
+      assert.deepEqual(calls, expected)
+      assert.equal(process.env.TANDEM_INITIAL_PROMPT, undefined)
+    })
   }
-  const dispose = await plugin.setup(context, reactiveForTest())
-  t.after(dispose)
-  assert.deepEqual(calls, [["create", { location: { directory: "/work/review" } }],
-    ["route", { type: "session", sessionID: "ses_new" }],
-    ["prompt", { sessionID: "ses_new", text: "Literal 'text'; $(not-a-shell)" }]])
-  assert.equal(process.env.TANDEM_INITIAL_PROMPT, undefined)
 })
 
 async function tabClient(t) {
@@ -131,7 +163,10 @@ async function tabClient(t) {
     options: { presenceDirectory: root }, location: { directory: "/work/review" },
     client: {
       server: { info: async () => ({ urls: ["http://127.0.0.1:4199"] }) },
-      session: { create: async (input) => { calls.push(["create", input]); return { id: "ses_new" } } },
+      session: {
+        create: async (input) => { calls.push(["create", input]); return { id: "ses_new" } },
+        instructions: { entry: { put: async (input) => { calls.push(["instructions", input]) } } },
+      },
     },
     data: { session: {}, location: { provider: { list: () => [] }, model: { list: () => [] } } },
     ui: {
@@ -162,11 +197,13 @@ test("authenticated tab requests create and focus one blank session in the exist
   assert.equal((await client.request({}, "Bearer invalid")).status, 401)
   assert.equal((await client.request({ directory: "relative" })).status, 400)
   assert.deepEqual(client.calls, [])
-  const response = await client.request({ directory: "/work/space ' ; $(literal)/日本語" })
+  const response = await client.request({ directory: "/work/space ' ; $(literal)/日本語", instructions: "Services are started" })
   assert.equal(response.status, 200)
   assert.deepEqual(await response.json(), { id: "ses_new" })
   assert.deepEqual(client.calls, [
-    ["create", { location: { directory: "/work/space ' ; $(literal)/日本語" } }], ["focus", "ses_new"],
+    ["create", { location: { directory: "/work/space ' ; $(literal)/日本語" } }],
+    ["instructions", { sessionID: "ses_new", key: "tandem.services", value: "Services are started" }],
+    ["focus", "ses_new"],
   ])
   await client.dispose()
   await assert.rejects(client.request())
@@ -187,6 +224,20 @@ test("disabled tabs and uncertain creation keep the existing conversation withou
   assert.match((await failed.json()).error, /creation may be uncertain/)
   assert.equal(attempts, 1)
   assert.deepEqual(client.calls, [])
+})
+
+test("instruction failures block focus and never become model prompts", async (t) => {
+  for (const supported of [true, false]) {
+    await t.test(String(supported), async (t) => {
+      const client = await tabClient(t)
+      if (supported) client.context.client.session.instructions.entry.put = async () => { throw new Error("connection lost") }
+      else delete client.context.client.session.instructions
+      client.context.client.session.prompt = () => assert.fail("instruction setup must not run a model")
+      const response = await client.request({ directory: "/work/review", instructions: "Services won't start automatically" })
+      assert.equal(response.status, 502)
+      assert.deepEqual(client.calls, [["create", { location: { directory: "/work/review" } }]])
+    })
+  }
 })
 
 test("concurrent tab requests are rejected and disposal cancels creation before focus", async (t) => {
@@ -238,15 +289,21 @@ test("new-session requests reuse a verified empty idle tab in the requested work
     },
   }
   client.context.ui.tabs.list = () => ids.map((sessionID) => ({ sessionID }))
-  const response = await client.request()
+  const response = await client.request({ directory: "/work/review", instructions: "Services are starting automatically" })
   assert.equal(response.status, 200)
   assert.deepEqual(await response.json(), { id: "ses_empty" })
   assert.deepEqual(synchronized, ["ses_empty"])
-  assert.deepEqual(client.calls, [["focus", "ses_empty"]])
-  const repeated = await client.request()
+  assert.deepEqual(client.calls, [
+    ["instructions", { sessionID: "ses_empty", key: "tandem.services", value: "Services are starting automatically" }],
+    ["focus", "ses_empty"],
+  ])
+  const repeated = await client.request({ directory: "/work/review", instructions: "Services won't start automatically" })
   assert.equal(repeated.status, 200)
   assert.deepEqual(await repeated.json(), { id: "ses_empty" })
-  assert.deepEqual(client.calls, [["focus", "ses_empty"], ["focus", "ses_empty"]])
+  assert.deepEqual(client.calls.slice(2), [
+    ["instructions", { sessionID: "ses_empty", key: "tandem.services", value: "Services won't start automatically" }],
+    ["focus", "ses_empty"],
+  ])
 })
 
 test("unloaded, changing, or closed tabs must be checked before creating an empty session", async (t) => {

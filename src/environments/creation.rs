@@ -5,8 +5,8 @@ use crate::store::environments::{Instance, validate_instance_name, validate_name
 
 type BeforeCreation = Box<dyn FnOnce(&str, Instant) -> Result<(), String> + Send>;
 
-#[derive(Default)]
 pub(crate) struct Startup {
+    pub start_instance: bool,
     pub branch_instances: bool,
     pub description: Option<String>,
     pub opencode: Option<Option<String>>,
@@ -15,6 +15,22 @@ pub(crate) struct Startup {
     pub before_creation: Option<BeforeCreation>,
     pub before_repositories: Option<BeforeCreation>,
     pub writer: Option<std::sync::Arc<super::startup::Writer>>,
+}
+
+impl Default for Startup {
+    fn default() -> Self {
+        Self {
+            start_instance: true,
+            branch_instances: false,
+            description: None,
+            opencode: None,
+            opencode_result: None,
+            instance_lock: None,
+            before_creation: None,
+            before_repositories: None,
+            writer: None,
+        }
+    }
 }
 
 impl Environments {
@@ -68,6 +84,16 @@ impl Environments {
         }
         let deadline = Instant::now() + Duration::from_secs(30);
         if docker::project_ids(&self.config, name, deadline)?.is_empty() {
+            if let Some(mut instance) = journal::recorded(&self.config, name)?.filter(|instance| {
+                instance.runtime.prepared_only && instance.runtime.workspace_ready
+            }) {
+                super::ownership::verify(&self.config, &instance)?;
+                if instance.template != template {
+                    return Err("instance name belongs to another template".into());
+                }
+                journal::enrich(&self.config, std::slice::from_mut(&mut instance))?;
+                return Ok((Some(instance), lock));
+            }
             return Ok((None, lock));
         }
         let (instance, _) = lifecycle::managed_instance(&self.config, name, deadline)?;

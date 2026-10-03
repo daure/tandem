@@ -59,8 +59,13 @@ const plugin = {
         },
       },
       client: { session: {
-        async create({ directory }, options) {
-          return { data: await context.client.session.create({ location: { directory } }, options) }
+        async create({ directory, model }, options) {
+          return { data: await context.client.session.create({ location: { directory }, ...(model ? { model } : {}) }, options) }
+        },
+        async attachInstructions(sessionID, instructions, options) {
+          const entry = context.client.session?.instructions?.entry
+          if (!entry?.put) throw new Error("This OpenCode server does not support session instruction entries")
+          await entry.put({ sessionID, key: "tandem.services", value: instructions }, options)
         },
         promptAsync({ sessionID, parts }, options) {
           return context.client.session.prompt({ sessionID, text: parts.map((part) => part.text).join("\n") }, options)
@@ -83,23 +88,32 @@ const plugin = {
   },
   async tui(api, options = {}) {
     let initialPrompt = process.env.TANDEM_INITIAL_PROMPT
+    let initialInstructions = process.env.TANDEM_SESSION_INSTRUCTIONS || undefined
+    let initialModel = process.env.TANDEM_SESSION_MODEL || undefined
     delete process.env.TANDEM_INITIAL_PROMPT
+    delete process.env.TANDEM_SESSION_INSTRUCTIONS
+    delete process.env.TANDEM_SESSION_MODEL
     const root = options.presenceDirectory ?? join(
       process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"), "tandem/opencode",
     )
     const file = join(root, `${process.pid}.json`)
     const temporary = `${file}.tmp`
+    const lastQuestions = new Map()
     let stopped = false
     let pending = Promise.resolve()
     const initialRequest = new AbortController()
     const tabControl = api.tabs ? await serveTabs(api, initialRequest.signal) : undefined
 
     const initializeConversation = async () => {
-      if (stopped || !api.state.ready || initialPrompt === undefined) return
+      if (stopped || !api.state.ready || (initialPrompt === undefined && initialInstructions === undefined)) return
       const text = initialPrompt
+      const instructions = initialInstructions
+      const modelName = initialModel
       // Consume before awaiting: an uncertain HTTP result must never trigger a second submission.
       initialPrompt = undefined
-      if (!text.trim()) return
+      initialInstructions = undefined
+      initialModel = undefined
+      if (!text?.trim() && !instructions) return
       try {
         if (api.route.current.name !== "home") throw new Error("Client already has a conversation")
         const directory = api.state.path.directory
@@ -107,21 +121,28 @@ const plugin = {
           throwOnError: true,
           signal: AbortSignal.any([initialRequest.signal, AbortSignal.timeout(15_000)]),
         }
-        const result = await api.client.session.create({ directory }, options)
+        const [modelID, variant] = modelName?.split("#") ?? []
+        const [providerID, ...modelPath] = modelID?.split("/") ?? []
+        const model = modelName ? { providerID, id: modelPath.join("/"), ...(variant ? { variant } : {}) } : undefined
+        const result = await api.client.session.create({ directory, ...(model ? { model } : {}) }, options)
         if (stopped) return
         if (!result.data?.id) throw new Error("Session creation returned no session")
         if (api.route.current.name !== "home") throw new Error("Client changed conversations")
+        await applyInstructions(api, result.data.id, directory, instructions, options)
+        if (stopped) return
+        if (api.route.current.name !== "home") throw new Error("Client changed conversations")
         api.route.navigate("session", { sessionID: result.data.id })
-        await api.client.session.promptAsync({
+        if (text?.trim()) await api.client.session.promptAsync({
           directory,
           sessionID: result.data.id,
           parts: [{ type: "text", text }],
+          ...(model ? { model: { providerID: model.providerID, modelID: model.id }, variant } : {}),
         }, options)
       } catch {
         if (!stopped) api.ui.toast({
           variant: "error",
-          title: "Tandem initial prompt",
-          message: "Could not submit the initial prompt. Check this conversation before retrying; delivery may be uncertain.",
+          title: "Tandem session setup",
+          message: "Could not configure session instructions or submit the initial prompt. Check this conversation before retrying; delivery may be uncertain.",
         })
       }
     }
@@ -139,6 +160,7 @@ const plugin = {
           .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, "")
           .replace(/\s+/gu, " ").trim()
         : ""
+      if (questionText) lastQuestions.set(sessionID, Array.from(questionText).slice(0, 4096).join(""))
       const reply = messages.findLast((message) => message.role === "assistant")
       const last = messages.findLast((message) => message.role === "assistant" && message.tokens.output > 0)
       const provider = reply
@@ -163,7 +185,7 @@ const plugin = {
         directory: session?.directory ?? api.state.path.directory,
         server: server ?? "",
         tab_control: tabControl?.receipt,
-        last_question: questionText ? Array.from(questionText).slice(0, 4096).join("") : undefined,
+        last_question: lastQuestions.get(sessionID),
         activity: awaitingAnswer
           ? "awaiting_answer"
           : status?.type === "busy" || status?.type === "retry" ? "busy" : "idle",
@@ -271,7 +293,8 @@ async function serveTabs(api, disposed) {
         body += chunk
         if (Buffer.byteLength(body) > 16_384) throw new Error("Tab request is too large")
       }
-      const { directory, sessionID } = JSON.parse(body)
+      const { directory, sessionID, instructions } = JSON.parse(body)
+      if (instructions != null && typeof instructions !== "string") return reply(400, { error: "Invalid session instructions" })
       if (focusing) {
         const current = api.route.current
         const selected = current.name === "session" && current.params?.sessionID === sessionID
@@ -304,6 +327,8 @@ async function serveTabs(api, disposed) {
         ])
         signal.throwIfAborted()
         if (!empty() || !api.tabs.list().some((tab) => tab.sessionID === id)) continue
+        await applyInstructions(api, id, directory, instructions, { throwOnError: true, signal })
+        signal.throwIfAborted()
         if (api.tabs.focus(id) === false) return reply(409, { error: "OpenCode refused tab navigation" })
         return reply(200, { id })
       }
@@ -311,6 +336,8 @@ async function serveTabs(api, disposed) {
       const result = await api.client.session.create({ directory }, { throwOnError: true, signal })
       signal.throwIfAborted()
       if (!result.data?.id) throw new Error("Session creation returned no session")
+      await applyInstructions(api, result.data.id, directory, instructions, { throwOnError: true, signal })
+      signal.throwIfAborted()
       api.tabs.focus(result.data.id)
       reply(200, { id: result.data.id })
     } catch {
@@ -334,6 +361,18 @@ async function serveTabs(api, disposed) {
       server.close(resolve)
       server.closeAllConnections()
     }),
+  }
+}
+
+async function applyInstructions(api, sessionID, directory, instructions, options) {
+  if (!instructions) return
+  if (api.client.session.attachInstructions) {
+    await api.client.session.attachInstructions(sessionID, instructions, options)
+  } else {
+    // V1 has no instruction entries; synthetic no-reply context never starts a model request.
+    await api.client.session.prompt({
+      directory, sessionID, noReply: true, parts: [{ type: "text", text: instructions, synthetic: true }],
+    }, options)
   }
 }
 

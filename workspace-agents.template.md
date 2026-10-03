@@ -11,9 +11,10 @@
 {{/code_paths}}{{#repositories}}{{repository_guidance}}Edit source files and run Git commands in the checked-out repositories.
 New Tandem clones have depth 1. Run `git fetch --unshallow` only when history is needed and the checkout is shallow.
 Fetch other branches explicitly, even after unshallowing: `git fetch origin BRANCH:refs/remotes/origin/BRANCH`.
-{{/repositories}}{{#services}}Run tools and tests locally when their dependencies are available; use the service containers when commands need the environment’s runtime or dependencies.
+{{/repositories}}{{#services}}The services below are configured for this instance. Follow the session's Tandem startup instructions to distinguish automatic startup from intentionally stopped services.
+Run tools and tests locally when their dependencies are available; use service containers when they are running and commands need the environment’s runtime or dependencies.
 {{http_guidance}}
-Verify the running services with their tools and healthchecks, inspect relevant logs and data, then refine and recheck changes.
+When services are required for the work, verify their readiness with their tools and healthchecks, inspect relevant logs and data, then refine and recheck changes.
 
 ## Docker
 

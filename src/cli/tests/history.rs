@@ -1,7 +1,7 @@
 use super::*;
 
 #[path = "../../environments/opencode/tests/history_server.rs"]
-mod history_server;
+pub(super) mod history_server;
 use history_server::Server;
 
 fn fixture(discoverable: bool) -> (Fixture, Server) {

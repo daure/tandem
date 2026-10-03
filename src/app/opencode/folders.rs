@@ -27,6 +27,43 @@ pub(super) fn active_first(rows: &mut [Row], snapshot: &Snapshot, owners: &[Owne
         .iter()
         .filter_map(|directory| owner(directory, owners))
         .collect::<HashSet<_>>();
+    let mut directory_positions = HashMap::new();
+    let mut instance_positions = HashMap::new();
+    for (directory, pane) in snapshot
+        .sessions
+        .iter()
+        .flat_map(|session| {
+            session
+                .panes
+                .iter()
+                .map(move |pane| (session.directory.as_str(), pane))
+        })
+        .chain(
+            snapshot
+                .clients
+                .iter()
+                .map(|client| (client.directory.as_str(), &client.pane)),
+        )
+    {
+        let Some(position) = snapshot
+            .zellij_tabs
+            .get(&pane.session)
+            .and_then(|tabs| tabs.get(&pane.tab_id))
+            .map(|position| (pane.session.as_str(), *position))
+        else {
+            continue;
+        };
+        directory_positions
+            .entry(directory)
+            .and_modify(|current| *current = std::cmp::min(*current, position))
+            .or_insert(position);
+        if let Some(instance) = owner(directory, owners) {
+            instance_positions
+                .entry(instance)
+                .and_modify(|current| *current = std::cmp::min(*current, position))
+                .or_insert(position);
+        }
+    }
     let mut ranks = HashMap::new();
     for (index, row) in rows.iter().enumerate() {
         let active = if let Some(instance) = row.instance.as_deref() {
@@ -42,12 +79,20 @@ pub(super) fn active_first(rows: &mut [Row], snapshot: &Snapshot, owners: &[Owne
             (false, true) => 2,
             (false, false) => 3,
         };
+        let position = if let Some(instance) = row.instance.as_deref() {
+            instance_positions.get(instance)
+        } else {
+            row.workspace
+                .as_deref()
+                .and_then(|directory| directory_positions.get(directory))
+        }
+        .copied();
         let rank = row
             .parent
             .as_ref()
             .and_then(|parent| ranks.get(parent))
             .copied()
-            .unwrap_or((group, index));
+            .unwrap_or((group, position.is_none(), position, index));
         ranks.insert(row.id.clone(), rank);
     }
     rows.sort_by_key(|row| ranks[&row.id]);

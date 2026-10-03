@@ -157,17 +157,26 @@ export default { id: "test.route", setup(ctx) {
                     with urllib.request.urlopen(request, timeout=15) as response:
                         return json.load(response)['id']
 
-                assert tab_action('/tabs', {'directory': str(workspace)}) == first
+                instructions = 'Services are starting automatically; explore available code.'
+                assert tab_action('/tabs', {'directory': str(workspace), 'instructions': instructions}) == first
                 wait_for(lambda: receipt(first))
-                assert tab_action('/tabs', {'directory': str(workspace)}) == first
+                entries_path = f'/api/experimental/session/{first}/instructions/entries'
+                assert any(entry['key'] == 'tandem.services' and entry['value'] == instructions
+                           for entry in api(entries_path)['data'])
+                instructions = "Services won't start automatically; ask if needed."
+                assert tab_action('/tabs', {'directory': str(workspace), 'instructions': instructions}) == first
+                assert any(entry['key'] == 'tandem.services' and entry['value'] == instructions
+                           for entry in api(entries_path)['data'])
                 assert len(native_order(receipt(first))) == before_tabs
                 assert len(api('/api/session?limit=20')['data']) == 2
-                print('PASS: repeated new-session requests focus an existing empty tab without creating a session')
+                print('PASS: empty-tab reuse replaces durable service instructions without creating a session')
                 route_file.write_text(json.dumps({'close': second}))
                 wait_for(lambda: second not in native_order(receipt(first)))
                 route_file.write_text(json.dumps({'close': first}))
                 wait_for(lambda: receipt('') and not receipt('').get('tabs'))
-                new_id = tab_action('/tabs', {'directory': str(workspace)})
+                new_id = tab_action('/tabs', {'directory': str(workspace), 'instructions': instructions})
+                assert any(entry['key'] == 'tandem.services' and entry['value'] == instructions
+                           for entry in api(f'/api/experimental/session/{new_id}/instructions/entries')['data'])
                 new_record = wait_for(lambda: receipt(new_id))
                 assert new_record['pid'] == record['pid'] and new_record['pane_id'] == pane_id
                 assert new_id not in (first, second)
@@ -237,6 +246,18 @@ export default { id: "test.route", setup(ctx) {
                 wait_for(lambda: not records() or all(not Path(f'/proc/{record["pid"]}').exists() for record in records()), timeout=15)
                 assert api('/api/session/active')['data'] == {}
                 print('PASS: closing the client removes presence; no model run occurred')
+                guided_pane = zj('action', 'new-pane', '--stacked', '--name', '', '--cwd', str(workspace), '--',
+                                'env', 'TANDEM_INITIAL_PROMPT=', f'TANDEM_SESSION_INSTRUCTIONS={instructions}',
+                                'TANDEM_SESSION_MODEL=', binary, str(workspace), '--server', url)
+                guided_pane_id = int(guided_pane.removeprefix('terminal_'))
+                guided = wait_for(lambda: next((record for record in records()
+                    if record['pane_id'] == guided_pane_id and record['id']), None))
+                assert any(entry['key'] == 'tandem.services' and entry['value'] == instructions
+                           for entry in api(f'/api/experimental/session/{guided["id"]}/instructions/entries')['data'])
+                assert api('/api/session/active')['data'] == {}
+                zj('action', 'close-pane', '--pane-id', guided_pane)
+                wait_for(lambda: not records() or all(not Path(f'/proc/{record["pid"]}').exists() for record in records()), timeout=15)
+                print('PASS: client startup attaches durable instructions without submitting a model prompt')
             finally:
                 if created:
                     subprocess.run([zellij, 'kill-session', name], env=env, capture_output=True, timeout=10)

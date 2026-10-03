@@ -7,37 +7,52 @@ use ratatui::{
     text::Line,
 };
 use tuicore::{
-    AnimationSettings, Column, DataView, DataViewTypedEvent, Dropdown, DropdownLabelPosition,
-    DropdownVariant, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusTarget, KeySpec,
-    LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, Paragraph, RenderCtx,
-    Split, TickResult, Toggle, TuiEvent, TuiNode, line_width,
+    AnimationSettings, Button, Column, DataView, DataViewTypedEvent, Dropdown,
+    DropdownLabelPosition, DropdownVariant, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId,
+    FocusTarget, HotkeyLabelMode, KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
+    LifecycleCtx, Paragraph, RenderCtx, Split, TickResult, Toggle, TuiEvent, TuiNode, line_width,
 };
 
 use super::Msg;
 use crate::store::events::{Record, Snapshot};
 
+mod filters;
 mod rows;
+pub(super) use filters::StreamKey;
 pub(super) use rows::{profile_icon, row_text};
 
 pub(super) const FOCUS: &str = "event-feed";
 pub(super) type SharedState = Rc<RefCell<Snapshot>>;
-pub(super) type FilterState = Rc<RefCell<Option<Vec<String>>>>;
-type EventControls = Split<Split<Toggle<Msg>, Toggle<Msg>>, Paragraph>;
-type EventView = Split<Split<Dropdown<String, String>, EventControls>, DataView<Record, i64>>;
+pub(super) type FilterState = Rc<RefCell<Option<Vec<StreamKey>>>>;
+#[derive(Default)]
+pub(super) struct FocusRequest {
+    pub(super) record: Option<Record>,
+    pub(super) deletion: Option<Option<i64>>,
+    pub(super) reset_filters: bool,
+}
+pub(super) type FocusState = Rc<RefCell<FocusRequest>>;
+type EventToggles = Split<Toggle<Msg>, Split<Toggle<Msg>, Toggle<Msg>>>;
+type EventStatus = Split<Split<Paragraph, Button<Msg>>, Paragraph>;
+type EventControls = Split<EventToggles, EventStatus>;
+type HeaderRow = Split<Dropdown<StreamKey, StreamKey>, EventControls>;
+type EventView = Split<Split<HeaderRow, Paragraph>, DataView<Record, i64>>;
 
 pub(super) struct Events {
     view: EventView,
     shared: SharedState,
     snapshot: Snapshot,
     filter: FilterState,
-    sources: Vec<String>,
+    sources: Vec<StreamKey>,
     providers: super::providers::SharedState,
-    provider_names: Vec<String>,
+    stream_sources: Vec<StreamKey>,
     handovers_only: bool,
     following: bool,
     newest_visible: Option<i64>,
     focus_feed: bool,
     status: String,
+    requested: FocusState,
+    pinned: Option<Record>,
+    toolbar: super::toolbar::SharedState,
 }
 
 impl Events {
@@ -45,18 +60,23 @@ impl Events {
         shared: SharedState,
         filter: FilterState,
         providers: super::providers::SharedState,
+        requested: FocusState,
+        toolbar: super::toolbar::SharedState,
     ) -> Self {
         let selection = filter.clone();
-        let provider_filter =
-            Dropdown::multi(Vec::new(), |name: &String| name.clone(), |name| clean(name))
-                .variant(DropdownVariant::Filled)
-                .label("Providers")
-                .label_position(DropdownLabelPosition::Inline)
-                .placeholder("All providers")
-                .show_multi_labels(true)
-                .max_popup_width(u16::MAX)
-                .hotkey("shift+p")
-                .on_select(move |names| *selection.borrow_mut() = Some(names));
+        let stream_filter = Dropdown::multi(
+            Vec::new(),
+            |source: &StreamKey| source.clone(),
+            StreamKey::label,
+        )
+        .variant(DropdownVariant::Filled)
+        .label("Streams")
+        .label_position(DropdownLabelPosition::Inline)
+        .placeholder("All streams")
+        .show_multi_labels(true)
+        .max_popup_width(u16::MAX)
+        .hotkey("shift+p")
+        .on_select(move |names| *selection.borrow_mut() = Some(names));
         let data = DataView::new(Vec::new(), |row: &Record| row.sequence)
             .focus_id(FOCUS)
             .hotkey("shift+h")
@@ -72,30 +92,51 @@ impl Events {
             .filter_controls(false)
             .row_height(2)
             .empty_state(tuicore::SeasonalEmptyState::new(
-                "No events received. Start a provider to populate this feed.",
+                "No events handed over to Tandem instances.",
             ));
-        Self {
-            view: Split::vertical(
+        let header = Split::horizontal(
+            stream_filter,
+            Split::horizontal(
                 Split::horizontal(
-                    provider_filter,
+                    Toggle::new("󰕾")
+                        .hotkey("shift+n")
+                        .preserve_focus_on_hotkey(true)
+                        .on_change(Msg::SetEventAcceptanceSound),
                     Split::horizontal(
-                        Split::horizontal(
-                            Toggle::new("")
-                                .hotkey("shift+t")
-                                .preserve_focus_on_hotkey(true),
-                            Toggle::new("")
-                                .checked(true)
-                                .hotkey("shift+g")
-                                .preserve_focus_on_hotkey(true),
-                        )
-                        .gap(1),
-                        Paragraph::new("Waiting for event providers").wrap(false),
+                        Toggle::new("")
+                            .checked(true)
+                            .hotkey("shift+t")
+                            .preserve_focus_on_hotkey(true),
+                        Toggle::new("󰞖")
+                            .checked(true)
+                            .hotkey("gg")
+                            .preserve_focus_on_hotkey(true),
                     )
-                    .constraints(Constraint::Length(11), Constraint::Fill(1))
                     .gap(1),
                 )
-                .constraints(Constraint::Length(1), Constraint::Fill(1))
                 .gap(1),
+                Split::horizontal(
+                    Split::horizontal(
+                        Paragraph::new("").wrap(false),
+                        Button::new("Delete all events")
+                            .hotkey("shift+x")
+                            .hotkey_focus_enabled(false)
+                            .hotkey_label_mode(HotkeyLabelMode::Inline)
+                            .on_press(|| Msg::DeleteEvents(None)),
+                    ),
+                    Paragraph::new("Waiting for event providers").wrap(false),
+                )
+                .gap(1),
+            )
+            .constraints(Constraint::Length(11), Constraint::Fill(1))
+            .gap(1),
+        )
+        .constraints(Constraint::Length(1), Constraint::Fill(1))
+        .gap(1);
+        Self {
+            view: Split::vertical(
+                Split::vertical(header, Paragraph::new("").wrap(false))
+                    .constraints(Constraint::Length(1), Constraint::Length(0)),
                 data,
             )
             .constraints(Constraint::Length(1), Constraint::Fill(1)),
@@ -104,67 +145,125 @@ impl Events {
             filter,
             sources: Vec::new(),
             providers,
-            provider_names: Vec::new(),
-            handovers_only: false,
+            stream_sources: Vec::new(),
+            handovers_only: true,
             following: true,
             newest_visible: None,
             focus_feed: false,
             status: "Waiting for event providers".into(),
+            requested,
+            pinned: None,
+            toolbar,
         }
     }
 
+    fn header(&self) -> &HeaderRow {
+        self.view.first().first()
+    }
+
+    fn header_mut(&mut self) -> &mut HeaderRow {
+        self.view.first_mut().first_mut()
+    }
+
     fn sync(&mut self) -> bool {
+        let sound = self.toolbar.borrow().event_acceptance_sound;
+        let sound_toggle = self.header_mut().second_mut().first_mut().first_mut();
+        let sound_changed = sound_toggle.is_checked() != sound;
+        sound_toggle.set_value(sound);
+        let deletion = self.requested.borrow_mut().deletion.take();
+        if let Some(sequence) = deletion
+            && self
+                .pinned
+                .as_ref()
+                .is_some_and(|row| sequence.is_none_or(|id| id == row.sequence))
+        {
+            self.pinned = None;
+        }
+        let requested = self.requested.borrow_mut().record.take();
+        let reset_filters = std::mem::take(&mut self.requested.borrow_mut().reset_filters);
+        if reset_filters {
+            self.view.second_mut().clear_search();
+            self.view.second_mut().clear_filters();
+            self.header_mut().first_mut().cancel();
+        }
+        let selected = requested.as_ref().map(|record| record.sequence);
+        if let Some(record) = requested {
+            self.pinned = Some(record);
+            *self.filter.borrow_mut() = Some(Vec::new());
+            self.view.second_mut().clear_search();
+            self.view.second_mut().clear_filters();
+            self.header_mut()
+                .second_mut()
+                .first_mut()
+                .second_mut()
+                .first_mut()
+                .set_value(false);
+            self.header_mut().first_mut().cancel();
+            self.set_following(false);
+        }
         let filter = self.filter.borrow_mut().take();
         let filtered = filter.is_some();
         if let Some(names) = filter {
             self.sources = names;
         }
         let snapshot = self.shared.borrow().clone();
-        let mut provider_names: Vec<_> = self
-            .providers
-            .borrow()
-            .snapshot
-            .providers
-            .iter()
-            .filter_map(|provider| {
-                provider
-                    .manifest
-                    .as_ref()
-                    .map(|manifest| manifest.name.clone())
-            })
-            .chain(snapshot.records.iter().map(|row| row.provider.clone()))
-            .chain(self.sources.iter().cloned())
-            .collect();
-        provider_names.sort();
-        provider_names.dedup();
-        let providers_changed = provider_names != self.provider_names;
-        let handovers_only = self.view.first().second().first().first().is_checked();
+        let stream_sources = filters::inventory(
+            &self.providers.borrow().snapshot,
+            &snapshot.records,
+            &self.sources,
+            self.pinned.as_ref(),
+        );
+        let streams_changed = stream_sources != self.stream_sources;
+        let handovers_only = self.header().second().first().second().first().is_checked();
         let handovers_changed = handovers_only != self.handovers_only;
-        if snapshot == self.snapshot && !filtered && !providers_changed && !handovers_changed {
-            return false;
+        if snapshot == self.snapshot
+            && !filtered
+            && !streams_changed
+            && !handovers_changed
+            && !reset_filters
+            && deletion.is_none()
+        {
+            return sound_changed;
         }
-        if providers_changed {
-            self.view
+        if streams_changed {
+            self.header_mut()
                 .first_mut()
-                .first_mut()
-                .set_rows(provider_names.clone());
-            self.provider_names = provider_names;
+                .set_rows(stream_sources.clone());
+            self.stream_sources = stream_sources;
         }
-        if filtered {
-            self.view
-                .first_mut()
-                .first_mut()
-                .set_selected(self.sources.clone());
+        if filtered || streams_changed {
+            let sources = self.sources.clone();
+            self.header_mut().first_mut().set_selected(sources);
         }
         let mut records: Vec<_> = snapshot
             .records
             .iter()
-            .filter(|row| self.sources.is_empty() || self.sources.contains(&row.provider))
-            // Acceptance alone does not establish an instance handover; dispatch has no assignments.
-            .filter(|_| !handovers_only)
+            .filter(|row| {
+                self.sources.is_empty() || self.sources.iter().any(|source| source.matches(row))
+            })
+            .filter(|row| {
+                !handovers_only
+                    || row
+                        .acceptances
+                        .iter()
+                        .any(|acceptance| acceptance.operation_id.is_some())
+            })
             .cloned()
             .collect();
-        records.sort_by_key(|row| row.sequence);
+        if let Some(pinned) = &self.pinned
+            && !records
+                .iter()
+                .any(|record| record.sequence == pinned.sequence)
+            && (self.sources.is_empty() || self.sources.iter().any(|source| source.matches(pinned)))
+            && (!handovers_only
+                || pinned
+                    .acceptances
+                    .iter()
+                    .any(|acceptance| acceptance.operation_id.is_some()))
+        {
+            records.push(pinned.clone());
+        }
+        records.sort_by_key(|row| std::cmp::Reverse(row.sequence));
         let status = snapshot
             .error
             .as_deref()
@@ -173,7 +272,7 @@ impl Events {
         self.view.second_mut().set_rows(records);
         let highlighted = self.view.second().highlighted_id();
         let reset = filtered || handovers_changed;
-        self.highlight_bottom();
+        self.highlight_top();
         if !self.following && !reset {
             if let Some(id) = highlighted {
                 self.view.second_mut().highlight_id(&id);
@@ -182,6 +281,12 @@ impl Events {
             self.set_following(true);
         }
         if reset {
+            self.focus_feed = true;
+        }
+        if let Some(id) = selected {
+            self.view.second_mut().highlight_id(&id);
+            self.view.second_mut().reveal_highlighted();
+            self.set_following(false);
             self.focus_feed = true;
         }
         self.view.second_mut().take_events();
@@ -199,26 +304,29 @@ impl Events {
     }
 
     fn row(&self, id: i64) -> Option<&Record> {
-        self.snapshot.records.iter().find(|row| row.sequence == id)
+        self.snapshot
+            .records
+            .iter()
+            .find(|row| row.sequence == id)
+            .or_else(|| self.pinned.as_ref().filter(|row| row.sequence == id))
     }
 
     fn set_following(&mut self, following: bool) {
         self.following = following;
-        self.view
-            .first_mut()
+        self.header_mut()
             .second_mut()
             .first_mut()
+            .second_mut()
             .second_mut()
             .set_value(following);
     }
 
-    fn highlight_bottom(&mut self) {
+    fn highlight_top(&mut self) {
         let ids: Vec<_> = self
             .view
             .second()
             .rows()
             .iter()
-            .rev()
             .map(|row| row.sequence)
             .collect();
         self.newest_visible = ids
@@ -238,29 +346,43 @@ impl Events {
     }
 
     fn reset(&mut self, ctx: &mut EventCtx<Msg>) {
-        self.view.first_mut().first_mut().cancel();
+        self.toolbar.borrow_mut().event_acceptance_sound = false;
+        ctx.emit(Msg::SetEventAcceptanceSound(false));
+        self.pinned = None;
+        self.header_mut().first_mut().cancel();
         *self.filter.borrow_mut() = Some(Vec::new());
-        self.view
+        self.header_mut()
+            .second_mut()
             .first_mut()
             .second_mut()
             .first_mut()
-            .first_mut()
-            .set_value(false);
+            .set_value(true);
         self.view.second_mut().clear_search();
         self.view.second_mut().clear_filters();
         self.sync();
-        self.follow_bottom(ctx);
+        self.follow_top(ctx);
     }
 
-    fn follow_bottom(&mut self, ctx: &mut EventCtx<Msg>) {
+    fn follow_top(&mut self, ctx: &mut EventCtx<Msg>) {
         self.set_following(true);
-        self.highlight_bottom();
+        self.highlight_top();
         self.view.second_mut().reveal_highlighted();
         self.view.second_mut().take_events();
         self.return_to_feed(ctx);
     }
 
     fn action(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
+        if matches!(event, TuiEvent::Key(key) if KeySpec::key_with_modifiers(tuicore::Key::Enter, tuicore::KeyModifiers::SHIFT).matches(*key))
+        {
+            self.header_mut().first_mut().cancel();
+            *self.filter.borrow_mut() = Some(Vec::new());
+            self.sync();
+            self.view.second_mut().clear_selection();
+            ctx.request_layout();
+            ctx.request_redraw();
+            ctx.stop_propagation();
+            return true;
+        }
         if super::App::overview_requested(event) {
             self.reset(ctx);
             ctx.stop_propagation();
@@ -269,47 +391,63 @@ impl Events {
         if super::App::returns_to_data_view(event)
             && (!self.view.second().is_focused()
                 || self.view.second().is_searching()
-                || self.view.first().first().is_open())
+                || self.header().first().is_open())
         {
-            self.view.first_mut().first_mut().cancel();
+            self.header_mut().first_mut().cancel();
             self.return_to_feed(ctx);
             ctx.stop_propagation();
             return true;
         }
         if self.view.second().is_focused()
             && !self.view.second().is_searching()
-            && matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "shift+g")
+            && matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "gg")
         {
-            self.follow_bottom(ctx);
+            self.follow_top(ctx);
             ctx.stop_propagation();
             return true;
         }
-        if self.view.second().is_searching() || self.view.first().first().is_open() {
+        if self.view.second().is_searching() || self.header().first().is_open() {
             return false;
         }
         let TuiEvent::Key(key) = event else {
             return false;
         };
         if KeySpec::shifted('p').matches(*key) {
-            self.view.first_mut().first_mut().open_with_context(ctx);
+            self.header_mut().first_mut().open_with_context(ctx);
             ctx.stop_propagation();
             return true;
         }
         if KeySpec::shifted('t').matches(*key) {
-            self.view
-                .first_mut()
+            self.header_mut()
                 .second_mut()
                 .first_mut()
+                .second_mut()
                 .first_mut()
                 .event(event, ctx);
             self.drain(ctx);
             ctx.stop_propagation();
             return true;
         }
-        if tuicore::keybindings().data_view().bottom_matches(*key)
-            || tuicore::keybindings().end_matches(*key)
-        {
-            self.follow_bottom(ctx);
+        if KeySpec::shifted('n').matches(*key) {
+            self.header_mut()
+                .second_mut()
+                .first_mut()
+                .first_mut()
+                .event(
+                    &TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit("shift+n".into())),
+                    ctx,
+                );
+            self.drain(ctx);
+            ctx.stop_propagation();
+            return true;
+        }
+        if tuicore::keybindings().home_matches(*key) {
+            self.follow_top(ctx);
+            ctx.stop_propagation();
+            return true;
+        }
+        if KeySpec::shifted('x').matches(*key) {
+            ctx.emit(Msg::DeleteEvents(None));
             ctx.stop_propagation();
             return true;
         }
@@ -328,6 +466,8 @@ impl Events {
             }
         } else if KeySpec::plain('r').matches(*key) {
             ctx.emit(Msg::ReplayEvent(id));
+        } else if KeySpec::plain('x').matches(*key) {
+            ctx.emit(Msg::DeleteEvents(Some(id)));
         } else {
             return false;
         }
@@ -336,11 +476,17 @@ impl Events {
     }
 
     fn drain(&mut self, ctx: &mut EventCtx<Msg>) {
-        let following = self.view.first().second().first().second().is_checked();
+        let following = self
+            .header()
+            .second()
+            .first()
+            .second()
+            .second()
+            .is_checked();
         if following != self.following {
             self.following = following;
             if following {
-                self.highlight_bottom();
+                self.highlight_top();
                 self.view.second_mut().reveal_highlighted();
             }
         }
@@ -360,7 +506,7 @@ impl Events {
             }
         }
         if transform_changed {
-            self.highlight_bottom();
+            self.highlight_top();
             self.set_following(true);
             self.view.second_mut().take_events();
         }
@@ -390,7 +536,8 @@ pub(super) fn clean(text: &str) -> String {
 
 fn search_text(row: &Record) -> String {
     format!(
-        "{} {} {} {} {}",
+        "#{} {} {} {} {} {}",
+        row.sequence,
         row.provider,
         row.event.stream,
         row.event.summary,
@@ -425,67 +572,116 @@ impl TuiNode<Msg> for Events {
                 .contains(&row.sequence)
                 .then(|| Style::default().bg(tuicore::theme().surface_bg()))
         });
-        let provider_width = <Dropdown<String, String> as TuiNode<Msg>>::measure(
-            self.view.first().first(),
+        let stream_width = <Dropdown<StreamKey, StreamKey> as TuiNode<Msg>>::measure(
+            self.header().first(),
             LayoutProposal::unbounded(),
         )
         .preferred
         .width;
         let toggle_width = <Toggle<Msg> as TuiNode<Msg>>::measure(
-            self.view.first().second().first().first(),
+            self.header().second().first().second().first(),
             LayoutProposal::unbounded(),
         )
         .preferred
         .width;
         let follow_width = <Toggle<Msg> as TuiNode<Msg>>::measure(
-            self.view.first().second().first().second(),
+            self.header().second().first().second().second(),
             LayoutProposal::unbounded(),
         )
         .preferred
         .width;
-        let controls_width = toggle_width.saturating_add(follow_width).saturating_add(1);
+        let sound_width = <Toggle<Msg> as TuiNode<Msg>>::measure(
+            self.header().second().first().first(),
+            LayoutProposal::unbounded(),
+        )
+        .preferred
+        .width;
+        let filter_width = toggle_width.saturating_add(follow_width).saturating_add(1);
+        let controls_width = sound_width.saturating_add(filter_width).saturating_add(1);
         let status_width =
             line_width(&Line::from(self.status.as_str())).min(u16::MAX as usize) as u16;
-        self.view.first_mut().set_constraints(
-            Constraint::Length(
-                area.width
-                    .saturating_sub(
-                        controls_width
-                            .saturating_add(status_width)
-                            .saturating_add(2),
-                    )
-                    .max(1)
-                    .min(area.width)
-                    .min(provider_width),
-            ),
+        let delete_width = self
+            .header()
+            .second()
+            .second()
+            .first()
+            .second()
+            .measure(LayoutProposal::unbounded())
+            .preferred
+            .width;
+        let narrow = area.width
+            < controls_width
+                .saturating_add(delete_width)
+                .saturating_add(status_width)
+                .saturating_add(4);
+        self.view.set_constraints(
+            Constraint::Length(if narrow { 2 } else { 1 }),
             Constraint::Fill(1),
         );
         self.view
             .first_mut()
+            .set_constraints(Constraint::Length(1), Constraint::Length(u16::from(narrow)));
+        let inline_status_width = if narrow { 0 } else { status_width };
+        self.header_mut().set_constraints(
+            Constraint::Length(
+                area.width
+                    .saturating_sub(
+                        controls_width
+                            .saturating_add(delete_width)
+                            .saturating_add(inline_status_width)
+                            .saturating_add(3),
+                    )
+                    .max(1)
+                    .min(area.width)
+                    .min(stream_width),
+            ),
+            Constraint::Fill(1),
+        );
+        self.header_mut()
             .second_mut()
             .set_constraints(Constraint::Length(controls_width), Constraint::Fill(1));
-        self.view
-            .first_mut()
+        self.header_mut().second_mut().first_mut().set_constraints(
+            Constraint::Length(sound_width),
+            Constraint::Length(filter_width),
+        );
+        self.header_mut()
             .second_mut()
             .first_mut()
+            .second_mut()
             .set_constraints(
                 Constraint::Length(toggle_width),
                 Constraint::Length(follow_width),
             );
+        let status = self.header_mut().second_mut().second_mut();
+        status.set_constraints(Constraint::Fill(1), Constraint::Length(inline_status_width));
+        status
+            .first_mut()
+            .set_constraints(Constraint::Fill(1), Constraint::Length(delete_width));
+        status.second_mut().set_text("");
+        self.view.first_mut().second_mut().set_text("");
         let result = <EventView as TuiNode<Msg>>::layout(&mut self.view, area, ctx);
         if self.following {
             self.view.second_mut().reveal_highlighted();
         }
-        let width = self.view.first().second().child_areas().1.width;
-        self.view
-            .first_mut()
-            .second_mut()
-            .second_mut()
-            .set_text(format!(
-                "{}{}",
-                " ".repeat(usize::from(width.saturating_sub(status_width))),
-                self.status,
-            ));
+        let width = if narrow {
+            self.view.first().child_areas().1.width
+        } else {
+            self.header().second().second().child_areas().1.width
+        };
+        let status = format!(
+            "{}{}",
+            " ".repeat(usize::from(width.saturating_sub(status_width))),
+            self.status,
+        );
+        if narrow {
+            self.view.first_mut().second_mut().set_text(status);
+        } else {
+            self.header_mut()
+                .second_mut()
+                .second_mut()
+                .second_mut()
+                .set_text(status);
+        }
         result
     }
     fn render<'a>(&'a self, frame: &mut Frame, area: Rect, ctx: &mut RenderCtx<'a>) {
@@ -512,13 +708,13 @@ impl TuiNode<Msg> for Events {
             .is_some_and(|key| key.as_str() == "second");
         let controls_escape = !feed_route && super::App::returns_to_data_view(event);
         if controls_escape {
-            self.view.first_mut().first_mut().cancel();
+            self.header_mut().first_mut().cancel();
             self.return_to_feed(ctx);
             ctx.stop_propagation();
             return EventOutcome::Handled;
         }
         let follow_hotkey = self.view.second().is_focused()
-            && matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "shift+g");
+            && matches!(event, TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit(sequence)) if sequence == "gg");
         if (feed_route || follow_hotkey || super::App::overview_requested(event))
             && self.action(event, ctx)
         {
@@ -575,13 +771,55 @@ impl TuiNode<Msg> for Events {
 }
 
 impl super::App {
+    pub(super) fn confirm_delete_events(&mut self, sequence: Option<i64>, ctx: &mut EventCtx<Msg>) {
+        let (title, prose) = if sequence.is_some() {
+            ("Delete event", "Delete this event and history?")
+        } else {
+            ("Delete all events", "Delete all events and history?")
+        };
+        let modal = super::dialogs::dialog(title)
+            .actions([
+                tuicore::DialogAction::new("Ok")
+                    .hotkey(KeySpec::plain('o'))
+                    .on_trigger(move || Msg::DeleteEventsConfirmed(sequence)),
+                tuicore::DialogAction::new("Cancel")
+                    .hotkey(KeySpec::plain('c'))
+                    .on_trigger(|| Msg::Close),
+            ])
+            .host(tuicore::Flex::column().child(
+                "warning",
+                Paragraph::new(prose),
+                tuicore::FlexItem::fit_content(),
+            ));
+        self.intent = None;
+        self.open_compact(Box::new(modal), ctx);
+    }
+
+    pub(super) fn update_event_snapshot(&mut self, snapshot: Snapshot) -> bool {
+        if snapshot.error.is_none()
+            && let Some(count) = snapshot.accepted_attempts
+        {
+            if self.event_acceptance_sound
+                && self
+                    .event_acceptance_count
+                    .is_some_and(|previous| count > previous)
+            {
+                self.service.play_event_acceptance_sound();
+            }
+            self.event_acceptance_count = Some(count);
+        }
+        self.pages_mut().update_events(snapshot)
+    }
+
     pub(super) fn sync_overview_tab(&mut self, ctx: &mut EventCtx<Msg>) {
         let index = self.tabs_mut().selected_index();
         if index == 1 {
+            self.rules_active = false;
             self.events_active = true;
             self.providers_active = false;
             self.pages_mut().select_events();
-        } else if index == 2 {
+        } else if index == 3 {
+            self.rules_active = false;
             if !self.providers_active {
                 ctx.focus(tuicore::FocusRequest::Target(FocusId::new(
                     super::providers::FOCUS,
@@ -590,10 +828,21 @@ impl super::App {
             self.providers_active = true;
             self.events_active = false;
             self.pages_mut().select_providers();
+        } else if index == self.rules_tab_index() {
+            if !self.rules_active {
+                ctx.focus(tuicore::FocusRequest::Target(FocusId::new(
+                    super::rules::FOCUS,
+                )));
+            }
+            self.rules_active = true;
+            self.events_active = false;
+            self.providers_active = false;
+            self.pages_mut().select_rules();
         } else {
             let sessions = self.service.opencode_enabled() && index == 0;
             if self.events_active
                 || self.providers_active
+                || self.rules_active
                 || sessions != self.attached_sessions_only
             {
                 self.handle_message(Msg::SetAttachedSessionsOnly(sessions), ctx);
@@ -609,17 +858,29 @@ impl super::App {
                 |character| !matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'),
             )
             .collect();
-        let modal = super::dialogs::dialog("Event details").host(
-            tuicore::Flex::column().child(
-                "event-json",
+        let shared = self.pages_mut().rules_state();
+        let modal = tuicore::Tabs::dialog(vec![
+            tuicore::Tab::new(
+                "Acceptances",
+                super::rules::Rules::for_event(
+                    shared,
+                    row.sequence,
+                    row.acceptances.clone(),
+                    self.keys,
+                ),
+            ),
+            tuicore::Tab::new(
+                "Event details",
                 tuicore::SyntaxHighlighter::new(
                     content,
                     tuicore::Language::guess(Some("event.json"), ""),
                 )
                 .wrap(true),
-                tuicore::FlexItem::fill(1),
             ),
-        );
+        ])
+        .variant(tuicore::TabsVariant::OneRow)
+        .edge_borders(ratatui::widgets::Borders::TOP)
+        .on_close(|_| Msg::Close);
         self.intent = None;
         self.open(Box::new(modal), ctx);
         self.details_open = true;
@@ -638,8 +899,15 @@ impl super::App {
             None => return false,
         };
         self.event_action = None;
+        let deletion = self.event_deletion.take();
         match result {
-            Ok(_) => self.service.poll_events(),
+            Ok(_) => {
+                if let Some(sequence) = deletion {
+                    self.pages_mut().forget_event(sequence);
+                }
+                self.service.poll_events();
+                self.service.poll_rules();
+            }
             Err(error) => self.notify(tuicore::Notification::error(
                 "Event action failed",
                 error.to_string(),

@@ -14,7 +14,7 @@ import unittest
 from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from providers import PROFILES, create_providers, sample
+from providers import PROVIDERS, create_providers, sample
 
 SOURCE = Path(__file__).resolve().parents[1] / "assets/providers/provider.py"
 SPEC = importlib.util.spec_from_file_location("provider_fixture", SOURCE)
@@ -32,14 +32,14 @@ class ProviderTests(unittest.TestCase):
         directory = create_providers(self.root)
         model = json.loads((directory / "compose.providers.yaml").read_text())
         self.assertEqual(len(model["services"]), 4)
-        for profile in PROFILES:
-            name = profile.replace("_", "-")
+        for profile, name in PROVIDERS.items():
             package = directory / name
             self.assertTrue((package / "Dockerfile").is_file())
             self.assertEqual((package / "src/provider.py").read_bytes(), SOURCE.read_bytes())
-            event = json.loads((package / "sample.json").read_text())
-            self.assertEqual(event["profile"], profile)
-            self.assertTrue(event["attachments"] and event["people"] and event["relations"])
+            events = json.loads((package / "sample.json").read_text())
+            for event in events:
+                self.assertEqual(event["profile"], profile)
+                self.assertTrue(event["attachments"] and event["people"] and event["relations"])
             self.assertEqual(model["services"][name]["build"]["context"], f"./{name}")
             self.assertNotIn("ports", model["services"][name])
         with self.assertRaisesRegex(ValueError, "Refusing to overwrite"):
@@ -73,6 +73,30 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(provider.value("sequence"), "10")
         self.assertIsNone(provider.value("pending"))
 
+    def test_stream_sequences_count_independently_across_batches_and_restart(self):
+        state = self.root / "streams.sqlite3"
+        events = []
+
+        def acknowledge(path, payload=None):
+            events.extend(payload["events"])
+            return {"receipts": [{"event_id": event["event_id"]} for event in payload["events"]]}
+
+        for batch_size in [5, 7]:
+            provider = MODULE.Provider(state, sample("message"), "http://localhost", "unused", batch_size)
+            provider.request = acknowledge
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    provider.deliver()
+            finally:
+                provider.close()
+        self.assertEqual([event["metadata"]["sample_sequence"] for event in events], list(range(12)))
+        for stream in ["messages", "reactions"]:
+            stream_events = [event for event in events if event["stream"] == stream]
+            self.assertEqual([event["metadata"]["stream_sequence"] for event in stream_events], list(range(1, 7)))
+            self.assertEqual([event["metadata"]["stream_sequence"] for event in stream_events
+                              if event["metadata"]["stream_sequence"] % 3 == 0], [3, 6])
+        self.assertEqual({event["data"]["channel"] for event in events}, {"#pull-requests", "#support"})
+
     def test_feedback_is_persisted_once_and_repeated_delivery_is_acknowledged(self):
         provider = MODULE.Provider(self.root / "state.sqlite3", sample("ticket"), "http://localhost", "unused")
         self.addCleanup(provider.close)
@@ -90,6 +114,48 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(output.getvalue().count("feedback received"), 1)
         self.assertEqual(provider.db.execute("SELECT count(*) FROM feedback").fetchone()[0], 1)
         self.assertEqual(requests.count("/v1/notifications/7/ack"), 2)
+
+    def test_stopping_a_stream_halts_generation_and_resumes_without_buffered_events(self):
+        provider = MODULE.Provider(self.root / "streams.sqlite3", sample("message"), "http://localhost", "unused", 4)
+        self.addCleanup(provider.close)
+        pending = []
+        provider.request = lambda path, payload=None: pending.append(payload) or (_ for _ in ()).throw(URLError("lost receipt"))
+        with self.assertRaises(URLError):
+            provider.deliver()
+        ignored_ids = {event["event_id"] for event in pending[0]["events"] if event["stream"] == "messages"}
+        emitted = []
+        controls = [{"stream": "messages", "enabled": False, "revision": 2}]
+        acknowledgments = []
+
+        def request(path, payload=None):
+            if path == "/v1/streams":
+                return {"streams": controls}
+            if path == "/v1/streams/ack":
+                self.assertEqual("messages" in provider.enabled_streams, payload["enabled"])
+                if not payload["enabled"]:
+                    batch = json.loads(provider.value("pending") or '{"events": []}')
+                    self.assertTrue(all(event["stream"] != "messages" for event in batch["events"]))
+                acknowledgments.append(dict(payload))
+                return None
+            emitted.extend(payload["events"])
+            return {"receipts": [{"event_id": event["event_id"]} for event in payload["events"]]}
+
+        provider.request = request
+        with contextlib.redirect_stdout(io.StringIO()):
+            provider.receive_controls()
+            provider.deliver()
+            provider.deliver()
+            self.assertTrue(all(event["stream"] == "reactions" for event in emitted))
+            controls[0] = {"stream": "messages", "enabled": True, "revision": 3}
+            provider.receive_controls()
+            provider.deliver()
+        self.assertEqual([control["enabled"] for control in acknowledgments], [False, True])
+        self.assertTrue(any(event["stream"] == "messages" for event in emitted))
+        self.assertTrue(ignored_ids.isdisjoint(event["event_id"] for event in emitted))
+        provider.enabled_streams.clear()
+        sequence = provider.value("sequence")
+        provider.deliver()
+        self.assertEqual(provider.value("sequence"), sequence)
 
     def test_discarded_batches_advance_the_checkpoint_and_are_not_retried(self):
         provider = MODULE.Provider(self.root / "state.sqlite3", sample("message"), "http://localhost", "unused", 10)
@@ -130,7 +196,7 @@ class ProviderTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "Requires Unix signals")
     def test_sigterm_interrupts_a_pending_request_and_closes_the_checkpoint_cleanly(self):
-        package = create_providers(self.root) / "message"
+        package = create_providers(self.root) / "slack"
         token = self.root / "provider.token"
         token.write_text("a" * 64)
         state = self.root / "state"
@@ -140,6 +206,8 @@ spec = importlib.util.spec_from_file_location("fixture", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 def request(self, path, payload=None):
+    if path != "/v1/events":
+        return {"streams": []}
     print("request-ready", flush=True)
     time.sleep(60)
 close = module.Provider.close

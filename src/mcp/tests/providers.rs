@@ -8,6 +8,15 @@ fn provider_lifecycle_tools_require_approval_before_starting_runtime_resources()
     let server = McpServer::new(service.clone());
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
+        let error = server
+            .delete_provider(Parameters(super::super::DeleteProviderInput {
+                name: "message".into(),
+                confirmed: false,
+            }))
+            .await
+            .err()
+            .unwrap();
+        assert!(error.contains("confirmation_required"));
         assert!(
             server
                 .list_providers()
@@ -17,23 +26,20 @@ fn provider_lifecycle_tools_require_approval_before_starting_runtime_resources()
                 .providers
                 .is_empty()
         );
-        for action in [
-            Action::Start,
-            Action::Stop,
-            Action::Pause,
-            Action::Resume,
-            Action::Restart,
-        ] {
-            let error = server
-                .provider_action(Parameters(super::super::ProviderActionInput {
-                    name: "message".into(),
-                    action,
-                    confirmed: false,
-                }))
-                .await
-                .err()
-                .unwrap();
-            assert!(error.contains("confirmation_required"));
+        for action in [Action::Start, Action::Stop] {
+            for stream in [None, Some("messages".into())] {
+                let error = server
+                    .provider_action(Parameters(super::super::ProviderActionInput {
+                        name: "message".into(),
+                        stream,
+                        action,
+                        confirmed: false,
+                    }))
+                    .await
+                    .err()
+                    .unwrap();
+                assert!(error.contains("confirmation_required"));
+            }
         }
         assert!(service.provider_snapshot().providers.is_empty());
     });

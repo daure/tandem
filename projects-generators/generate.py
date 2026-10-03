@@ -12,7 +12,7 @@ import subprocess
 
 from recipes import REPOSITORIES, create_repositories, local_repository, write, write_json
 from templates import FIXTURES, create_templates
-from providers import create_providers, instance_catalog
+from providers import PROVIDERS, create_providers, instance_catalog
 
 MINIMAL_FIXTURES = ("repo-only", "compose-only", "guidance-only")
 
@@ -78,7 +78,7 @@ def generate(root, seed_commits=False, port=9886):
     write(root / "env.sh", "# Source this file from your shell before starting Tandem.\n"
           + "".join(f"export {key}={shlex.quote(value)}\n" for key, value in environment.items()))
     write_json(root / "fixtures.json", {"environment": environment, "repositories": list(REPOSITORIES),
-                                        "templates": list(FIXTURES), "providers": ["message", "ticket", "system-event", "generic"], "seeded": seed_commits})
+                                        "templates": list(FIXTURES), "providers": list(PROVIDERS.values()), "seeded": seed_commits})
     return root
 
 

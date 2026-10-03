@@ -1,7 +1,22 @@
-use super::{Environments, startup};
-use crate::store::environments::{InstanceInspection, validate_instance_name};
+use super::{Environments, journal, startup};
+use crate::store::environments::{Instance, InstanceInspection, validate_instance_name};
 
 impl Environments {
+    pub(crate) fn session_instance(&self, name: &str) -> Result<Instance, String> {
+        validate_instance_name(name)?;
+        if let Some(instance) = journal::workspace_instance(&self.config, name)? {
+            return Ok(instance);
+        }
+        let inventory = self.list_instances()?;
+        let mut instance = inventory
+            .instances
+            .into_iter()
+            .find(|instance| instance.name == name)
+            .ok_or("instance is unavailable; refresh and try again")?;
+        instance.runtime.stale |= inventory.runtime_error.is_some();
+        Ok(instance)
+    }
+
     pub(crate) fn inspect_instance(&self, name: &str) -> Result<InstanceInspection, String> {
         validate_instance_name(name)?;
         let inventory = self.list_instances()?;

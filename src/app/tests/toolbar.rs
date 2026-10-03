@@ -41,10 +41,9 @@ fn tabs_share_toolbar_controls_and_retain_separate_searches() {
             .clone();
         let route = EventRoute::new(tabs.path.clone());
 
-        for (key, sessions) in [('[', false), (']', true)] {
-            app.dispatch_event(
-                &route,
-                &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
+        for sessions in [false, true] {
+            app.handle_message(
+                Msg::SetAttachedSessionsOnly(sessions),
                 &mut EventCtx::new(settings),
             );
             assert_eq!(app.attached_sessions_only, sessions);
@@ -173,7 +172,7 @@ fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_en
                 assert!(!app.attached_sessions_only);
                 assert_eq!(
                     app.tabs_mut().selected_index(),
-                    if key == '[' { 2 } else { 0 }
+                    if key == '[' { 3 } else { 0 }
                 );
                 assert_eq!(app.providers_active, key == '[');
             }
@@ -206,14 +205,14 @@ fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_en
             .unwrap();
         assert!(app.update_snapshot(snapshot()));
         assert!(!app.attached_sessions_only);
-        assert_eq!(app.tabs_mut().selected_index(), 3);
+        assert_eq!(app.tabs_mut().selected_index(), 4);
         let header =
             rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30))[0].clone();
         assert!(
-            header.contains("Sessions · Events · Providers · Instances"),
+            header.contains("Sessions · Events · Rules · Providers · Instances"),
             "{header}"
         );
-        for _ in 0..3 {
+        for _ in 0..4 {
             app.event(
                 &TuiEvent::Key(KeyEvent::from(Key::Char('['))),
                 &mut EventCtx::new(settings),
@@ -225,7 +224,7 @@ fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_en
 }
 
 #[test]
-fn bracket_navigation_keeps_control_focus_and_the_tab_header_active() {
+fn bracket_navigation_keeps_focus_valid_and_the_tab_header_active() {
     init_ui();
     let mut app = crate::app::root(AppService::for_tests());
     app.update_snapshot(snapshot());
@@ -253,7 +252,7 @@ fn bracket_navigation_keeps_control_focus_and_the_tab_header_active() {
     for target in targets.iter().filter(|target| target.enabled) {
         let mut current = target.clone();
         app.dispatch_focus(target, true, &mut tuicore::FocusCtx::new(settings));
-        for (key, sessions) in [('[', false), (']', true), ('[', false), (']', true)] {
+        for key in ['[', ']', '[', ']'] {
             let mut ctx = EventCtx::new(settings);
             let outcome = app.dispatch_event(
                 &EventRoute::new(current.path.clone()),
@@ -261,17 +260,26 @@ fn bracket_navigation_keeps_control_focus_and_the_tab_header_active() {
                 &mut ctx,
             );
             assert_eq!(outcome, tuicore::EventOutcome::Handled);
-            assert_eq!(app.attached_sessions_only, sessions, "{:?}", target.path);
-            let path = match ctx.focus_request() {
-                Some(tuicore::FocusRequest::Path(path)) => path.clone(),
-                None => current.path.clone(),
-                request => panic!("Unexpected focus request: {request:?}"),
-            };
+            assert_eq!(app.attached_sessions_only, key == ']', "{:?}", target.path);
+            assert_eq!(
+                app.tabs_mut().selected_index(),
+                if key == '[' { 4 } else { 0 }
+            );
             layout.layout(&mut app, Rect::new(0, 0, 130, 30));
             let next = layout
                 .focus_targets()
                 .iter()
-                .find(|candidate| candidate.path == path && candidate.id == target.id)
+                .find(|candidate| {
+                    candidate.enabled
+                        && match ctx.focus_request() {
+                            Some(tuicore::FocusRequest::Target(id)) => candidate.id == *id,
+                            Some(tuicore::FocusRequest::Path(path)) => {
+                                candidate.path == *path && candidate.id == current.id
+                            }
+                            None => candidate.path == current.path && candidate.id == current.id,
+                            request => panic!("Unexpected focus request: {request:?}"),
+                        }
+                })
                 .unwrap();
             app.dispatch_focus(&current, false, &mut tuicore::FocusCtx::new(settings));
             app.dispatch_focus(next, true, &mut tuicore::FocusCtx::new(settings));

@@ -12,7 +12,7 @@ use super::*;
 #[path = "startup_tui.rs"]
 mod tui;
 
-struct Client {
+pub(super) struct Client {
     child: Child,
     input: Option<ChildStdin>,
     replies: mpsc::Receiver<Value>,
@@ -24,7 +24,7 @@ impl Client {
         Self::with_command(fixture.command(&["mcp"]))
     }
 
-    fn with_command(mut command: Command) -> Self {
+    pub(super) fn with_command(mut command: Command) -> Self {
         use std::os::unix::process::CommandExt;
         let mut child = command
             .env("BLOCK_CONFIG", "1")
@@ -63,7 +63,7 @@ impl Client {
         self.input.as_mut().unwrap().flush().unwrap();
     }
 
-    fn request(&mut self, method: &str, params: Value) -> Value {
+    pub(super) fn request(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
         self.send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
@@ -79,7 +79,7 @@ impl Client {
         }
     }
 
-    fn tool(&mut self, name: &str, arguments: Value) -> Value {
+    pub(super) fn tool(&mut self, name: &str, arguments: Value) -> Value {
         let result = self.request("tools/call", json!({"name": name, "arguments": arguments}));
         assert_ne!(result["isError"], true, "{result}");
         if let Some(value) = result.get("structuredContent") {

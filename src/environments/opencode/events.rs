@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -69,9 +69,20 @@ pub(crate) struct Changes {
     streams: BTreeMap<String, tokio::task::JoinHandle<()>>,
     signal: Arc<Signal>,
     signature: Vec<String>,
+    servers: BTreeSet<String>,
+    evidence_changed: bool,
 }
 
 impl Changes {
+    pub(crate) fn evidence_changed(&self) -> bool {
+        self.evidence_changed
+    }
+    pub(crate) fn errors(&self) -> BTreeMap<String, String> {
+        let mut errors = self.signal.errors();
+        errors.retain(|server, _| self.servers.contains(server));
+        errors
+    }
+
     pub(crate) fn new(observer: &Observer, signal: Arc<Signal>) -> Result<Self, String> {
         let presence = observer.presence.clone();
         let daemons = observer.daemons.clone();
@@ -125,6 +136,8 @@ impl Changes {
             streams: BTreeMap::new(),
             signal,
             signature: Vec::new(),
+            servers: BTreeSet::new(),
+            evidence_changed: false,
         })
     }
 
@@ -134,14 +147,14 @@ impl Changes {
         snapshot: &Snapshot,
     ) -> Result<bool, String> {
         let observer = observer.clone();
-        let (presences, mut servers) = tokio::task::spawn_blocking(move || observer.inventory())
-            .await
-            .map_err(|error| error.to_string())?;
-        for session in &snapshot.sessions {
-            if let Some(server) = transport::local_server(&session.server) {
-                servers.entry(server).or_default();
-            }
-        }
+        let sessions = snapshot.sessions.clone();
+        let (presences, sources, servers) = tokio::task::spawn_blocking(move || {
+            let (presences, sources) = observer.inventory();
+            let (_, servers) = observer.inventory_with_sessions(&sessions);
+            (presences, sources, servers)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
         self.streams.retain(|server, task| {
             if servers.contains_key(server) {
                 true
@@ -193,9 +206,15 @@ impl Changes {
                 value.to_string()
             })
             .collect::<Vec<_>>();
+        if !sources.is_empty() {
+            signature.push(format!("{sources:?}"));
+        }
         signature.sort();
-        let changed = signature != self.signature;
+        let servers = servers.into_keys().collect();
+        self.evidence_changed = signature != self.signature;
+        let changed = self.evidence_changed || servers != self.servers;
         self.signature = signature;
+        self.servers = servers;
         Ok(changed)
     }
 }

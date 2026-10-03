@@ -20,7 +20,7 @@ fn tab_creation_and_navigation_use_the_exact_client_and_preserve_the_zellij_pane
                 value["tabs"] = json!([background]);
             }
             fs::write(receipt, value.to_string()).unwrap();
-            let expected_body = if focus { json!({"sessionID":"ses_background"}) } else { json!({"directory":directory}) }.to_string();
+            let expected_body = if focus { json!({"sessionID":"ses_background"}) } else { json!({"directory":directory, "instructions":"Services won't start automatically"}) }.to_string();
             let controller = tokio::spawn(async move {
                 let (mut stream, _) = tokio::time::timeout(std::time::Duration::from_secs(2), listener.accept()).await.expect("client control request").unwrap();
                 let mut bytes = Vec::new();
@@ -49,7 +49,7 @@ fn tab_creation_and_navigation_use_the_exact_client_and_preserve_the_zellij_pane
             let target = Pane { session: "main".into(), id: 7, tab_id: 99, tab_name: "stale".into() };
             let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 if focus { observer.jump("ses_background", &target, "other").await.map(|_| None) }
-                else { observer.new_session_tab(directory, "other", Some(&target)).await }
+                else { observer.new_session_tab(directory, "other", Some(&target), Some("Services won't start automatically")).await }
             }).await.unwrap();
             controller.await.unwrap();
             let calls = fs::read_to_string(root.path().join("calls")).unwrap();
@@ -84,7 +84,7 @@ fn workspaces_without_a_tab_capable_client_use_client_launching() {
     for destination in [None, Some(&pane)] {
         assert_eq!(
             runtime
-                .block_on(observer.new_session_tab(directory, "main", destination))
+                .block_on(observer.new_session_tab(directory, "main", destination, None))
                 .unwrap(),
             None
         );
@@ -99,7 +99,7 @@ fn workspaces_without_a_tab_capable_client_use_client_launching() {
     );
     assert_eq!(
         runtime
-            .block_on(observer.new_session_tab(directory, "main", Some(&pane)))
+            .block_on(observer.new_session_tab(directory, "main", Some(&pane), None))
             .unwrap(),
         None
     );

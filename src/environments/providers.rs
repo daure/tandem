@@ -13,6 +13,9 @@ use crate::store::providers::{
     Action, ActionError, ActionOutcome, Manifest, Provider, RuntimeObservation, Snapshot, Status,
 };
 
+mod deletion;
+mod streams;
+
 #[derive(Clone)]
 pub(crate) struct Providers {
     config: Config,
@@ -61,6 +64,7 @@ impl Providers {
             container_id: None,
             error: None,
             operation: None,
+            streams: Vec::new(),
         })
     }
 
@@ -83,6 +87,7 @@ impl Providers {
                     container_id: None,
                     error: Some(error),
                     operation: None,
+                    streams: Vec::new(),
                 });
                 providers.insert(name, provider);
             }
@@ -110,6 +115,7 @@ impl Providers {
                 container_id: None,
                 error: None,
                 operation: None,
+                streams: Vec::new(),
             });
             provider.error = provider.error.clone().or(error);
             provider.manifest = serde_json::from_str(&manifest)
@@ -132,6 +138,11 @@ impl Providers {
                     provider.error = Some(issue.clone());
                     error = Some(issue);
                 }
+            }
+            if let Some(manifest) = &provider.manifest {
+                provider.streams = EventStore::open(&self.config)
+                    .and_then(|store| store.provider_streams(manifest, provider.status))
+                    .map_err(|error| error.to_string())?;
             }
         }
         Ok(Snapshot {
@@ -196,10 +207,12 @@ impl Providers {
         execute: impl FnOnce() -> Result<T, ActionError>,
     ) -> Result<T, ActionError> {
         crate::store::environments::validate_name(name)?;
+        let _package = gateway::shared_lock(&self.config, &format!("provider-package-{name}"))?;
         let _gate = gateway::lock(
             &self.config,
             &format!("provider-{}-{name}", self.config.namespace),
         )?;
+        self.ensure_not_deleting(name)?;
         let ingestion = if action == Action::Logs {
             None
         } else {
@@ -208,8 +221,7 @@ impl Providers {
         let result = execute();
         if let Some((store, source, previous)) = ingestion
             && result.is_err()
-            && (matches!(action, Action::Start | Action::Resume | Action::Restart)
-                || matches!(result, Err(ActionError::Unavailable(_))))
+            && (action == Action::Start || matches!(result, Err(ActionError::Unavailable(_))))
         {
             store
                 .set_ingestion_enabled(&source, previous)
@@ -250,12 +262,9 @@ impl Providers {
         let manifest: Manifest =
             serde_json::from_str(&manifest).map_err(|error| error.to_string())?;
         let store = EventStore::open(&self.config).map_err(|error| error.to_string())?;
-        // Persist before Docker work so the detached sidecar observes stop/pause immediately.
+        // Persist before Docker work so the detached sidecar observes Stop immediately.
         let previous = store
-            .set_ingestion_enabled(
-                &manifest.name,
-                !matches!(action, Action::Stop | Action::Pause),
-            )
+            .set_ingestion_enabled(&manifest.name, action != Action::Stop)
             .map_err(|error| error.to_string())?;
         Ok(Some((store, manifest.name, previous)))
     }
@@ -268,25 +277,17 @@ impl Providers {
             return Err(ActionError::Unavailable(reason));
         }
         if action == Action::Start {
-            if let Some(container) = &container
-                && container["State"]["Running"].as_bool() == Some(true)
-            {
-                provider_sidecar::ensure(&self.config)?;
-                return observed_outcome(
-                    "Provider is already running; configuration preserved".into(),
-                    container,
-                )
+            return self
+                .start_collector(name, container.as_ref(), None)
                 .map_err(Into::into);
-            }
-            return self.start(name).map_err(Into::into);
         }
         let container = container.ok_or("provider has no owned container")?;
         let id = container["Id"].as_str().ok_or("collector ID missing")?;
         let paused = container["State"]["Paused"].as_bool() == Some(true);
-        if matches!(action, Action::Resume | Action::Restart) {
-            provider_sidecar::ensure(&self.config)?;
+        if action == Action::Stop {
+            self.invalidate_stream_controls(name)?;
         }
-        if matches!(action, Action::Stop | Action::Restart) && paused {
+        if action == Action::Stop && paused {
             let mut unpause = command::docker();
             unpause.args(["unpause", id]);
             command::run(unpause, Duration::from_secs(20), None)?;
@@ -295,15 +296,6 @@ impl Providers {
         match action {
             Action::Stop => {
                 command_.args(["stop", "--timeout", "10", id]);
-            }
-            Action::Pause => {
-                command_.args(["pause", id]);
-            }
-            Action::Resume => {
-                command_.args(["unpause", id]);
-            }
-            Action::Restart => {
-                command_.args(["restart", "--timeout", "10", id]);
             }
             Action::Logs => {
                 command_.args(["logs", "--tail", "100", id]);
@@ -323,24 +315,56 @@ impl Providers {
         }
         let observed = self.inspect_containers(name, &[id])?;
         let running = observed["State"]["Running"].as_bool() == Some(true);
-        let paused = observed["State"]["Paused"].as_bool() == Some(true);
-        if !match action {
-            Action::Stop => !running,
-            Action::Pause => paused,
-            Action::Resume | Action::Restart => running && !paused,
-            _ => false,
-        } {
+        if running {
             return Err("provider did not reach the requested runtime state".into());
         }
         observed_outcome(format!("Provider {name}: {action:?}"), &observed).map_err(Into::into)
     }
 
-    fn start(&self, name: &str) -> Result<ActionOutcome, String> {
+    fn start_collector(
+        &self,
+        name: &str,
+        container: Option<&Value>,
+        only_stream: Option<&str>,
+    ) -> Result<ActionOutcome, String> {
+        if let Some(container) = container
+            && container["State"]["Running"].as_bool() == Some(true)
+        {
+            provider_sidecar::ensure(&self.config)?;
+            self.prepare_stream_controls(name, only_stream)?;
+            let id = container["Id"].as_str().ok_or("collector ID missing")?;
+            if container["State"]["Paused"].as_bool() == Some(true) {
+                let mut unpause = command::docker();
+                unpause.args(["unpause", id]);
+                command::run(unpause, Duration::from_secs(20), None)?;
+            }
+            let observed = self.inspect_containers(name, &[id])?;
+            if container_status(Some(&observed)) != Status::Running {
+                return Err("provider collector failed to run; inspect its logs".into());
+            }
+            return observed_outcome(format!("Provider {name} started"), &observed);
+        }
+        self.start(name, only_stream)
+    }
+
+    fn start(&self, name: &str, only_stream: Option<&str>) -> Result<ActionOutcome, String> {
         let definition = self.definition(name)?;
         let manifest = definition
             .manifest
             .as_ref()
             .ok_or("provider manifest missing")?;
+        if let Some(stream) = only_stream
+            && (!manifest.stream_control || !manifest.streams.iter().any(|name| name == stream))
+        {
+            return Err("Provider does not support controls for this stream".into());
+        }
+        let _source = gateway::lock(
+            &self.config,
+            &format!(
+                "provider-source-{}-{}",
+                self.config.namespace, manifest.name
+            ),
+        )?;
         let token = EventStore::open(&self.config)
             .map_err(|error| error.to_string())?
             .provider_credential_file(&manifest.name)
@@ -374,6 +398,9 @@ impl Providers {
         }
         let source = serde_json::to_string(&compose).map_err(|error| error.to_string())?;
         self.save_launch(&definition, &source)?;
+        EventStore::open(&self.config)
+            .and_then(|store| store.prepare_streams_for(manifest, only_stream))
+            .map_err(|error| error.to_string())?;
         let runtime = super::runtime_db::directory(&self.config)?
             .join("providers")
             .join(name);
@@ -397,9 +424,14 @@ impl Providers {
         let observed = self
             .container(name)?
             .ok_or("provider startup produced no owned collector")?;
-        if observed["State"]["Running"].as_bool() != Some(true) {
+        if observed["State"]["Running"].as_bool() != Some(true)
+            || observed["State"]["Paused"].as_bool() == Some(true)
+        {
             return Err("provider collector failed to run; inspect its logs".into());
         }
+        EventStore::open(&self.config)
+            .and_then(|store| store.collector_started(&manifest.name))
+            .map_err(|error| error.to_string())?;
         observed_outcome(format!("Provider {name} started"), &observed)
     }
 

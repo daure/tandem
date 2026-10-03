@@ -188,6 +188,10 @@ pub(crate) struct Instance {
 }
 
 impl Instance {
+    pub(crate) fn default_start_instance() -> bool {
+        true
+    }
+
     pub fn startup_error(&self) -> Option<String> {
         self.services
             .iter()
@@ -318,6 +322,7 @@ pub(crate) struct Instructions {
     pub workspaces_root: String,
     pub template_repository_root: String,
     pub provider_templates_root: String,
+    pub rule_templates_root: String,
     pub gateway_origin: String,
     pub manifest_schema: serde_json::Value,
 }

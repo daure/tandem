@@ -241,13 +241,17 @@ pub(crate) struct Record {
     pub received_at: String,
     pub event: Event,
     pub attempts: Vec<Attempt>,
+    #[serde(default)]
+    pub acceptances: Vec<super::rules::Acceptance>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub(crate) struct Snapshot {
     pub records: Vec<Record>,
     pub total: u64,
+    pub accepted_attempts: Option<u64>,
     pub provider_totals: std::collections::BTreeMap<String, u64>,
+    pub provider_handovers: std::collections::BTreeMap<String, u64>,
     pub error: Option<String>,
 }
 
@@ -277,6 +281,7 @@ pub(crate) enum NotificationKind {
     Received,
     Replayed,
     Acknowledged,
+    Assigned,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -287,6 +292,14 @@ pub(crate) struct ProviderNotification {
     pub attempt_id: i64,
     pub kind: NotificationKind,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_revision: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
 }
 
 #[derive(Debug)]

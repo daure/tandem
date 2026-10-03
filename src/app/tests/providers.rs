@@ -13,6 +13,8 @@ fn provider(name: &str, status: Status) -> Provider {
             protocol: "tandem-events-v1".into(),
             description: format!("Sample {name} provider"),
             feedback: vec![],
+            streams: vec![],
+            stream_control: false,
         }),
         available: true,
         status,
@@ -20,6 +22,7 @@ fn provider(name: &str, status: Status) -> Provider {
             .then(|| format!("container-{name}")),
         error: None,
         operation: None,
+        streams: vec![],
     }
 }
 
@@ -28,26 +31,16 @@ fn provider_menus_offer_actions_for_the_observed_runtime_state() {
     use crate::app::row_actions::{Command, Target};
 
     for (status, expected) in [
-        (
-            Status::NotStarted,
-            [true, false, false, false, false, false],
-        ),
-        (Status::Running, [false, true, true, false, true, true]),
-        (Status::Paused, [false, true, false, true, true, true]),
-        (Status::Stopped, [true, false, false, false, true, true]),
-        (Status::Unknown, [false, false, false, false, false, false]),
+        (Status::NotStarted, [true, false, false]),
+        (Status::Running, [false, true, true]),
+        (Status::Paused, [true, true, true]),
+        (Status::Stopped, [true, false, true]),
+        (Status::Unknown, [false, false, false]),
     ] {
         let target = Target::Provider(Box::new(provider("message", status)));
-        for (command, enabled) in [
-            Command::Start,
-            Command::Stop,
-            Command::Pause,
-            Command::Resume,
-            Command::Restart,
-            Command::Logs,
-        ]
-        .into_iter()
-        .zip(expected)
+        for (command, enabled) in [Command::Start, Command::Stop, Command::Logs]
+            .into_iter()
+            .zip(expected)
         {
             assert_eq!(
                 target.enabled(command),
@@ -70,7 +63,7 @@ fn provider_menus_offer_actions_for_the_observed_runtime_state() {
     let mut row = provider("message", Status::Running);
     row.operation = Some(Action::Stop);
     let target = Target::Provider(Box::new(row));
-    assert!(!target.enabled(Command::Pause));
+    assert!(!target.enabled(Command::Stop));
     assert!(!target.enabled(Command::Logs));
 }
 
@@ -94,7 +87,7 @@ fn unavailable_provider_shortcuts_warn_before_confirmation_or_execution() {
         .iter()
         .find(|target| target.id.as_str() == crate::app::providers::FOCUS)
         .unwrap();
-    for key in ['a', 'r', 'l'] {
+    for key in ['o'] {
         let mut ctx = EventCtx::default();
         app.dispatch_event(
             &EventRoute::new(target.path.clone()),
@@ -155,7 +148,7 @@ fn a_running_provider_action_allows_stopping_another_provider() {
     app.provider_actions
         .push(crate::app::providers::PendingAction {
             name: "ticket".into(),
-            action: Action::Restart,
+            action: Action::Stop,
             receiver,
         });
 
@@ -184,7 +177,7 @@ fn a_running_provider_action_blocks_another_action_on_the_same_provider() {
     app.provider_actions
         .push(crate::app::providers::PendingAction {
             name: "message".into(),
-            action: Action::Restart,
+            action: Action::Stop,
             receiver,
         });
 
@@ -207,7 +200,7 @@ fn concurrent_provider_actions_report_completion_without_losing_pending_results(
     let (ticket_sender, ticket_receiver) = tokio::sync::oneshot::channel();
     let (message_sender, message_receiver) = tokio::sync::oneshot::channel();
     for (name, action, receiver) in [
-        ("ticket", Action::Restart, ticket_receiver),
+        ("ticket", Action::Start, ticket_receiver),
         ("message", Action::Stop, message_receiver),
     ] {
         app.provider_actions
@@ -228,13 +221,13 @@ fn concurrent_provider_actions_report_completion_without_losing_pending_results(
         "message stopped"
     );
 
-    ticket_sender.send(Ok("ticket restarted".into())).unwrap();
+    ticket_sender.send(Ok("ticket started".into())).unwrap();
     assert!(app.poll_provider_action());
     assert!(app.provider_actions.is_empty());
     assert_eq!(app.notifications.center().history().len(), 2);
     assert_eq!(
         app.notifications.center().history().last().unwrap().body(),
-        "ticket restarted"
+        "ticket started"
     );
     assert!(!app.poll_provider_action());
 }
@@ -261,7 +254,7 @@ fn provider_runtime_preconditions_warn_while_execution_failures_report_errors() 
         app.provider_actions
             .push(crate::app::providers::PendingAction {
                 name: "message".into(),
-                action: Action::Pause,
+                action: Action::Stop,
                 receiver,
             });
         sender.send(Err(error)).unwrap();
@@ -275,14 +268,14 @@ fn provider_runtime_preconditions_warn_while_execution_failures_report_errors() 
 }
 
 #[test]
-fn provider_shortcuts_choose_start_stop_pause_resume_and_restart_from_runtime_state() {
+fn provider_shortcuts_choose_start_stop_from_runtime_state() {
     init_ui();
     let mut app = root(AppService::for_tests());
-    for (status, start_stop, pause_resume) in [
-        (Status::NotStarted, Action::Start, Action::Pause),
-        (Status::Running, Action::Stop, Action::Pause),
-        (Status::Paused, Action::Stop, Action::Resume),
-        (Status::Stopped, Action::Start, Action::Pause),
+    for (status, start_stop) in [
+        (Status::NotStarted, Action::Start),
+        (Status::Running, Action::Stop),
+        (Status::Paused, Action::Stop),
+        (Status::Stopped, Action::Start),
     ] {
         app.pages_mut().update_providers(Snapshot {
             providers: vec![provider("message", status)],
@@ -300,11 +293,7 @@ fn provider_shortcuts_choose_start_stop_pause_resume_and_restart_from_runtime_st
             .iter()
             .find(|target| target.id.as_str() == crate::app::providers::FOCUS)
             .unwrap();
-        for (key, expected) in [
-            ('s', start_stop),
-            ('a', pause_resume),
-            ('r', Action::Restart),
-        ] {
+        for (key, expected) in [('s', start_stop), ('o', Action::Logs)] {
             let mut ctx = EventCtx::default();
             app.dispatch_event(
                 &EventRoute::new(target.path.clone()),
@@ -349,7 +338,7 @@ fn compact_provider_rows_show_full_history_counts_and_refresh_without_runtime_ch
     let lines: Vec<_> = text.lines().collect();
     let message = lines
         .iter()
-        .position(|line| line.contains(" dev-message ·  0/662 · Running"))
+        .position(|line| line.contains(" dev-message ·  0/662 · Healthy"))
         .unwrap();
     assert!(
         lines[message + 1].contains(" dev-ticket ·  0/38 · Stopped"),
@@ -374,7 +363,7 @@ fn compact_provider_rows_show_full_history_counts_and_refresh_without_runtime_ch
     assert!(
         render(&mut app, 130)
             .1
-            .contains(" dev-message ·  0/663 · Running")
+            .contains(" dev-message ·  0/663 · Healthy")
     );
 }
 
@@ -394,7 +383,7 @@ fn render(app: &mut App, width: u16) -> (tuicore::LayoutCtx, String) {
 }
 
 #[test]
-fn event_and_provider_details_share_the_bottom_docked_size_across_terminal_resizes() {
+fn event_details_provider_logs_and_details_share_the_bottom_docked_size_across_terminal_resizes() {
     init_ui();
     let mut app = root(AppService::for_tests());
     let row = rows::from_snapshot(&super::snapshot()).remove(0);
@@ -404,9 +393,26 @@ fn event_and_provider_details_share_the_bottom_docked_size_across_terminal_resiz
         received_at: "now".into(),
         event: crate::environments::events::tests::event("sample"),
         attempts: vec![],
+        acceptances: vec![],
     };
-    for kind in ["Event details", "Provider details", "Template details"] {
+    for kind in [
+        "Event details",
+        "Provider details",
+        "Provider logs",
+        "Template details",
+    ] {
         match kind {
+            "Provider logs" => {
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                app.provider_actions
+                    .push(crate::app::providers::PendingAction {
+                        name: "message".into(),
+                        action: Action::Logs,
+                        receiver,
+                    });
+                sender.send(Ok("Collector output".into())).unwrap();
+                assert!(app.poll_provider_action());
+            }
             "Template details" => app.open_details(&row, &mut EventCtx::default()),
             "Event details" => app.open_event(&event, &mut EventCtx::default()),
             _ => app.open_provider_details(
@@ -433,7 +439,7 @@ fn event_and_provider_details_share_the_bottom_docked_size_across_terminal_resiz
 }
 
 #[test]
-fn providers_are_the_third_tab_with_owned_lifecycle_controls_and_confirmation() {
+fn providers_are_the_fourth_tab_with_owned_lifecycle_controls_and_confirmation() {
     init_ui();
     let mut app = crate::app::root(AppService::for_tests());
     app.update_snapshot(super::snapshot());
@@ -446,13 +452,13 @@ fn providers_are_the_third_tab_with_owned_lifecycle_controls_and_confirmation() 
     });
     app.pages_mut()
         .tick(Duration::ZERO, AnimationSettings::default());
-    for _ in 0..2 {
+    for _ in 0..3 {
         app.event(
             &TuiEvent::Key(KeyEvent::from(Key::Char(']'))),
             &mut EventCtx::default(),
         );
     }
-    assert_eq!(app.tabs_mut().selected_index(), 2);
+    assert_eq!(app.tabs_mut().selected_index(), 3);
     assert!(app.providers_active);
     for width in [40, 130] {
         let (layout, text) = render(&mut app, width);
@@ -486,14 +492,10 @@ fn providers_are_the_third_tab_with_owned_lifecycle_controls_and_confirmation() 
     assert!(app.menu_layer().is_active());
     let text = render(&mut app, 130).1;
     for (label, key) in [
-        ("View details", "Enter"),
-        ("Start", "s"),
-        ("Stop", "s"),
-        ("Pause", "a"),
-        ("Resume", "a"),
-        ("Restart", "r"),
-        ("Logs", "l"),
-        ("Events", "e"),
+        ("Provider details", "Enter"),
+        ("Start provider", "s"),
+        ("Stop provider", "s"),
+        ("Logs", "o"),
     ] {
         let line = text
             .lines()
@@ -530,7 +532,7 @@ fn providers_are_the_third_tab_with_owned_lifecycle_controls_and_confirmation() 
         let dialog = layout.overlays().last().unwrap();
         assert!(dialog.area.width <= width.min(60), "{text}");
         assert_eq!(dialog.area.height, 3, "{text}");
-        assert!(text.contains("Start message?"), "{text}");
+        assert!(text.contains("Start message (all streams)?"), "{text}");
         assert!(text.contains("Ok (o) · Cancel (c)"), "{text}");
     }
     app.handle_message(Msg::Close, &mut EventCtx::default());
@@ -542,7 +544,7 @@ fn providers_are_the_third_tab_with_owned_lifecycle_controls_and_confirmation() 
 fn entering_providers_focuses_the_data_view_without_stealing_focus_from_its_controls() {
     init_ui();
     for width in [40, 130] {
-        for previous in [1, 3] {
+        for previous in [2, 4] {
             for (mouse, routed) in [(false, false), (false, true), (true, true)] {
                 let mut app = crate::app::root(AppService::for_tests());
                 app.pages_mut().update_providers(Snapshot {
@@ -576,7 +578,7 @@ fn entering_providers_focuses_the_data_view_without_stealing_focus_from_its_cont
                         modifiers: KeyModifiers::NONE,
                     })
                 } else {
-                    TuiEvent::Key(KeyEvent::from(Key::Char(if previous == 1 {
+                    TuiEvent::Key(KeyEvent::from(Key::Char(if previous == 2 {
                         ']'
                     } else {
                         '['
@@ -625,7 +627,7 @@ fn entering_providers_focuses_the_data_view_without_stealing_focus_from_its_cont
                             .path
                             .keys()
                             .iter()
-                            .any(|key| key.as_str() == "provider-pause-all")
+                            .any(|key| key.as_str() == "provider-start-all")
                     })
                     .unwrap();
                 app.dispatch_focus(control, true, &mut tuicore::FocusCtx::default());
@@ -789,7 +791,7 @@ fn provider_data_view_is_focusable_and_tabbable_in_every_runtime_state() {
 }
 
 #[test]
-fn provider_event_links_apply_an_exact_source_filter_and_restore_source_selection() {
+fn stream_event_links_apply_an_exact_source_filter_and_restore_provider_selection() {
     init_ui();
     let mut app = crate::app::root(AppService::for_tests());
     app.update_snapshot(super::snapshot());
@@ -809,26 +811,30 @@ fn provider_event_links_apply_an_exact_source_filter_and_restore_source_selectio
             received_at: "now".into(),
             event: crate::environments::events::tests::event(&format!("event-{index}")),
             attempts: vec![],
+            acceptances: vec![],
         })
         .collect();
     app.pages_mut()
         .update_events(crate::store::events::Snapshot {
             records: rows,
             total: 2,
+            accepted_attempts: None,
             provider_totals: Default::default(),
+            provider_handovers: Default::default(),
             error: None,
         });
     app.pages_mut()
         .tick(Duration::ZERO, AnimationSettings::default());
     app.handle_message(
-        Msg::ProviderEvents("dev-message".into()),
+        Msg::ProviderStreamEvents("dev-message".into(), "samples".into()),
         &mut EventCtx::default(),
     );
+    super::events::show_all_events(&mut app);
     app.pages_mut()
         .tick(Duration::ZERO, AnimationSettings::default());
     let (layout, text) = render(&mut app, 130);
-    assert!(text.contains(" dev-message · Alex"), "{text}");
-    assert!(!text.contains(" dev-message-other · Alex"), "{text}");
+    assert!(text.contains(" dev-message · #0 · Alex"), "{text}");
+    assert!(!text.contains(" dev-message-other · #1 · Alex"), "{text}");
     let target = layout
         .focus_targets()
         .iter()
@@ -863,70 +869,20 @@ fn provider_event_links_apply_an_exact_source_filter_and_restore_source_selectio
     assert!(
         matches!(action.messages(), [Msg::ProviderAction(name, Action::Stop)] if name == "message")
     );
-    let mut menu = EventCtx::default();
-    app.dispatch_event(
-        &EventRoute::new(target.path.clone()),
-        &TuiEvent::Key(KeyEvent::from(Key::Char('.'))),
-        &mut menu,
-    );
-    for message in menu.drain_messages() {
-        app.handle_message(message, &mut EventCtx::default());
-    }
-    render(&mut app, 130);
-    for character in "Events".chars() {
-        app.event(
-            &TuiEvent::Key(KeyEvent::from(Key::Char(character))),
-            &mut EventCtx::default(),
-        );
-    }
-    app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
-        &mut EventCtx::default(),
-    );
-    app.pages_mut()
-        .tick(Duration::ZERO, AnimationSettings::default());
-    assert!(app.events_active);
-    assert_eq!(app.tabs_mut().selected_index(), 1);
-    let text = render(&mut app, 130).1;
-    assert!(text.contains(" dev-message · Alex"), "{text}");
-    assert!(!text.contains(" dev-message-other · Alex"), "{text}");
 }
 
 #[test]
 fn provider_bulk_controls_follow_aggregate_state_and_share_their_slots_and_hotkeys() {
     init_ui();
     let mut app = root(AppService::for_tests());
-    for (statuses, start_stop, pause_resume) in [
-        (
-            [Status::NotStarted, Status::Stopped],
-            Action::Start,
-            Action::Pause,
-        ),
-        (
-            [Status::Running, Status::Running],
-            Action::Stop,
-            Action::Pause,
-        ),
-        (
-            [Status::Paused, Status::Paused],
-            Action::Stop,
-            Action::Resume,
-        ),
-        (
-            [Status::Running, Status::Paused],
-            Action::Stop,
-            Action::Pause,
-        ),
-        (
-            [Status::Running, Status::Stopped],
-            Action::Start,
-            Action::Pause,
-        ),
-        (
-            [Status::Paused, Status::Stopped],
-            Action::Start,
-            Action::Pause,
-        ),
+    for (statuses, start_stop) in [
+        ([Status::NotStarted, Status::Stopped], Action::Start),
+        ([Status::Running, Status::Running], Action::Stop),
+        ([Status::Paused, Status::Paused], Action::Stop),
+        ([Status::Running, Status::Paused], Action::Stop),
+        ([Status::Running, Status::Stopped], Action::Stop),
+        ([Status::Paused, Status::Stopped], Action::Stop),
+        ([Status::Stopped, Status::Running], Action::Stop),
     ] {
         let snapshot = Snapshot {
             providers: ["message", "ticket"]
@@ -946,27 +902,19 @@ fn provider_bulk_controls_follow_aggregate_state_and_share_their_slots_and_hotke
         for width in [40, 130] {
             let (layout, text) = render(&mut app, width);
             let toolbar = text.lines().nth(1).unwrap();
-            let pause_label = format!("{pause_resume:?}");
             let start_label = format!("{start_stop:?}");
-            let pause = toolbar.find(&pause_label).unwrap();
-            let start = toolbar.find(&start_label).unwrap();
-            let restart = toolbar.find("Restart").unwrap();
-            assert!(pause < start && start < restart, "{text}");
+            assert!(toolbar.contains(&start_label), "{text}");
             if width == 130 {
-                assert!(toolbar.contains(&format!("{pause_label} all")), "{toolbar}");
                 assert!(toolbar.contains(&format!("{start_label} all")), "{toolbar}");
-                assert!(toolbar.trim_end().ends_with("|R|"), "{toolbar}");
+                assert!(toolbar.trim_end().ends_with("|S|"), "{toolbar}");
             }
             let list = layout
                 .focus_targets()
                 .iter()
                 .find(|target| target.id.as_str() == crate::app::providers::FOCUS)
                 .unwrap();
-            for (key, action) in [
-                ('A', pause_resume),
-                ('S', start_stop),
-                ('R', Action::Restart),
-            ] {
+            {
+                let (key, action) = ('S', start_stop);
                 let mut ctx = EventCtx::default();
                 app.dispatch_event(
                     &EventRoute::new(list.path.clone()),
@@ -983,11 +931,7 @@ fn provider_bulk_controls_follow_aggregate_state_and_share_their_slots_and_hotke
                     );
                 }
             }
-            for (slot, action) in [
-                ("provider-pause-all", pause_resume),
-                ("provider-start-all", start_stop),
-                ("provider-restart-all", Action::Restart),
-            ] {
+            for (slot, action) in [("provider-start-all", start_stop)] {
                 let target = layout
                     .focus_targets()
                     .iter()
@@ -1036,14 +980,8 @@ fn provider_bulk_confirmation_targets_only_eligible_idle_providers_and_cancel_ke
     };
     app.pages_mut().update_providers(snapshot);
     for (action, expected) in [
-        (Action::Start, vec!["system_event", "generic"]),
+        (Action::Start, vec!["ticket", "system_event", "generic"]),
         (Action::Stop, vec!["message", "ticket"]),
-        (Action::Pause, vec!["message"]),
-        (Action::Resume, vec!["ticket"]),
-        (
-            Action::Restart,
-            vec!["message", "ticket", "system_event", "missing"],
-        ),
     ] {
         app.handle_message(Msg::ProviderBulkAction(action), &mut EventCtx::default());
         let expected: Vec<String> = expected.into_iter().map(str::to_owned).collect();
@@ -1071,11 +1009,27 @@ fn provider_bulk_confirmation_targets_only_eligible_idle_providers_and_cancel_ke
     app.provider_actions
         .push(crate::app::providers::PendingAction {
             name: "message".into(),
-            action: Action::Restart,
+            action: Action::Stop,
             receiver,
         });
     app.handle_message(
-        Msg::ProviderBulkAction(Action::Pause),
+        Msg::ProviderBulkAction(Action::Stop),
+        &mut EventCtx::default(),
+    );
+    assert_eq!(
+        app.provider_bulk_confirmation,
+        Some((vec!["ticket".into()], Action::Stop))
+    );
+    app.handle_message(Msg::Close, &mut EventCtx::default());
+    let (_sender, receiver) = tokio::sync::oneshot::channel();
+    app.provider_actions
+        .push(crate::app::providers::PendingAction {
+            name: "ticket".into(),
+            action: Action::Stop,
+            receiver,
+        });
+    app.handle_message(
+        Msg::ProviderBulkAction(Action::Stop),
         &mut EventCtx::default(),
     );
     assert!(app.provider_bulk_confirmation.is_none());
@@ -1091,11 +1045,8 @@ fn provider_bulk_shortcuts_do_not_run_while_searching_and_empty_controls_are_dis
     let mut app = root(AppService::for_tests());
     app.pages_mut().select_providers();
     let (layout, _) = render(&mut app, 130);
-    for slot in [
-        "provider-pause-all",
-        "provider-start-all",
-        "provider-restart-all",
-    ] {
+    {
+        let slot = "provider-start-all";
         let target = layout
             .focus_targets()
             .iter()
@@ -1117,7 +1068,7 @@ fn provider_bulk_shortcuts_do_not_run_while_searching_and_empty_controls_are_dis
         .unwrap();
     let route = EventRoute::new(list.path.clone());
     app.dispatch_focus(list, true, &mut tuicore::FocusCtx::default());
-    for key in ['/', 'A', 'S', 'R'] {
+    for key in ['/', 'S'] {
         let mut ctx = EventCtx::default();
         app.dispatch_event(
             &route,
@@ -1127,3 +1078,6 @@ fn provider_bulk_shortcuts_do_not_run_while_searching_and_empty_controls_are_dis
         assert!(ctx.messages().is_empty(), "{key}: {:?}", ctx.messages());
     }
 }
+
+#[path = "provider_streams.rs"]
+mod streams;

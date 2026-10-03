@@ -71,13 +71,24 @@ image tags are not content-addressed locks.
 
 ## Event providers
 
-The developer catalog includes `message`, `ticket`, `system-event`, and `generic` packages.
+The developer catalog includes synthetic `slack`, `jira`, `datadog`, and `github` packages.
+They require no external accounts or API connections. Slack uses the `message` profile for
+`messages` and `reactions`; Jira uses `ticket` for `backlog`; Datadog uses `system_event` for
+`production-gateway-issue`; GitHub uses `generic` for `releases`.
 Each owns a Dockerfile, `src/provider.py`, normalized `sample.json`, and a validated `provider.json`.
 The manifest declares `schema_version: 1`, a unique `name`, supported `profile`, `description`,
-`protocol: "tandem-events-v1"`, and optional `feedback` names. Tandem manages one installation per
-package and namespace. Edit the payload or custom metadata, then Stop and Start it to rebuild.
+`protocol: "tandem-events-v1"`, `streams`, `stream_control: true`, and optional `feedback` names. Tandem manages one installation per
+package and namespace. `sample.json` contains an ordered list of normalized event envelopes;
+the runtime also accepts a single envelope. Edit the samples, then Stop and Start to rebuild.
+Slack cycles through PR requests, support queries, and reactions to those messages.
+Each emitted event has a one-based `metadata.stream_sequence` counting only its own stream,
+and a zero-based `metadata.sample_sequence` counting all events from that provider.
+Checkpoint state preserves the sequence across retries and restarts.
 Python runs inside the sample containers;
 the HTTP protocol is language-independent and Tandem requires no Python runtime.
+The runtime polls authenticated stream controls, halts generation for each stopped stream before
+acknowledgment, and clears its buffered events. Sibling streams continue; resume generates new events only.
+Source catch-up is outside the fixture contract.
 
 For an existing fixture root, append the packages without moving instance templates or changing
 source repositories, workspaces, or Git history:
@@ -92,16 +103,61 @@ After generating or appending providers, open Tandem from the checkout:
 cargo run -- dev
 ```
 
-Open the third tab, **Providers**, select each package, and choose **Start**. Confirm trusted Docker
+Open **Providers**, select each package, and choose **Start provider**. Confirm trusted Docker
 execution; Tandem provisions credentials, starts its own sidecar, builds the image, and runs the
-collector. Use the same tab to Stop, Pause, Resume, inspect details, or read Logs. No manual Compose,
+collector. Use the same tab to Stop, inspect details, or read Logs. No manual Compose,
 credential setup, or sidecar command is required.
+Expand a provider to inspect its stream children. Stream menus and details act on that child;
+provider Start enables all its streams and provider Stop halts the collector.
 
 Open the second tab, **Events**. Four row styles arrive every three seconds, with source-specific
 data, shared people/attachments/relations, bounded supporting context, and custom metadata.
-Enter opens details; `h` manually acknowledges the current attempt; `r` creates a replay attempt
-after acknowledgment. `p` selects the originating provider; Providers' **Events** action shows only
-that source, and `a` restores all sources. These actions do not create instances or run agent prompts.
+Enter opens details and its per-rule Acceptances tab. Enabled predicates accept matching events
+automatically; `r` requests confirmed replay of any retained event using current enabled rules.
+`p` selects the originating provider; Providers' **Events** action shows only that source.
+The provider multiselect filters sources; an empty selection shows all providers.
+
+### Developer rules
+
+With the `guidance-only` fixture installed, add six disabled example rules:
+
+```sh
+cargo run -- rules-setup --model openai/gpt-6.1-sol-fast
+```
+
+Setup preserves existing definitions and enablement. Use `rules-setup --model openai/gpt-6.1-sol-fast --refresh`
+to apply the example predicates and descriptions to saved example rules. Changed rules are paused;
+their model, template, prompt, service-start setting, and destination remain intact.
+**Rules** follows Instances; `[` and `]`
+visit every main tab in both directions. Enter opens a rule's dialog. Review **Settings**, including
+its independent handler template, model, and initial prompt; valid edits save automatically.
+Editing pauses an enabled rule. Space toggles the rule
+and asks for authorization before enabling automatic actions.
+
+| Rule | Provider / stream | Output |
+|---|---|---|
+| `slack-pr-request` | `slack` / `messages` | `pr-review-brief.md` |
+| `slack-support-query` | `slack` / `messages` | `support-checklist.md` |
+| `slack-message-reaction` | `slack` / `reactions` | `reaction-summary.md` |
+| `jira-ticket-triage` | `jira` / `backlog` | `ticket-triage.md` |
+| `datadog-gateway-issue` | `datadog` / `production-gateway-issue` | `gateway-incident-brief.md` |
+| `github-release-notes` | `github` / `releases` | `release-summary.md` |
+
+Each rule matches its provider and stream, requires `metadata.fixture == true`, and checks
+`metadata.stream_sequence % 3 == 0`: stream events 3, 6, 9, and so on. Matching is independent
+of message content, channel, severity, and status. Both Slack message rules accept the same third
+message, demonstrating independent acceptances. Their tasks report when the relevant request is absent.
+Each match creates its own fresh `guidance-only` scratch instance and OpenCode session.
+Handlebars prompts show optional nested message fields with `if`, attachments with `each` and an
+`else` fallback, and the full event through `{{json event}}`.
+At the default three-second interval, Slack rules match every eighteen seconds; other providers'
+rules match every nine seconds. Enabling all six produces work faster than Tandem's ten-starts-per-minute
+dispatch limit, so acceptances queue. Enable a subset or increase the provider interval for model runs.
+
+After rebuilding Tandem, restart the development TUI and its owned event sidecar before enabling
+examples. Existing sidecars retain the executable they started with.
+No model prompts run while the examples remain disabled. Observe matched events in Events and
+follow acceptance links to their instances and sessions; a launched session does not prove file creation.
 
 Tandem retains provider-scoped credentials in SQLite and atomically writes private token files
 under `$TANDEM_HOME/provider-credentials/$TANDEM_NAMESPACE/`. Containers mount their own token file
@@ -110,17 +166,16 @@ Named volumes hold pending batches, checkpoint identities, and deduplicated noti
 
 The managed collectors use Linux Docker host networking to reach Tandem's detached loopback sidecar,
 independently of MCP. Tandem supplies its verified address. Collection persists after the TUI closes;
-the TUI supervises the sidecar when reopened, and Start or Resume repairs an interrupted sidecar.
+the TUI supervises the sidecar when reopened, and Start repairs an interrupted sidecar.
 A disconnected provider retains its pending batch and
 retries it with identical IDs. It polls, persists, and acknowledges `received`, `replayed`, and
 `acknowledged` feedback. Read its output through **Logs** in Providers.
 
-Stop preserves checkpoints and event history. Stop and Pause immediately discard incoming batches
+Stop preserves checkpoints and event history. Stop immediately discards incoming batches
 before Docker work. The sample runtime advances its checkpoint on explicit discarded IDs so those
-events are not retried after activation. Start, Resume, and Restart enable ingestion; failed Stop/Pause
+events are not retried after activation. Start enables ingestion; failed Stop
 operations keep it disabled. The sample runtime handles SIGTERM by interrupting pending work and
-closing its checkpoint database; pending batches remain available for retry. Pause freezes the
-collector without rebuilding or discarding state; Resume continues it. Package deletion does not remove an installed collector's
+closing its checkpoint database; pending batches remain available for retry. Package deletion does not remove an installed collector's
 ownership evidence, so Tandem can still Stop it. The generated `compose.providers.yaml` and
 `providers-setup` command support isolated protocol tests; normal lifecycle uses Tandem's saved
 private launch configuration. The protocol-test harness can override sample batch size and interval.
@@ -133,10 +188,12 @@ python3 projects-generators/tests/events_smoke.py --docker
 python3 projects-generators/tests/providers_smoke.py
 ```
 
-Both checks use temporary homes and a free loopback port. They verify all four profiles, forty
-distinct events, provider feedback acknowledgment, duplicate ingestion, and sidecar restart
-persistence. The Docker variant builds all four images and removes its own containers and volumes.
-The lifecycle check starts all four providers through Tandem, proving automatic setup, pause/resume,
+The event checks use temporary homes and a free loopback port. They verify all four profiles,
+five streams, seventy-two distinct events, provider feedback acknowledgment, duplicate ingestion,
+and sidecar restart persistence. MCP previews verify all six disabled rules match stream events
+3, 6, and 9, including prompt rendering. No model prompts run.
+The Docker variant builds all four images and removes its own containers and volumes.
+The lifecycle check starts all four providers through Tandem, proving automatic setup,
 stop/start checkpoint preservation, bounded logs, sidecar recovery, and Stop after package deletion.
 The lifecycle check requires clean collector exits and reports measured Stop durations.
 These checks clean up their isolated containers, volumes, and sidecar workers; they do not touch the
@@ -157,7 +214,7 @@ projects/
   .tandem/
     templates/              # one Git repository for both template catalogs
       instances/<template>/ # Compose and/or manifest recipes with tandem-agents.md
-      providers/<profile>/  # Dockerfile, src/provider.py, sample.json, provider.json
+      providers/<source>/   # slack, jira, datadog, github: Dockerfile, src/, sample.json, provider.json
     workspaces/<instance>/  # independent writable clones of the relevant repos
 ```
 

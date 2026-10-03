@@ -183,6 +183,9 @@ fn message(value: &Value) -> Option<Value> {
         for mut content in value["content"].as_array().into_iter().flatten().cloned() {
             if content["type"] == "tool" {
                 content["tool"] = content["name"].clone();
+            } else if let Some(content) = content.as_object_mut() {
+                // Text and reasoning state contains provider metadata, not tool status.
+                content.remove("state");
             }
             parts.push(content);
         }

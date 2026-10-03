@@ -26,6 +26,19 @@ pub(super) fn new_client_command(directory: &str) -> Vec<String> {
 #[path = "tests/direnv.rs"]
 mod direnv_tests;
 
+pub(super) fn rule_client_command(model: &str, variant: Option<&str>) -> Vec<String> {
+    // Station model flags pre-create a session; the V2 companion owns creation and model selection.
+    let mut command = vec![
+        "/bin/sh".into(), "-c".into(),
+        "case \"$(opencode --version)\" in 'opencode v2.'*|2.*) exec opencode-station run;; *) exec opencode \"$@\";; esac".into(),
+        "tandem-rule-session".into(), "--model".into(), model.into(),
+    ];
+    if let Some(variant) = variant {
+        command.extend(["--variant".into(), variant.into()]);
+    }
+    command
+}
+
 impl Observer {
     pub(super) async fn list_panes(&self, name: &str) -> Result<Vec<RemotePane>, String> {
         let output = zellij(
@@ -314,6 +327,7 @@ impl Observer {
         current: &str,
         destination: Option<&Pane>,
         initial_prompt: Option<&str>,
+        instructions: Option<&str>,
     ) -> Result<Pane, String> {
         if current.is_empty() {
             return Err("Run Tandem inside Zellij to create an OpenCode session".into());
@@ -339,6 +353,11 @@ impl Observer {
                 initial_prompt.unwrap_or_default()
             ),
         ];
+        command.push(format!(
+            "TANDEM_SESSION_INSTRUCTIONS={}",
+            instructions.unwrap_or_default()
+        ));
+        command.push("TANDEM_SESSION_MODEL=".into());
         command.extend(if let Some(server) = server {
             let client = transport::client()?;
             let _: serde_json::Value = get(&client, &server, "/global/health").await?;
@@ -364,6 +383,65 @@ impl Observer {
         });
         self.launch_panel(directory, name, current, destination, &command)
             .await
+    }
+
+    pub(crate) async fn new_rule_session(
+        &self,
+        directory: &str,
+        name: &str,
+        current: &str,
+        model: &str,
+        prompt: &str,
+        instructions: Option<&str>,
+    ) -> Result<Pane, String> {
+        if current.is_empty()
+            || !Path::new(directory).is_absolute()
+            || !Path::new(directory).is_dir()
+        {
+            return Err(
+                "rule session requires a prepared workspace and a target Zellij session".into(),
+            );
+        }
+        self.validate_rule_destination(current).await?;
+        let (model, variant) = model
+            .split_once('#')
+            .map_or((model, None), |(model, variant)| (model, Some(variant)));
+        let mut command = vec![
+            "env".into(),
+            format!("TANDEM_INITIAL_PROMPT={prompt}"),
+            format!(
+                "TANDEM_SESSION_INSTRUCTIONS={}",
+                instructions.unwrap_or_default()
+            ),
+            format!(
+                "TANDEM_SESSION_MODEL={model}{}",
+                variant
+                    .map(|variant| format!("#{variant}"))
+                    .unwrap_or_default()
+            ),
+        ];
+        command.extend(rule_client_command(model, variant));
+        self.launch_panel(directory, name, current, None, &command)
+            .await
+    }
+
+    pub(crate) async fn validate_rule_destination(&self, name: &str) -> Result<(), String> {
+        let sessions = zellij(
+            &self.zellij,
+            &[
+                "list-sessions".into(),
+                "--short".into(),
+                "--no-formatting".into(),
+            ],
+        )
+        .await?;
+        if sessions.lines().any(|session| session == name) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Zellij session {name:?} is unavailable; deactivate and reactivate the rule in the current Tandem TUI"
+            ))
+        }
     }
 
     async fn live_destination(&self, destination: &Pane) -> Result<Option<Pane>, String> {

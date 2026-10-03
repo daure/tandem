@@ -17,6 +17,11 @@ fn update_events(app: &mut App, count: i64) {
                 received_at: "now".into(),
                 event,
                 attempts: vec![],
+                acceptances: vec![super::rules::acceptance(
+                    super::rules::rule("matching"),
+                    sequence,
+                    sequence,
+                )],
             }
         })
         .collect();
@@ -144,46 +149,46 @@ fn select_tab(app: &mut App, index: usize) {
 }
 
 #[test]
-fn events_follow_the_newest_row_until_navigation_leaves_the_bottom() {
+fn events_follow_the_newest_row_until_navigation_leaves_the_top() {
     let mut app = events_app(20);
     let route = focus_feed(&mut app);
     assert_eq!(selected(&mut app, &route), 20);
     let text = render(&mut app).1;
-    assert!(text.contains("──●  |G|"), "{text}");
+    assert!(text.contains("──● 󰞖 |gg|"), "{text}");
     assert!(text.contains("event-020"), "{text}");
     assert!(!text.contains("event-001"), "{text}");
     assert!(
-        text.find("event-019").unwrap() < text.find("event-020").unwrap(),
+        text.find("event-020").unwrap() < text.find("event-019").unwrap(),
         "{text}"
     );
 
     update_events(&mut app, 21);
     assert_eq!(selected(&mut app, &route), 21);
     assert!(render(&mut app).1.contains("event-021"));
-    send(&mut app, &route, TuiEvent::Key(KeyEvent::from(Key::Up)));
+    send(&mut app, &route, TuiEvent::Key(KeyEvent::from(Key::Down)));
     assert_eq!(selected(&mut app, &route), 20);
-    assert!(render(&mut app).1.contains("○──  |G|"));
+    assert!(render(&mut app).1.contains("○── 󰞖 |gg|"));
     update_events(&mut app, 22);
     assert_eq!(selected(&mut app, &route), 20);
 
-    send(&mut app, &route, shifted('g'));
+    send(&mut app, &route, hotkey("gg"));
     assert_eq!(selected(&mut app, &route), 22);
     update_events(&mut app, 23);
     assert_eq!(selected(&mut app, &route), 23);
-    send(&mut app, &route, TuiEvent::Key(KeyEvent::from(Key::Up)));
     send(&mut app, &route, TuiEvent::Key(KeyEvent::from(Key::Down)));
+    send(&mut app, &route, TuiEvent::Key(KeyEvent::from(Key::Up)));
     update_events(&mut app, 24);
     assert_eq!(selected(&mut app, &route), 24);
 
     let (layout, _) = render(&mut app);
-    let toggle = control(&layout, "shift+g");
+    let toggle = control(&layout, "gg");
     let toggle_route = EventRoute::new(toggle.path.clone());
-    send(&mut app, &toggle_route, hotkey("shift+g"));
+    send(&mut app, &toggle_route, hotkey("gg"));
     update_events(&mut app, 25);
     assert_eq!(selected(&mut app, &route), 25);
 
     let (layout, _) = render(&mut app);
-    let toggle = control(&layout, "shift+g");
+    let toggle = control(&layout, "gg");
     let feed = focus_target(&layout, crate::app::events::FOCUS);
     app.dispatch_focus(&feed, false, &mut tuicore::FocusCtx::default());
     app.dispatch_focus(&toggle, true, &mut tuicore::FocusCtx::default());
@@ -192,32 +197,51 @@ fn events_follow_the_newest_row_until_navigation_leaves_the_bottom() {
         &toggle_route,
         TuiEvent::Key(KeyEvent::from(Key::Enter)),
     );
-    assert!(render(&mut app).1.contains("○──  |G|"));
+    assert!(render(&mut app).1.contains("○── 󰞖 |gg|"));
     update_events(&mut app, 26);
     focus_feed(&mut app);
     assert_eq!(selected(&mut app, &route), 25);
-    let ctx = send(&mut app, &toggle_route, hotkey("shift+g"));
+    let ctx = send(&mut app, &toggle_route, hotkey("gg"));
     assert_feed_focus(&ctx);
     assert_eq!(selected(&mut app, &route), 26);
+
+    send(&mut app, &route, shifted('g'));
+    assert_eq!(selected(&mut app, &route), 1);
+    update_events(&mut app, 27);
+    assert_eq!(selected(&mut app, &route), 1);
+    send(&mut app, &toggle_route, hotkey("gg"));
+    assert_eq!(selected(&mut app, &route), 27);
+    let text = render(&mut app).1;
+    assert!(
+        text.contains("event-027") && !text.contains("event-001"),
+        "{text}"
+    );
+
+    send(&mut app, &route, TuiEvent::Key(KeyEvent::from(Key::End)));
+    assert_eq!(selected(&mut app, &route), 1);
+    send(&mut app, &route, TuiEvent::Key(KeyEvent::from(Key::Home)));
+    update_events(&mut app, 28);
+    assert_eq!(selected(&mut app, &route), 28);
 }
 
 #[test]
-fn event_filters_select_the_newest_match_and_overview_clears_all_filters() {
+fn event_filters_select_the_newest_match_and_overview_restores_handover_filtering() {
     let mut app = events_app(20);
     let route = focus_feed(&mut app);
-    send(&mut app, &route, TuiEvent::Key(KeyEvent::from(Key::Up)));
-    app.pages_mut().filter_events("beta".into());
+    send(&mut app, &route, TuiEvent::Key(KeyEvent::from(Key::Down)));
+    app.pages_mut()
+        .filter_event_stream("beta".into(), "samples".into());
     app.pages_mut()
         .tick(Duration::ZERO, AnimationSettings::default());
     assert!(
         matches!(app.take_pending_focus_request(), Some(tuicore::FocusRequest::Target(id)) if id.as_str() == crate::app::events::FOCUS)
     );
     assert_eq!(selected(&mut app, &route), 19);
-    assert!(render(&mut app).1.contains("──●  |G|"));
+    assert!(render(&mut app).1.contains("──● 󰞖 |gg|"));
 
     let ctx = send(&mut app, &route, shifted('t'));
     assert_feed_focus(&ctx);
-    assert!(render(&mut app).1.contains("No events handed over"));
+    assert!(render(&mut app).1.contains("○──  |T|"));
     let (layout, _) = render(&mut app);
     let toggle = control(&layout, "shift+t");
     app.dispatch_focus(&toggle, true, &mut tuicore::FocusCtx::default());
@@ -232,8 +256,9 @@ fn event_filters_select_the_newest_match_and_overview_clears_all_filters() {
     let route = focus_feed(&mut app);
     assert_eq!(selected(&mut app, &route), 20);
     let text = render(&mut app).1;
+    assert!(text.contains("──●  |T|"), "{text}");
     assert!(
-        text.contains("All providers") && text.contains("alpha") && text.contains("beta"),
+        text.contains("All streams") && text.contains("alpha") && text.contains("beta"),
         "{text}"
     );
 
@@ -252,7 +277,9 @@ fn event_filters_select_the_newest_match_and_overview_clears_all_filters() {
     select_tab(&mut app, 1);
     let route = focus_feed(&mut app);
     assert_eq!(selected(&mut app, &route), 20);
-    assert!(render(&mut app).1.contains("──●  |G|"));
+    let text = render(&mut app).1;
+    assert!(text.contains("──● 󰞖 |gg|"), "{text}");
+    assert!(text.contains("──●  |T|"), "{text}");
     update_events(&mut app, 21);
     assert_eq!(selected(&mut app, &route), 21);
     let text = render(&mut app).1;
@@ -301,7 +328,7 @@ fn tab_from_the_event_feed_focuses_the_provider_filter_directly() {
 #[test]
 fn escape_and_control_bracket_return_event_controls_to_the_feed() {
     let mut app = events_app(3);
-    for sequence in ["shift+p", "shift+t", "shift+g"] {
+    for sequence in ["shift+p", "shift+t", "gg"] {
         for event in [TuiEvent::Key(KeyEvent::from(Key::Esc)), control_bracket()] {
             let (layout, _) = render(&mut app);
             let target = control(&layout, sequence);
@@ -330,13 +357,13 @@ fn an_empty_event_feed_follows_its_first_arrival() {
     let route = focus_feed(&mut app);
     update_events(&mut app, 1);
     assert_eq!(selected(&mut app, &route), 1);
-    assert!(render(&mut app).1.contains("──●  |G|"));
+    assert!(render(&mut app).1.contains("──● 󰞖 |gg|"));
 }
 
 #[test]
 fn overview_resets_search_and_selection_on_all_tabs_and_returns_to_sessions() {
     init_ui();
-    for tab in 0..4 {
+    for tab in [0, 1, 2, 3, 4] {
         for event in [shifted('h'), hotkey("shift+h")] {
             for routed in [false, true] {
                 let service = AppService::for_tests();
@@ -356,30 +383,37 @@ fn overview_resets_search_and_selection_on_all_tabs_and_returns_to_sessions() {
                                     description: name.into(),
                                     protocol: "tandem-events-v1".into(),
                                     feedback: vec![],
+                                    streams: vec![],
+                                    stream_control: false,
                                 }),
                                 available: true,
                                 status: crate::store::providers::Status::NotStarted,
                                 container_id: None,
                                 error: None,
                                 operation: None,
+                                streams: vec![],
                             })
                             .to_vec(),
                         error: None,
                     });
                 update_events(&mut app, 20);
-                for page in 0..4 {
+                for page in [0, 1, 3, 4] {
                     select_tab(&mut app, page);
                     let (layout, _) = render(&mut app);
                     let list = focus_target(
                         &layout,
                         match page {
                             1 => crate::app::events::FOCUS,
-                            2 => crate::app::providers::FOCUS,
+                            3 => crate::app::providers::FOCUS,
                             _ => crate::app::TREE_FOCUS,
                         },
                     );
                     let route = EventRoute::new(list.path.clone());
                     app.dispatch_focus(&list, true, &mut tuicore::FocusCtx::default());
+                    if page == 1 {
+                        send(&mut app, &route, shifted('t'));
+                        assert!(render(&mut app).1.contains("○──  |T|"));
+                    }
                     send(&mut app, &route, TuiEvent::Key(KeyEvent::from(Key::End)));
                     send(
                         &mut app,
@@ -396,7 +430,7 @@ fn overview_resets_search_and_selection_on_all_tabs_and_returns_to_sessions() {
                         TuiEvent::Paste(
                             match page {
                                 1 => "event-019",
-                                2 => "beta",
+                                3 => "beta",
                                 _ => "missing",
                             }
                             .into(),
@@ -413,7 +447,14 @@ fn overview_resets_search_and_selection_on_all_tabs_and_returns_to_sessions() {
                 select_tab(&mut app, tab);
                 assert_eq!(app.tabs_mut().selected_index(), tab);
                 let (layout, _) = render(&mut app);
-                let search = focus_target(&layout, "input");
+                let search = focus_target(
+                    &layout,
+                    if tab == 2 {
+                        crate::app::rules::FOCUS
+                    } else {
+                        "input"
+                    },
+                );
                 let search_route = EventRoute::new(search.path.clone());
                 app.dispatch_focus(&search, true, &mut tuicore::FocusCtx::default());
                 let mut ctx = EventCtx::default();
@@ -432,7 +473,7 @@ fn overview_resets_search_and_selection_on_all_tabs_and_returns_to_sessions() {
                 let (layout, _) = render(&mut app);
                 focus_target(&layout, crate::app::TREE_FOCUS);
                 assert!(layout.overlays().is_empty());
-                for page in 0..4 {
+                for page in [0, 1, 3, 4] {
                     select_tab(&mut app, page);
                     let (layout, text) = render(&mut app);
                     assert!(layout.overlays().is_empty(), "tab {page}");
@@ -441,7 +482,7 @@ fn overview_resets_search_and_selection_on_all_tabs_and_returns_to_sessions() {
                         &layout,
                         match page {
                             1 => crate::app::events::FOCUS,
-                            2 => crate::app::providers::FOCUS,
+                            3 => crate::app::providers::FOCUS,
                             _ => crate::app::TREE_FOCUS,
                         },
                     );
@@ -453,9 +494,10 @@ fn overview_resets_search_and_selection_on_all_tabs_and_returns_to_sessions() {
                                 text.contains("event-020") && !text.contains("event-001"),
                                 "{text}"
                             );
-                            assert!(text.contains("──●  |G|"), "{text}");
+                            assert!(text.contains("──● 󰞖 |gg|"), "{text}");
+                            assert!(text.contains("──●  |T|"), "{text}");
                         }
-                        2 => {
+                        3 => {
                             assert!(text.contains("alpha") && text.contains("beta"), "{text}");
                             let ctx = send(
                                 &mut app,
@@ -483,6 +525,54 @@ fn overview_resets_search_and_selection_on_all_tabs_and_returns_to_sessions() {
             }
         }
     }
+}
+
+#[test]
+fn event_id_search_keeps_the_matching_row_when_the_number_is_completed() {
+    let mut app = events_app(0);
+    app.pages_mut().update_events(Snapshot {
+        records: [(3360, "#336"), (3253, "#3360")]
+            .into_iter()
+            .map(|(sequence, id)| Record {
+                sequence,
+                provider: "slack".into(),
+                received_at: "now".into(),
+                event: crate::environments::events::tests::event(id),
+                attempts: vec![],
+                acceptances: vec![],
+            })
+            .collect(),
+        total: 2,
+        ..Default::default()
+    });
+    super::events::show_all_events(&mut app);
+    let route = focus_feed(&mut app);
+    send(
+        &mut app,
+        &route,
+        TuiEvent::Key(KeyEvent::from(Key::Char('/'))),
+    );
+    let (layout, _) = render(&mut app);
+    let search = focus_target(&layout, "input");
+    let search_route = EventRoute::new(search.path.clone());
+    app.dispatch_focus(&search, true, &mut tuicore::FocusCtx::default());
+    send(&mut app, &search_route, TuiEvent::Paste("#336".into()));
+    assert!(render(&mut app).1.contains("slack · #3360 · Alex"));
+    send(
+        &mut app,
+        &search_route,
+        TuiEvent::Key(KeyEvent::from(Key::Char('0'))),
+    );
+    let text = render(&mut app).1;
+    assert!(text.contains("slack · #3360 · Alex"), "{text}");
+    assert!(text.contains("slack · #3253 · Alex"), "{text}");
+    send(
+        &mut app,
+        &search_route,
+        TuiEvent::Key(KeyEvent::from(Key::Enter)),
+    );
+    focus_feed(&mut app);
+    assert_eq!(selected(&mut app, &route), 3360);
 }
 
 #[test]

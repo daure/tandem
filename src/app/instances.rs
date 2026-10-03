@@ -277,11 +277,11 @@ impl Instances {
     }
 
     fn sync_rows(&mut self) -> bool {
-        let changed = self.sync_updated_rows();
         let reset = std::mem::take(&mut self.state.borrow_mut().reset_view);
         if reset {
             self.reset_search_and_selection();
         }
+        let changed = self.sync_updated_rows();
         changed || reset
     }
 

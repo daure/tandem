@@ -98,6 +98,7 @@ fn new_instance_description_is_visible_while_creation_is_pending() {
             "website".into(),
             "Review environment".into(),
             None,
+            true,
         )
         .unwrap();
 

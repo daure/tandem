@@ -1,7 +1,7 @@
 use std::{
     fs::{File, OpenOptions, TryLockError},
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -14,7 +14,7 @@ use super::{
     gateway,
 };
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Receipt {
     pub pid: u32,
     pub origin: String,
@@ -120,7 +120,7 @@ pub(crate) fn running(config: &Config) -> Option<Receipt> {
             .ok()?,
     )
     .ok()?;
-    (response.pid == receipt.pid && response.identity == receipt.identity).then_some(receipt)
+    (response == receipt).then_some(receipt)
 }
 
 pub(crate) fn ensure(config: &Config) -> Result<String, String> {
@@ -128,11 +128,15 @@ pub(crate) fn ensure(config: &Config) -> Result<String, String> {
     let _gate = gateway::lock_until(
         config,
         &format!("provider-sidecar-start-{}", config.namespace),
-        Instant::now() + Duration::from_secs(20),
+        Instant::now() + Duration::from_secs(30),
         &progress,
     )?;
+    let executable = installed_executable()?;
     if let Some(receipt) = running(config) {
-        return Ok(receipt.origin);
+        if executable_is_current(&receipt, &executable)? {
+            return Ok(receipt.origin);
+        }
+        stop_outdated(config, &receipt)?;
     }
     let file = lease_file(config)?;
     match file.try_lock() {
@@ -144,7 +148,6 @@ pub(crate) fn ensure(config: &Config) -> Result<String, String> {
         }
         Err(error) => return Err(error.to_string()),
     }
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let log_path = config.home.join("provider-sidecar.log");
     let mut options = OpenOptions::new();
     options.create(true).append(true);
@@ -205,4 +208,89 @@ pub(crate) fn ensure(config: &Config) -> Result<String, String> {
         }
         thread::sleep(Duration::from_millis(100));
     }
+}
+
+fn installed_executable() -> Result<PathBuf, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        // Open clients can retain an unlinked executable after an atomic installation.
+        // Resolve its installed path so those clients cannot downgrade the receiver.
+        if let Some(path) = executable
+            .as_os_str()
+            .as_bytes()
+            .strip_suffix(b" (deleted)")
+        {
+            return Ok(std::ffi::OsString::from_vec(path.to_vec()).into());
+        }
+    }
+    Ok(executable)
+}
+
+#[cfg(target_os = "linux")]
+fn executable_is_current(receipt: &Receipt, executable: &Path) -> Result<bool, String> {
+    use std::os::unix::fs::MetadataExt;
+    let running = std::fs::metadata(format!("/proc/{}/exe", receipt.pid))
+        .map_err(|error| format!("cannot inspect provider sidecar executable: {error}"))?;
+    let installed = std::fs::metadata(executable)
+        .map_err(|error| format!("cannot inspect installed Tandem executable: {error}"))?;
+    Ok(running.dev() == installed.dev() && running.ino() == installed.ino())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn executable_is_current(_receipt: &Receipt, _executable: &Path) -> Result<bool, String> {
+    Ok(true)
+}
+
+#[cfg(target_os = "linux")]
+fn stop_outdated(config: &Config, receipt: &Receipt) -> Result<(), String> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, receipt.pid, 0) };
+    if descriptor < 0 {
+        return Err(format!(
+            "cannot pin outdated provider sidecar process: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let process = unsafe { OwnedFd::from_raw_fd(descriptor as i32) };
+    if running(config).as_ref() != Some(receipt) {
+        return Err("provider sidecar identity changed before replacement; retry".into());
+    }
+    // A pidfd prevents signaling an unrelated process if the receipt's PID is reused.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            process.as_raw_fd(),
+            libc::SIGINT,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        )
+    };
+    if result < 0 {
+        return Err(format!(
+            "cannot stop outdated provider sidecar: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let file = lease_file(config)?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(TryLockError::WouldBlock) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        if Instant::now() >= deadline {
+            return Err(
+                "outdated provider sidecar did not release its lease; retry after shutdown".into(),
+            );
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn stop_outdated(_config: &Config, _receipt: &Receipt) -> Result<(), String> {
+    Err("automatic provider sidecar replacement requires Linux".into())
 }

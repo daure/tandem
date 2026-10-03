@@ -89,6 +89,20 @@ pub(in crate::environments) fn workspace_ready(config: &Config, name: &str) -> R
     write(config, name, &record)
 }
 
+pub(in crate::environments) fn prepared_ready(
+    config: &Config,
+    name: &str,
+) -> Result<Instance, String> {
+    let mut record = read(config, name)?;
+    let instance = record.expected.as_mut().ok_or("instance record missing")?;
+    instance.runtime.workspace_ready = true;
+    instance.runtime.prepared_only = true;
+    write(config, name, &record)?;
+    let mut instance = recorded(config, name)?.ok_or("instance record missing")?;
+    super::enrich(config, std::slice::from_mut(&mut instance))?;
+    Ok(instance)
+}
+
 pub(in crate::environments) fn workspace_instance(
     config: &Config,
     name: &str,
@@ -106,7 +120,10 @@ pub(in crate::environments) fn workspaces(config: &Config) -> Result<Vec<Instanc
     for (key, text) in super::runtime_db::list(config, super::Kind::Journal)? {
         let record: super::Record =
             serde_json::from_str(&text).map_err(|error| error.to_string())?;
-        if let Some(expected) = record.expected.filter(|instance| instance.workspace_only) {
+        if let Some(expected) = record
+            .expected
+            .filter(|instance| instance.workspace_only || instance.runtime.prepared_only)
+        {
             if expected.name.to_ascii_lowercase() != key {
                 return Err("instance record name mismatch".into());
             }

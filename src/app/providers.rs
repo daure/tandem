@@ -14,7 +14,7 @@ use tuicore::{
     AnimationSettings, Button, ChildKey, ChildSlot, Column, DataView, DataViewTypedEvent, EventCtx,
     EventOutcome, EventRoute, Flex, FlexItem, FocusCtx, FocusId, FocusTarget, HotkeyLabelMode,
     KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint, LifecycleCtx, RenderCtx,
-    TickResult, TuiEvent, TuiNode,
+    TickResult, TreeAdapter, TuiEvent, TuiNode,
 };
 
 use super::{
@@ -22,6 +22,10 @@ use super::{
     events::{clean, profile_icon},
 };
 use crate::store::providers::{Action, ActionError, Provider, Snapshot, Status};
+
+mod rows;
+mod streams;
+use rows::{Row, from_snapshot, search_text, stream_text};
 
 pub(super) const FOCUS: &str = "provider-list";
 const DATA_SLOT: &str = "provider-data";
@@ -32,7 +36,7 @@ pub(super) struct State {
     pub requested: Option<String>,
 }
 pub(super) type SharedState = Rc<RefCell<State>>;
-type ProviderView = DataView<Provider, String>;
+type ProviderView = DataView<Row, String>;
 
 pub(super) struct PendingAction {
     pub name: String,
@@ -42,19 +46,20 @@ pub(super) struct PendingAction {
 
 pub(super) struct Providers {
     view: ProviderView,
-    controls: [ChildSlot<Button<Msg>, Msg>; 3],
-    control_areas: [Rect; 3],
+    controls: [ChildSlot<Button<Msg>, Msg>; 1],
+    control_areas: [Rect; 1],
     view_area: Rect,
     shared: SharedState,
     snapshot: Snapshot,
     events: super::events::SharedState,
     totals: BTreeMap<String, u64>,
+    handovers: BTreeMap<String, u64>,
 }
 
 impl Providers {
     pub(super) fn new(shared: SharedState, events: super::events::SharedState) -> Self {
         let counts = events.clone();
-        let data = DataView::new(Vec::new(), |provider: &Provider| provider.name.clone())
+        let data = DataView::new(Vec::new(), |row: &Row| row.id.clone())
             .focus_id(FOCUS)
             .hotkey("shift+h")
             .columns(vec![
@@ -62,19 +67,36 @@ impl Providers {
                     "provider",
                     "Providers",
                     Constraint::Fill(1),
-                    move |row: &Provider, _| {
+                    move |row: &Row, _| {
+                        if let Some(stream) = &row.stream {
+                            return stream_text(stream);
+                        }
                         let total = row
+                            .provider
                             .manifest
                             .as_ref()
                             .and_then(|manifest| {
                                 counts.borrow().provider_totals.get(&manifest.name).copied()
                             })
                             .unwrap_or_default();
-                        row_text(row, total)
+                        let handovers = row
+                            .provider
+                            .manifest
+                            .as_ref()
+                            .and_then(|manifest| {
+                                counts
+                                    .borrow()
+                                    .provider_handovers
+                                    .get(&manifest.name)
+                                    .copied()
+                            })
+                            .unwrap_or_default();
+                        row_text(&row.provider, handovers, total)
                     },
                 )
                 .search_key(search_text),
             ])
+            .tree(TreeAdapter::parent_id(|row: &Row| row.parent.clone()))
             .headers(false)
             .action_bar(true)
             .filter_controls(false)
@@ -84,37 +106,27 @@ impl Providers {
             ));
         Self {
             view: data,
-            controls: [
-                ("provider-pause-all", "Pause all", "shift+a", true),
-                ("provider-start-all", "Start all", "shift+s", false),
-                ("provider-restart-all", "Restart all", "shift+r", false),
-            ]
-            .map(|(id, label, hotkey, pause)| {
+            controls: [{
                 let state = shared.clone();
                 ChildSlot::new(
-                    id,
-                    Button::new(label)
-                        .hotkey(hotkey)
+                    "provider-start-all",
+                    Button::new("Start all")
+                        .hotkey("shift+s")
                         .hotkey_focus_enabled(false)
                         .hotkey_label_mode(HotkeyLabelMode::Inline)
                         .on_press(move || {
                             let snapshot = &state.borrow().snapshot;
-                            Msg::ProviderBulkAction(if pause {
-                                snapshot.pause_resume_action()
-                            } else if id == "provider-start-all" {
-                                snapshot.start_stop_action()
-                            } else {
-                                Action::Restart
-                            })
+                            Msg::ProviderBulkAction(snapshot.start_stop_action())
                         }),
                 )
-            }),
+            }],
             view_area: Rect::default(),
-            control_areas: [Rect::default(); 3],
+            control_areas: [Rect::default(); 1],
             shared,
             snapshot: Snapshot::default(),
             events,
             totals: BTreeMap::new(),
+            handovers: BTreeMap::new(),
         }
     }
 
@@ -122,7 +134,8 @@ impl Providers {
         let requested = self.shared.borrow_mut().requested.take();
         let snapshot = self.shared.borrow().snapshot.clone();
         let totals = self.events.borrow().provider_totals.clone();
-        if snapshot == self.snapshot && totals == self.totals {
+        let handovers = self.events.borrow().provider_handovers.clone();
+        if snapshot == self.snapshot && totals == self.totals && handovers == self.handovers {
             if let Some(name) = requested {
                 self.view.highlight_id(&name);
                 self.shared.borrow_mut().selected = Some(name);
@@ -130,29 +143,33 @@ impl Providers {
             }
             return false;
         }
-        self.view.set_rows(snapshot.providers.clone());
+        self.view.set_rows(from_snapshot(&snapshot));
+        for provider in &snapshot.providers {
+            if !self
+                .snapshot
+                .providers
+                .iter()
+                .any(|previous| previous.name == provider.name && !previous.streams.is_empty())
+            {
+                self.view.expand(&provider.name);
+            }
+        }
         if let Some(name) = requested {
             self.view.highlight_id(&name);
         }
         self.shared.borrow_mut().selected = self.view.highlighted_id();
         self.snapshot = snapshot;
         self.totals = totals;
+        self.handovers = handovers;
         true
     }
 
     fn sync_controls(&mut self, compact: bool) {
         let snapshot = &self.shared.borrow().snapshot;
-        for (control, action) in self.controls.iter_mut().zip([
-            snapshot.pause_resume_action(),
-            snapshot.start_stop_action(),
-            Action::Restart,
-        ]) {
+        for (control, action) in self.controls.iter_mut().zip([snapshot.start_stop_action()]) {
             let label = match action {
-                Action::Pause => "Pause",
-                Action::Resume => "Resume",
                 Action::Start => "Start",
                 Action::Stop => "Stop",
-                Action::Restart => "Restart",
                 Action::Logs => unreachable!(),
             };
             control.child_mut().set_label(if compact {
@@ -173,13 +190,15 @@ impl Providers {
                     self.shared.borrow_mut().selected = row_id
                 }
                 DataViewTypedEvent::Activated { row_id } => {
-                    if let Some(provider) = self
-                        .snapshot
-                        .providers
-                        .iter()
-                        .find(|row| row.name == row_id)
-                    {
-                        ctx.emit(Msg::ProviderDetails(Box::new(provider.clone())));
+                    if let Some(row) = self.view.rows().iter().find(|row| row.id == row_id) {
+                        ctx.emit(if let Some(stream) = &row.stream {
+                            Msg::ProviderStreamDetails(
+                                row.provider.name.clone(),
+                                Box::new(stream.clone()),
+                            )
+                        } else {
+                            Msg::ProviderDetails(Box::new(row.provider.clone()))
+                        });
                     }
                 }
                 _ => {}
@@ -206,7 +225,7 @@ impl Providers {
             if self.view.is_searching() {
                 self.view.on_key(tuicore::Key::Enter, Rect::default());
             }
-            if let Some(id) = self.view.rows().first().map(|row| row.name.clone()) {
+            if let Some(id) = self.view.rows().first().map(|row| row.id.clone()) {
                 self.view.highlight_id(&id);
             }
             self.view.reveal_highlighted();
@@ -224,34 +243,50 @@ impl Providers {
         let TuiEvent::Key(key) = event else {
             return false;
         };
-        for (binding, action) in [
-            (KeySpec::shifted('a'), self.snapshot.pause_resume_action()),
-            (KeySpec::shifted('s'), self.snapshot.start_stop_action()),
-            (KeySpec::shifted('r'), Action::Restart),
-        ] {
-            if binding.matches(*key) {
-                if !self.snapshot.action_targets(action).is_empty() {
-                    ctx.emit(Msg::ProviderBulkAction(action));
-                }
-                ctx.stop_propagation();
-                return true;
+        if KeySpec::shifted('s').matches(*key) {
+            let action = self.snapshot.start_stop_action();
+            if !self.snapshot.action_targets(action).is_empty() {
+                ctx.emit(Msg::ProviderBulkAction(action));
             }
+            ctx.stop_propagation();
+            return true;
         }
         let Some(name) = self.view.highlighted_id() else {
             return false;
         };
-        let Some(provider) = self.snapshot.providers.iter().find(|row| row.name == name) else {
+        let Some(row) = self.view.rows().iter().find(|row| row.id == name) else {
             return false;
         };
+        let provider = &row.provider;
+        if let Some(stream) = &row.stream {
+            if KeySpec::plain('.').matches(*key) {
+                ctx.emit(Msg::OpenRowMenu(super::row_actions::Target::Stream(
+                    Box::new((provider.clone(), stream.clone())),
+                )));
+            } else if KeySpec::plain('e').matches(*key) {
+                if let Some(manifest) = &provider.manifest {
+                    ctx.emit(Msg::ProviderStreamEvents(
+                        manifest.name.clone(),
+                        stream.name.clone(),
+                    ));
+                }
+            } else if KeySpec::plain('s').matches(*key) {
+                let action = stream.start_stop_action(provider);
+                ctx.emit(Msg::ProviderStreamAction(
+                    provider.name.clone(),
+                    stream.name.clone(),
+                    action,
+                ));
+            } else {
+                return false;
+            }
+            ctx.stop_propagation();
+            return true;
+        }
         if KeySpec::plain('.').matches(*key) {
             ctx.emit(Msg::OpenRowMenu(super::row_actions::Target::Provider(
                 Box::new(provider.clone()),
             )));
-        } else if KeySpec::plain('e').matches(*key) {
-            let Some(manifest) = &provider.manifest else {
-                return false;
-            };
-            ctx.emit(Msg::ProviderEvents(manifest.name.clone()));
         } else {
             let action = [
                 (
@@ -262,16 +297,7 @@ impl Providers {
                         Action::Start
                     },
                 ),
-                (
-                    'a',
-                    if provider.status == Status::Paused {
-                        Action::Resume
-                    } else {
-                        Action::Pause
-                    },
-                ),
-                ('r', Action::Restart),
-                ('l', Action::Logs),
+                ('o', Action::Logs),
             ]
             .into_iter()
             .find(|(character, _)| KeySpec::plain(*character).matches(*key))
@@ -279,7 +305,7 @@ impl Providers {
             let Some(action) = action else {
                 return false;
             };
-            ctx.emit(Msg::ProviderAction(name, action));
+            ctx.emit(Msg::ProviderAction(provider.name.clone(), action));
         }
         ctx.stop_propagation();
         true
@@ -294,18 +320,36 @@ fn provider_label(provider: &Provider) -> &str {
         .unwrap_or("Invalid provider")
 }
 
-fn search_text(row: &Provider) -> String {
-    format!(
-        "{} {}",
-        provider_label(row),
-        row.manifest
-            .as_ref()
-            .map(|manifest| manifest.description.as_str())
-            .unwrap_or("")
-    )
+fn display_operation(provider: &Provider) -> Option<Action> {
+    if let Some(operation) = provider.operation.filter(|action| *action != Action::Logs) {
+        return Some(operation);
+    }
+    if provider
+        .streams
+        .iter()
+        .any(|stream| stream.operation == Some(Action::Stop))
+        && provider.streams.iter().all(|stream| {
+            !stream.controllable || !stream.enabled || stream.operation == Some(Action::Stop)
+        })
+    {
+        return Some(Action::Stop);
+    }
+    let collecting = provider
+        .streams
+        .iter()
+        .any(|stream| stream.status == Status::Running);
+    if provider.status != Status::Unknown
+        && !collecting
+        && provider.streams.iter().any(|stream| {
+            stream.operation == Some(Action::Start) || stream.status == Status::Starting
+        })
+    {
+        return Some(Action::Start);
+    }
+    None
 }
 
-fn row_text(provider: &Provider, total: u64) -> Text<'static> {
+fn row_text(provider: &Provider, handovers: u64, total: u64) -> Text<'static> {
     let theme = tuicore::theme();
     let icon = profile_icon(
         provider
@@ -314,35 +358,53 @@ fn row_text(provider: &Provider, total: u64) -> Text<'static> {
             .map(|manifest| manifest.profile.as_str())
             .unwrap_or("generic"),
     );
-    let color = match provider.status {
-        Status::Running => theme.info_fg(),
-        Status::Paused => theme.warning_fg(),
-        Status::Unknown => theme.error_fg(),
+    let operation = display_operation(provider);
+    let color = match (operation, provider.status) {
+        (Some(Action::Start | Action::Stop), _) => theme.info_fg(),
+        (_, Status::Running) => theme.success_fg(),
+        (_, Status::Paused) => theme.warning_fg(),
+        (_, Status::Unknown) => theme.error_fg(),
         _ => theme.muted_fg(),
     };
-    let status = provider
-        .operation
-        .map(|action| {
-            match action {
-                Action::Start => "Starting...",
-                Action::Stop => "Stopping...",
-                Action::Pause => "Pausing...",
-                Action::Resume => "Resuming...",
-                Action::Restart => "Restarting...",
-                Action::Logs => "Loading logs...",
-            }
-            .to_owned()
-        })
-        .unwrap_or_else(|| match provider.status {
-            Status::NotStarted => "Not started".into(),
+    let status = match operation {
+        Some(Action::Start) => "Starting...".to_owned(),
+        Some(Action::Stop) => "Stopping...".to_owned(),
+        _ => match provider.status {
+            Status::Running => "Healthy".to_owned(),
+            Status::NotStarted => "Not started".to_owned(),
             status => format!("{status:?}"),
-        });
+        },
+    };
+    let streams = if provider.streams.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " · {}/{} collecting",
+            provider
+                .streams
+                .iter()
+                .filter(|stream| stream.status == Status::Running)
+                .count(),
+            provider.streams.len()
+        )
+    };
     Text::from(Line::from(vec![
+        Span::styled(
+            icon,
+            if matches!(operation, Some(Action::Start | Action::Stop)) {
+                Style::default().fg(theme.info_fg())
+            } else if provider.status == Status::Running {
+                Style::default().fg(theme.success_fg())
+            } else {
+                Style::default()
+            },
+        ),
         Span::raw(format!(
-            "{icon} {} ·  0/{total} · ",
+            " {} ·  {handovers}/{total} · ",
             clean(provider_label(provider))
         )),
         Span::styled(status, Style::default().fg(color)),
+        Span::raw(streams),
     ]))
 }
 
@@ -367,11 +429,11 @@ impl TuiNode<Msg> for Providers {
             })
             .enumerate()
             .filter(|(index, _)| index % 2 == 0)
-            .map(|(_, row)| row.name.clone())
+            .map(|(_, row)| row.id.clone())
             .collect();
         self.view.set_row_style_by(move |row| {
             alternate
-                .contains(&row.name)
+                .contains(&row.id)
                 .then(|| Style::default().bg(tuicore::theme().surface_bg()))
         });
         self.sync_controls(area.width < 60);
@@ -380,7 +442,7 @@ impl TuiNode<Msg> for Providers {
             .controls
             .each_ref()
             .map(|control| control.measure(proposal).preferred.width);
-        let total = widths.iter().copied().sum::<u16>().saturating_add(2);
+        let total = widths.iter().copied().sum::<u16>();
         let mut x = area.right().saturating_sub(total).max(area.x);
         for ((control, control_area), width) in self
             .controls
@@ -533,10 +595,9 @@ impl super::App {
     pub(super) fn request_provider_bulk_action(&mut self, action: Action, ctx: &mut EventCtx<Msg>) {
         let mut names = self.pages_mut().provider_bulk_targets(action);
         names.retain(|name| {
-            !self
-                .provider_actions
-                .iter()
-                .any(|pending| &pending.name == name)
+            !self.provider_actions.iter().any(|pending| {
+                &pending.name == name || pending.name.starts_with(&format!("{name}/"))
+            })
         });
         if names.is_empty() {
             self.notify(tuicore::Notification::warning(
@@ -553,6 +614,7 @@ impl super::App {
             format!("{action:?} {} providers?", names.len()),
         );
         self.provider_confirmation = None;
+        self.provider_stream_confirmation = None;
         self.provider_bulk_confirmation = Some((names, action));
         self.intent = None;
         self.open_compact(dialog, ctx);
@@ -564,15 +626,14 @@ impl super::App {
         action: Action,
         ctx: &mut EventCtx<Msg>,
     ) {
-        let unavailable = if self
-            .provider_actions
-            .iter()
-            .any(|pending| pending.name == name)
-        {
-            Some("An action for this provider is already in progress; wait for it to finish")
-        } else {
-            self.pages_mut().provider_action_unavailable(&name, action)
-        };
+        let unavailable =
+            if self.provider_actions.iter().any(|pending| {
+                pending.name == name || pending.name.starts_with(&format!("{name}/"))
+            }) {
+                Some("An action for this provider is already in progress; wait for it to finish")
+            } else {
+                self.pages_mut().provider_action_unavailable(&name, action)
+            };
         if let Some(reason) = unavailable {
             self.notify(tuicore::Notification::warning(
                 "Provider action unavailable",
@@ -585,10 +646,11 @@ impl super::App {
             return;
         }
         self.provider_confirmation = Some((name.clone(), action));
+        self.provider_stream_confirmation = None;
         self.provider_bulk_confirmation = None;
         let dialog = super::dialogs::confirmation(
             &format!("{action:?} provider"),
-            format!("{action:?} {name}?"),
+            format!("{action:?} {name} (all streams)?"),
         );
         self.intent = None;
         self.open_compact(dialog, ctx);
@@ -597,8 +659,6 @@ impl super::App {
     pub(super) fn open_provider_details(&mut self, provider: &Provider, ctx: &mut EventCtx<Msg>) {
         let text = serde_json::to_string_pretty(provider).unwrap_or_default();
         self.open_provider_text("Provider details", text, ctx);
-        self.details_open = true;
-        self.resize_details_dialog();
     }
 
     fn open_provider_text(&mut self, title: &str, text: String, ctx: &mut EventCtx<Msg>) {
@@ -616,7 +676,8 @@ impl super::App {
         );
         self.intent = None;
         self.open(Box::new(dialog), ctx);
-        self.view.set_fit_content(false);
+        self.details_open = true;
+        self.resize_details_dialog();
     }
 
     pub(super) fn start_provider_action(&mut self, name: String, action: Action, confirmed: bool) {

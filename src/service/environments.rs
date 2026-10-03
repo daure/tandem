@@ -133,6 +133,7 @@ impl AppService {
         template: String,
         description: String,
         opencode: Option<Option<String>>,
+        start_instance: bool,
     ) -> Result<CreateInstanceOutcome, String> {
         if let Some(instance) = self
             .environments
@@ -167,6 +168,7 @@ impl AppService {
             operation,
             600,
             Startup {
+                start_instance,
                 description: Some(description),
                 opencode,
                 opencode_result: open_requested.then_some(sender),
@@ -245,6 +247,33 @@ impl AppService {
         Ok(self.schedule_operation(operation, timeout, Startup::default()))
     }
 
+    pub(crate) fn submit_instance_creation(
+        &self,
+        name: &str,
+        template: String,
+        timeout: u64,
+        confirmed: bool,
+        start_instance: bool,
+    ) -> Result<Operation, String> {
+        if !confirmed {
+            return Err("confirmation_required: this prepares repositories with host Git and trusted template configuration".into());
+        }
+        if !(5..=900).contains(&timeout) {
+            return Err("timeout_seconds must be between 5 and 900".into());
+        }
+        let operation = self
+            .environments
+            .begin("create_instance", name, Some(template))?;
+        Ok(self.schedule_operation(
+            operation,
+            timeout,
+            Startup {
+                start_instance,
+                ..Default::default()
+            },
+        ))
+    }
+
     pub(crate) fn submit_instance_batch(
         &self,
         action: &str,
@@ -321,7 +350,7 @@ impl AppService {
         let operation_id = operation.id.clone();
         let environments = Arc::clone(&self.environments);
         let worker_operation = operation.clone();
-        let startup_timing = (action == "create_instance")
+        let startup_timing = (action == "create_instance" && startup.start_instance)
             .then(|| {
                 worker_operation
                     .template

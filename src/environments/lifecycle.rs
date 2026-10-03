@@ -46,6 +46,11 @@ pub(crate) fn start(
         } else {
             runtime::project_ids(config, name, deadline)?
         };
+        if !startup.start_instance && !existing_ids.is_empty() {
+            return Err(
+                "preparation without startup requires an instance without containers".into(),
+            );
+        }
         if !existing_ids.is_empty() {
             let existing = runtime::inspect_until(config, deadline)?
                 .into_iter()
@@ -160,6 +165,11 @@ pub(crate) fn start(
             writer.workspace_ready();
         }
         pending_services(services);
+        if !startup.start_instance {
+            let instance = journal::prepared_ready(config, name)?;
+            progress("Workspace and Compose configuration ready; services not started".into());
+            return Ok(instance);
+        }
         gateway::ensure(config, progress.clone(), remaining(deadline)?)?;
         progress(format!(
             "Starting {} from {}",
@@ -330,9 +340,60 @@ pub(super) fn delete(
     progress: Progress,
     before_deletion: &super::BeforeDeletion<'_>,
 ) -> Result<(), String> {
+    delete_with_provenance(config, name, None, progress, before_deletion)
+}
+
+pub(super) fn delete_for_provider(
+    config: &Config,
+    name: &str,
+    operation: &str,
+    progress: Progress,
+    before_deletion: &super::BeforeDeletion<'_>,
+) -> Result<(), String> {
+    delete_with_provenance(config, name, Some(operation), progress, before_deletion)
+}
+
+fn delete_with_provenance(
+    config: &Config,
+    name: &str,
+    operation: Option<&str>,
+    progress: Progress,
+    before_deletion: &super::BeforeDeletion<'_>,
+) -> Result<(), String> {
     validate_instance_name(name)?;
     let deadline = Instant::now() + Duration::from_secs(60);
     let _lock = gateway::lock(config, &format!("instance-{name}"))?;
+    if let Some(operation) = operation {
+        match super::startup::read(config, name)? {
+            Some(record) if record.operation.id == operation => {}
+            Some(_) => {
+                return Err(format!(
+                    "instance {name} has a different startup identity; refusing provider deletion"
+                ));
+            }
+            None => {
+                let workspace_absent = match fs::symlink_metadata(config.workspaces.join(name)) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                    Ok(_) => false,
+                    Err(error) => return Err(error.to_string()),
+                };
+                if workspace_absent
+                    && journal::recorded(config, name)?.is_none()
+                    && runtime::project_ids(config, name, deadline)?.is_empty()
+                {
+                    let workspace = config.workspaces.join(name);
+                    before_deletion(
+                        workspace.to_str().ok_or("invalid workspace path")?,
+                        deadline,
+                    )?;
+                    return Ok(());
+                }
+                return Err(format!(
+                    "instance {name} has no verifiable startup identity; refusing provider deletion"
+                ));
+            }
+        }
+    }
     let activity = journal::ActivityGuard::begin(config, name, "delete_instance", None, 60)?;
     let result = (|| {
         if cleanup::unclaimed_startup(config, name)? {
@@ -439,8 +500,20 @@ pub(super) fn managed_instance(
     }
     let instance = runtime::inspect_until(config, deadline)?
         .into_iter()
-        .find(|instance| instance.name == name)
-        .ok_or("instance not found")?;
+        .find(|instance| instance.name == name);
+    let Some(instance) = instance else {
+        if let Some(mut instance) =
+            journal::recorded(config, name)?.filter(|instance| instance.runtime.prepared_only)
+        {
+            ownership::verify(config, &instance)?;
+            if !runtime::project_ids(config, name, deadline)?.is_empty() {
+                return Err("project contains unmanaged containers; refusing to change it".into());
+            }
+            journal::enrich(config, std::slice::from_mut(&mut instance))?;
+            return Ok((instance, Vec::new()));
+        }
+        return Err("instance not found".into());
+    };
     checked_project(config, instance, deadline)
 }
 

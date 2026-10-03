@@ -40,6 +40,11 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
+        Self::start_in("/work/review")
+    }
+
+    fn start_in(directory: &str) -> Self {
+        let directory = directory.to_owned();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -131,12 +136,12 @@ impl Server {
                         fs::write(path, receipt).unwrap();
                     }
                     let mut history = json!([
-                        {"id":"ses_busy","title":"Same title","directory":"/work/review/repo","time":{"updated":4}},
-                        {"id":"ses_idle","title":"Same title","directory":"/work/review/repo","time":{"updated":3}},
-                        {"id":"ses_background","title":"Tests","directory":"/work/review","time":{"updated":2}},
-                        {"id":"ses_saved","title":"Old conversation","directory":"/work/review","time":{"updated":1}},
-                        {"id":"ses_elsewhere","title":"Other workspace","directory":"/work/review-other","time":{"updated":5}},
-                        {"id":"ses_child","parentID":"ses_busy","title":"Subagent","directory":"/work/review","time":{"updated":6}}
+                        {"id":"ses_busy","title":"Same title","directory":format!("{directory}/repo"),"time":{"updated":4}},
+                        {"id":"ses_idle","title":"Same title","directory":format!("{directory}/repo"),"time":{"updated":3}},
+                        {"id":"ses_background","title":"Tests","directory":directory,"time":{"updated":2}},
+                        {"id":"ses_saved","title":"Old conversation","directory":directory,"time":{"updated":1}},
+                        {"id":"ses_elsewhere","title":"Other workspace","directory":format!("{directory}-other"),"time":{"updated":5}},
+                        {"id":"ses_child","parentID":"ses_busy","title":"Subagent","directory":directory,"time":{"updated":6}}
                     ]);
                     let history = history.as_array_mut().unwrap();
                     history.retain(|session| {
@@ -234,6 +239,7 @@ esac
         presence: root.join("presence"),
         daemons: root.join("daemons"),
         zellij: program,
+        excluded: Default::default(),
     };
     fs::create_dir_all(&observer.presence).unwrap();
     observer
@@ -811,15 +817,16 @@ fn server_targets_reject_remote_hosts_credentials_paths_and_redirect_targets() {
 #[test]
 fn daemon_directory_receipts_discover_detached_work_without_a_client() {
     let root = tempfile::tempdir().unwrap();
-    let server = Server::start();
+    let directory = root.path().to_str().unwrap();
+    let server = Server::start_in(directory);
     let observer = observer(root.path());
     let station = observer.daemons.join("station");
     fs::create_dir_all(station.join("dirs")).unwrap();
     fs::write(station.join("port"), server.url.rsplit(':').next().unwrap()).unwrap();
-    fs::write(station.join("dirs/work.dir"), "/work/review\n").unwrap();
+    fs::write(station.join("dirs/work.dir"), directory).unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let snapshot = runtime
-        .block_on(observer.observe(&["/work/review".into()], Snapshot::default()))
+        .block_on(observer.observe(&[directory.into()], Snapshot::default()))
         .unwrap();
     assert_eq!(
         snapshot

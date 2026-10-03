@@ -26,6 +26,8 @@ TUI with `tandem`.
 2. Press `Enter` on a template, instance or service to view its details. Template details include
    metadata, available Compose source and the manifest.
 3. Press `i`, enter `review`, then Enter or Ctrl+S to confirm execution; watch progress in Details.
+   **Start instance**, the last dialog control, defaults on. Turn it off to prepare repositories,
+   guidance and Compose configuration without starting services; an initial prompt still opens OpenCode.
 4. Expand the template row using the DataView's configured expansion key (shown in its action bar)
    and select `review`; the blank workspace is ready and contains standard `AGENTS.md` guidance.
    Add repositories, `compose.yaml`, routes, or `tandem-agents.md` to the template as needed; use a new
@@ -132,6 +134,7 @@ Source output may contain secrets from template files; handle it accordingly.
 tandem new-instance review --template website
 tandem new-instance review -t website --opencode
 tandem new-instance review -t website -o "Explain this project"
+tandem new-instance review -t website --start-instance=false
 tandem start-instance review
 tandem stop-instance review
 tandem restart-instance review
@@ -144,6 +147,10 @@ and Docker execution; use trusted templates. Creation follows the saved Branch i
 the same ownership checks, locks and startup rules as the TUI/MCP. The CLI waits up to ten minutes for
 startup readiness, prints the workspace and service URLs on success, and exits nonzero on failure.
 Failed startups preserve resources for inspection.
+
+`--start-instance` defaults to true. Set it to false to complete workspace and Compose preparation
+without Compose startup, gateway startup or service-readiness waits. Service instances remain
+container-backed and report **Not started**; use `start-instance` to start them later.
 
 `start-instance` requires an existing managed instance and its trusted template. It uses the TUI's
 startup path, provisions missing repositories, reapplies Compose configuration, and may rerun setup
@@ -182,21 +189,29 @@ existing configuration.
 
 For a new instance, Tandem creates and validates the workspace directory, completes creation-history
 cleanup when enabled, and launches the requested OpenCode client before cloning repositories.
-Repository preparation, workspace `AGENTS.md` generation, and any container startup follow the launch
-attempt. The client can open before sources and guidance exist; initial prompts run without waiting
-for instance readiness. Startup continues if the client launch fails.
+Seed copying and workspace `AGENTS.md` generation precede the launch. Repository preparation,
+verified guidance mappings and requested container startup follow it. Initial prompts run without
+waiting for instance readiness. Startup continues if the client launch fails.
 Client lifetime does not delay CLI exit. Launch failures make the CLI fail after startup completes,
 or immediately for an existing instance; prepared workspaces remain available.
 
-Initial prompts require the bundled Tandem TUI companion. The release shell installer refreshes it and
+Session instructions and initial prompts require the bundled Tandem TUI companion. The release shell installer refreshes it and
 prints its OpenCode `cli.json` plugin directory (V1: `bridge.mjs` in `tui.json`); after source or manual updates, run `tandem opencode-setup`.
 Ensure the printed entry is in the plugin array. Each new client receives
-`TANDEM_INITIAL_PROMPT`; the companion consumes and clears it, waits for readiness, creates a fresh
-conversation, navigates only that client, and submits the text once through the server API.
-Blank text opens a blank client. Prompt requests use the server's configured agent/model defaults.
-The prompt travels as a literal process argument and environment value; avoid including secrets.
-CLI success confirms instance readiness and pane launch, not prompt delivery or model completion.
+`TANDEM_INITIAL_PROMPT` and instance-state instructions; the companion consumes and clears them,
+waits for client readiness, creates a conversation and attaches instructions before any initial prompt.
+Without prompt text, instructed instance sessions open without requesting a model reply.
+Ordinary sessions use the configured agent/model defaults; rule sessions use their pinned model/variant.
+The prompt travels as a literal environment value; avoid including secrets.
+CLI success confirms requested preparation/readiness and pane launch, not prompt delivery or model completion.
 The companion reports submission failures in the new client and does not retry uncertain requests.
+
+Every new instance session opened through `n` or creation receives current service-state guidance.
+Starting services allow code exploration during preparation and require readiness only when the work
+needs them. Started services require readiness verification when needed. Stopped or prepare-only
+services require asking the user before starting them. Opening a session does not start containers.
+V2 stores this guidance as a durable `tandem.services` instruction entry; V1 uses synthetic context
+with no model reply. Generated workspace guidance lists configured services and preserves user edits.
 
 `delete-instance` permanently removes the named instance's owned containers, workspace, private volumes,
 networks, private rendered Compose file, and local instance records. It leaves templates, shared images, and the gateway intact.
@@ -270,7 +285,8 @@ Template-owned clone jobs and container-created files appear only after their ow
 **Events** is the second main tab. It shows the latest 200 received events in arrival order, with
 new arrivals at the bottom, using distinct message, ticket, system-event, and generic rows.
 Search by provider, stream, profile, summary, or event ID.
-Each event occupies two lines: a type glyph, provider identity, and profile-specific fields above the
+Each event occupies two lines: a type glyph, provider identity, muted `#<sequence>` local event ID,
+and profile-specific fields above the
 message text, ticket title, system description, or generic summary. The glyphs are `` message,
 `` ticket, `` system event, and `` generic; Providers uses the same glyphs. The glyph is green
 when the latest processing attempt is accepted and uses the normal text color otherwise.
@@ -279,42 +295,66 @@ assignees. System headers show resource, optional environment, signal, and sever
 Environment aliases `prod`, `dev`, and `stage` display as `production`, `development`, and `staging`;
 custom labels remain intact. Separators and secondary fields are muted; severity colors only its label.
 Press Enter to inspect the normalized payload, metadata, supporting context, and the latest 50
-processing attempts. The feed starts on its newest event with bottom-following enabled. Selecting
-the last row enables following; moving to an older row pauses it and retains that event during updates.
-The `G` toggle controls following. `Shift+G` in the DataView selects the newest matching event and
+processing attempts. The feed lists newest events first and starts with top-following enabled. Selecting
+the first row enables following; moving to an older row pauses it and retains that event during updates.
+The `gg` toggle controls following. `gg` in the DataView selects the newest matching event and
 resumes following. `Shift+H` opens the Sessions overview from any main tab, including during search.
-It clears searches and filters on every page and selects each DataView's first item, except Events,
-which selects the newest event at the bottom and resumes following.
+It clears searches and stream filters on every page and selects each DataView's first item.
+Events enables handover filtering and resumes following.
 With OpenCode integration disabled, it opens the Instances overview.
 Press `.` for the highlighted event's action menu with hotkeys; `p` selects its source in Providers.
-The provider multiselect at the top (`P`) filters by exact provider names. Enter toggles an option,
+`x` deletes the highlighted event, including from the `.` menu. `X` deletes all retained events
+in the current namespace, across providers and filters. Both require **Ok** (`o`) or **Cancel** (`c`).
+Deletion removes event history, feedback, and pending rule work while preserving instances, sessions,
+rules, provider credentials, and dispatch rate limits. Active rule actions must finish first.
+Redelivering a deleted event creates a fresh receipt and can trigger enabled rules again.
+The stream multiselect at the top (`P`) lists `provider · stream` and filters by exact pairs. Enter toggles an option,
 Ctrl+J/Ctrl+K moves through options, and Ctrl+Enter applies the selection. An empty selection shows
-all providers. Providers' **Events** action selects only that provider in the filter. The `T` toggle
-shows only events handed over to Tandem instances; acceptance alone does not establish assignment. The count
-at the right shows displayed events out of the full retained history. Instance dispatch is pending,
-so the handover-only feed is empty. Changing a provider or handover filter selects the newest matching
+all streams. A stream row's **Stream events** action selects only that stream and clears event search.
+`Shift+Enter` clears the stream selection. The `T` toggle
+shows only events handed over to Tandem instances and is enabled at startup; acceptance alone does not establish assignment. The count
+at the right shows displayed events out of the full retained history. Changing a stream or handover filter selects the newest matching
 event and focuses the DataView. Escape or Ctrl+[ from the filters or toggles returns to the DataView.
+
+The first Events toggle, **󰕾 acceptance sound** (`Shift+N`), is off at startup. It plays for newly
+accepted processing attempts across all providers, independently of filters and the active tab.
+Startup history is silent; replay can produce a new notification. Acceptances in the same refresh
+share one sound. `Shift+H` turns this toggle off.
 
 Events start **pending**. **Accepted** means a rule matched the event and triggered its action;
 instance startup, prompt delivery, and task completion have separate outcomes. Acceptance belongs
-to automatic rule processing. `r` replays an accepted event as a new pending attempt while preserving
-its original event ID and history. Replay requires an accepted current attempt. Rules, automatic
-instance creation, and assignment/task-completion notifications are pending, so newly received
-events stay pending in this developer slice. Schema upgrades require existing Tandem clients and
+to automatic rule processing. `r` replays any retained event as a new pending attempt while preserving
+its original event ID and history. Replay requires approval to evaluate current enabled rule revisions;
+use it to apply newly created or enabled rules to earlier events. Each replay can trigger the same rule
+again with a fresh instance. The row shows `Accepted · 3 rules` for three matches in
+the latest attempt. The **Acceptances** details tab lists each rule, timestamp, attempt, assigned
+instance, session, and dispatch outcome. Schema upgrades require existing Tandem clients and
 sidecars to be stopped; retained processing history keeps its identities and timestamps.
 
-**Providers** is the third main tab. Tandem discovers packages under `provider_templates_root`.
-Each row shows its provider identity, handed-over/total event count, and runtime status. Handover counts
-are zero while instance dispatch is pending; totals cover full retained history for the manifest's
-provider identity. Select a provider and press `.` for its action menu: **Start**/**Stop** (`s`),
-**Pause**/**Resume** (`a`), **Restart** (`r`), **Logs** (`l`), and **Events** (`e`). The hotkeys choose
+**Providers** discovers packages under `provider_templates_root` and displays a provider → streams tree.
+Provider rows show identity, handed-over/total event count, collector status, and collecting-stream count. Counts cover
+distinct events across full retained history for the manifest's
+provider identity. Select a provider and press `.` for its action menu: **Start provider**/**Stop provider** (`s`),
+and **Logs** (`o`). The hotkeys choose
 the action for the observed state and also work directly on the row; unavailable menu actions are muted.
 Enter inspects its configuration and runtime state. Lifecycle actions ask for approval because they
 execute trusted Docker code.
 
-The right-side controls are **Pause all**/**Resume all** (`A`), **Start all**/**Stop all** (`S`), and
-**Restart all** (`R`). Start/Stop shows Stop when every provider is running or paused, and Start for a
-mixed state. Pause/Resume shows Resume when every provider is paused, and Pause otherwise. Bulk actions
+Stream children show their own handed-over/total counts and collection state. Enter opens **Stream details**;
+`.` offers **Start stream**/**Stop stream** (`s`) and **Stream events** (`e`). Provider actions target the
+collector and all its declared streams. On a running compatible provider, stream actions preserve siblings.
+Starting an individual stream on a stopped or uninstalled provider starts its collector with only that stream
+enabled. Stopping the last enabled stream also stops the collector, preserving checkpoints and history.
+Stop cancels collection inside the collector and clears that stream's buffered events. Resume is
+live-only: the stopped interval is skipped, without catch-up. Completion requires the collector's current
+acknowledgment within ten seconds. Enabled streams show **Starting...** while waiting for that acknowledgment;
+timeout, errors or expired evidence show **Unverified**. The periodic control acknowledgment verifies readiness
+without waiting for a source event or adding health-check events to history. Streams inferred from
+retained events remain inspectable when their provider does not declare stream control. Logs belong to the
+collector and open in a bottom dialog. Tree expansion uses the DataView's configured bindings and survives snapshot refreshes.
+
+The right-side control is **Start all**/**Stop all** (`S`). It shows Stop when any provider is
+running or paused, and Start when none are running or paused. Bulk actions
 confirm the eligible, idle providers before running; unavailable providers are skipped. Search input
 retains uppercase letters without triggering these actions.
 
@@ -323,24 +363,36 @@ the Tandem-owned sidecar, builds the image, and verifies the owned collector is 
 There is one installation per package in each namespace. Manifest identities are unique and fixed
 for installed packages. CLI/MCP Start on a running provider preserves its configuration; apply template
 edits by stopping and starting it. Running proves container liveness, not successful source collection.
+Provider Start enables every declared stream, including streams individually stopped while the collector ran.
 
-Stop preserves checkpoint volumes and event history. Stop and Pause discard incoming events as soon
-as their operation starts, before Docker work; discarded events create no history or feedback.
-Failed Stop/Pause operations keep ingestion disabled; unavailable actions preserve the prior gate.
-Start, Resume, and Restart enable ingestion before collector work and restore the prior gate on failure.
-Pause freezes collection and feedback; Resume continues the same container. Restart restarts an
-existing collector with its current configuration and checkpoints, including a stopped or paused
-collector; it ensures the sidecar and verifies the collector is running and unpaused.
+Stop preserves checkpoint volumes and event history. Stop discards incoming events as soon
+as its operation starts, before Docker work; discarded events create no history or feedback.
+Failed Stop operations keep ingestion disabled; unavailable actions preserve the prior gate.
+Start enables ingestion before collector work and restores the prior gate on failure.
+Start unpauses an owned paused collector and verifies it is running and unpaused.
 Lifecycle actions verify namespace, provider, Compose project, and
 collector-service ownership before mutation. Retained launch snapshots permit Stop and Logs even
 when a package directory is removed. Build/start failures and Docker observation failures remain
 visible; unavailable Docker is not evidence that a provider is stopped.
 
+MCP `delete_provider` accepts the package `name` from `list_providers` and requires `confirmed: true`.
+It permanently removes the shared package, owned collector and checkpoint volume, credentials, stream
+controls, events, attempts, acceptances, and feedback. It also purges event-created instances, their
+workspaces and associated OpenCode sessions, independently of history-cleanup preferences.
+Shared rule definitions, sidecars, namespace dispatch-rate history and Docker images/build caches remain.
+Active rule actions, another namespace's installation, unsafe paths or unverifiable/reused instance
+identities block deletion. External cleanup can partly succeed before a failure; identity and history
+remain available for retry, with ingestion, collection restarts and queued dispatch blocked.
+Source-system side effects are outside this local purge. Close old Tandem clients and sidecars before
+upgrading so all processes honor deletion coordination.
+
 Tandem owns one detached sidecar per home/namespace, separate from MCP. It chooses a loopback port
 and passes that address to collectors. A private process lease and identity probe prevent duplicate
 workers and verify readiness. Providers and collection continue after the TUI closes. Opening Tandem
-supervises the sidecar for active providers; Start, Resume, and Restart repair an interrupted sidecar,
-retaining its recorded address so collectors reconnect without changing event identities.
+supervises the sidecar for active providers. On Linux, supervision, provider Start and rule activation
+ensure the receiver uses the installed Tandem executable. A verified outdated receiver shuts down
+gracefully before replacement on its recorded address, so collectors reconnect with their checkpoints,
+credentials and event identities intact. Stop controls collectors; the shared sidecar stays running.
 Private worker diagnostics live at `$TANDEM_HOME/provider-sidecar.log`. Provider process logs are
 available through the Providers tab. Normal operation needs no Compose command, token setup, or
 manual sidecar startup.
@@ -356,6 +408,16 @@ protocol-testing server, independent of the owned lifecycle.
 | `POST /v1/events` | JSON object with an `events` array of 1–100 events; atomic acceptance returns `receipts` with event ID, local sequence, and duplicate flag. Disabled ingestion returns HTTP 200 with empty `receipts` and a `discarded` array containing the batch's event IDs. |
 | `GET /v1/notifications` | Returns up to 100 unacknowledged notifications for the authenticated provider, oldest first. |
 | `POST /v1/notifications/{id}/ack` | Idempotently acknowledges that provider's notification; returns 204. |
+| `GET /v1/streams` | Returns a `streams` array of the authenticated provider's `{stream, enabled, revision}` controls. |
+| `POST /v1/streams/ack` | Acknowledges one exact current control after the collector applies it; returns 204, or 409 for unavailable/superseded controls. Repeat applied acknowledgments at least once per second; freshness expires after five seconds. |
+
+Provider manifests declare `streams: ["messages", "reactions"]` and `stream_control: true` when the
+collector supports the control contract. Poll controls at least once per second, even when every stream is
+stopped. Cancel and join a stopped stream's collection work before acknowledgment; filtering emitted events
+alone is insufficient. Sibling streams continue. Start uses the current source position and skips buffered
+history. Manifest stream names are unique, nonempty strings up to 80 bytes without control characters.
+Ingestion racing with stream Stop is discarded for that stream; mixed batches can contain both receipts and
+discarded IDs, each in input order. This ingestion guard does not certify collection has stopped.
 
 Each event has `schema_version: 1`, a stable `event_id`, `stream`, namespaced `type`, `summary`,
 `profile`, and normalized `data`. Optional fields are `occurred_at` (RFC 3339), `subject`, `body`,
@@ -395,6 +457,105 @@ Tandem durably queues `received`, `replayed`, and `acknowledged` feedback with s
 IDs, original event IDs, local sequences, and processing-attempt IDs. Providers poll and acknowledge
 these notifications. Delivery retries and sidecar restarts preserve the queue; providers must
 deduplicate notifications and reconcile their external side effects before acknowledgment.
+
+## Event rules
+
+**Rules** is a main tab after Instances. Each rule occupies two rows showing its enabled state,
+name, handler template, model, and description. `a` activates or deactivates the selected rule; Space
+also toggles it. `.` opens its action menu with hotkey labels. The top-right `A` button offers
+**Activate all** when no rules are active, or **Deactivate all** when any rule is active.
+Single-rule activation and deactivation save immediately and report success or failure in a notification.
+Activation authorizes automatic execution. Bulk actions confirm eligible saved revisions with **Ok (o)**
+and **Cancel (c)**. A white pause icon marks inactive rules; a green play icon marks active rules.
+TUI activation binds the rule to that Tandem process's current Zellij session. Activation and dispatch
+require a live target; dispatch checks before preparation and again before launching. If the session
+closes, deactivate and reactivate the rule in the desired Tandem TUI. Existing acceptances keep their
+pinned destination; an explicit replay after reactivation uses the newly authorized revision.
+Enter opens a bottom-docked dialog with **Accepted events**,
+**Script**, and **Settings** tabs. Valid field edits save automatically while the dialog stays open;
+invalid input stays editable with a save error. Script uses Rust highlighting for Rhai syntax;
+Initial prompt uses Glimmer highlighting for Handlebars syntax.
+Editing an enabled rule pauses it before saving the draft; `a` in Rules authorizes its updated
+revision. Already accepted work retains its pinned definition. Predicates inspect provider-supplied
+custom fields through `event.metadata`.
+In a rule's acceptance list, Enter switches to Events and selects that exact retained event, clearing
+conflicting filters even outside the latest-200 feed. In an event's acceptance list, Enter selects its rule.
+Event dialogs open on **Acceptances**, followed by **Event details**.
+The `.` menu offers **Go to instance** (`i`) and **Go to OpenCode session** (`o`); both keys also work
+directly on the row. Session navigation is available once a conversation or assigned pane is recorded.
+
+Create rules through MCP with `save_rule`. Use `list_rules`/`get_rule` to read revisions and acceptance
+history, `list_events`/`get_event` to inspect input, and `preview_rule` to check matches and resolved
+prompts without contacting an agent or creating an instance. Updates require the saved revision.
+Shared definitions live in `$TANDEM_HOME/templates/rules/<name>/rule.json`, alongside the instance
+and provider catalogs in the template Git repository. Each file contains `name`, `script`, `template`,
+`model`, and `initial_prompt`, with optional `description` and `start_instance` (default true).
+The name must match its directory. Activation (`enabled`), Zellij targets, revisions, and execution
+history live locally in `settings.sqlite3`; omit `enabled` from the file and set it through `save_rule`
+or the TUI. File additions are discovered automatically as inactive rules. Direct edits pause the rule
+in each namespace and require activation of the updated revision. Removing a file stops future
+matches; pinned work and history are preserved. Invalid files surface errors and block new attempts
+until corrected.
+
+```rhai
+fn matches(event) {
+    event.profile == "message" && event.data.channel == "support"
+}
+```
+
+The predicate receives the normalized envelope plus authenticated `provider`, local `sequence`, and
+`received_at`. All four profiles expose `data`, shared context, and arbitrary event metadata. Rhai
+returns only a boolean; Tandem owns side effects. Evaluation limits include 50,000 operations,
+32 call levels, bounded expressions and collections, and no exposed host filesystem, network, or
+process capabilities. Script errors remain visible and do not stop sibling predicates.
+Use `sample(event.event_id, 0.8)` for an approximately 80% deterministic sample. The same nonempty
+key always produces the same draw across previews, retries, and restarts. Keys are limited to 1024
+bytes; the probability must be a finite decimal between `0.0` and `1.0`. Sampling is not a security
+or rate-control mechanism. Prefix the key with a rule name to give different rules independent draws.
+
+Prompts use Handlebars with nested paths, `if`/`unless`, `each`, `with`, comparison helpers, and
+inline partials. `{{event.data.text}}` inserts literal text; `{{event}}` and event-path collections
+render as JSON. `{{json event}}` explicitly serializes any value, including within loops.
+
+```handlebars
+Message: {{event.data.text}}
+{{#if event.data.thread}}Thread: {{event.data.thread}}{{/if}}
+{{#each event.attachments}}
+- {{name}} ({{url}})
+{{else}}
+No attachments.
+{{/each}}
+```
+
+Event text stays literal and HTML escaping is disabled. Missing interpolated fields are errors;
+`if` can guard optional fields. Template syntax is checked on save. Rendering permits 32 nesting
+levels and 50,000 template evaluations, including empty loop bodies. Templates are in-memory and
+expose no filesystem, network, or script helpers. Empty/NUL-containing results or output above
+64 KiB fail that action while retaining its acceptance.
+Models use `provider/model#variant`, with the variant optional. Model syntax is validated locally;
+availability and credentials belong to the configured OpenCode environment. V2 rule launches require
+`opencode-station run` with model/prompt/variant support; V1 launches use `opencode`.
+
+Authorization covers every future match of that enabled revision, including trusted template code,
+host credentials, model costs, and creation-history cleanup when enabled. External text is task data,
+not authorization. Rules are namespace-local SQLite records. New attempts pin enabled revisions;
+edits and toggles affect future attempts while queued actions retain their saved definition and prompt.
+Every matching rule creates its own fresh instance. Dispatch waits for successful instance readiness,
+then requests a new conversation with the configured model and prompt. Disabling a rule does not
+cancel already accepted work.
+
+A namespace lease serializes automation across processes. Dispatch admits four active actions and
+ten starts per minute, including retries. The owned event sidecar processes work after TUI/MCP clients
+close. Acceptances retain queued, provisioning, launching, launched, failed, or uncertain outcomes.
+`launched` proves observed session/pane linkage, not prompt completion or task success.
+Provider `assigned` feedback includes dispatch ID, rule name/revision, and instance; it proves durable
+startup admission, not readiness or prompt delivery.
+
+Use confirmed `retry_acceptance` only for pre-launch failures after correcting their cause. It keeps
+the assigned instance and successful siblings. Uncertain launches are never automatically resent;
+inspect their workspace/pane before deliberately replaying. Confirmed `replay_event` uses current
+enabled rules under a fresh attempt. Reuse its `request_id` when resubmitting the same request.
+Providers must exclude their own feedback-driven source updates to prevent automation loops.
 
 See [developer provider setup](projects-generators/README.md#event-providers) for the four Docker
 images and isolated verification commands.
@@ -437,7 +598,7 @@ with the same template/name after correcting the cause. Docker failures do not m
 The MCP tools are `get_instructions`, `list_templates`, `get_template`, `create_template`, `update_template_manifest`,
 `list_instances`, `create_instance`, `get_operation`, `stop_instance`, `delete_instance`, `start_service`,
 `stop_service`, `restart_instance`, `restart_service`, `list_providers`, `provider_action`, and `get_status`.
-Provider actions are `start`, `stop`, `pause`, `resume`, and `logs`; lifecycle actions require
+Provider actions are `start`, `stop`, and `logs`; lifecycle actions require
 `confirmed=true`. CLI equivalents are `tandem list-providers` and `tandem provider <action> <name>`;
 they use the same service boundary and perform the sidecar/credential setup themselves.
 List tools return objects with `templates` or `instances` arrays. Mutating instance tools require
@@ -497,8 +658,9 @@ Generated configuration and instance records live in Tandem's private local stor
 Tandem uses the nested instance catalog when `templates/instances/` exists. Flat instance catalogs
 remain supported and are preserved; mixing flat and nested instance recipes fails initialization.
 Fresh developer fixtures put instance and provider packages in `templates/instances/` and
-`templates/providers/`, sharing the Git repository at `templates/`. `get_instructions` returns the
-effective instance root, provider root, and shared repository root.
+`templates/providers/`; rule definitions live in `templates/rules/`, sharing the Git repository at
+`templates/`. `get_instructions` returns the effective instance, provider, and rule roots and the
+shared repository root.
 
 `tandem-files/` seeds each instance workspace with its contents, including nested directories, hidden
 files, binary files, and file permissions. Copying runs before workspace guidance generation, any
@@ -642,9 +804,10 @@ each chooser option is shown as `<service> - <url>`.
 gutter marker's final fade; the two short pulses and 150 ms rise keep their fixed timing.
 Valid edits save immediately in `$TANDEM_HOME/settings.sqlite3` and apply to active markers.
 
-**Completion sound** lists installed `.oga`, `.ogg`, and `.wav` files from the user and system
+**Completion sound** and **Event acceptance sound** independently select installed `.oga`, `.ogg`,
+and `.wav` files from the user and system
 XDG sound directories. Confirming a dropdown selection saves it and plays a preview, even when
-the toolbar's completion-sound toggle is off. Moving the highlight is silent. Playback is
+its toolbar sound toggle is off. Moving the highlight is silent. Playback is
 asynchronous; a new preview replaces the previous sound. System default uses the desktop's
 `complete` event; an unavailable saved choice falls back to it. Restart Tandem to discover
 newly installed sounds. Playback failures are recorded in diagnostic logs.
@@ -777,8 +940,9 @@ Workspace matching includes repository
 subdirectories and selects the closest owning workspace.
 
 The top **Sessions** tab groups conversations beneath instance rows and outside-Tandem
-directory groups. **Events** is second, **Providers** third, and **Instances** shows the template and
-instance tree. With OpenCode disabled, the tabs are **Instances**, **Events**, and **Providers**. Click a tab or
+directory groups. The tabs are **Sessions**, **Events**, **Rules**, **Providers**, and **Instances**.
+**Instances** shows the template and instance tree. With OpenCode disabled, the tabs are
+**Instances**, **Events**, **Rules**, and **Providers**. Click a tab or
 press `[` / `]` from any main-view control to switch left / right. Instance/session switches retain
 control focus; entering Events or Providers focuses its DataView.
 The tab header stays visually active; dialogs and action menus own their keyboard input.

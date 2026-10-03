@@ -30,12 +30,15 @@ fn new_sessions_attach_without_resuming_and_stack_in_the_observed_tab() {
             "other",
             Some(&pane),
             Some("Explain 'this'; $(touch injected)\nsecond line"),
+            Some("Services won't start automatically"),
         ))
         .unwrap();
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
     let command = navigation::client_command(&[
         "env".into(),
         "TANDEM_INITIAL_PROMPT=Explain 'this'; $(touch injected)\nsecond line".into(),
+        "TANDEM_SESSION_INSTRUCTIONS=Services won't start automatically".into(),
+        "TANDEM_SESSION_MODEL=".into(),
         "opencode".into(),
         "attach".into(),
         server.url.clone(),
@@ -73,14 +76,19 @@ fn new_sessions_start_opencode_in_a_named_tab_without_a_known_server() {
     let directory = root.path().to_str().unwrap();
     let created = tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(observer.new_session(directory, "workspace", "main", None, None))
+        .block_on(observer.new_session(directory, "workspace", "main", None, None, None))
         .unwrap();
     assert_eq!(
         (created.session.as_str(), created.id, created.tab_id),
         ("main", 100, 9)
     );
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
-    let mut client = vec!["env".into(), "TANDEM_INITIAL_PROMPT=".into()];
+    let mut client = vec![
+        "env".into(),
+        "TANDEM_INITIAL_PROMPT=".into(),
+        "TANDEM_SESSION_INSTRUCTIONS=".into(),
+        "TANDEM_SESSION_MODEL=".into(),
+    ];
     client.extend(navigation::new_client_command(directory));
     let command = navigation::client_command(&client).join(" ");
     assert!(
@@ -105,11 +113,123 @@ fn new_sessions_start_opencode_in_a_named_tab_without_a_known_server() {
 }
 
 #[test]
+fn rule_sessions_reject_closed_destinations_without_creating_a_tab() {
+    let root = tempfile::tempdir().unwrap();
+    let observer = observer(root.path());
+    let error = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(observer.new_rule_session(
+            root.path().to_str().unwrap(),
+            "event-1",
+            "closed-session",
+            "openai/test",
+            "Inspect the event",
+            None,
+        ))
+        .unwrap_err();
+    assert!(error.contains("closed-session"), "{error}");
+    let calls = fs::read_to_string(root.path().join("calls")).unwrap();
+    assert!(!calls.contains("new-tab"), "{calls}");
+}
+
+#[test]
+fn rule_launchers_leave_v2_session_creation_to_the_companion_and_keep_v1_model_flags() {
+    let root = tempfile::tempdir().unwrap();
+    for program in ["opencode", "opencode-station"] {
+        let path = root.path().join(program);
+        fs::write(
+            &path,
+            r#"#!/bin/sh
+if [ "$1" = --version ]; then printf '%s\n' "$TEST_VERSION"; exit; fi
+printf '%s\n' "$TANDEM_SESSION_MODEL" "$TANDEM_INITIAL_PROMPT" "$@"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let prompt = "Inspect '; $(touch injected)";
+    let launch = navigation::rule_client_command("openai/test", Some("fast"));
+    for (version, args) in [
+        ("2.0.22", vec!["run"]),
+        ("opencode v2.0.22", vec!["run"]),
+        (
+            "opencode v1.18.29",
+            vec!["--model", "openai/test", "--variant", "fast"],
+        ),
+    ] {
+        let output = std::process::Command::new(&launch[0])
+            .args(&launch[1..])
+            .current_dir(root.path())
+            .env("PATH", root.path())
+            .env("TEST_VERSION", version)
+            .env("TANDEM_SESSION_MODEL", "openai/test#fast")
+            .env("TANDEM_INITIAL_PROMPT", prompt)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let mut expected = vec!["openai/test#fast", prompt];
+        expected.extend(args);
+        assert_eq!(
+            String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            expected,
+            "{version}"
+        );
+    }
+    assert!(!root.path().join("injected").exists());
+}
+
+#[test]
+fn rule_sessions_pass_the_model_variant_and_untrusted_prompt_as_literal_arguments() {
+    let root = tempfile::tempdir().unwrap();
+    let observer = observer(root.path());
+    let prompt = "Inspect '; $(touch injected)\n{{event.secret}}";
+    let pane = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(observer.new_rule_session(
+            root.path().to_str().unwrap(),
+            "event-1",
+            "main",
+            "openai/test#fast",
+            prompt,
+            Some("Services won't start automatically"),
+        ))
+        .unwrap();
+    assert_eq!(pane.session, "main");
+    let calls = fs::read_to_string(root.path().join("calls")).unwrap();
+    assert!(
+        calls.contains("--model openai/test --variant fast"),
+        "{calls}"
+    );
+    assert!(
+        calls.contains(&format!("TANDEM_INITIAL_PROMPT={prompt}")),
+        "{calls}"
+    );
+    assert!(
+        calls.contains("TANDEM_SESSION_MODEL=openai/test#fast"),
+        "{calls}"
+    );
+    assert!(
+        calls.contains("TANDEM_SESSION_INSTRUCTIONS=Services won't start automatically"),
+        "{calls}"
+    );
+    assert_eq!(calls.matches("action new-tab").count(), 1, "{calls}");
+    assert!(!root.path().join("injected").exists());
+}
+
+#[test]
 fn new_tab_returns_the_command_pane_with_an_application_owned_title_in_a_multi_pane_layout() {
     let root = tempfile::tempdir().unwrap();
     let observer = observer(root.path());
     let directory = root.path().to_str().unwrap();
-    let mut client = vec!["env".into(), "TANDEM_INITIAL_PROMPT=".into()];
+    let mut client = vec![
+        "env".into(),
+        "TANDEM_INITIAL_PROMPT=".into(),
+        "TANDEM_SESSION_INSTRUCTIONS=".into(),
+        "TANDEM_SESSION_MODEL=".into(),
+    ];
     client.extend(navigation::new_client_command(directory));
     let command = navigation::client_command(&client).join(" ");
     fs::write(root.path().join("panes.json"), json!([
@@ -118,7 +238,7 @@ fn new_tab_returns_the_command_pane_with_an_application_owned_title_in_a_multi_p
     ]).to_string()).unwrap();
     let pane = tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(observer.new_session(directory, "workspace", "main", None, None))
+        .block_on(observer.new_session(directory, "workspace", "main", None, None, None))
         .unwrap();
     assert_eq!(pane.id, 101);
     let calls = fs::read_to_string(root.path().join("calls")).unwrap();
@@ -146,6 +266,7 @@ fn new_session_selects_the_destination_tab_and_focuses_its_exact_new_pane() {
             "workspace",
             "main",
             Some(&pane),
+            None,
             None,
         ))
         .unwrap();
@@ -275,7 +396,8 @@ fn new_sessions_reject_missing_workspaces_and_non_zellij_navigation() {
                 "workspace",
                 "",
                 None,
-                None
+                None,
+                None,
             ))
             .unwrap_err()
             .contains("inside Zellij")
@@ -286,6 +408,7 @@ fn new_sessions_reject_missing_workspaces_and_non_zellij_navigation() {
                 root.path().join("missing").to_str().unwrap(),
                 "workspace",
                 "main",
+                None,
                 None,
                 None,
             ))

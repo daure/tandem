@@ -47,6 +47,10 @@ fn nested_catalogs_separate_provider_packages_and_refuse_ambiguous_instance_layo
         instructions.provider_templates_root,
         root.join("providers").display().to_string()
     );
+    assert_eq!(
+        instructions.rule_templates_root,
+        root.join("rules").display().to_string()
+    );
     fs::create_dir_all(root.join("legacy")).unwrap();
     fs::write(root.join("legacy/tandem.json"), "{}").unwrap();
     assert!(

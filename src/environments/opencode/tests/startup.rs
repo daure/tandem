@@ -61,21 +61,33 @@ fn starting_observer(root: &Path, server: &Server) -> Observer {
     let station = observer.daemons.join("station");
     fs::create_dir_all(station.join("dirs")).unwrap();
     fs::write(station.join("port"), server.url.rsplit(':').next().unwrap()).unwrap();
-    fs::write(station.join("dirs/work.dir"), "/work/review\n").unwrap();
+    fs::write(station.join("dirs/work.dir"), root.to_str().unwrap()).unwrap();
     fs::write(root.join("panes.json"), json!([
-        {"id":7,"is_plugin":false,"exited":false,"tab_id":4,"tab_name":"Review","pane_command":"opencode attach","pane_cwd":"/work/review/repo"}
+        {"id":7,"is_plugin":false,"exited":false,"tab_id":4,"tab_name":"Review","pane_command":"opencode attach","pane_cwd":root.join("repo")}
     ]).to_string()).unwrap();
     observer
+}
+
+fn starting_presence(observer: &Observer, id: &str, server: &Server) {
+    let directory = observer.presence.parent().unwrap().join("repo");
+    presence_in(
+        observer,
+        "one.json",
+        id,
+        7,
+        &server.url,
+        directory.to_str().unwrap(),
+    );
 }
 
 #[test]
 fn a_starting_pane_keeps_history_saved_and_reconciles_with_its_companion() {
     let root = tempfile::tempdir().unwrap();
-    let server = Server::start();
+    let server = Server::start_in(root.path().to_str().unwrap());
     server.busy.store(false, Ordering::Relaxed);
     let observer = starting_observer(root.path(), &server);
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let roots = ["/work/review".into()];
+    let roots = [root.path().to_str().unwrap().into()];
     let starting = runtime
         .block_on(observer.observe(&roots, Snapshot::default()))
         .unwrap();
@@ -107,7 +119,7 @@ fn a_starting_pane_keeps_history_saved_and_reconciles_with_its_companion() {
     assert_eq!(starting.clients[0].awaiting_presence_since, since);
     assert!(!starting.clients[0].stale);
 
-    presence(&observer, "one.json", "", 7, &server.url);
+    starting_presence(&observer, "", &server);
     let home = runtime
         .block_on(observer.observe(&roots, starting))
         .unwrap();
@@ -117,7 +129,7 @@ fn a_starting_pane_keeps_history_saved_and_reconciles_with_its_companion() {
     assert_eq!(home.clients[0].awaiting_presence_since, None);
     assert!(home.sessions.iter().all(Session::saved));
 
-    presence(&observer, "one.json", "ses_idle", 7, &server.url);
+    starting_presence(&observer, "ses_idle", &server);
     let conversation = runtime.block_on(observer.observe(&roots, home)).unwrap();
     assert_eq!(conversation.error, None);
     assert!(conversation.clients.is_empty());
@@ -134,11 +146,11 @@ fn a_starting_pane_keeps_history_saved_and_reconciles_with_its_companion() {
 #[test]
 fn saved_history_is_published_without_message_enrichment() {
     let root = tempfile::tempdir().unwrap();
-    let server = Server::start();
+    let server = Server::start_in(root.path().to_str().unwrap());
     server.busy.store(false, Ordering::Relaxed);
     let observer = starting_observer(root.path(), &server);
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let roots = ["/work/review".into()];
+    let roots = [root.path().to_str().unwrap().into()];
 
     let discovered = runtime
         .block_on(observer.observe(&roots, Snapshot::default()))
@@ -184,11 +196,11 @@ fn saved_history_is_published_without_message_enrichment() {
 #[test]
 fn missing_companion_warnings_stay_on_the_pane_and_clear_when_it_closes() {
     let root = tempfile::tempdir().unwrap();
-    let server = Server::start();
+    let server = Server::start_in(root.path().to_str().unwrap());
     server.busy.store(false, Ordering::Relaxed);
     let observer = starting_observer(root.path(), &server);
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let roots = ["/work/review".into()];
+    let roots = [root.path().to_str().unwrap().into()];
     let mut starting = runtime
         .block_on(observer.observe(&roots, Snapshot::default()))
         .unwrap();
@@ -211,13 +223,13 @@ fn missing_companion_warnings_stay_on_the_pane_and_clear_when_it_closes() {
 #[test]
 fn known_clients_losing_their_companion_do_not_receive_startup_grace() {
     let root = tempfile::tempdir().unwrap();
-    let server = Server::start();
+    let server = Server::start_in(root.path().to_str().unwrap());
     server.busy.store(false, Ordering::Relaxed);
     let observer = starting_observer(root.path(), &server);
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let roots = ["/work/review".into()];
+    let roots = [root.path().to_str().unwrap().into()];
     for id in ["", "ses_idle"] {
-        presence(&observer, "one.json", id, 7, &server.url);
+        starting_presence(&observer, id, &server);
         let attached = runtime
             .block_on(observer.observe(&roots, Snapshot::default()))
             .unwrap();
@@ -235,12 +247,12 @@ fn known_clients_losing_their_companion_do_not_receive_startup_grace() {
 #[test]
 fn a_starting_pane_in_an_owned_workspace_is_visible_before_daemon_discovery() {
     let root = tempfile::tempdir().unwrap();
-    let server = Server::start();
+    let server = Server::start_in(root.path().to_str().unwrap());
     let observer = starting_observer(root.path(), &server);
     fs::remove_dir_all(&observer.daemons).unwrap();
     let snapshot = tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(observer.observe(&["/work/review".into()], Snapshot::default()))
+        .block_on(observer.observe(&[root.path().to_str().unwrap().into()], Snapshot::default()))
         .unwrap();
     assert_eq!(snapshot.error, None);
     assert!(snapshot.sessions.is_empty());
@@ -251,15 +263,15 @@ fn a_starting_pane_in_an_owned_workspace_is_visible_before_daemon_discovery() {
 #[test]
 fn a_route_change_during_server_queries_publishes_only_the_current_pane_identity() {
     let root = tempfile::tempdir().unwrap();
-    let server = Server::start();
+    let server = Server::start_in(root.path().to_str().unwrap());
     let observer = starting_observer(root.path(), &server);
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let roots = ["/work/review".into()];
+    let roots = [root.path().to_str().unwrap().into()];
     for (before, after) in [("", "ses_busy"), ("ses_busy", "")] {
-        presence(&observer, "one.json", after, 7, &server.url);
+        starting_presence(&observer, after, &server);
         let path = observer.presence.join("one.json");
         let next_receipt = fs::read_to_string(&path).unwrap();
-        presence(&observer, "one.json", before, 7, &server.url);
+        starting_presence(&observer, before, &server);
         *server.receipt_update.lock().unwrap() = Some((path, next_receipt));
 
         let snapshot = runtime

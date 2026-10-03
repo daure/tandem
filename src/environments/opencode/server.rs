@@ -6,6 +6,7 @@ use std::{
 use super::{
     RemoteQuestion, RemoteSession, RemoteStatus, SESSION_DIRECTORY_WINDOW, transport, valid_id,
 };
+use crate::store::opencode::observation::Failure;
 
 #[derive(Default)]
 pub(super) struct Observation {
@@ -17,7 +18,7 @@ pub(super) struct Observation {
     pub failed_history: BTreeSet<String>,
     pub sessions: BTreeMap<String, RemoteSession>,
     pub deleted: BTreeSet<String>,
-    pub errors: BTreeSet<String>,
+    pub errors: Vec<Failure>,
 }
 
 pub(super) async fn observe(
@@ -75,8 +76,10 @@ pub(super) async fn observe(
                         .extend(questions.into_iter().map(|question| question.session_id));
                 }
                 Err(error) => {
-                    observation.errors.insert(format!(
-                        "{directory}: OpenCode observation unavailable ({error})"
+                    observation.errors.push(Failure::directory(
+                        server,
+                        &directory,
+                        format!("{directory}: OpenCode observation unavailable ({error})"),
                     ));
                 }
             }
@@ -111,14 +114,18 @@ pub(super) async fn observe(
                     }
                 }
                 Ok((directory, Err(error))) => {
+                    observation
+                        .errors
+                        .push(Failure::directory(server, &directory, error));
                     observation.failed_history.insert(directory);
-                    observation.errors.insert(error);
                 }
                 Err(error) => {
                     observation
                         .failed_history
                         .extend(directories.iter().cloned());
-                    observation.errors.insert(error.to_string());
+                    observation
+                        .errors
+                        .push(Failure::server(server, error.to_string()));
                 }
             }
         }
@@ -151,10 +158,12 @@ pub(super) async fn observe(
                     observation.deleted.insert(id);
                 }
                 Ok((_, Err(error))) => {
-                    observation.errors.insert(error);
+                    observation.errors.push(Failure::server(server, error));
                 }
                 Err(error) => {
-                    observation.errors.insert(error.to_string());
+                    observation
+                        .errors
+                        .push(Failure::server(server, error.to_string()));
                 }
             }
         }
@@ -164,12 +173,13 @@ pub(super) async fn observe(
     match result {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            observation.errors.insert(error);
+            observation.errors.push(Failure::server(server, error));
         }
         Err(_) => {
-            observation
-                .errors
-                .insert(format!("{server}: OpenCode observation timed out"));
+            observation.errors.push(Failure::server(
+                server,
+                format!("{server}: OpenCode observation timed out"),
+            ));
         }
     }
     observation

@@ -1,7 +1,9 @@
 mod conversation;
+mod discovery;
 pub(crate) mod events;
 mod history;
 mod navigation;
+mod order;
 mod purge;
 mod resources;
 mod server;
@@ -20,6 +22,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::store::opencode::observation::{Evidence, Exclusions, Failure};
 use crate::store::opencode::{Activity, Client, Pane, Session, Snapshot, conversation::LatestTurn};
 use serde::Deserialize;
 use transport::{get, local_server, zellij};
@@ -33,6 +36,7 @@ pub(crate) struct Observer {
     pub presence: PathBuf,
     pub daemons: PathBuf,
     pub zellij: PathBuf,
+    pub excluded: Exclusions,
 }
 
 #[derive(Deserialize, serde::Serialize)]
@@ -120,6 +124,7 @@ impl Observer {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| state.join("opencode-daemon")),
             zellij: "zellij".into(),
+            excluded: Exclusions::default(),
         }
     }
 
@@ -169,6 +174,7 @@ impl Observer {
 
     fn inventory(&self) -> (Vec<Presence>, BTreeMap<String, BTreeSet<String>>) {
         let presences = self.presences();
+        let listening = discovery::listening_ports();
         let mut servers = BTreeMap::<String, BTreeSet<String>>::new();
         for presence in &presences {
             if let Some(server) = local_server(&presence.server) {
@@ -183,9 +189,11 @@ impl Observer {
                 .and_then(|text| text.trim().parse::<u16>().ok())
                 .filter(|port| *port != 0)
             {
-                let directories = servers
-                    .entry(format!("http://127.0.0.1:{port}"))
-                    .or_default();
+                let server = format!("http://127.0.0.1:{port}");
+                if !servers.contains_key(&server) && !listening.contains(&port) {
+                    continue;
+                }
+                let directories = servers.entry(server).or_default();
                 directories.extend(
                     entries(&directory.join("dirs"))
                         .filter(|path| path.extension().is_some_and(|extension| extension == "dir"))
@@ -196,6 +204,21 @@ impl Observer {
             }
         }
         (presences, servers)
+    }
+
+    fn observed_presences(&self) -> Vec<Presence> {
+        self.presences()
+            .into_iter()
+            .filter(|presence| {
+                !self.excluded.sessions.contains(&presence.id)
+                    && !self.excluded.servers.contains(&presence.server)
+                    && !presence.pane_id.is_some_and(|id| {
+                        self.excluded
+                            .panes
+                            .contains(&(presence.zellij_session.clone(), id))
+                    })
+            })
+            .collect()
     }
 
     pub async fn observe(&self, roots: &[String], previous: Snapshot) -> Result<Snapshot, String> {
@@ -220,19 +243,28 @@ impl Observer {
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
         let previous_resources = previous.resources;
-        let (presences, mut servers) = tokio::task::spawn_blocking(move || observer.inventory())
-            .await
-            .map_err(|error| error.to_string())?;
-        directories.extend(presences.iter().map(|presence| presence.directory.clone()));
+        let mut unfinished_sessions = previous.observation.unfinished_sessions;
         for session in &previous.sessions {
-            if let Some(server) = local_server(&session.server) {
-                servers
-                    .entry(server)
-                    .or_default()
-                    .insert(session.directory.clone());
+            if matches!(session.activity, Activity::Busy | Activity::AwaitingAnswer)
+                || session.approval_pending == Some(true)
+            {
+                unfinished_sessions.insert(session.id.clone());
+            } else if !session.stale
+                && session.activity == Activity::Idle
+                && session.approval_pending == Some(false)
+            {
+                unfinished_sessions.remove(&session.id);
             }
         }
+        let previous_sessions = previous.sessions.clone();
+        let (presences, servers) = tokio::task::spawn_blocking(move || {
+            observer.inventory_with_sessions(&previous_sessions)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        directories.extend(presences.iter().map(|presence| presence.directory.clone()));
         let client = transport::client()?;
+        let servers_for_questions = servers.keys().cloned().collect::<BTreeSet<_>>();
         let previous_panes: BTreeMap<_, _> = previous
             .sessions
             .iter()
@@ -249,10 +281,14 @@ impl Observer {
         let mut sessions: BTreeMap<_, _> = previous
             .sessions
             .into_iter()
+            .filter(|session| {
+                !self.excluded.sessions.contains(&session.id)
+                    && !self.excluded.servers.contains(&session.server)
+            })
             .map(|mut session| {
                 session.panes.clear();
                 session.tab_position = None;
-                if remote {
+                if remote && servers.contains_key(&session.server) {
                     session.stale = true;
                     session.activity = Activity::Unknown;
                     session.approval_pending = None;
@@ -265,7 +301,7 @@ impl Observer {
             .flat_map(|directories| directories.iter().cloned())
             .collect::<Vec<_>>();
         directories.extend(known_directories.iter().cloned());
-        let mut errors = BTreeSet::new();
+        let mut errors = Vec::new();
         let mut failed_status_directories = BTreeMap::<String, BTreeSet<String>>::new();
         let mut observed_sessions = BTreeSet::new();
         let mut deleted = BTreeSet::new();
@@ -293,7 +329,7 @@ impl Observer {
             let (server, directories, observation) = match result {
                 Ok(result) => result,
                 Err(error) => {
-                    errors.insert(error.to_string());
+                    errors.push(Failure::global(error.to_string()));
                     continue;
                 }
             };
@@ -302,13 +338,10 @@ impl Observer {
         for (server, (directories, observation)) in observations {
             let failed_status = failed_status_directories.entry(server.clone()).or_default();
             *failed_status = observation.failed_status;
-            if failed_status.len() < directories.len()
-                || sessions.values().any(|session| session.server == server)
-            {
-                errors.extend(observation.errors);
-            }
+            errors.extend(observation.errors);
             sessions.retain(|id, session| {
                 session.server != server
+                    || failed_status.contains(&session.directory)
                     || observation.failed_history.contains(&session.directory)
                     || observation.sessions.contains_key(id)
             });
@@ -320,6 +353,7 @@ impl Observer {
             }
             for (_, item) in observation.sessions {
                 if item.parent_id.is_some()
+                    || self.excluded.sessions.contains(&item.id)
                     || !valid_id(&item.id)
                     || !directories.iter().any(|directory| {
                         Path::new(&item.directory).starts_with(directory)
@@ -415,18 +449,45 @@ impl Observer {
                     Ok((name, Ok(found))) => {
                         panes.insert(name, found);
                     }
-                    Ok((_, Err(error))) => {
-                        errors.insert(error);
+                    Ok((name, Err(error))) => {
+                        for (session, id) in previous_panes
+                            .keys()
+                            .filter(|(session, _)| *session == name)
+                        {
+                            errors.push(Failure::pane(session, *id, error.clone()));
+                        }
+                        for presence in &presences {
+                            if presence.zellij_session == name
+                                && let Some(id) = presence.pane_id
+                            {
+                                errors.push(Failure::pane(&name, id, error.clone()));
+                            }
+                        }
                     }
                     Err(error) => {
-                        errors.insert(error.to_string());
+                        errors.push(Failure::global(error.to_string()));
                     }
                 }
             }
             Some(names)
         } else {
             if !sessions.is_empty() || !presences.is_empty() {
-                errors.insert("Zellij unavailable; attachment observation incomplete".into());
+                for (session, id) in previous_panes.keys() {
+                    errors.push(Failure::pane(
+                        session,
+                        *id,
+                        "Zellij unavailable; attachment observation incomplete",
+                    ));
+                }
+                for presence in &presences {
+                    if let Some(id) = presence.pane_id {
+                        errors.push(Failure::pane(
+                            &presence.zellij_session,
+                            id,
+                            "Zellij unavailable; attachment observation incomplete",
+                        ));
+                    }
+                }
                 for session in sessions.values_mut() {
                     session.stale = true;
                 }
@@ -461,13 +522,14 @@ impl Observer {
         // identity from fresh receipts rather than the discovery-time home route.
         let observer = self.clone();
         let (presences, mut resources) = tokio::task::spawn_blocking(move || {
-            let presences = observer.presences();
+            let presences = observer.observed_presences();
             let resources = previous_resources;
             (presences, resources)
         })
         .await
         .map_err(|error| error.to_string())?;
         let mut tracked = BTreeSet::new();
+        let mut verified_panes = BTreeSet::new();
         let mut clients = BTreeMap::new();
         for presence in presences {
             if presence.id.is_empty()
@@ -475,6 +537,9 @@ impl Observer {
             {
                 if let Some(pane) = attached_pane(&presence) {
                     tracked.insert((presence.zellij_session.clone(), pane.id));
+                    if panes.contains_key(&pane.session) {
+                        verified_panes.insert((pane.session.clone(), pane.id));
+                    }
                     if presence.id.is_empty() {
                         let stale = !panes.contains_key(&pane.session);
                         clients.insert(
@@ -506,6 +571,9 @@ impl Observer {
                     activity: presence.activity,
                     ..Default::default()
                 });
+            if matches!(presence.activity, Activity::Busy | Activity::AwaitingAnswer) {
+                unfinished_sessions.insert(session.id.clone());
+            }
             session.title = clean(&presence.title);
             if let Some(question) = &presence.last_question {
                 let question = question
@@ -561,6 +629,9 @@ impl Observer {
                 session.server = server;
             }
             if let Some(pane) = pane {
+                if panes.contains_key(&pane.session) {
+                    verified_panes.insert((pane.session.clone(), pane.id));
+                }
                 if let Some(index) = presence.tab_index {
                     let position = crate::store::opencode::TabPosition {
                         zellij_session: pane.session.clone(),
@@ -583,7 +654,10 @@ impl Observer {
         }
         for (name, panes) in panes {
             for pane in panes.iter().filter(|pane| {
-                !pane.is_plugin && !pane.exited && !tracked.contains(&(name.clone(), pane.id))
+                !pane.is_plugin
+                    && !pane.exited
+                    && !tracked.contains(&(name.clone(), pane.id))
+                    && !self.excluded.panes.contains(&(name.clone(), pane.id))
             }) {
                 if pane.pane_command.as_ref().is_some_and(|command| {
                     command.contains("opencode") || command.contains("oc-pane")
@@ -607,7 +681,7 @@ impl Observer {
                     let stale =
                         observed_at.saturating_sub(since) >= CLIENT_STARTUP_GRACE_MILLISECONDS;
                     if stale {
-                        errors.insert("OpenCode panes need the Tandem TUI companion; run tandem opencode-setup and reopen those clients".into());
+                        errors.push(Failure::pane(&name, pane.id, "OpenCode panes need the Tandem TUI companion; run tandem opencode-setup and reopen those clients"));
                     }
                     clients.insert(
                         (name.clone(), pane.id),
@@ -631,6 +705,7 @@ impl Observer {
         let mut questions: Vec<_> = sessions
             .values()
             .filter(|_| remote)
+            .filter(|session| servers_for_questions.contains(&session.server))
             .filter(|session| question_refresh.contains(&session.id) || !session.question_observed)
             .filter(|session| !session.saved())
             .map(|session| {
@@ -700,13 +775,46 @@ impl Observer {
         });
         directories.extend(sessions.values().map(|session| session.directory.clone()));
         directories.extend(clients.values().map(|client| client.directory.clone()));
-        Ok(Snapshot {
+        for session in sessions.values() {
+            if !session.stale {
+                if matches!(session.activity, Activity::Busy | Activity::AwaitingAnswer)
+                    || session.approval_pending == Some(true)
+                {
+                    unfinished_sessions.insert(session.id.clone());
+                } else if session.activity == Activity::Idle
+                    && (session.approval_pending == Some(false) || session.server.is_empty())
+                {
+                    unfinished_sessions.remove(&session.id);
+                }
+            }
+        }
+        unfinished_sessions.retain(|id| sessions.contains_key(id));
+        let checked_directories = directories.clone();
+        let missing_directories = tokio::task::spawn_blocking(move || {
+            checked_directories
+                .into_iter()
+                .filter(|directory| matches!(Path::new(directory).try_exists(), Ok(false)))
+                .collect()
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        let mut snapshot = Snapshot {
             directories: directories.into_iter().collect(),
             sessions: sessions.into_values().collect(),
             clients: clients.into_values().collect(),
+            zellij_tabs: previous.zellij_tabs,
             resources,
-            error: (!errors.is_empty()).then(|| errors.into_iter().collect::<Vec<_>>().join("\n")),
-        })
+            error: None,
+            observation: Evidence {
+                missing_directories,
+                verified_panes,
+                unfinished_sessions,
+                failures: errors,
+            },
+        };
+        snapshot.error = snapshot.observation_error();
+        self.refresh_tab_order(&mut snapshot).await;
+        Ok(snapshot)
     }
 
     pub(crate) async fn sample_resources(
@@ -714,9 +822,11 @@ impl Observer {
         previous: Vec<crate::store::opencode::resources::ProcessResource>,
     ) -> Result<Vec<crate::store::opencode::resources::ProcessResource>, String> {
         let observer = self.clone();
-        tokio::task::spawn_blocking(move || resources::collect(&observer.presences(), previous))
-            .await
-            .map_err(|error| error.to_string())
+        tokio::task::spawn_blocking(move || {
+            resources::collect(&observer.observed_presences(), previous)
+        })
+        .await
+        .map_err(|error| error.to_string())
     }
 }
 

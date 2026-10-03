@@ -26,6 +26,7 @@ pub(crate) fn launch(
         operation: operation.clone(),
         description: startup.description.clone(),
         branch_instances: startup.branch_instances,
+        start_instance: startup.start_instance,
         kind: environments.startup_kind(&operation.id).unwrap_or_default(),
         started_at: journal::now(),
         timeout,
