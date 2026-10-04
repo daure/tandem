@@ -2,7 +2,6 @@ use super::*;
 use crate::{
     environments::rules::RuleStore,
     store::{
-        environments::{EnvironmentSnapshot, Instance},
         opencode,
         rules::{Definition, DispatchStatus},
     },
@@ -126,25 +125,20 @@ fn acceptance_deletion_preserves_its_event_siblings_resources_and_completed_eval
     let sibling = acceptances.remove(0);
     let directory = config.workspaces.join(&selected.instance);
     fs::create_dir_all(&directory).unwrap();
-    rules
-        .remember_workspaces(
-            &EnvironmentSnapshot {
-                instances: vec![Instance {
-                    name: selected.instance.clone(),
-                    template: "blank".into(),
-                    workspace: directory.display().to_string(),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
-            &opencode::Snapshot {
-                sessions: vec![opencode::Session {
-                    id: "ses_retained".into(),
-                    directory: directory.display().to_string(),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            },
+    let workspace = crate::store::rules::AcceptanceWorkspace {
+        directory: directory.display().to_string(),
+        sessions: vec![opencode::Session {
+            id: "ses_retained".into(),
+            directory: directory.display().to_string(),
+            ..Default::default()
+        }],
+    };
+    events
+        .connection()
+        .unwrap()
+        .execute(
+            "INSERT INTO rule_acceptance_workspaces(acceptance_id, payload) VALUES (?1, ?2)",
+            params![selected.id, serde_json::to_string(&workspace).unwrap()],
         )
         .unwrap();
     assert!(rules.admit_dispatch(selected.id).unwrap());

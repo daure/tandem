@@ -93,7 +93,7 @@ fn workspace_guidance_lists_declared_and_discovered_repositories_and_service_acc
             "\n"
         )
     );
-    assert!(text.contains("use `start_self` when assigned work needs services"));
+    assert!(text.contains("Use `start_self` when assigned work needs services"));
     assert!(text.contains("`stop_self` when services are no longer needed"));
     assert!(!text.contains("{{"));
     assert!(!text.contains("`repo-sync`"));

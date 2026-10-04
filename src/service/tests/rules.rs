@@ -1,6 +1,9 @@
 use super::*;
 use crate::store::events::{Batch, Deletion};
 
+#[path = "dispatch_history.rs"]
+mod history;
+
 impl AppService {
     pub(crate) fn set_rule_session_for_tests(&mut self, current: &str) {
         use std::os::unix::fs::PermissionsExt;
@@ -152,14 +155,14 @@ fn acceptance_recreation_requires_confirmation_and_preserves_the_original_dispat
     rule.start_instance = false;
     service.rules.store.save(rule, None, "main".into()).unwrap();
     let token = service.register_provider_for_tests("sample");
-    service
-        .runtime
-        .block_on(service.ingest_events(
-            token,
+    crate::environments::events::EventStore::open(&service.environments.config)
+        .unwrap()
+        .ingest(
+            &token,
             Batch {
                 events: vec![crate::environments::events::tests::event("one")],
             },
-        ))
+        )
         .unwrap();
     service.rules.store.evaluate().unwrap();
     let mut acceptance = service
@@ -183,7 +186,7 @@ fn acceptance_recreation_requires_confirmation_and_preserves_the_original_dispat
     assert!(error.contains("Dispatch is still active"), "{error}");
     assert!(service.operations().is_empty());
     acceptance.status = DispatchStatus::Launched;
-    acceptance.operation_id = Some("original-operation".into());
+    acceptance.operation_id = Some("123-456-1".into());
     acceptance.session_id = Some("ses_original".into());
     service.rules.store.update(&acceptance, false).unwrap();
     service
@@ -195,6 +198,10 @@ fn acceptance_recreation_requires_confirmation_and_preserves_the_original_dispat
         .unwrap()
         .unwrap();
     assert!(record.preserve_opencode_history);
+    assert_eq!(
+        Some(record.origin_operation_id()),
+        acceptance.operation_id.as_deref()
+    );
     assert!(!record.opencode_requested);
     assert!(!record.start_instance);
     assert_eq!(record.operation.state, OperationState::Succeeded);
@@ -210,12 +217,37 @@ fn acceptance_recreation_requires_confirmation_and_preserves_the_original_dispat
         service.rules.store.snapshot().unwrap().acceptances,
         vec![acceptance.clone()]
     );
-    let error = service
-        .recreate_acceptance(acceptance.id, None, true)
-        .blocking_recv()
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let error = service
+            .recreate_acceptance(acceptance.id, None, true)
+            .blocking_recv()
+            .unwrap()
+            .unwrap_err();
+        if error.contains("Rule work is in progress") {
+            assert!(Instant::now() < deadline, "{error}");
+            std::thread::sleep(Duration::from_millis(20));
+            continue;
+        }
+        assert!(error.contains("already in use"), "{error}");
+        break;
+    }
+    crate::environments::providers::Providers::new(&service.environments.config)
         .unwrap()
-        .unwrap_err();
-    assert!(error.contains("already in use"), "{error}");
+        .delete_created_instance(
+            &acceptance.instance,
+            acceptance.operation_id.as_deref().unwrap(),
+            &|_, _| Ok(()),
+        )
+        .unwrap();
+    assert!(
+        !service
+            .environments
+            .config
+            .workspaces
+            .join(&acceptance.instance)
+            .exists()
+    );
 }
 
 #[test]

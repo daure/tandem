@@ -443,6 +443,15 @@ impl Environments {
         }
         Ok(workspace.display().to_string())
     }
+
+    pub(crate) fn recorded_instance(&self, name: &str) -> Result<Option<Instance>, String> {
+        let instance = journal::recorded(&self.config, name)?;
+        if let Some(instance) = &instance {
+            ownership::verify(&self.config, instance)?;
+            removal::validate_workspace(&self.config, name)?;
+        }
+        Ok(instance)
+    }
     pub fn instructions(&self) -> Result<Instructions, String> {
         Ok(Instructions {
             file: self.config.instructions.display().to_string(),
@@ -462,7 +471,12 @@ impl Environments {
                 .join("templates/providers")
                 .display()
                 .to_string(),
-            rule_templates_root: self.config.home.join("templates/rules").display().to_string(),
+            rule_templates_root: self
+                .config
+                .home
+                .join("templates/rules")
+                .display()
+                .to_string(),
             gateway_origin: self.config.origin(),
             manifest_schema: serde_json::to_value(schemars::schema_for!(
                 crate::store::environments::Manifest

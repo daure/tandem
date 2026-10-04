@@ -17,6 +17,21 @@ const REPORT_SELECT: &str = "SELECT a.payload, r.title, r.summary, r.markdown, r
     WHERE e.namespace = ?1";
 
 impl RuleStore {
+    pub(super) fn report_summaries(
+        &self,
+        connection: &rusqlite::Connection,
+    ) -> Result<std::collections::BTreeMap<i64, ReportSummary>, Error> {
+        let select = REPORT_SELECT.replace("r.markdown", "''");
+        let mut statement = connection.prepare(&select)?;
+        let mut summaries = std::collections::BTreeMap::new();
+        for report in statement.query_map([&self.config.namespace], read_report)? {
+            let mut details = report?.details;
+            self.observe_report_cleanup(&mut details)?;
+            summaries.insert(details.acceptance_id, details);
+        }
+        Ok(summaries)
+    }
+
     pub(crate) fn reported_acceptances(&self) -> Result<std::collections::BTreeSet<i64>, Error> {
         let connection = self.events.connection()?;
         connection
@@ -47,6 +62,18 @@ impl RuleStore {
         if rows.len() != 1 || rows[0].rule.definition.template != instance.template {
             return Err(Error::Conflict(
                 "workspace must belong to exactly one retained event acceptance".into(),
+            ));
+        }
+        if !super::super::startup::belongs_to(
+            &self.config,
+            &instance.name,
+            &instance.template,
+            rows[0].operation_id.as_deref(),
+        )
+        .map_err(Error::Storage)?
+        {
+            return Err(Error::Conflict(
+                "workspace belongs to another acceptance lineage".into(),
             ));
         }
         if self.provider_deleting(rows[0].event_sequence)? {

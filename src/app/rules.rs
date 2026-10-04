@@ -146,8 +146,8 @@ impl Rules {
             .action_bar(true)
             .filter_controls(false)
             .row_height_by(|row| match row {
-                Entry::Acceptance(target) if target.instance.is_none() => 1,
-                _ => 2,
+                Entry::Acceptance(target) => target.height(),
+                Entry::Rule(_) => 2,
             })
             .empty_state(tuicore::SeasonalEmptyState::new(if rules {
                 "No rules configured. Create a Rhai rule through MCP."
@@ -209,12 +209,15 @@ impl Rules {
                         Scope::Rules => false,
                     })
                     .map(|row| {
-                        Entry::Acceptance(Box::new(super::acceptances::Target::new(
-                            &row,
-                            shared.workspaces.get(&row.id),
-                            &self.context.borrow(),
-                            true,
-                        )))
+                        Entry::Acceptance(Box::new(
+                            super::acceptances::Target::new(
+                                &row,
+                                shared.workspaces.get(&row.id),
+                                &self.context.borrow(),
+                                true,
+                            )
+                            .with_report(shared.reports.get(&row.id)),
+                        ))
                     })
                     .collect()
             }

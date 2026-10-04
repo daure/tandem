@@ -399,7 +399,7 @@ fn delete_with_provenance(
     };
     if let Some(operation) = operation {
         match super::startup::read(config, name)? {
-            Some(record) if record.operation.id == operation => {}
+            Some(record) if record.origin_operation_id() == operation => {}
             Some(_) => {
                 return Err(format!(
                     "instance {name} has a different startup identity; refusing provider deletion"

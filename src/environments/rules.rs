@@ -166,6 +166,7 @@ impl RuleStore {
             evaluation_errors,
             error: None,
             workspaces: self.workspaces(&transaction)?,
+            reports: self.report_summaries(&transaction)?,
         };
         drop(statement);
         transaction.commit()?;

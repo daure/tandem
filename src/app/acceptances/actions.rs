@@ -27,7 +27,8 @@ impl App {
             snapshot.workspaces.get(&acceptance.id),
             &context.borrow(),
             true,
-        );
+        )
+        .with_report(snapshot.reports.get(&acceptance.id));
         drop(snapshot);
         target.selected = requested
             .selected
@@ -49,6 +50,39 @@ impl App {
             return;
         }
         match command {
+            Command::Report => {
+                let report = super::super::markdown::Markdown::new(
+                    "report",
+                    Ok(self.service.read_event_report(target.acceptance.id)),
+                    |report| {
+                        format!(
+                            "# {}\n\n{}\n\nAcceptance #{} · event #{}\n\nCleanup: {:?}{}\n\n---\n\n{}",
+                            report.details.title,
+                            report.details.summary,
+                            report.details.acceptance_id,
+                            report.details.event_sequence,
+                            report.details.cleanup_state,
+                            report
+                                .details
+                                .cleanup_error
+                                .map(|error| format!("\n\n{error}"))
+                                .unwrap_or_default(),
+                            report.markdown
+                        )
+                    },
+                );
+                self.intent = None;
+                self.open_compact(
+                    Box::new(
+                        dialogs::dialog("Acceptance report").host(Flex::column().child(
+                            "report",
+                            report,
+                            FlexItem::fill(1),
+                        )),
+                    ),
+                    ctx,
+                );
+            }
             Command::Delete => self.handle_message(
                 Msg::DeleteEvents(crate::store::events::Deletion::Acceptance(
                     target.acceptance.id,

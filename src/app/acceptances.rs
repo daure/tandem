@@ -7,6 +7,7 @@ use ratatui::{
 use tuicore::{EventCtx, KeySpec, Notification, TuiEvent};
 
 use super::{Msg, events::clean, row_actions::Command, rows::Row};
+use crate::store::rules::reports::{CleanupState, ReportSummary};
 use crate::store::{
     environments::EnvironmentSnapshot,
     opencode,
@@ -28,6 +29,7 @@ pub(crate) struct Target {
     pub(super) workspace: Option<String>,
     pub(super) conversations: Vec<Row>,
     pub(super) selected: Option<Row>,
+    pub(super) report: Option<ReportSummary>,
     pub(super) missing: &'static str,
     pub(super) available: bool,
     relative_date: String,
@@ -124,6 +126,7 @@ impl Target {
             workspace,
             conversations,
             selected: None,
+            report: None,
             missing,
             available,
             relative_date,
@@ -131,27 +134,54 @@ impl Target {
         }
     }
 
+    pub(super) fn with_report(mut self, report: Option<&ReportSummary>) -> Self {
+        self.report = report.cloned();
+        if self.instance.is_none() && self.available && self.report.is_some() {
+            self.missing = "instance deleted";
+        }
+        self
+    }
+
+    pub(super) fn height(&self) -> u16 {
+        1 + u16::from(self.instance.is_some()) + u16::from(self.report.is_some())
+    }
+
     pub(super) fn enabled(&self, command: Command) -> bool {
         match command {
+            Command::Report => self.report.is_some(),
             Command::Instance | Command::PurgeInstance | Command::Routes => self.instance.is_some(),
             Command::CreateInstance => {
                 self.instance.is_none()
                     && self.available
-                    && !matches!(
-                        self.acceptance.status,
-                        DispatchStatus::Queued
-                            | DispatchStatus::Provisioning
-                            | DispatchStatus::Launching
-                    )
+                    && self.report.as_ref().is_none_or(|report| {
+                        !matches!(
+                            report.cleanup_state,
+                            CleanupState::Pending | CleanupState::Purging
+                        )
+                    })
+                    && (self.report.is_some()
+                        || !matches!(
+                            self.acceptance.status,
+                            DispatchStatus::Queued
+                                | DispatchStatus::Provisioning
+                                | DispatchStatus::Launching
+                        ))
             }
             Command::NewSession => self.instance.is_some() && self.workspace.is_some(),
             Command::Session => self.has_conversations,
             Command::Delete => {
                 self.selected.is_none()
-                    && !matches!(
-                        self.acceptance.status,
-                        DispatchStatus::Provisioning | DispatchStatus::Launching
-                    )
+                    && self.report.as_ref().is_none_or(|report| {
+                        !matches!(
+                            report.cleanup_state,
+                            CleanupState::Pending | CleanupState::Purging
+                        )
+                    })
+                    && (self.report.is_some()
+                        || !matches!(
+                            self.acceptance.status,
+                            DispatchStatus::Provisioning | DispatchStatus::Launching
+                        ))
             }
             _ => true,
         }
@@ -184,22 +214,50 @@ impl Target {
         if self.instance.is_none() {
             header.push(Span::styled(format!(" · {}", self.missing), muted));
         }
+        if let Some(report) = &self.report {
+            let tone = match report.cleanup_state {
+                CleanupState::Failed => theme.error_fg(),
+                CleanupState::Purged => theme.success_fg(),
+                _ => theme.info_fg(),
+            };
+            header.push(Span::styled(
+                format!(" · Reported · cleanup {:?}", report.cleanup_state),
+                Style::default().fg(tone),
+            ));
+        }
         let mut lines = vec![Line::from(header)];
         if let Some(instance) = &self.instance {
             lines.extend(instance.text(spinner, width).lines);
+        }
+        if let Some(report) = &self.report {
+            lines.push(Line::raw(format!(
+                "Report: {} · {}",
+                clean(&report.title),
+                clean(&report.summary)
+            )));
         }
         Text::from(lines)
     }
 
     pub(super) fn search(&self) -> String {
         format!(
-            "#{} event #{} {} {} {} {:?}",
+            "#{} event #{} {} {} {} {:?} {}",
             self.acceptance.id,
             self.acceptance.event_sequence,
             self.acceptance.rule_name,
             self.acceptance.event_summary,
             self.acceptance.instance,
-            self.acceptance.status
+            self.acceptance.status,
+            self.report
+                .as_ref()
+                .map(|report| format!(
+                    "{} {} {:?} {}",
+                    report.title,
+                    report.summary,
+                    report.cleanup_state,
+                    report.cleanup_error.as_deref().unwrap_or_default()
+                ))
+                .unwrap_or_default()
         )
     }
 
@@ -225,6 +283,7 @@ impl Target {
             }
         } else if let Some(command) = [
             Command::Rule,
+            Command::Report,
             Command::CreateInstance,
             Command::Instance,
             Command::NewSession,

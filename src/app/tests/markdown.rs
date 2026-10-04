@@ -5,7 +5,7 @@ use ratatui::{Terminal, backend::TestBackend};
 fn conversation_content_loads_asynchronously_and_disposal_cancels_pending_reads() {
     crate::app::tests::init_ui();
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    let mut view = Conversation::new(Ok(receiver));
+    let mut view = Markdown::new("conversation", Ok(receiver), std::convert::identity);
     let area = Rect::new(0, 0, 80, 15);
     view.layout(area, &mut LayoutCtx::new());
     sender
@@ -31,7 +31,7 @@ fn conversation_content_loads_asynchronously_and_disposal_cancels_pending_reads(
         .collect();
     assert!(text.contains("Latest answer") && text.contains("Latest question"));
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    let view = Conversation::new(Ok(receiver));
+    let view = Markdown::<String>::new("conversation", Ok(receiver), std::convert::identity);
     drop(view);
     assert!(sender.is_closed());
 }

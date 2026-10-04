@@ -217,4 +217,66 @@ fn dispatch(start_instance: bool) {
     assert_eq!(assigned.len(), 1);
     assert_eq!(assigned[0]["dispatch_id"], success["id"]);
     assert_eq!(assigned[0]["instance"], success["instance"]);
+    let connection = rusqlite::Connection::open(fixture.home.join("settings.sqlite3")).unwrap();
+    let retained = || {
+        let text: String = connection
+            .query_row(
+                "SELECT payload FROM rule_acceptance_workspaces WHERE acceptance_id = ?1",
+                [success["id"].as_i64().unwrap()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()
+    };
+    assert_eq!(retained()["sessions"][0]["id"], "ses_rule_fixture");
+    assert_eq!(retained()["sessions"][0]["panes"], json!([]));
+    fs::remove_file(presence.join("rule.json")).unwrap();
+    let mut command = fixture.command(&["mcp-instance"]);
+    command.current_dir(
+        fixture
+            .home
+            .join("workspaces")
+            .join(success["instance"].as_str().unwrap()),
+    );
+    let mut agent = super::startup::Client::with_command(command);
+    let report = json!({"title":"Fixture inspected", "summary":"Literal prompt verified", "markdown":"# Evidence\nThe fixture completed."});
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let result = agent.request(
+            "tools/call",
+            json!({"name":"conclude", "arguments": report}),
+        );
+        if result.to_string().contains("rule dispatch is busy") {
+            assert!(Instant::now() < deadline, "{result}");
+            thread::sleep(Duration::from_millis(20));
+            continue;
+        }
+        assert_ne!(result["isError"], true, "{result}");
+        break;
+    }
+    let mut management = super::startup::Client::with_command(fixture.command(&["mcp"]));
+    loop {
+        let saved = management.tool("get_event_report", json!({"acceptance_id": success["id"]}));
+        if saved["cleanup_state"] == "purged" {
+            break;
+        }
+        assert_ne!(saved["cleanup_state"], "failed", "{saved}");
+        assert!(Instant::now() < deadline, "{saved}");
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(retained()["sessions"][0]["id"], "ses_rule_fixture");
+    assert!(
+        !fixture
+            .home
+            .join("workspaces")
+            .join(success["instance"].as_str().unwrap())
+            .exists()
+    );
+    assert_eq!(
+        management.tool(
+            "search_event_reports",
+            json!({"search_strings":["fixture completed"]})
+        )["reports"][0]["acceptance_id"],
+        success["id"]
+    );
 }

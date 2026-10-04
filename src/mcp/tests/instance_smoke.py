@@ -55,10 +55,17 @@ def workspace_fixture(binary):
 def smoke(binary):
     with workspace_fixture(binary) as (home, _, client):
         tools = client.request("tools/list", {})["tools"]
-        assert {tool["name"] for tool in tools} == {"start_self", "stop_self"}, tools
+        fields = {
+            "start_self": set(), "stop_self": set(), "get_instructions": set(),
+            "conclude": {"title", "summary", "markdown"},
+            "search_events": {"search_strings"}, "get_event_report": {"acceptance_id"},
+        }
+        assert {tool["name"] for tool in tools} == set(fields), tools
         for tool in tools:
             assert tool["inputSchema"].get("additionalProperties") is False, tool
-            assert not tool["inputSchema"].get("properties"), tool
+            expected = fields[tool["name"]]
+            assert set(tool["inputSchema"].get("properties", {})) == expected, tool
+            assert set(tool["inputSchema"].get("required", [])) == expected, tool
             assert "outputSchema" not in tool, tool
         data = home / "workspaces/review/result.txt"
         data.write_text("retained deliverable")

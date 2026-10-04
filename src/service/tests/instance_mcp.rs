@@ -105,7 +105,7 @@ fn conclusion_saves_acceptance_reports_before_detached_purge_and_rejects_unlinke
         ))
         .unwrap();
     service.rules.store.evaluate().unwrap();
-    let acceptance = service
+    let mut acceptance = service
         .rules
         .store
         .snapshot()
@@ -113,6 +113,14 @@ fn conclusion_saves_acceptance_reports_before_detached_purge_and_rejects_unlinke
         .acceptances
         .remove(0);
     let scope = workspace(&service, &acceptance.instance);
+    acceptance.operation_id = Some(
+        crate::environments::startup::read(&service.environments.config, &acceptance.instance)
+            .unwrap()
+            .unwrap()
+            .operation
+            .id,
+    );
+    service.rules.store.update(&acceptance, false).unwrap();
     let receipt = service
         .runtime
         .block_on(service.conclude_instance(scope.clone(), report()))
@@ -175,5 +183,19 @@ fn conclusion_saves_acceptance_reports_before_detached_purge_and_rejects_unlinke
             .runtime
             .block_on(service.conclude_instance(scope, report()))
             .is_err()
+    );
+    let replacement = workspace(&service, &acceptance.instance);
+    let error = service
+        .runtime
+        .block_on(service.conclude_instance(replacement, report()))
+        .unwrap_err();
+    assert!(error.contains("another acceptance lineage"), "{error}");
+    assert!(
+        service
+            .environments
+            .config
+            .workspaces
+            .join(&acceptance.instance)
+            .exists()
     );
 }

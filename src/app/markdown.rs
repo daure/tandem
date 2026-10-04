@@ -9,28 +9,36 @@ use tuicore::{
 
 use crate::app::Msg;
 
-type Reply = tokio::sync::oneshot::Receiver<Result<String, String>>;
+type Reply<T> = tokio::sync::oneshot::Receiver<Result<T, String>>;
 
-pub(super) struct Conversation {
+pub(super) struct Markdown<T> {
     text: SyntaxHighlighter,
-    pending: Option<Reply>,
+    pending: Option<Reply<T>>,
+    label: &'static str,
+    document: fn(T) -> String,
 }
 
-impl Conversation {
-    pub(super) fn new(reply: Result<Reply, String>) -> Self {
+impl<T> Markdown<T> {
+    pub(super) fn new(
+        label: &'static str,
+        reply: Result<Reply<T>, String>,
+        document: fn(T) -> String,
+    ) -> Self {
         let (text, pending) = match reply {
-            Ok(reply) => ("Loading conversation…".into(), Some(reply)),
-            Err(error) => (format!("Unable to load conversation\n\n{error}"), None),
+            Ok(reply) => (format!("Loading {label}…"), Some(reply)),
+            Err(error) => (format!("Unable to load {label}\n\n{error}"), None),
         };
         Self {
             text: SyntaxHighlighter::new(text, Language::guess(Some("conversation.md"), ""))
                 .wrap(true),
             pending,
+            label,
+            document,
         }
     }
 }
 
-impl TuiNode<Msg> for Conversation {
+impl<T> TuiNode<Msg> for Markdown<T> {
     fn measure(&self, proposal: LayoutProposal) -> LayoutSizeHint {
         <SyntaxHighlighter as TuiNode<Msg>>::measure(&self.text, proposal)
     }
@@ -60,13 +68,15 @@ impl TuiNode<Msg> for Conversation {
                 Ok(result) => Some(result),
                 Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
                 Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                    Some(Err("Conversation loading was cancelled".into()))
+                    Some(Err(format!("{} loading was cancelled", self.label)))
                 }
             });
         if let Some(reply) = reply {
             self.pending = None;
             self.text.set_code(
-                reply.unwrap_or_else(|error| format!("Unable to load conversation\n\n{error}")),
+                reply
+                    .map(self.document)
+                    .unwrap_or_else(|error| format!("Unable to load {}\n\n{error}", self.label)),
             );
             result.changed = true;
             result.layout = true;
@@ -101,5 +111,5 @@ impl TuiNode<Msg> for Conversation {
 }
 
 #[cfg(test)]
-#[path = "../tests/opencode_conversation.rs"]
+#[path = "tests/markdown.rs"]
 mod tests;

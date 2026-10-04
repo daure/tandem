@@ -4,7 +4,7 @@ use super::AppService;
 use crate::{
     environments::{InstanceScope, Startup, conclusion, config::Config},
     store::{
-        environments::{EnvironmentSnapshot, InstanceInstructions, Operation, OperationState},
+        environments::{InstanceInstructions, Operation, OperationState},
         rules::reports::{CleanupState, Report, ReportInput, ReportSummary},
     },
 };
@@ -155,6 +155,18 @@ impl AppService {
         .map_err(|error| format!("report worker failed: {error}"))?
     }
 
+    pub(crate) fn read_event_report(
+        &self,
+        id: i64,
+    ) -> tokio::sync::oneshot::Receiver<Result<Report, String>> {
+        let service = self.clone();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.runtime.spawn(async move {
+            let _ = sender.send(service.get_event_report(id).await);
+        });
+        receiver
+    }
+
     pub(crate) fn run_conclusion_worker(
         id: i64,
         name: &str,
@@ -211,16 +223,7 @@ impl AppService {
             .store
             .set_report_cleanup(id, CleanupState::Purging, None)
             .map_err(|error| error.to_string())?;
-        self.rules
-            .store
-            .remember_workspaces(
-                &EnvironmentSnapshot {
-                    instances: vec![instance],
-                    ..Default::default()
-                },
-                &self.opencode_snapshot(),
-            )
-            .map_err(|error| format!("cannot retain acceptance workspace before purge: {error}"))?;
+        self.retain_instance_history(&instance)?;
         let operation = self.environments.begin("delete_instance", name, None)?;
         self.environments.execute(
             operation.clone(),

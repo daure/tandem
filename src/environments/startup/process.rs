@@ -22,8 +22,22 @@ pub(crate) fn launch(
         None => gateway::lock(config, &format!("instance-{}", operation.name))?,
     };
     let lease_lock = gateway::lock(config, &lease(&operation.id))?;
+    let previous = read(config, &operation.name)?;
+    let origin = previous
+        .as_ref()
+        .map(|record| record.origin_operation_id().to_owned());
+    if let (Some(expected), Some(actual)) = (&startup.origin_operation_id, &origin)
+        && expected != actual
+    {
+        return Err("startup belongs to another instance lineage".into());
+    }
     let record = Record {
         operation: operation.clone(),
+        origin_operation_id: Some(
+            origin
+                .or_else(|| startup.origin_operation_id.take())
+                .unwrap_or_else(|| operation.id.clone()),
+        ),
         description: startup.description.clone(),
         branch_instances: startup.branch_instances,
         start_instance: startup.start_instance,

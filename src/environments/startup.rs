@@ -21,6 +21,8 @@ pub(crate) use process::{claim, launch};
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Record {
     pub operation: Operation,
+    #[serde(default)]
+    pub origin_operation_id: Option<String>,
     pub description: Option<String>,
     pub branch_instances: bool,
     #[serde(default = "Instance::default_start_instance")]
@@ -40,6 +42,12 @@ pub(crate) struct Record {
 }
 
 impl Record {
+    pub(crate) fn origin_operation_id(&self) -> &str {
+        self.origin_operation_id
+            .as_deref()
+            .unwrap_or(&self.operation.id)
+    }
+
     pub fn activity(&self) -> Activity {
         Activity {
             id: self.operation.id.clone(),
@@ -105,6 +113,9 @@ pub(super) fn decode(name: &str, text: &str) -> Result<Record, String> {
     if !record.operation.name.eq_ignore_ascii_case(name)
         || record.operation.action != "create_instance"
         || record.operation.id.is_empty()
+        || record.origin_operation_id.as_ref().is_some_and(|id| {
+            id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit() || byte == b'-')
+        })
         || !record
             .operation
             .id
@@ -145,6 +156,21 @@ pub(crate) fn records(config: &Config) -> Result<Vec<Record>, String> {
         records.push(decode(&name, &text)?.observe(config)?);
     }
     Ok(records)
+}
+
+pub(crate) fn belongs_to(
+    config: &Config,
+    name: &str,
+    template: &str,
+    operation: Option<&str>,
+) -> Result<bool, String> {
+    let Some(operation) = operation else {
+        return Ok(false);
+    };
+    Ok(read(config, name)?.is_some_and(|record| {
+        record.origin_operation_id() == operation
+            && record.operation.template.as_deref() == Some(template)
+    }))
 }
 
 #[cfg(test)]

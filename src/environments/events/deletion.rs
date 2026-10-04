@@ -154,8 +154,9 @@ fn ensure_deletion_allowed(
     let active: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM rule_acceptances a JOIN event_attempts p ON p.id = a.attempt_id
          WHERE p.event_sequence IN (SELECT sequence FROM event_deletion_targets)
-         AND (?1 IS NULL OR a.id = ?1)
-         AND json_extract(a.payload, '$.status') IN ('provisioning', 'launching'))",
+          AND (?1 IS NULL OR a.id = ?1)
+          AND NOT EXISTS (SELECT 1 FROM rule_acceptance_reports r WHERE r.acceptance_id = a.id)
+          AND json_extract(a.payload, '$.status') IN ('provisioning', 'launching'))",
         [acceptance],
         |row| row.get(0),
     )?;

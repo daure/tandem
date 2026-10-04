@@ -118,6 +118,11 @@ impl AppService {
         service
     }
 
+    #[cfg(test)]
+    pub(crate) fn config_for_tests(&self) -> crate::environments::config::Config {
+        self.environments.config.clone()
+    }
+
     pub(crate) fn status(&self) -> ServiceStatus {
         ServiceStatus {
             name: "Tandem",

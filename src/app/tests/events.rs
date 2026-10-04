@@ -897,14 +897,15 @@ fn show_all_toggle_shares_visibility_and_preserves_stream_filter_on_refresh() {
             usize::from(width),
             "{text}"
         );
-        assert!(text.contains("󰈈 |A|"), "{text}");
+        assert!(text.contains("──● 󰈈"), "{text}");
         if width == 130 {
-            assert!(header.contains("󰈈"), "{text}");
+            assert!(text.contains("󰈈 |A|"), "{text}");
+            let toolbar = text.lines().find(|line| line.contains("󰈈")).unwrap();
             assert!(
-                header.contains("Delete all events |X|")
-                    && header.contains("Delete ignored events |I|")
-                    && header.find("Delete all events").unwrap()
-                        < header.find("Delete ignored events").unwrap(),
+                toolbar.contains("Delete all events |X|")
+                    && toolbar.contains("Delete ignored events |I|")
+                    && toolbar.find("Delete all events").unwrap()
+                        < toolbar.find("Delete ignored events").unwrap(),
                 "{text}"
             );
         }

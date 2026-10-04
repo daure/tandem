@@ -85,7 +85,7 @@ class RefreshTests(unittest.TestCase):
             terminal = Terminal(environment)
             try:
                 terminal.wait_for(lambda: inventory_calls() == 1 and b"Instances" in terminal.output)
-                terminal.send(b"]A")
+                terminal.send(b"]]A")
                 terminal.send(b"\x1b[O")
                 terminal.drain_for(11)
                 self.assertEqual(inventory_calls(), 1, "Unfocused TUI must skip ten-second inventory polls")
@@ -105,7 +105,7 @@ class RefreshTests(unittest.TestCase):
                     terminal.send(b"\x1b[I")
                     terminal.wait_for(lambda: inventory_calls() == 2, timeout=3)
                     terminal.output = b""
-                    terminal.send(b"\r")
+                    terminal.send(b"d")
                     terminal.wait_for(lambda: b"Fresh MCP manifest" in terminal.output)
                     external = home / "templates" / "disk-visible"
                     external.mkdir()

@@ -76,6 +76,7 @@ pub(crate) struct Snapshot {
     pub evaluation_errors: Vec<Evaluation>,
     pub error: Option<String>,
     pub workspaces: std::collections::BTreeMap<i64, AcceptanceWorkspace>,
+    pub reports: std::collections::BTreeMap<i64, reports::ReportSummary>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

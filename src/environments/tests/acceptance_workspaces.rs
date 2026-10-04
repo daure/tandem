@@ -1,14 +1,22 @@
 use crate::environments::{config::Config, events::EventStore, rules::RuleStore};
 use crate::store::{
-    environments::{EnvironmentSnapshot, Instance},
+    environments::EnvironmentSnapshot,
     events::{Batch, Deletion},
     opencode::{Activity, Pane, Session, Snapshot},
 };
 
 #[test]
 fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_ownership() {
-    let home = tempfile::tempdir().unwrap();
-    let config = Config::at(home.path().into(), "history-test".into(), 9876).unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let service = crate::service::AppService::for_tests();
+    let config = service.config_for_tests();
+    runtime
+        .block_on(service.set_clear_opencode_history(false).unwrap())
+        .unwrap()
+        .unwrap();
+    runtime
+        .block_on(service.create_template("blank".into()))
+        .unwrap();
     let store = RuleStore::open(&config).unwrap();
     let events = EventStore::open(&config).unwrap();
     store
@@ -37,19 +45,32 @@ fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_own
         )
         .unwrap();
     store.evaluate().unwrap();
-    let acceptance = store.snapshot().unwrap().acceptances.remove(0);
+    let mut acceptance = store.snapshot().unwrap().acceptances.remove(0);
+    let operation = service
+        .submit_operation(
+            "create_instance",
+            &acceptance.instance,
+            Some("blank".into()),
+            60,
+            true,
+        )
+        .unwrap();
+    let completed = runtime
+        .block_on(service.wait_operation(&operation.id))
+        .unwrap();
+    assert_eq!(
+        completed.state,
+        crate::store::environments::OperationState::Succeeded
+    );
+    acceptance.operation_id = Some(operation.id.clone());
+    store.update(&acceptance, false).unwrap();
     let directory = config
         .workspaces
         .join(&acceptance.instance)
         .display()
         .to_string();
     let inventory = EnvironmentSnapshot {
-        instances: vec![Instance {
-            name: acceptance.instance.clone(),
-            template: "blank".into(),
-            workspace: directory.clone(),
-            ..Default::default()
-        }],
+        instances: vec![completed.instance.unwrap()],
         ..Default::default()
     };
     let observed = Snapshot {
@@ -77,6 +98,9 @@ fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_own
         ..Default::default()
     };
     store.remember_workspaces(&inventory, &observed).unwrap();
+    let mut unavailable = observed.clone();
+    unavailable.sessions[0].server.clear();
+    store.remember_workspaces(&inventory, &unavailable).unwrap();
     store
         .remember_workspaces(&EnvironmentSnapshot::default(), &Snapshot::default())
         .unwrap();
@@ -86,9 +110,56 @@ fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_own
     assert_eq!(history[&acceptance.id].sessions.len(), 1);
     let session = &history[&acceptance.id].sessions[0];
     assert_eq!(session.id, "ses_retained");
+    assert_eq!(session.server, "http://127.0.0.1:12345");
     assert_eq!(session.activity, Activity::Idle);
     assert!(session.panes.is_empty());
-    let other = Config::at(home.path().into(), "other".into(), 9876).unwrap();
+    crate::environments::lifecycle::delete(
+        &config,
+        &acceptance.instance,
+        std::sync::Arc::new(|_| {}),
+        &|_, _| Ok(()),
+    )
+    .unwrap();
+    let replacement = service
+        .submit_operation(
+            "create_instance",
+            &acceptance.instance,
+            Some("blank".into()),
+            60,
+            true,
+        )
+        .unwrap();
+    let replacement = runtime
+        .block_on(service.wait_operation(&replacement.id))
+        .unwrap();
+    let unrelated = Snapshot {
+        sessions: vec![Session {
+            id: "ses_unrelated".into(),
+            directory: directory.clone(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    restarted
+        .remember_workspaces(
+            &EnvironmentSnapshot {
+                instances: vec![replacement.instance.unwrap()],
+                ..Default::default()
+            },
+            &unrelated,
+        )
+        .unwrap();
+    assert_eq!(
+        restarted.snapshot().unwrap().workspaces[&acceptance.id].sessions[0].id,
+        "ses_retained"
+    );
+    assert_eq!(
+        restarted.snapshot().unwrap().workspaces[&acceptance.id]
+            .sessions
+            .len(),
+        1
+    );
+    let other = Config::at(config.home.clone(), "other".into(), 9876).unwrap();
     assert!(
         RuleStore::open(&other)
             .unwrap()

@@ -772,18 +772,16 @@ fn capital_r_requests_manual_refresh_from_toolbar_and_data_view_at_both_sizes() 
             .unwrap()
             .clone();
         app.dispatch_focus(&target, true, &mut tuicore::FocusCtx::default());
-        for key in [Key::Char('R')] {
-            let mut ctx = EventCtx::new(AnimationSettings::default());
-            app.dispatch_event(
-                &tuicore::EventRoute::new(target.path.clone()),
-                &TuiEvent::Key(KeyEvent::from(key)),
-                &mut ctx,
-            );
-            assert!(matches!(ctx.messages(), [Msg::Refresh]));
-            app.handle_message(Msg::Refresh, &mut ctx);
-            assert!(app.manual_refresh.is_some());
-            app.manual_refresh = None;
-        }
+        let mut ctx = EventCtx::new(AnimationSettings::default());
+        app.dispatch_event(
+            &tuicore::EventRoute::new(target.path.clone()),
+            &TuiEvent::Key(KeyEvent::from(Key::Char('R'))),
+            &mut ctx,
+        );
+        assert!(matches!(ctx.messages(), [Msg::Refresh]));
+        app.handle_message(Msg::Refresh, &mut ctx);
+        assert!(app.manual_refresh.is_some());
+        app.manual_refresh = None;
         app.event(
             &TuiEvent::Key(KeyEvent::from(Key::Char('R'))),
             &mut EventCtx::new(AnimationSettings::default()),

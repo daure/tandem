@@ -178,3 +178,37 @@ fn event_deletion_preserves_acceptance_history_during_conclusion_cleanup() {
         1
     );
 }
+
+#[test]
+fn reported_work_can_delete_history_after_cleanup_even_when_dispatch_is_historically_launching() {
+    let service = AppService::for_tests();
+    let (_token, mut acceptances) = accepted_events(&service);
+    let acceptance = &mut acceptances[0];
+    acceptance.status = crate::store::rules::DispatchStatus::Launching;
+    service.rules.store.update(acceptance, false).unwrap();
+    service
+        .rules
+        .store
+        .save_report(
+            acceptance.id,
+            &crate::store::rules::reports::ReportInput {
+                title: "Inspection complete".into(),
+                summary: "Verified work".into(),
+                markdown: "# Evidence\nVerified".into(),
+            },
+        )
+        .unwrap();
+    service
+        .rules
+        .store
+        .set_report_cleanup(
+            acceptance.id,
+            crate::store::rules::reports::CleanupState::Purged,
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        delete(&service, Deletion::Acceptance(acceptance.id)).unwrap(),
+        1
+    );
+}

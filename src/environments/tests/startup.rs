@@ -31,6 +31,7 @@ fn fixture() -> (tempfile::TempDir, Config, Record) {
         .unwrap();
     let record = Record {
         operation,
+        origin_operation_id: None,
         description: Some("Review workspace".into()),
         branch_instances: false,
         start_instance: true,
@@ -69,6 +70,26 @@ fn reconnect_exposes_startup_before_containers_exist() {
     assert_eq!(activities[0].owner_pid, 42);
     assert!(activities[0].active());
     assert!(journal::enrich(&config, &mut instances).unwrap().is_empty());
+}
+
+#[test]
+fn startup_admission_rejects_a_conflicting_origin_without_replacing_ownership() {
+    let (_directory, config, record) = fixture();
+    write(&config, &record).unwrap();
+    let environments = Environments::new(config.clone());
+    let operation = environments
+        .begin("create_instance", "Review", Some("website".into()))
+        .unwrap();
+    let mut startup = Startup {
+        origin_operation_id: Some("1-1".into()),
+        ..Default::default()
+    };
+    let error = launch(&environments, &operation, 60, &mut startup).unwrap_err();
+    assert_eq!(error, "startup belongs to another instance lineage");
+    assert_eq!(
+        read(&config, "Review").unwrap().unwrap().operation.id,
+        record.operation.id
+    );
 }
 
 #[test]

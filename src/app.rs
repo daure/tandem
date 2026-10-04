@@ -30,6 +30,7 @@ mod details;
 mod dialogs;
 mod events;
 mod instances;
+mod markdown;
 mod opencode;
 mod operations;
 mod overview;

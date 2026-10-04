@@ -465,3 +465,60 @@ fn acceptance_shortcuts_open_its_routes_and_focus_its_rule_from_both_views() {
         );
     }
 }
+
+#[test]
+fn historical_acceptances_show_report_outcomes_and_offer_report_reads_without_an_instance() {
+    init_ui();
+    let mut app = crate::app::root(AppService::for_tests());
+    let mut acceptance = acceptance();
+    acceptance.status = crate::store::rules::DispatchStatus::Launching;
+    let report = crate::store::rules::reports::ReportSummary {
+        acceptance_id: acceptance.id,
+        event_sequence: acceptance.event_sequence,
+        rule_name: acceptance.rule_name.clone(),
+        title: "Incident reviewed".into(),
+        summary: "Verification evidence retained".into(),
+        reported_at: "2026-10-04T00:00:00Z".into(),
+        cleanup_state: crate::store::rules::reports::CleanupState::Failed,
+        cleanup_error: Some("Client closure failed".into()),
+    };
+    app.pages_mut().update_rules(crate::store::rules::Snapshot {
+        acceptances: vec![acceptance.clone()],
+        reports: [(acceptance.id, report.clone())].into(),
+        ..Default::default()
+    });
+    let target =
+        Target::new(&acceptance, None, &Context::default(), true).with_report(Some(&report));
+    assert!(target.enabled(Command::Report));
+    assert!(target.enabled(Command::Delete));
+    assert!(target.search().contains("Client closure failed"));
+    let text = target.text("", Some(160)).to_string();
+    assert!(
+        text.contains("Launching") && text.contains("Reported · cleanup Failed"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Incident reviewed") && text.contains("Verification evidence retained"),
+        "{text}"
+    );
+    assert_eq!(target.height(), 2);
+    let mut ctx = EventCtx::default();
+    target.action(&TuiEvent::Key(Key::Char('f').into()), &mut ctx);
+    assert!(matches!(
+        ctx.messages(),
+        [Msg::AcceptanceAction(_, Command::Report)]
+    ));
+    app.acceptance_action(target, Command::Report, &mut EventCtx::default());
+    let (_, text) = render(&mut app, 160);
+    assert!(
+        text.contains("Acceptance report") && text.contains("Loading report"),
+        "{text}"
+    );
+    let mut pending = report;
+    pending.cleanup_state = crate::store::rules::reports::CleanupState::Purging;
+    assert!(
+        !Target::new(&acceptance, None, &Context::default(), true)
+            .with_report(Some(&pending))
+            .enabled(Command::Delete)
+    );
+}

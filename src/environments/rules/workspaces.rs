@@ -40,18 +40,24 @@ impl RuleStore {
         let remembered = self.workspaces(&transaction)?;
         for acceptance in acceptances(&transaction, None, &self.config.namespace)? {
             let existing = remembered.get(&acceptance.id);
-            let directory = inventory
-                .instances
-                .iter()
-                .find(|instance| {
-                    instance.name == acceptance.instance
-                        && instance.template == acceptance.rule.definition.template
-                })
-                .map(|instance| instance.workspace.clone())
-                .or_else(|| existing.map(|workspace| workspace.directory.clone()));
-            let Some(directory) = directory else {
+            let instance = inventory.instances.iter().find(|instance| {
+                instance.name == acceptance.instance
+                    && instance.template == acceptance.rule.definition.template
+            });
+            let Some(instance) = instance else {
                 continue;
             };
+            if !super::super::startup::belongs_to(
+                &self.config,
+                &instance.name,
+                &instance.template,
+                acceptance.operation_id.as_deref(),
+            )
+            .map_err(Error::Storage)?
+            {
+                continue;
+            }
+            let directory = instance.workspace.clone();
             let mut workspace = existing.cloned().unwrap_or_default();
             // A recorded directory pins history to this acceptance even after instance removal.
             if !workspace.directory.is_empty() && workspace.directory != directory {
@@ -79,6 +85,9 @@ impl RuleStore {
                 saved.approval_pending = None;
                 if let Some(previous) = workspace.sessions.iter_mut().find(|row| row.id == saved.id)
                 {
+                    if saved.server.is_empty() {
+                        saved.server.clone_from(&previous.server);
+                    }
                     *previous = saved;
                 } else {
                     workspace.sessions.push(saved);

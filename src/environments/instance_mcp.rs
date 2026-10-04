@@ -137,6 +137,17 @@ impl Environments {
         let lock = gateway::lock(&self.config, &format!("instance-{}", scope.name))?;
         Ok((self.verify_instance_scope(scope)?, lock))
     }
+
+    pub(crate) fn admit_instance_observation(
+        &self,
+        scope: &InstanceScope,
+    ) -> Result<Option<(Instance, gateway::Lock)>, String> {
+        let Some(lock) = gateway::try_lock(&self.config, &format!("instance-{}", scope.name))?
+        else {
+            return Ok(None);
+        };
+        Ok(Some((self.verify_instance_scope(scope)?, lock)))
+    }
 }
 
 pub(super) fn prepare_config(config: &Config, workspace: &Path) -> Result<(), String> {

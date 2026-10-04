@@ -9,6 +9,7 @@ use std::{
 use tokio::sync::oneshot;
 
 mod developer;
+mod history;
 mod recreation;
 
 use super::AppService;
@@ -364,7 +365,7 @@ impl AppService {
                         .validate_rule_destination(&acceptance.rule.zellij_session),
                 )?;
                 if let Some(record) = startup::read(config, &acceptance.instance)?
-                    && acceptance.operation_id.as_deref() != Some(&record.operation.id)
+                    && acceptance.operation_id.as_deref() != Some(record.origin_operation_id())
                 {
                     return Err("assigned instance has a different startup operation; inspect before retrying".into());
                 }
@@ -381,7 +382,9 @@ impl AppService {
                     acceptance.rule.definition.template.clone(),
                     Some(&description),
                 )?;
-                acceptance.operation_id = Some(operation.id.clone());
+                acceptance
+                    .operation_id
+                    .get_or_insert_with(|| operation.id.clone());
                 acceptance.status = DispatchStatus::Provisioning;
                 store
                     .update(acceptance, true)
@@ -390,6 +393,7 @@ impl AppService {
                     operation,
                     600,
                     Startup {
+                        origin_operation_id: acceptance.operation_id.clone(),
                         start_instance: acceptance.rule.definition.start_instance,
                         instance_lock: Some(lock),
                         description: Some(description),
@@ -401,7 +405,7 @@ impl AppService {
                 let record = startup::read(config, &acceptance.instance)?
                     .ok_or("startup admission was interrupted; inspect the assigned instance before retrying")?
                     .observe(config)?;
-                if acceptance.operation_id.as_deref() != Some(&record.operation.id) {
+                if acceptance.operation_id.as_deref() != Some(record.origin_operation_id()) {
                     return Err("assigned instance has a different startup operation; inspect before retrying".into());
                 }
                 match record.operation.state {
@@ -454,17 +458,43 @@ impl AppService {
                 let pane = acceptance.pane.as_ref().ok_or(
                     "session launch was interrupted with an uncertain outcome; it will not be sent again",
                 )?;
-                let workspace = self.environments.workspace(&acceptance.instance)?;
+                let scope = self
+                    .environments
+                    .bind_instance_directory(&config.workspaces.join(&acceptance.instance))?;
+                let Some((instance, _lock)) =
+                    self.environments.admit_instance_observation(&scope)?
+                else {
+                    return Ok(());
+                };
+                if !startup::belongs_to(
+                    config,
+                    &instance.name,
+                    &instance.template,
+                    acceptance.operation_id.as_deref(),
+                )? {
+                    return Err("assigned workspace belongs to another acceptance lineage".into());
+                }
+                let workspace = &instance.workspace;
                 let observed = self.runtime.handle().block_on(
                     self.opencode
                         .observer
-                        .observe(std::slice::from_ref(&workspace), Default::default()),
+                        .observe(std::slice::from_ref(workspace), Default::default()),
                 )?;
                 if let Some(session) = observed
                     .sessions
                     .iter()
-                    .find(|session| session.directory == workspace && session.panes.contains(pane))
+                    .find(|session| session.directory == *workspace && session.panes.contains(pane))
                 {
+                    self.rules
+                        .store
+                        .remember_workspaces(
+                            &crate::store::environments::EnvironmentSnapshot {
+                                instances: vec![instance],
+                                ..Default::default()
+                            },
+                            &observed,
+                        )
+                        .map_err(|error| error.to_string())?;
                     acceptance.session_id = Some(session.id.clone());
                     acceptance.status = DispatchStatus::Launched;
                     store

@@ -133,6 +133,22 @@ fn scoped_conclusion_survives_mcp_kill_and_retains_searchable_reports_after_reso
     assert_eq!(results.as_array().unwrap().len(), 1);
     assert_eq!(results[0]["title"], "Incident resolved");
     assert_eq!(results[0]["summary"], "Verified service recovery");
+    let mut management = Client::with_command(fixture.command(&["mcp"]));
+    assert_eq!(
+        management.tool("get_event_report", json!({"acceptance_id": 1}))["markdown"],
+        input()["markdown"]
+    );
+    assert_eq!(
+        management.tool("list_rules", json!({}))["reports"]["1"]["cleanup_state"],
+        "purged"
+    );
+    assert_eq!(
+        management.tool(
+            "search_event_reports",
+            json!({"search_strings": ["hidden timeout"]})
+        )["reports"][0]["acceptance_id"],
+        1
+    );
     assert!(results[0].get("markdown").is_none());
     assert!(
         fs::read_to_string(fixture.home.join("docker-calls"))

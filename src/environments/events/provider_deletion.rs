@@ -53,11 +53,16 @@ impl EventStore {
                     .map_err(|error| Error::Storage(error.to_string()))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let reported = connection
+            .prepare("SELECT acceptance_id FROM rule_acceptance_reports")?
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
         if rows.iter().any(|row| {
-            matches!(
-                row.status,
-                DispatchStatus::Provisioning | DispatchStatus::Launching
-            )
+            !reported.contains(&row.id)
+                && matches!(
+                    row.status,
+                    DispatchStatus::Provisioning | DispatchStatus::Launching
+                )
         }) {
             return Err(Error::Conflict(
                 "provider has active rule actions; retry when they finish".into(),

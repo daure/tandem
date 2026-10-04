@@ -53,7 +53,7 @@ The surface has no caller-selected lifecycle target and is not a host-process sa
 seeds workspace configuration in syntax supported by OpenCode V1 and V2, with explicit Tandem settings,
 preserving existing root and `.opencode` JSON/JSONC configuration. Configuring the surface grants
 these lifecycle actions; stopping services remains independent of event-task completion. Conclude
-requires one retained acceptance matching the owned instance and template. It commits an immutable
+requires one retained acceptance matching the owned instance, template and originating startup lineage. It commits an immutable
 acceptance-owned report before transferring the instance lock, rule-worker lease and conclusion lease
 to a detached worker. The worker closes associated clients regardless of the observation setting and
 purges owned resources through the existing deletion contract. Client closure may interrupt the MCP
@@ -63,6 +63,8 @@ Reported acceptances retain dispatch history and are excluded from dispatch admi
 Namespace-scoped report search matches any case-insensitive literal substring in title, summary or
 Markdown and returns acceptance summaries; report retrieval uses the acceptance ID. Report storage
 is independent of instance state and cascades only with acceptance/event/provider history deletion.
+Management MCP exposes report search and retrieval through the same service contract. Rule snapshots
+include report summaries and observed cleanup outcomes; Events and rule histories expose full-report reads.
 
 - Docker labels and inspected containers are authoritative for container-backed runtime inventory.
 - Successfully prepared service instances with no containers retain their service execution kind and
@@ -75,6 +77,10 @@ is independent of instance state and cascades only with acceptance/event/provide
   Resolved Compose snapshots are materialized atomically beneath `runtime/<namespace>/<instance>/compose.json`
   with private permissions. SQLite snapshots repair altered or missing regular materializations; unsafe paths fail closed.
 - The latest startup request, bounded progress, and outcome per instance are durable runtime records.
+- Startup records retain the originating operation ID across preparation retries, Start and authorized
+  acceptance recreation. The acceptance keeps its original operation ID. Purge releases instance identity;
+  unrelated name reuse receives a fresh origin. Records without an explicit origin use their retained
+  operation ID; a conflicting historical acceptance fails closed rather than inferring ownership from names.
 - Other operation history, resource samples, and transient UI state are process-local caches.
 
 An empty or failed Docker observation never proves that an instance is workspace-only. Recovery and cleanup require positive ownership evidence from the appropriate source.
@@ -232,7 +238,7 @@ capability-specific event logic lives in `app/events`.
 Confirmed event deletion removes namespace-scoped events, processing history, pending rule work,
 and associated feedback atomically while holding leases only for the selected events. Dispatch, retry,
 and recreation admission hold the same event lease and reread retained acceptance identity before
-acting. Provisioning, launching, or active conclusion cleanup blocks deletion of affected history.
+acting. Unreported provisioning or launching and active conclusion cleanup block deletion of affected history.
 Instances, sessions, provider credentials, rule definitions, and namespace dispatch admission history
 are preserved. Bulk deletion is atomic when any selected event is busy.
 Ignored-event deletion selects all retained namespace events with zero acceptances and removes their
@@ -284,7 +290,9 @@ notification commit together. The sidecar polls automation independently of open
 
 Acceptance instance names include the event sequence and durable acceptance ID within the instance-name
 length limit. SQLite retains each acceptance's workspace and observed conversation metadata, excluding live
-pane attachment. Confirmed instance purge retains that linkage; event/provider deletion removes dependent
+pane attachment. Headless dispatch captures metadata when it verifies workspace/pane linkage. Purge refreshes
+metadata under the instance lock, preserves saved endpoints when observation is unavailable, and verifies
+the startup lineage before associating conversations. Event/provider deletion removes dependent
 history. Recreation uses the recorded identity with current template files, preserves OpenCode history,
 and requires confirmation that workspace files and runtime data will be freshly provisioned. The original
 dispatch record remains historical; recreation sends no rule prompt. Reopening a retained conversation
@@ -358,7 +366,7 @@ cross-namespace lifecycle work; namespace/provider and source locks exclude coll
 identity reuse. The rule-worker lease gates dispatch admission. Durable deletion markers block queued
 dispatch and collection restarts across failures and process restarts. Positive Docker labels authorize
 collector/checkpoint removal; canonical package/runtime/credential paths bound filesystem cleanup.
-Instance purge rechecks the originating startup identity under the instance lock before closing clients,
+Instance purge rechecks the originating startup lineage under the instance lock before closing clients,
 deleting workspace OpenCode history and removing resources. External failures retain launch/event
 identity for retry. Successful cleanup atomically removes provider credentials, streams, events and
 dependent history, launch records and the deletion marker. Shared rules, sidecars, namespace admission

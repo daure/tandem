@@ -65,9 +65,7 @@ impl EventStore {
         transaction.execute_batch(include_str!(
             "../../migrations/0015_acceptance_workspaces.sql"
         ))?;
-        transaction.execute_batch(include_str!(
-            "../../migrations/0016_acceptance_reports.sql"
-        ))?;
+        transaction.execute_batch(include_str!("../../migrations/0016_acceptance_reports.sql"))?;
         let scoped_dispatch_history: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('rule_dispatch_starts') WHERE name = 'namespace')",
             [],

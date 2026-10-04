@@ -27,7 +27,10 @@ impl AppService {
             .map_err(|error| error.to_string())
             .and_then(|result| result);
             let result = match result {
-                Err(error) => Err(error),
+                Err(error) => {
+                    let _ = sender.send(Err(error));
+                    return;
+                }
                 Ok((operation, session)) => match service.wait_operation(&operation.id).await {
                     Ok(operation) if operation.state == OperationState::Succeeded => {
                         if let Some(session) = session {
@@ -85,10 +88,19 @@ impl AppService {
         {
             return Err("The originating provider is being deleted".into());
         }
-        if matches!(
-            acceptance.status,
-            DispatchStatus::Queued | DispatchStatus::Provisioning | DispatchStatus::Launching
-        ) {
+        let report = snapshot.reports.get(&id);
+        if report.is_some_and(|report| {
+            matches!(
+                report.cleanup_state,
+                crate::store::rules::reports::CleanupState::Pending
+                    | crate::store::rules::reports::CleanupState::Purging
+            )
+        }) || (report.is_none()
+            && matches!(
+                acceptance.status,
+                DispatchStatus::Queued | DispatchStatus::Provisioning | DispatchStatus::Launching
+            ))
+        {
             return Err("Dispatch is still active; wait before recreating its instance".into());
         }
         let directory = self
@@ -131,6 +143,10 @@ impl AppService {
             );
         }
         let description = format!("{}: {}", acceptance.rule_name, acceptance.event_summary);
+        let origin = acceptance
+            .operation_id
+            .clone()
+            .ok_or("Acceptance has no verifiable instance lineage; inspect before recreating")?;
         let operation = self.environments.begin_instance(
             &acceptance.instance,
             acceptance.rule.definition.template.clone(),
@@ -141,6 +157,7 @@ impl AppService {
             600,
             Startup {
                 instance_lock: Some(lock),
+                origin_operation_id: Some(origin),
                 preserve_opencode_history: true,
                 start_instance: acceptance.rule.definition.start_instance,
                 description: Some(description),

@@ -13,7 +13,6 @@ use crate::store::opencode::resources::Owner;
 use crate::store::opencode::{Activity, Client, Counts, Pane, Session, Snapshot, workspace_owner};
 
 mod actions;
-mod conversation;
 mod folders;
 mod resources;
 
@@ -1113,7 +1112,11 @@ impl App {
         if self.service.known_opencode_session(id).is_none() {
             return true;
         }
-        let history = conversation::Conversation::new(self.service.opencode_conversation(id));
+        let history = super::markdown::Markdown::new(
+            "conversation",
+            self.service.opencode_conversation(id),
+            std::convert::identity,
+        );
         let tabs = vec![
             tuicore::Tab::new("Conversation", history),
             tuicore::Tab::new(

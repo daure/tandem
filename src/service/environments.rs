@@ -381,25 +381,8 @@ impl AppService {
         let settings = Arc::clone(&self.settings);
         let observer = self.opencode.observer.clone();
         let runtime = self.runtime.handle().clone();
-        let rules = self.rules.clone();
-        let observed = self.opencode_snapshot();
+        let service = self.clone();
         self.runtime.spawn_blocking(move || {
-            if matches!(
-                worker_operation.action.as_str(),
-                "delete_instance" | "delete_template"
-            ) && let Err(error) = rules
-                .store
-                .remember_workspaces(&environments.snapshot(), &observed)
-            {
-                environments.finish_operation(
-                    &worker_operation.id,
-                    Err(format!(
-                        "Cannot retain conversation history before purge: {error}"
-                    )),
-                );
-                notifier.publish(refresh);
-                return;
-            }
             notifier.publish(refresh);
             environments.execute(
                 worker_operation,
@@ -407,6 +390,13 @@ impl AppService {
                 startup,
                 &|workspace, deadline| {
                     settings.refresh()?;
+                    let name = std::path::Path::new(workspace)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .ok_or("invalid instance workspace")?;
+                    if let Some(instance) = service.environments.recorded_instance(name)? {
+                        service.retain_instance_history(&instance)?;
+                    }
                     if settings.opencode_enabled() {
                         runtime.block_on(observer.close_workspace(workspace, deadline))?;
                     }

@@ -145,6 +145,34 @@ fn mcp_provider_deletion_requires_approval_and_purges_only_its_owned_resources_a
 }
 
 #[test]
+fn provider_cleanup_keeps_acceptance_ownership_through_scoped_start_and_legacy_startup_records() {
+    for legacy in [false, true] {
+        let (fixture, _server) = fixture();
+        let original =
+            fixture.runtime_record("review", "startup").unwrap()["operation"]["id"].clone();
+        if legacy {
+            let mut record = fixture.runtime_record("review", "startup").unwrap();
+            record
+                .as_object_mut()
+                .unwrap()
+                .remove("origin_operation_id");
+            fixture.set_runtime_record("review", "startup", &record);
+        }
+        let mut command = fixture.command(&["mcp-instance"]);
+        command.current_dir(fixture.home.join("workspaces/review"));
+        let mut scoped = Client::with_command(command);
+        assert_eq!(scoped.tool("start_self", json!({}))["state"], "succeeded");
+        let started = fixture.runtime_record("review", "startup").unwrap();
+        assert_ne!(started["operation"]["id"], original);
+        assert_eq!(started["origin_operation_id"], original);
+        let mut management = Client::with_command(fixture.command(&["mcp"]));
+        let result = delete_when_idle(&mut management);
+        assert_ne!(result["isError"], true, "{result}");
+        assert!(!fixture.home.join("workspaces/review").exists());
+    }
+}
+
+#[test]
 fn mcp_provider_deletion_preserves_retry_evidence_after_external_failure() {
     let (fixture, server) = fixture();
     fs::write(fixture.home.join("reject-volume-removal"), "").unwrap();
@@ -213,9 +241,13 @@ fn mcp_provider_deletion_refuses_shared_packages_active_dispatches_and_reused_in
                 connection.execute("UPDATE rule_acceptances SET payload=json_set(payload,'$.status','provisioning') WHERE id=1", []).unwrap();
             }
             "reused" => {
-                let mut startup = fixture.runtime_record("review", "startup").unwrap();
-                startup["operation"]["id"] = json!("999-999");
-                fixture.set_runtime_record("review", "startup", &startup);
+                assert!(fixture.run(&["delete-instance", "review"]).status.success());
+                assert!(
+                    fixture
+                        .run(&["new-instance", "review", "-t", "blank"])
+                        .status
+                        .success()
+                );
             }
             "volume" => {
                 fs::write(fixture.home.join("foreign-volume"), "").unwrap();

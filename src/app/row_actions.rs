@@ -37,6 +37,7 @@ pub(crate) enum Command {
     PurgeInstance,
     Rule,
     Routes,
+    Report,
 }
 
 impl Command {
@@ -63,6 +64,7 @@ impl Command {
             Self::PurgeInstance => "Purge instance",
             Self::Rule => "Go to rule",
             Self::Routes => "Open routes",
+            Self::Report => "View report",
         }
     }
 
@@ -83,6 +85,7 @@ impl Command {
             Self::PurgeInstance => "p",
             Self::Rule => "r",
             Self::Routes => "Ctrl+Enter",
+            Self::Report => "f",
         }
     }
 }
@@ -133,6 +136,7 @@ impl Target {
             Self::AcceptanceContext(target) => {
                 let mut commands = vec![
                     Command::Rule,
+                    Command::Report,
                     Command::CreateInstance,
                     Command::Instance,
                     Command::Routes,

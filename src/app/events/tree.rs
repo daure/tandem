@@ -51,13 +51,7 @@ impl Entry {
     pub(super) fn height(&self) -> u16 {
         match self {
             Self::Event(_) => 2,
-            Self::Acceptance(target) => {
-                if target.instance.is_some() {
-                    2
-                } else {
-                    1
-                }
-            }
+            Self::Acceptance(target) => target.height(),
             Self::Conversation { row, .. } => row.height(),
         }
     }
@@ -102,7 +96,8 @@ pub(super) fn project(
                 rules.workspaces.get(&acceptance.id),
                 context,
                 show_saved,
-            );
+            )
+            .with_report(rules.reports.get(&acceptance.id));
             rows.push(Entry::Acceptance(Box::new(target.clone())));
             for row in &target.conversations {
                 rows.push(Entry::Conversation {

@@ -183,10 +183,10 @@ impl Retention {
         let mut visible = snapshot.clone();
         visible.sessions.retain(|session| {
             !snapshot.uncertain_session(session)
-                && !(snapshot.missing_directory(&session.directory)
-                    && !session.attached()
-                    && session.activity == super::Activity::Idle
-                    && !snapshot.unfinished_missing_workspace(session))
+                && (!snapshot.missing_directory(&session.directory)
+                    || session.attached()
+                    || session.activity != super::Activity::Idle
+                    || snapshot.unfinished_missing_workspace(session))
         });
         visible
             .clients

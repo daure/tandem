@@ -720,6 +720,7 @@ impl TuiNode<Msg> for Events {
         .preferred
         .width;
         let compact = area.width < 60;
+        let toggle_width = toggle_width.saturating_sub(if compact { 4 } else { 0 });
         let follow_width = follow_width.saturating_sub(if compact { 5 } else { 0 });
         let sound_width = sound_width.saturating_sub(if compact { 4 } else { 0 });
         let history_width = history_width.saturating_sub(if compact { 4 } else { 0 });
@@ -767,17 +768,11 @@ impl TuiNode<Msg> for Events {
         });
         let ignored_width = ignored.measure(LayoutProposal::unbounded()).preferred.width;
         let delete_width = all_width.saturating_add(ignored_width).saturating_add(1);
-        let minimum_stream_width = self
-            .filter
-            .borrow()
-            .as_ref()
-            .filter(|selected| selected.len() == 1)
-            .map(|selected| {
-                (line_width(&Line::from(selected[0].label())).min(u16::MAX as usize) as u16)
-                    .saturating_add(2)
-            })
-            .unwrap_or(20)
-            .min(stream_width);
+        let minimum_stream_width = if self.sources.len() == 1 {
+            stream_width
+        } else {
+            20.min(stream_width)
+        };
         let narrow = area.width
             < controls_width
                 .saturating_add(delete_width)

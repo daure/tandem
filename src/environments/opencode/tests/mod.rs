@@ -5,7 +5,7 @@ mod destinations;
 mod events;
 mod folders;
 mod history;
-mod history_server;
+pub(crate) mod history_server;
 mod purge;
 mod questions;
 mod startup;

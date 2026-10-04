@@ -113,6 +113,14 @@ fn sibling_acceptance_reports_are_durable_searchable_and_namespace_scoped() {
     let report = restarted.event_report(acceptances[0].id).unwrap();
     assert_eq!(report.markdown, input("").markdown);
     assert_eq!(report.details.cleanup_state, CleanupState::Purged);
+    let projected = restarted.snapshot().unwrap();
+    assert_eq!(projected.reports[&acceptances[0].id], report.details);
+    assert_eq!(
+        projected.reports[&acceptances[1].id]
+            .cleanup_error
+            .as_deref(),
+        Some("client closure failed")
+    );
     let other = Config::at(config.home.clone(), "other".into(), 9876).unwrap();
     let foreign = RuleStore::open(&other).unwrap();
     assert!(

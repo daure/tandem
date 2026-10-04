@@ -956,4 +956,4 @@ pub(crate) fn install(home: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 #[path = "tests/mod.rs"]
-mod tests;
+pub(crate) mod tests;
