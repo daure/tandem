@@ -2,6 +2,93 @@ use super::*;
 use crate::store::environments::{RepositoryCheckout, StartupKind, StartupTiming};
 
 #[test]
+fn workspace_only_instances_remain_visible_in_both_views_without_opencode_clients() {
+    init_ui();
+    let mut inventory = snapshot();
+    inventory.instances[0].services[0].status = "exited 0".into();
+    let mut template = inventory.templates[0].clone();
+    template.name = "guidance-only".into();
+    template.directory = "/tmp/templates/guidance-only".into();
+    template.compose_file.clear();
+    template.compose_source.clear();
+    template.guidance_source = Some("Inspect the workspace".into());
+    let mut instance = inventory.instances[0].clone();
+    instance.name = "folder".into();
+    instance.template = template.name.clone();
+    instance.template_directory = template.directory.clone();
+    instance.workspace = "/tmp/workspaces/folder".into();
+    instance.workspace_only = true;
+    instance.runtime.workspace_ready = true;
+    instance.services.clear();
+    inventory.templates.push(template);
+    inventory.instances.push(instance);
+    for sessions in [false, true] {
+        for running_only in [true, false] {
+            for show_saved in [false, true] {
+                let projected = crate::app::opencode::project_rows(
+                    &inventory,
+                    &[],
+                    &Default::default(),
+                    running_only,
+                    show_saved,
+                    sessions,
+                );
+                let folder = projected
+                    .iter()
+                    .find(|row| row.id == "instance:folder")
+                    .unwrap();
+                assert_eq!(folder.icon, rows::WORKSPACE_ICON);
+                if running_only {
+                    assert!(!projected.iter().any(|row| row.id == "instance:review"));
+                }
+                if sessions {
+                    assert!(folder.parent.is_none());
+                } else {
+                    assert_eq!(
+                        folder.parent.as_deref(),
+                        Some("template:/tmp/templates/guidance-only")
+                    );
+                    let template = projected
+                        .iter()
+                        .find(|row| row.id == "template:/tmp/templates/guidance-only")
+                        .unwrap();
+                    assert_eq!(template.tone, rows::Tone::Success);
+                    assert_eq!(
+                        template.text("", None).lines[0].spans[0].style.fg,
+                        Some(tuicore::theme().success_fg())
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn workspace_template_icons_are_green_with_instances_and_keep_empty_or_invalid_states() {
+    init_ui();
+    let mut inventory = snapshot();
+    inventory.templates[0].compose_file.clear();
+    inventory.templates[0].compose_source.clear();
+    inventory.instances[0].services.clear();
+    inventory.instances[0].workspace_only = true;
+    inventory.instances[0].runtime.workspace_ready = true;
+    for (has_instance, invalid, tone) in [
+        (false, false, rows::Tone::Normal),
+        (true, false, rows::Tone::Success),
+        (true, true, rows::Tone::Error),
+    ] {
+        let mut inventory = inventory.clone();
+        if !has_instance {
+            inventory.instances.clear();
+        }
+        inventory.templates[0].error = invalid.then(|| "Invalid manifest".into());
+        let projected = rows::from_snapshot(&inventory);
+        assert_eq!(projected[0].icon, rows::TEMPLATE_ICON);
+        assert_eq!(projected[0].tone, tone);
+    }
+}
+
+#[test]
 fn repository_setup_rows_precede_jobs_and_copy_absolute_checkout_paths() {
     init_ui();
     let mut inventory = snapshot();

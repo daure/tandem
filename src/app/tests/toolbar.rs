@@ -76,7 +76,6 @@ fn tabs_share_toolbar_controls_and_retain_separate_searches() {
                 &mut EventCtx::new(settings),
             );
         }
-        let toolbar = toolbar_line(&mut app, width);
         for (label, sessions) in [("Instances", false), ("Sessions", true)] {
             let lines = rendered_lines(&toolbar_terminal(&mut app, width), area);
             if let Some((prefix, _)) = lines[0].split_once(label) {
@@ -100,7 +99,14 @@ fn tabs_share_toolbar_controls_and_retain_separate_searches() {
             assert_eq!(app.attached_sessions_only, sessions);
             assert!(app.running_only && app.opencode_history && app.completion_sound);
             let lines = rendered_lines(&toolbar_terminal(&mut app, width), area);
-            assert_eq!(lines[1], toolbar);
+            assert_eq!(lines[1].contains("󰕾"), sessions);
+            if !sessions {
+                app.event(
+                    &TuiEvent::Key(KeyEvent::from(Key::Char('N'))),
+                    &mut EventCtx::new(settings),
+                );
+                assert!(app.completion_sound);
+            }
             assert_eq!(
                 lines[2].contains("missing-workspace"),
                 sessions,
@@ -112,7 +118,7 @@ fn tabs_share_toolbar_controls_and_retain_separate_searches() {
                 !sessions
             );
             layout.layout(&mut app, area);
-            for action in ["new-template", "stop-all", "purge-all", "refresh"] {
+            for action in ["stop-all", "purge-all"] {
                 assert!(layout.focus_targets().iter().any(|target| target.enabled
                     && target.path.keys().iter().any(|key| key.as_str() == action)));
             }
@@ -205,14 +211,14 @@ fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_en
             .unwrap();
         assert!(app.update_snapshot(snapshot()));
         assert!(!app.attached_sessions_only);
-        assert_eq!(app.tabs_mut().selected_index(), 4);
+        assert_eq!(app.tabs_mut().selected_index(), 2);
         let header =
             rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30))[0].clone();
         assert!(
-            header.contains("Sessions · Events · Rules · Providers · Instances"),
+            header.contains("Sessions · Events · Instances · Rules · Providers"),
             "{header}"
         );
-        for _ in 0..4 {
+        for _ in 0..2 {
             app.event(
                 &TuiEvent::Key(KeyEvent::from(Key::Char('['))),
                 &mut EventCtx::new(settings),
@@ -260,7 +266,7 @@ fn bracket_navigation_keeps_focus_valid_and_the_tab_header_active() {
                 &mut ctx,
             );
             assert_eq!(outcome, tuicore::EventOutcome::Handled);
-            assert_eq!(app.attached_sessions_only, key == ']', "{:?}", target.path);
+            assert_eq!(app.providers_active, key == '[', "{:?}", target.path);
             assert_eq!(
                 app.tabs_mut().selected_index(),
                 if key == '[' { 4 } else { 0 }
@@ -293,7 +299,7 @@ fn bracket_navigation_keeps_focus_valid_and_the_tab_header_active() {
             &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
             &mut EventCtx::new(settings),
         );
-        assert_eq!(app.attached_sessions_only, key == ']');
+        assert_eq!(app.providers_active, key == '[');
     }
     let tree = targets
         .iter()
@@ -310,7 +316,7 @@ fn bracket_navigation_keeps_focus_valid_and_the_tab_header_active() {
     }
     let lines = rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30));
     assert!(lines[2].contains("12"), "{}", lines[2]);
-    app.handle_message(Msg::NewTemplate, &mut EventCtx::new(settings));
+    app.action(2, &mut EventCtx::new(settings));
     assert!(app.view.is_active());
     for key in ['[', ']'] {
         app.event(
@@ -391,35 +397,12 @@ fn visibility_toggle_starts_off_and_reveals_all_instances() {
                 .find(|target| target.path.keys().iter().any(|key| key.as_str() == name))
                 .unwrap()
         };
-        let template = target("new-template");
         let history = target("opencode-history");
         let running = target("running-only");
-        if width >= 50 {
-            let sound = target("completion-sound");
-            assert_eq!(template.area.right() + 1, sound.area.x);
-            assert_eq!(
-                sound.area.right() + u16::from(width >= super::super::MOBILE_TABS_WIDTH),
-                history.area.x
-            );
-        } else {
-            assert_eq!(template.area.right(), history.area.x);
-        }
-        assert_eq!(history.area.right() + 1, running.area.x);
+        assert_eq!(running.area.right() + 1, history.area.x);
         let line = toolbar_line(&mut app, width);
         assert!(line.contains("󰈈") && line.contains("|A|"), "{line}");
-        let template_icon = if width < super::super::MOBILE_TABS_WIDTH {
-            "󰠲"
-        } else {
-            "Template"
-        };
-        assert!(
-            line.find(template_icon).unwrap() < line.find("󰋚").unwrap(),
-            "{line}"
-        );
-        if width >= 50 {
-            assert!(line.find("󰕾").unwrap() < line.find("󰋚").unwrap(), "{line}");
-        }
-        assert!(line.find("󰋚").unwrap() < line.find("󰈈").unwrap(), "{line}");
+        assert!(line.find("󰈈").unwrap() < line.find("󰋚").unwrap(), "{line}");
     }
 
     assert!(app.running_only);
@@ -429,7 +412,7 @@ fn visibility_toggle_starts_off_and_reveals_all_instances() {
     assert!(running.contains("other"), "{running}");
     assert!(running.contains("agent-only"), "{running}");
     assert!(!running.contains("stopped"), "{running}");
-    assert!(!running.contains("guidance-only"), "{running}");
+    assert!(running.contains("guidance-only"), "{running}");
     assert!(!running.contains("new"), "{running}");
     assert!(running.contains(" 2/3"), "{running}");
 
@@ -517,7 +500,7 @@ fn global_h_opens_the_expanded_agent_view_and_restores_default_filters() {
     let terminal = toolbar_terminal(&mut app, 130);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 130, 30));
     assert!(
-        lines[1].contains("○── 󰕾 |N| ○── 󰋚 |O| ○── 󰈈 |A|"),
+        lines[1].contains("○── 󰈈 |A| ○── 󰋚 |O| ○── 󰕾 |N|"),
         "{}",
         lines[1]
     );
@@ -558,7 +541,6 @@ fn toolbar_totals_cover_all_instances_and_update_independently_of_tree_search() 
         for label in ["used", "available", "CPU"] {
             assert!(!line.contains(label), "{line}");
         }
-        assert!(line.find("󰑓").unwrap() < line.find("").unwrap());
     }
 
     let mut layout = tuicore::LayoutCtx::new();
@@ -737,7 +719,7 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
         tuicore::theme().muted_fg()
     );
     let narrow = toolbar_line(&mut app, 40);
-    assert!(narrow.contains("󰠲 T") && narrow.contains("󰑓 R"), "{narrow}");
+    assert!(narrow.contains("󰈈") && narrow.contains("󰋚"), "{narrow}");
     assert!(
         !narrow.contains("MiB"),
         "unavailable totals should remain hidden when they do not fit: {narrow}"
@@ -771,74 +753,7 @@ fn toolbar_totals_show_unavailable_and_paused_states() {
 }
 
 #[test]
-fn refresh_button_precedes_right_aligned_totals_and_shows_its_hotkey_at_both_sizes() {
-    init_ui();
-    let mut app = root(AppService::for_tests());
-    for width in [130, 99, 40, 100, 150] {
-        let area = Rect::new(0, 0, width, 30);
-        let mut layout = tuicore::LayoutCtx::new();
-        app.layout(area, &mut layout);
-        let target = layout
-            .focus_targets()
-            .iter()
-            .find(|target| {
-                target
-                    .path
-                    .keys()
-                    .iter()
-                    .any(|key| key.as_str() == "refresh")
-            })
-            .unwrap();
-        let button_order = layout
-            .focus_targets()
-            .iter()
-            .flat_map(|target| target.path.keys())
-            .filter(|key| matches!(key.as_str(), "stop-all" | "purge-all" | "refresh"))
-            .map(|key| key.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(button_order, ["stop-all", "purge-all", "refresh"]);
-        assert_eq!(target.area.y, 1);
-        let mut terminal = Terminal::new(TestBackend::new(width, area.height)).unwrap();
-        terminal
-            .draw(|frame| {
-                let mut render = RenderCtx::new();
-                app.render(frame, area, &mut render);
-                render.flush(frame);
-            })
-            .unwrap();
-        let lines = rendered_lines(&terminal, area);
-        let refresh_label = if width < 100 {
-            "󰑓 R"
-        } else {
-            "󰑓 Refresh"
-        };
-        assert!(lines[1].contains(refresh_label));
-        if let Some(totals_x) = lines[1].find('') {
-            assert!(lines[1].find(refresh_label).unwrap() < totals_x);
-            assert!(lines[1].trim_end().ends_with(" —"));
-        } else {
-            assert!(lines[1].trim_end().ends_with(refresh_label));
-        }
-        assert!(lines[1].find('').unwrap() < lines[1].find('').unwrap());
-        assert!(lines[1].find('').unwrap() < lines[1].find('󰑓').unwrap());
-        let label: String = lines[usize::from(target.area.y)]
-            .chars()
-            .skip(usize::from(target.area.x))
-            .take(usize::from(target.area.width))
-            .collect();
-        assert_eq!(
-            label.trim(),
-            if width < 100 {
-                "󰑓 R"
-            } else {
-                "󰑓 Refresh"
-            }
-        );
-    }
-}
-
-#[test]
-fn toolbar_refresh_activation_and_capital_r_request_manual_refresh_at_both_sizes() {
+fn capital_r_requests_manual_refresh_from_toolbar_and_data_view_at_both_sizes() {
     init_ui();
     for width in [130, 40] {
         let mut app = root(AppService::for_tests());
@@ -852,12 +767,12 @@ fn toolbar_refresh_activation_and_capital_r_request_manual_refresh_at_both_sizes
                     .path
                     .keys()
                     .iter()
-                    .any(|key| key.as_str() == "refresh")
+                    .any(|key| key.as_str() == "running-only")
             })
             .unwrap()
             .clone();
         app.dispatch_focus(&target, true, &mut tuicore::FocusCtx::default());
-        for key in [Key::Enter, Key::Char('R')] {
+        for key in [Key::Char('R')] {
             let mut ctx = EventCtx::new(AnimationSettings::default());
             app.dispatch_event(
                 &tuicore::EventRoute::new(target.path.clone()),
@@ -892,7 +807,7 @@ fn escape_from_toolbar_returns_focus_to_the_data_view() {
                 .path
                 .keys()
                 .iter()
-                .any(|key| matches!(key.as_str(), "new-template" | "refresh"))
+                .any(|key| matches!(key.as_str(), "stop-all" | "purge-all"))
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -950,26 +865,17 @@ fn escape_in_the_data_view_keeps_its_focus() {
 }
 
 #[test]
-fn compact_refresh_button_honors_a_configured_hotkey() {
+fn toolbar_manual_refresh_honors_a_configured_hotkey() {
     init_ui();
     let mut toolbar = crate::app::toolbar::Toolbar::new(
-        tuicore::KeySpec::shifted('t'),
         tuicore::KeySpec::shifted('g'),
         tuicore::KeySpec::shifted('s'),
         tuicore::KeySpec::shifted('p'),
         Default::default(),
+        false,
     );
     let area = Rect::new(0, 0, 40, 1);
     toolbar.layout(area, &mut tuicore::LayoutCtx::new());
-    let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
-    terminal
-        .draw(|frame| toolbar.render(frame, area, &mut RenderCtx::new()))
-        .unwrap();
-    assert!(
-        rendered_lines(&terminal, area)[0]
-            .trim_end()
-            .contains("󰑓 G")
-    );
     let mut ctx = EventCtx::new(AnimationSettings::default());
     toolbar.event(&TuiEvent::Key(KeyEvent::from(Key::Char('G'))), &mut ctx);
     assert!(matches!(ctx.messages(), [Msg::Refresh]));
@@ -1014,7 +920,7 @@ fn history_toggle_beside_running_filter_controls_saved_sessions_across_instances
                 .clone()
         };
         let history = target("opencode-history");
-        assert_eq!(history.area.right() + 1, target("running-only").area.x);
+        assert_eq!(target("running-only").area.right() + 1, history.area.x);
         let line = toolbar_line(&mut app, width);
         assert!(line.contains("󰋚"), "{line}");
         if width >= super::super::MOBILE_TABS_WIDTH {

@@ -93,6 +93,7 @@ pub(crate) fn start(
         }
         super::removal::validate_workspace(config, name)?;
         template_files::prepare(&workspace, &template, deadline, progress.clone())?;
+        super::instance_mcp::prepare_config(config, &workspace)?;
         let mut preparing = journal::recorded(config, name)?.ok_or("instance record missing")?;
         preparing.services = compose::preview_services(config, &template, name);
         progress("Preparing workspace AGENTS.md".into());
@@ -310,9 +311,21 @@ pub(super) fn readiness(
 }
 
 pub(crate) fn stop(config: &Config, name: &str, progress: Progress) -> Result<(), String> {
+    stop_with_lock(config, name, progress, None)
+}
+
+pub(super) fn stop_with_lock(
+    config: &Config,
+    name: &str,
+    progress: Progress,
+    instance_lock: Option<gateway::Lock>,
+) -> Result<(), String> {
     validate_instance_name(name)?;
     let deadline = Instant::now() + Duration::from_secs(60);
-    let _lock = gateway::lock(config, &format!("instance-{name}"))?;
+    let _lock = match instance_lock {
+        Some(lock) => lock,
+        None => gateway::lock(config, &format!("instance-{name}"))?,
+    };
     let activity = journal::ActivityGuard::begin(config, name, "stop_instance", None, 60)?;
     let result = (|| {
         let (instance, _) = managed_instance(config, name, deadline)?;

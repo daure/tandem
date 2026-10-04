@@ -174,11 +174,11 @@ fn toolbar_bulk_hotkeys_use_configured_letters_for_labels_and_activation() {
             super::super::toolbar::State::from_snapshot(&inventory()),
         ));
         let mut toolbar = super::super::toolbar::Toolbar::new(
-            tuicore::KeySpec::shifted('t'),
             tuicore::KeySpec::shifted('r'),
             tuicore::KeySpec::shifted('k'),
             tuicore::KeySpec::shifted('l'),
             state,
+            false,
         );
         let area = Rect::new(0, 0, width, 1);
         toolbar.layout(area, &mut tuicore::LayoutCtx::new());

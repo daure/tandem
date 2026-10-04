@@ -26,20 +26,10 @@ fn name_input_route(app: &mut crate::app::App) -> tuicore::EventRoute {
 }
 
 #[test]
-fn template_button_and_uppercase_hotkey_open_template_creation() {
+fn uppercase_template_hotkey_opens_template_creation() {
     init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
-    let lines = render_app(&mut app);
-    let button_y = lines
-        .iter()
-        .position(|line| line.contains("Template |T|"))
-        .unwrap_or_else(|| panic!("template button with hotkey badge: {lines:#?}"));
-    let tree_y = lines
-        .iter()
-        .position(|line| line.contains("website"))
-        .unwrap();
-    assert!(button_y < tree_y);
     for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
         app.event(
             &TuiEvent::Key(KeyEvent {
@@ -56,35 +46,6 @@ fn template_button_and_uppercase_hotkey_open_template_creation() {
         );
         app.handle_message(Msg::Close, &mut EventCtx::new(AnimationSettings::default()));
     }
-    crate::app::instances::set_highlighted(&app.instances, Some("instance:review".into()));
-    let mut layout = tuicore::LayoutCtx::new();
-    app.layout(Rect::new(0, 0, 130, 40), &mut layout);
-    let button = layout
-        .focus_targets()
-        .iter()
-        .find(|target| {
-            target
-                .path
-                .keys()
-                .iter()
-                .any(|key| key.as_str() == "new-template")
-        })
-        .unwrap()
-        .clone();
-    app.dispatch_focus(&button, true, &mut tuicore::FocusCtx::default());
-    let mut ctx = EventCtx::new(AnimationSettings::default());
-    app.dispatch_event(
-        &tuicore::EventRoute::new(button.path),
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
-        &mut ctx,
-    );
-    assert!(matches!(ctx.messages(), [Msg::NewTemplate]));
-    assert!(app.service.opened_system_targets().is_empty());
-    app.handle_message(
-        Msg::NewTemplate,
-        &mut EventCtx::new(AnimationSettings::default()),
-    );
-    assert!(matches!(app.intent, Some(crate::app::Intent::NewTemplate)));
 }
 
 #[test]

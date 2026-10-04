@@ -34,6 +34,7 @@ fn fixture() -> (tempfile::TempDir, Config, Record) {
         description: Some("Review workspace".into()),
         branch_instances: false,
         start_instance: true,
+        preserve_opencode_history: false,
         kind: StartupKind::Cold,
         started_at: journal::now(),
         timeout: 60,

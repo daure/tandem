@@ -22,6 +22,7 @@ use crate::{
     store::environments::{EnvironmentSnapshot, Operation},
 };
 
+mod acceptances;
 mod action_menu;
 mod bulk;
 mod creation;
@@ -93,7 +94,8 @@ fn visible_rows(
         .collect::<HashSet<_>>();
     let mut visible = snapshot.clone();
     visible.instances.retain(|instance| {
-        instance.is_running()
+        instance.workspace_only
+            || instance.is_running()
             || instance.is_starting()
             || instance.status_summary().status == crate::store::environments::Status::Stopping
             || opencode_instances.contains(instance.name.as_str())
@@ -140,7 +142,6 @@ pub(crate) enum Msg {
     CompletionFadeChanged(String),
     CompletionSoundSelected(String),
     EventAcceptanceSoundSelected(String),
-    NewTemplate,
     Refresh,
     StopAll,
     PurgeAll,
@@ -151,7 +152,6 @@ pub(crate) enum Msg {
     SetOpencodeHistory(bool),
     SetAttachedSessionsOnly(bool),
     SetCompletionSound(bool),
-    SetEventAcceptanceSound(bool),
     CopyName,
     CopyDescription,
     CopyWorkspace,
@@ -172,7 +172,8 @@ pub(crate) enum Msg {
     FocusEvent(i64),
     FocusRule(String),
     AcceptanceInstance(String),
-    AcceptanceSession(Box<crate::store::rules::Acceptance>),
+    AcceptanceAction(Box<acceptances::Target>, row_actions::Command),
+    RecreateAcceptanceConfirmed(Box<crate::store::rules::Acceptance>, Option<String>),
     ProviderAction(String, crate::store::providers::Action),
     ProviderStreamAction(String, String, crate::store::providers::Action),
     ProviderStreamDetails(String, Box<crate::store::providers::Stream>),
@@ -248,6 +249,7 @@ pub(crate) struct App {
     // Action handlers address the active page; both pages retain their own state.
     instances: SharedState,
     toolbar_state: toolbar::SharedState,
+    tab_counts: (usize, usize),
     running_only: bool,
     keys: [KeySpec; 10],
     refresh_schedule: refresh::RefreshSchedule,
@@ -271,9 +273,10 @@ pub(crate) struct App {
     opencode_history: bool,
     attached_sessions_only: bool,
     completion_sound: bool,
-    event_acceptance_sound: bool,
     event_acceptance_count: Option<u64>,
     opencode_action: Option<opencode::PendingAction>,
+    acceptance_recreation: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
+    acceptance_selection: Rc<RefCell<Option<acceptances::Target>>>,
     events_active: bool,
     providers_active: bool,
     rules_active: bool,
@@ -329,7 +332,7 @@ pub(crate) fn root(service: AppService) -> App {
         toolbar_state.completion_sound = false;
     }
     let content = Split::vertical(
-        overview_tabs(opencode_enabled, opencode_enabled),
+        overview_tabs(opencode_enabled, opencode_enabled, (0, 0)),
         overview::Pages::new(keys, toolbar_state.clone(), states, opencode_enabled),
     )
     .constraints(Constraint::Length(1), Constraint::Fill(1));
@@ -376,6 +379,7 @@ pub(crate) fn root(service: AppService) -> App {
         view,
         instances,
         toolbar_state,
+        tab_counts: (0, 0),
         running_only: true,
         keys,
         refresh_schedule: refresh::RefreshSchedule::default(),
@@ -399,9 +403,10 @@ pub(crate) fn root(service: AppService) -> App {
         opencode_history: false,
         attached_sessions_only: opencode_enabled,
         completion_sound: false,
-        event_acceptance_sound: false,
         event_acceptance_count,
         opencode_action: None,
+        acceptance_recreation: None,
+        acceptance_selection: Rc::new(RefCell::new(None)),
         events_active: false,
         providers_active: false,
         rules_active: false,
@@ -430,14 +435,19 @@ impl App {
             let providers_active = self.providers_active;
             let rules_active = self.rules_active;
             self.select_overview(self.attached_sessions_only && opencode_enabled);
-            *self.tabs_mut() = overview_tabs(opencode_enabled, self.attached_sessions_only);
+            *self.tabs_mut() = overview_tabs(
+                opencode_enabled,
+                self.attached_sessions_only,
+                self.tab_counts,
+            );
             if events_active {
                 self.tabs_mut().select_index(1);
                 self.events_active = true;
                 self.pages_mut().select_events();
             }
             if providers_active {
-                self.tabs_mut().select_index(3);
+                let index = self.providers_tab_index();
+                self.tabs_mut().select_index(index);
                 self.providers_active = true;
                 self.pages_mut().select_providers();
             }
@@ -487,7 +497,6 @@ impl App {
         toolbar_state.opencode_enabled = opencode_enabled;
         toolbar_state.show_saved = self.opencode_history;
         toolbar_state.completion_sound = self.completion_sound;
-        toolbar_state.event_acceptance_sound = self.event_acceptance_sound;
         *self.toolbar_state.borrow_mut() = toolbar_state;
         self.snapshot = snapshot;
         snapshot_changed || rows_changed || totals_changed || tabs_changed
@@ -516,6 +525,38 @@ impl App {
         self.menu_layer_mut().base_mut().first_mut().second_mut()
     }
 
+    fn sync_tab_counts(&mut self) -> bool {
+        let counts = self.pages_mut().tab_counts();
+        if counts == self.tab_counts {
+            return false;
+        }
+        self.tab_counts = counts;
+        let selected = self.tabs_mut().selected_index();
+        *self.tabs_mut() = overview_tabs(
+            self.service.opencode_enabled(),
+            self.attached_sessions_only,
+            counts,
+        )
+        .selected(selected);
+        true
+    }
+
+    fn instances_tab_index(&self) -> usize {
+        if self.service.opencode_enabled() {
+            2
+        } else {
+            0
+        }
+    }
+
+    fn providers_tab_index(&self) -> usize {
+        if self.service.opencode_enabled() {
+            4
+        } else {
+            3
+        }
+    }
+
     fn select_overview(&mut self, sessions: bool) {
         self.events_active = false;
         self.providers_active = false;
@@ -531,6 +572,9 @@ impl App {
         select_first: bool,
     ) -> bool {
         let mut changed = false;
+        let opencode = self.opencode_snapshot.clone();
+        self.pages_mut()
+            .update_acceptance_context(snapshot, &opencode);
         for (index, state) in self.pages_mut().states().iter().enumerate() {
             let rows = opencode::project_rows(
                 snapshot,
@@ -608,6 +652,9 @@ impl App {
         let operations = self.service.operations();
         self.update_overview_rows(&self.snapshot.clone(), &operations, false);
         instances::request_center_highlighted(&self.instances);
+        if self.events_active {
+            ctx.focus(tuicore::FocusRequest::Target(FocusId::new(events::FOCUS)));
+        }
         ctx.request_layout();
         ctx.request_redraw();
     }
@@ -621,7 +668,8 @@ impl App {
             }
             Msg::ShowProvider(identity) => {
                 if self.pages_mut().highlight_provider(&identity) {
-                    self.tabs_mut().select_index(3);
+                    let index = self.providers_tab_index();
+                    self.tabs_mut().select_index(index);
                     self.providers_active = true;
                     self.events_active = false;
                     self.pages_mut().select_providers();
@@ -711,34 +759,53 @@ impl App {
                 }
             }
             Msg::AcceptanceInstance(name) => {
+                if !self
+                    .snapshot
+                    .instances
+                    .iter()
+                    .any(|instance| instance.name == name)
+                {
+                    ctx.notify(Notification::warning("Instance unavailable", name));
+                    return;
+                }
                 self.handle_message(Msg::Close, ctx);
                 self.select_overview(false);
-                let index = if self.service.opencode_enabled() {
-                    4
-                } else {
-                    0
-                };
+                let index = self.instances_tab_index();
                 self.tabs_mut().select_index(index);
-                self.running_only = false;
+                if self.running_only
+                    && !visible_rows(
+                        &self.snapshot,
+                        &self.service.operations(),
+                        &self.opencode_snapshot,
+                        true,
+                    )
+                    .iter()
+                    .any(|row| row.instance.as_deref() == Some(name.as_str()))
+                {
+                    self.set_running_only(false, ctx);
+                }
                 self.update_snapshot(self.snapshot.clone());
                 instances::request_view_reset(&self.instances);
                 instances::select_instance(&self.instances, &name);
                 ctx.focus(initial_focus());
                 ctx.request_layout();
             }
-            Msg::AcceptanceSession(row) => {
-                if let Some(id) = row.session_id {
-                    self.submit_opencode(&id, row.pane, ctx);
-                } else if let Some(pane) = row.pane {
-                    self.submit_opencode_client(pane, ctx);
-                } else {
+            Msg::AcceptanceAction(target, command) => self.acceptance_action(*target, command, ctx),
+            Msg::RecreateAcceptanceConfirmed(row, conversation) => {
+                if self.acceptance_recreation.is_some() {
                     ctx.notify(Notification::warning(
-                        "Session pending",
-                        "This acceptance has no session yet",
+                        "Recreation in progress",
+                        "Wait for the current recreation to finish",
                     ));
+                } else {
+                    self.acceptance_recreation =
+                        Some(self.service.recreate_acceptance(row.id, conversation, true));
+                    self.handle_message(Msg::Close, ctx);
+                    ctx.notify(Notification::info("Recreating instance", &row.instance));
                 }
             }
             Msg::SetOpencodeIntegration(enabled) => {
+                self.acceptance_selection.borrow_mut().take();
                 match self.service.set_opencode_enabled(enabled) {
                     Ok(reply) => self.settings_save = Some(reply),
                     Err(error) => ctx.notify(Notification::error("Cannot save settings", error)),
@@ -757,26 +824,25 @@ impl App {
                 let opencode_enabled = self.service.opencode_enabled();
                 let enabled = enabled && opencode_enabled;
                 self.select_overview(enabled);
-                self.tabs_mut().select_index_with_settings(
-                    if opencode_enabled && !enabled { 4 } else { 0 },
-                    ctx.animation(),
-                );
+                let index = if enabled {
+                    0
+                } else {
+                    self.instances_tab_index()
+                };
+                self.tabs_mut()
+                    .select_index_with_settings(index, ctx.animation());
                 self.update_snapshot(self.snapshot.clone());
                 ctx.request_layout();
                 ctx.request_redraw();
             }
             Msg::SetCompletionSound(enabled) => {
+                self.event_acceptance_count = self.service.event_snapshot().accepted_attempts;
                 self.completion_sound = enabled;
                 self.toolbar_state.borrow_mut().completion_sound = enabled;
                 ctx.request_redraw();
             }
-            Msg::SetEventAcceptanceSound(enabled) => {
-                self.event_acceptance_count = self.service.event_snapshot().accepted_attempts;
-                self.event_acceptance_sound = enabled;
-                self.toolbar_state.borrow_mut().event_acceptance_sound = enabled;
-                ctx.request_redraw();
-            }
             Msg::Close => {
+                self.acceptance_selection.borrow_mut().take();
                 self.rule_editor = None;
                 self.provider_confirmation = None;
                 self.provider_stream_confirmation = None;
@@ -820,7 +886,6 @@ impl App {
                     Err(error) => ctx.notify(Notification::error("Cannot select sound", error)),
                 }
             }
-            Msg::NewTemplate => self.action(2, ctx),
             Msg::Refresh => self.action(4, ctx),
             Msg::StopAll => self.confirm_stop_all(ctx),
             Msg::PurgeAll => self.confirm_purge_all(ctx),
@@ -1367,6 +1432,10 @@ impl App {
         else {
             return Vec::new();
         };
+        self.instance_routes(&name)
+    }
+
+    fn instance_routes(&self, name: &str) -> Vec<RouteChoice> {
         self.snapshot
             .instances
             .iter()
@@ -1391,6 +1460,10 @@ impl App {
             return true;
         }
         let routes = self.selected_instance_routes();
+        self.open_routes(routes, ctx)
+    }
+
+    fn open_routes(&mut self, routes: Vec<RouteChoice>, ctx: &mut EventCtx<Msg>) -> bool {
         if routes.is_empty() {
             return false;
         }
@@ -1416,7 +1489,13 @@ impl App {
         if let Some(route) = route {
             self.open_gateway_url(&route.url, ctx);
         }
-        ctx.focus(initial_focus());
+        ctx.focus(if self.events_active {
+            tuicore::FocusRequest::Target(FocusId::new(events::FOCUS))
+        } else if self.rules_active {
+            tuicore::FocusRequest::Target(FocusId::new(rules::FOCUS))
+        } else {
+            initial_focus()
+        });
     }
 
     fn action(&mut self, index: usize, ctx: &mut EventCtx<Msg>) {
@@ -1619,7 +1698,7 @@ impl App {
         let event = TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit("shift+h".into()));
         self.running_only = true;
         self.opencode_history = false;
-        self.event_acceptance_sound = false;
+        self.completion_sound = false;
         self.select_overview(self.service.opencode_enabled());
         self.tabs_mut()
             .select_index_with_settings(0, ctx.animation());
@@ -1627,7 +1706,7 @@ impl App {
             let mut toolbar = self.toolbar_state.borrow_mut();
             toolbar.running_only = true;
             toolbar.show_saved = false;
-            toolbar.event_acceptance_sound = false;
+            toolbar.completion_sound = false;
         }
         let operations = self.service.operations();
         self.update_overview_rows(&self.snapshot.clone(), &operations, false);
@@ -1699,6 +1778,7 @@ impl App {
         if let TuiEvent::Key(key) = event
             && KeySpec::shifted('n').matches(*key)
             && self.service.opencode_enabled()
+            && self.attached_sessions_only
         {
             self.handle_message(Msg::SetCompletionSound(!self.completion_sound), ctx);
             ctx.stop_propagation();
@@ -1783,6 +1863,10 @@ impl App {
     }
 
     fn after_event(&mut self, ctx: &mut EventCtx<Msg>) {
+        let selection = self.acceptance_selection.borrow_mut().take();
+        if let Some(target) = selection {
+            self.acceptance_action(target, row_actions::Command::Session, ctx);
+        }
         let sound = self.settings_sound_choice.borrow_mut().take();
         if let Some(sound) = sound {
             self.handle_message(sound, ctx);
@@ -1822,6 +1906,7 @@ impl TuiNode<Msg> for App {
     }
     fn layout(&mut self, area: Rect, ctx: &mut LayoutCtx) -> LayoutResult {
         self.area = area;
+        self.sync_tab_counts();
         if self.details_open {
             self.resize_details_dialog();
         }
@@ -1953,6 +2038,7 @@ impl TuiNode<Msg> for App {
         changed |= self.poll_event_action();
         changed |= self.poll_description_save();
         changed |= self.poll_creation_launches();
+        changed |= self.poll_acceptance_recreation();
         if let Some(reply) = &mut self.settings_save {
             let result = match reply.try_recv() {
                 Ok(result) => Some(result),
@@ -1973,7 +2059,10 @@ impl TuiNode<Msg> for App {
                 changed = true;
             }
         }
+        let tab_counts_changed = self.sync_tab_counts();
+        changed |= tab_counts_changed;
         let mut result = self.view.tick(dt, settings);
+        result.layout |= tab_counts_changed;
         result.layout |= provider_action_changed;
         result.layout |= std::mem::take(&mut self.details_layout_pending);
         result.layout |= opencode_enabled != self.toolbar_state.borrow().opencode_enabled;
@@ -2018,7 +2107,7 @@ impl TuiNode<Msg> for App {
     }
 }
 
-fn overview_tabs(opencode_enabled: bool, sessions: bool) -> Tabs<Msg> {
+fn overview_tabs(opencode_enabled: bool, sessions: bool, counts: (usize, usize)) -> Tabs<Msg> {
     let mut pages = Vec::new();
     if opencode_enabled {
         pages.push(Tab::text("Sessions", ""));
@@ -2027,13 +2116,19 @@ fn overview_tabs(opencode_enabled: bool, sessions: bool) -> Tabs<Msg> {
         pages.push(Tab::text("Instances", ""));
     }
     pages.push(Tab::text("Events", ""));
-    pages.push(Tab::text("Rules", ""));
-    pages.push(Tab::text("Providers", ""));
     if opencode_enabled {
         pages.push(Tab::text("Instances", ""));
     }
+    for (title, count) in [("Rules", counts.0), ("Providers", counts.1)] {
+        let title = if count == 0 {
+            title.into()
+        } else {
+            format!("{title} ({count})")
+        };
+        pages.push(Tab::text(title, ""));
+    }
     let mut tabs = Tabs::new(pages)
-        .selected(if opencode_enabled && !sessions { 4 } else { 0 })
+        .selected(if opencode_enabled && !sessions { 2 } else { 0 })
         .focused(true)
         .variant(TabsVariant::OneRow)
         .tab_stop(false)

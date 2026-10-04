@@ -18,7 +18,7 @@ mod node;
 mod prompt;
 
 use super::{Msg, events::clean};
-use crate::store::rules::{Acceptance, DispatchStatus, Rule, Snapshot};
+use crate::store::rules::{Acceptance, Rule, Snapshot};
 
 pub(super) const FOCUS: &str = "rule-list";
 const DATA_SLOT: &str = "rule-data";
@@ -43,14 +43,14 @@ pub(crate) enum PendingToggle {
 #[derive(Clone, PartialEq)]
 enum Entry {
     Rule(Box<Rule>),
-    Acceptance(Box<Acceptance>),
+    Acceptance(Box<super::acceptances::Target>),
 }
 
 impl Entry {
     fn id(&self) -> String {
         match self {
             Self::Rule(rule) => format!("rule:{}", rule.definition.name),
-            Self::Acceptance(row) => format!("acceptance:{}", row.id),
+            Self::Acceptance(row) => format!("acceptance:{}", row.acceptance.id),
         }
     }
     fn search(&self) -> String {
@@ -62,14 +62,7 @@ impl Entry {
                 rule.definition.template,
                 rule.definition.model
             ),
-            Self::Acceptance(row) => format!(
-                "{} {} {} {:?} {}",
-                row.rule_name,
-                row.event_summary,
-                row.instance,
-                row.status,
-                row.session_id.as_deref().unwrap_or_default()
-            ),
+            Self::Acceptance(row) => row.search(),
         }
     }
 }
@@ -77,7 +70,6 @@ impl Entry {
 enum Scope {
     Rules,
     Rule(String),
-    Event(i64),
 }
 
 type RuleView = DialogLayer<DataView<Entry, String>, super::action_menu::ActionMenu>;
@@ -92,6 +84,7 @@ pub(super) struct Rules {
     control_area: Rect,
     view_area: Rect,
     requested: FocusState,
+    context: super::acceptances::SharedContext,
 }
 
 impl Rules {
@@ -102,16 +95,16 @@ impl Rules {
         self.requested = requested;
         self
     }
-    pub(super) fn for_rule(shared: SharedState, name: String, keys: [KeySpec; 10]) -> Self {
-        Self::build(shared, Scope::Rule(name), Vec::new(), keys)
-    }
-    pub(super) fn for_event(
+    pub(super) fn for_rule(
         shared: SharedState,
-        sequence: i64,
-        initial: Vec<Acceptance>,
+        name: String,
         keys: [KeySpec; 10],
+        context: super::acceptances::SharedContext,
     ) -> Self {
-        Self::build(shared, Scope::Event(sequence), initial, keys)
+        let mut view = Self::build(shared, Scope::Rule(name), Vec::new(), keys);
+        view.context = context;
+        view.sync();
+        view
     }
 
     fn build(
@@ -152,7 +145,10 @@ impl Rules {
             .headers(false)
             .action_bar(true)
             .filter_controls(false)
-            .row_height(2)
+            .row_height_by(|row| match row {
+                Entry::Acceptance(target) if target.instance.is_none() => 1,
+                _ => 2,
+            })
             .empty_state(tuicore::SeasonalEmptyState::new(if rules {
                 "No rules configured. Create a Rhai rule through MCP."
             } else {
@@ -183,6 +179,7 @@ impl Rules {
             control_area: Rect::default(),
             view_area: Rect::default(),
             requested: Rc::new(RefCell::new(None)),
+            context: Rc::new(RefCell::new(super::acceptances::Context::default())),
         };
         result.sync();
         result
@@ -209,10 +206,16 @@ impl Rules {
                     .into_iter()
                     .filter(|row| match scope {
                         Scope::Rule(name) => &row.rule_name == name,
-                        Scope::Event(sequence) => row.event_sequence == *sequence,
                         Scope::Rules => false,
                     })
-                    .map(|row| Entry::Acceptance(Box::new(row)))
+                    .map(|row| {
+                        Entry::Acceptance(Box::new(super::acceptances::Target::new(
+                            &row,
+                            shared.workspaces.get(&row.id),
+                            &self.context.borrow(),
+                            true,
+                        )))
+                    })
                     .collect()
             }
         };
@@ -298,17 +301,13 @@ impl Rules {
                 ctx.emit(Msg::SaveRule(Box::new(rule)));
             }
             Entry::Acceptance(row) if KeySpec::plain('.').matches(*key) => {
-                self.view
-                    .layer_mut()
-                    .open_row(super::row_actions::Target::Acceptance(row.clone()), ctx);
+                self.view.layer_mut().open_row(
+                    super::row_actions::Target::AcceptanceContext(row.clone()),
+                    ctx,
+                );
                 self.view.set_active_with_context(true, ctx);
             }
-            Entry::Acceptance(row) if KeySpec::plain('i').matches(*key) => {
-                ctx.emit(Msg::AcceptanceInstance(row.instance.clone()))
-            }
-            Entry::Acceptance(row) if KeySpec::plain('o').matches(*key) => {
-                ctx.emit(Msg::AcceptanceSession(row.clone()))
-            }
+            Entry::Acceptance(row) => return row.action(event, ctx),
             _ => return false,
         }
         ctx.stop_propagation();
@@ -333,10 +332,7 @@ impl Rules {
             {
                 ctx.emit(match row {
                     Entry::Rule(rule) => Msg::OpenRule(rule.clone()),
-                    Entry::Acceptance(row) if matches!(self.scope, Scope::Event(_)) => {
-                        Msg::FocusRule(row.rule_name.clone())
-                    }
-                    Entry::Acceptance(row) => Msg::FocusEvent(row.event_sequence),
+                    Entry::Acceptance(row) => Msg::FocusEvent(row.acceptance.event_sequence),
                 });
             }
         }
@@ -378,39 +374,17 @@ fn entry_text(row: &Entry) -> Text<'static> {
             ]),
             Line::from(clean(&rule.definition.description)),
         ]),
-        Entry::Acceptance(row) => {
-            let color = match row.status {
-                DispatchStatus::Failed | DispatchStatus::Uncertain => theme.error_fg(),
-                DispatchStatus::Launched => theme.success_fg(),
-                _ => theme.info_fg(),
-            };
-            Text::from(vec![
-                Line::from(vec![
-                    Span::raw(format!(
-                        "{} · {} · attempt {} · ",
-                        clean(&row.rule_name),
-                        clean(&row.accepted_at),
-                        row.attempt_id
-                    )),
-                    Span::styled(format!("{:?}", row.status), Style::default().fg(color)),
-                ]),
-                Line::from(format!(
-                    "{} · i: {} · o: {}{}",
-                    clean(&row.event_summary),
-                    clean(&row.instance),
-                    clean(row.session_id.as_deref().unwrap_or("pending")),
-                    row.error
-                        .as_ref()
-                        .map_or(String::new(), |error| format!(" · {}", clean(error)))
-                )),
-            ])
-        }
+        Entry::Acceptance(row) => row.text("⠋", None),
     }
 }
 
 impl super::App {
     pub(super) fn rules_tab_index(&self) -> usize {
-        2
+        if self.service.opencode_enabled() {
+            3
+        } else {
+            2
+        }
     }
 
     pub(super) fn poll_event_focus(&mut self) -> bool {
@@ -427,6 +401,9 @@ impl super::App {
         self.event_focus_action = None;
         match result {
             Ok(record) => {
+                self.running_only = false;
+                self.toolbar_state.borrow_mut().running_only = false;
+                self.update_snapshot(self.snapshot.clone());
                 self.tabs_mut().select_index(1);
                 self.events_active = true;
                 self.providers_active = false;

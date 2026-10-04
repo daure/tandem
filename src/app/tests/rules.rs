@@ -61,7 +61,7 @@ fn bracket_navigation_reaches_rules_and_wraps_in_both_integration_modes() {
                         (count - step) % count
                     };
                     assert_eq!(app.tabs_mut().selected_index(), expected);
-                    assert_eq!(app.rules_active, expected == 2);
+                    assert_eq!(app.rules_active, expected == if enabled { 3 } else { 2 });
                     if app.rules_active {
                         let (layout, _) = render(&mut app, width);
                         assert!(
@@ -144,8 +144,8 @@ fn rule_dialog_lists_only_its_acceptances_and_uses_bottom_docked_form_tabs() {
     for width in [130, 40, 80] {
         let (_, text) = render(&mut app, width);
         assert!(text.contains("Rule details"), "{text}");
-        assert!(text.contains("event-1"), "{text}");
-        assert!(!text.contains("event-2"), "{text}");
+        assert!(text.contains("first #1 · event #7"), "{text}");
+        assert!(!text.contains("second #2"), "{text}");
         let border = text
             .lines()
             .position(|line| line.contains("Rule details"))
@@ -162,10 +162,17 @@ fn rule_dialog_lists_only_its_acceptances_and_uses_bottom_docked_form_tabs() {
 }
 
 #[test]
-fn acceptance_instance_navigation_reveals_the_assigned_instance_after_view_reset() {
+fn acceptance_instance_navigation_preserves_filters_unless_the_assigned_instance_is_hidden() {
     init_ui();
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    for enabled in [true, false] {
+    for (enabled, running, active_only) in [true, false].into_iter().flat_map(|enabled| {
+        [
+            (enabled, true, true),
+            (enabled, false, true),
+            (enabled, true, false),
+            (enabled, false, false),
+        ]
+    }) {
         let service = AppService::for_tests();
         runtime
             .block_on(service.set_opencode_enabled(enabled).unwrap())
@@ -176,13 +183,16 @@ fn acceptance_instance_navigation_reveals_the_assigned_instance_after_view_reset
         assigned.name = "assigned".into();
         assigned.workspace = "/tmp/workspaces/assigned".into();
         assigned.project = "tandem-assigned".into();
-        for service in &mut assigned.services {
-            service.status = "exited".into();
-            service.health = None;
+        if !running {
+            for service in &mut assigned.services {
+                service.status = "exited".into();
+                service.health = None;
+            }
         }
         inventory.instances.push(assigned);
         let mut app = crate::app::root(service);
         app.update_snapshot(inventory);
+        app.set_running_only(active_only, &mut EventCtx::default());
         let selected = rule("selected");
         let mut row = acceptance(selected.clone(), 107, 42);
         row.instance = "assigned".into();
@@ -202,173 +212,182 @@ fn acceptance_instance_navigation_reveals_the_assigned_instance_after_view_reset
         let mut ctx = EventCtx::default();
         app.dispatch_event(
             &EventRoute::new(target.path.clone()),
-            &TuiEvent::Key(Key::Char('i').into()),
+            &TuiEvent::Key(Key::Char('v').into()),
             &mut ctx,
         );
         for message in ctx.drain_messages() {
             app.handle_message(message, &mut EventCtx::default());
         }
         let (_, text) = render(&mut app, 130);
-        assert_eq!(app.tabs_mut().selected_index(), if enabled { 4 } else { 0 });
+        assert_eq!(app.tabs_mut().selected_index(), if enabled { 2 } else { 0 });
         assert!(!app.view.is_active());
-        assert!(!app.running_only);
+        assert_eq!(app.running_only, active_only && running);
+        assert_eq!(
+            app.toolbar_state.borrow().running_only,
+            active_only && running
+        );
         assert_eq!(app.selected().unwrap().id, "instance:assigned");
         assert!(text.contains("assigned"), "{text}");
     }
 }
 
 #[test]
-fn acceptance_menus_offer_instance_and_session_navigation_in_rule_and_event_lists() {
+fn rule_history_menus_offer_instance_and_conversation_navigation() {
     use crate::app::row_actions::Command;
 
     init_ui();
-    for from_event in [false, true] {
-        let mut app = crate::app::root(AppService::for_tests());
-        let selected = rule("selected");
-        let row = acceptance(selected.clone(), 107, 42);
-        app.pages_mut().update_rules(crate::store::rules::Snapshot {
-            rules: vec![selected.clone()],
-            acceptances: vec![row.clone()],
+    let mut app = crate::app::root(AppService::for_tests());
+    app.update_snapshot(snapshot());
+    app.opencode_snapshot = crate::store::opencode::Snapshot {
+        sessions: vec![crate::store::opencode::Session {
+            id: "ses_selected".into(),
+            title: "Inspect event".into(),
+            directory: "/tmp/workspaces/review".into(),
+            activity: crate::store::opencode::Activity::Idle,
             ..Default::default()
-        });
-        if from_event {
-            let event = crate::store::events::Record {
-                sequence: 42,
-                provider: "sample".into(),
-                received_at: "now".into(),
-                event: crate::environments::events::tests::event("selected"),
-                attempts: vec![],
-                acceptances: vec![row.clone()],
-            };
-            app.open_event(&event, &mut EventCtx::default());
-            let (_, text) = render(&mut app, 130);
-            let tabs = text
+        }],
+        ..Default::default()
+    };
+    app.update_overview_rows(&snapshot(), &[], false);
+    let selected = rule("selected");
+    let mut row = acceptance(selected.clone(), 107, 42);
+    row.instance = "review".into();
+    app.pages_mut().update_rules(crate::store::rules::Snapshot {
+        rules: vec![selected.clone()],
+        acceptances: vec![row.clone()],
+        ..Default::default()
+    });
+    app.open_rule(selected, &mut EventCtx::default());
+    let (layout, _) = render(&mut app, 130);
+    let target = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.id.as_str() == "acceptance-list")
+        .unwrap();
+    app.dispatch_focus(target, true, &mut tuicore::FocusCtx::default());
+    let route = EventRoute::new(target.path.clone());
+    for key in ['v', 'o'] {
+        let mut ctx = EventCtx::default();
+        app.dispatch_event(&route, &TuiEvent::Key(Key::Char(key).into()), &mut ctx);
+        match key {
+            'v' => assert!(
+                matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Instance)] if target.acceptance == row)
+            ),
+            'o' => assert!(
+                matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Session)] if target.acceptance == row)
+            ),
+            _ => unreachable!(),
+        }
+    }
+    for command in [Command::Instance, Command::Session] {
+        let mut ctx = EventCtx::default();
+        app.dispatch_event(&route, &TuiEvent::Key(Key::Char('.').into()), &mut ctx);
+        assert!(ctx.messages().is_empty());
+        let (menu_layout, text) = render(&mut app, 130);
+        for (label, key) in [
+            ("Go to rule", "r"),
+            ("Open routes", "Ctrl+Enter"),
+            ("Go to instance", "v"),
+            ("Go to OpenCode session", "o"),
+        ] {
+            let line = text
                 .lines()
-                .find(|line| line.contains("Event details") && line.contains("Acceptances"))
-                .unwrap();
-            assert!(tabs.find("Acceptances").unwrap() < tabs.find("Event details").unwrap());
-        } else {
-            app.open_rule(selected, &mut EventCtx::default());
-        }
-        let (layout, _) = render(&mut app, 130);
-        let target = layout
-            .focus_targets()
-            .iter()
-            .find(|target| target.id.as_str() == "acceptance-list")
-            .unwrap();
-        app.dispatch_focus(target, true, &mut tuicore::FocusCtx::default());
-        let route = EventRoute::new(target.path.clone());
-        for key in ['i', 'o'] {
-            let mut ctx = EventCtx::default();
-            app.dispatch_event(&route, &TuiEvent::Key(Key::Char(key).into()), &mut ctx);
-            match key {
-                'i' => assert!(
-                    matches!(ctx.messages(), [Msg::AcceptanceInstance(name)] if name == &row.instance)
-                ),
-                'o' => assert!(
-                    matches!(ctx.messages(), [Msg::AcceptanceSession(target)] if **target == row)
-                ),
-                _ => unreachable!(),
-            }
-        }
-        for command in [Command::Instance, Command::Session] {
-            let mut ctx = EventCtx::default();
-            app.dispatch_event(&route, &TuiEvent::Key(Key::Char('.').into()), &mut ctx);
-            assert!(ctx.messages().is_empty());
-            let (menu_layout, text) = render(&mut app, 130);
-            for (label, key) in [("Go to instance", "i"), ("Go to OpenCode session", "o")] {
-                let line = text
-                    .lines()
-                    .find(|line| line.contains(&format!("{label}   ")))
-                    .unwrap_or_else(|| panic!("Missing {label}:\n{text}"));
-                assert!(
-                    line.trim_end_matches([' ', '┃', '│']).ends_with(key),
-                    "{text}"
-                );
-            }
-            let menu = menu_layout
-                .focus_targets()
-                .iter()
-                .find(|target| target.enabled && target.id.as_str() == "input")
-                .unwrap();
-            app.dispatch_focus(menu, true, &mut tuicore::FocusCtx::default());
-            let menu_route = EventRoute::new(menu.path.clone());
-            let mut selection = EventCtx::default();
-            for character in command.label().chars() {
-                app.dispatch_event(
-                    &menu_route,
-                    &TuiEvent::Key(Key::Char(character).into()),
-                    &mut selection,
-                );
-            }
-            app.dispatch_event(
-                &menu_route,
-                &TuiEvent::Key(Key::Enter.into()),
-                &mut selection,
+                .find(|line| line.contains(&format!("{label}   ")))
+                .unwrap_or_else(|| panic!("Missing {label}:\n{text}"));
+            assert!(
+                line.trim_end_matches([' ', '┃', '│']).ends_with(key),
+                "{text}"
             );
-            match command {
-                Command::Instance => assert!(
-                    matches!(selection.messages(), [Msg::AcceptanceInstance(name)] if name == &row.instance)
-                ),
-                Command::Session => {
-                    assert!(
-                        matches!(selection.messages(), [Msg::AcceptanceSession(target)] if **target == row)
-                    )
-                }
-                _ => unreachable!(),
-            }
-            assert!(app.view.is_active());
-            assert!(!render(&mut app, 130).1.contains("Go to instance"));
         }
-        app.dispatch_event(
-            &route,
-            &TuiEvent::Key(Key::Char('.').into()),
-            &mut EventCtx::default(),
-        );
-        let (menu_layout, _) = render(&mut app, 130);
         let menu = menu_layout
             .focus_targets()
             .iter()
             .find(|target| target.enabled && target.id.as_str() == "input")
             .unwrap();
         app.dispatch_focus(menu, true, &mut tuicore::FocusCtx::default());
-        let mut cancel = EventCtx::default();
+        let menu_route = EventRoute::new(menu.path.clone());
+        let mut selection = EventCtx::default();
+        for character in command.label().chars() {
+            app.dispatch_event(
+                &menu_route,
+                &TuiEvent::Key(Key::Char(character).into()),
+                &mut selection,
+            );
+        }
         app.dispatch_event(
-            &EventRoute::new(menu.path.clone()),
-            &TuiEvent::Key(Key::Esc.into()),
-            &mut cancel,
+            &menu_route,
+            &TuiEvent::Key(Key::Enter.into()),
+            &mut selection,
         );
-        assert!(cancel.messages().is_empty());
+        match command {
+            Command::Instance => assert!(
+                matches!(selection.messages(), [Msg::AcceptanceAction(target, Command::Instance)] if target.acceptance == row)
+            ),
+            Command::Session => {
+                assert!(
+                    matches!(selection.messages(), [Msg::AcceptanceAction(target, Command::Session)] if target.acceptance == row)
+                )
+            }
+            _ => unreachable!(),
+        }
         assert!(app.view.is_active());
-        let (layout, text) = render(&mut app, 130);
-        assert!(!text.contains("Go to instance"));
-        assert!(
-            layout
-                .focus_targets()
-                .iter()
-                .any(|target| { target.enabled && target.id.as_str() == "acceptance-list" })
-        );
+        assert!(!render(&mut app, 130).1.contains("Go to instance"));
     }
+    app.dispatch_event(
+        &route,
+        &TuiEvent::Key(Key::Char('.').into()),
+        &mut EventCtx::default(),
+    );
+    let (menu_layout, _) = render(&mut app, 130);
+    let menu = menu_layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.enabled && target.id.as_str() == "input")
+        .unwrap();
+    app.dispatch_focus(menu, true, &mut tuicore::FocusCtx::default());
+    let mut cancel = EventCtx::default();
+    app.dispatch_event(
+        &EventRoute::new(menu.path.clone()),
+        &TuiEvent::Key(Key::Esc.into()),
+        &mut cancel,
+    );
+    assert!(cancel.messages().is_empty());
+    assert!(app.view.is_active());
+    let (layout, text) = render(&mut app, 130);
+    assert!(!text.contains("Go to instance"));
+    assert!(
+        layout
+            .focus_targets()
+            .iter()
+            .any(|target| { target.enabled && target.id.as_str() == "acceptance-list" })
+    );
 }
 
 #[test]
-fn acceptance_session_menus_require_a_recorded_conversation_or_pane() {
+fn acceptance_menus_require_observed_targets_and_verified_inventory() {
     use crate::app::row_actions::{Command, Target};
 
-    let mut row = acceptance(rule("selected"), 107, 42);
-    assert!(Target::Acceptance(Box::new(row.clone())).enabled(Command::Session));
-    row.session_id = None;
-    let target = Target::Acceptance(Box::new(row.clone()));
-    assert!(target.commands() == [Command::Instance, Command::Session]);
-    assert!(target.enabled(Command::Instance));
+    init_ui();
+    let row = acceptance(rule("selected"), 107, 42);
+    let mut context = crate::app::acceptances::Context::default();
+    let target = Target::AcceptanceContext(Box::new(crate::app::acceptances::Target::new(
+        &row, None, &context, true,
+    )));
+    assert!(!target.enabled(Command::CreateInstance));
+    context.inventory.observed_at_unix_seconds = Some(1);
+    let target = Target::AcceptanceContext(Box::new(crate::app::acceptances::Target::new(
+        &row, None, &context, true,
+    )));
+    assert!(target.enabled(Command::CreateInstance));
+    assert!(!target.enabled(Command::Instance));
+    assert!(!target.enabled(Command::NewSession));
+    assert!(!target.enabled(Command::PurgeInstance));
     assert!(!target.enabled(Command::Session));
-    row.pane = Some(crate::store::opencode::Pane {
-        session: "main".into(),
-        id: 2,
-        tab_id: 1,
-        tab_name: "selected".into(),
-    });
-    assert!(Target::Acceptance(Box::new(row)).enabled(Command::Session));
+    context.inventory.loading = true;
+    let target = Target::AcceptanceContext(Box::new(crate::app::acceptances::Target::new(
+        &row, None, &context, true,
+    )));
+    assert!(!target.enabled(Command::CreateInstance));
 }
 
 #[test]
@@ -537,7 +556,7 @@ fn acceptance_navigation_loads_a_retained_event_and_clears_conflicting_source_fi
 }
 
 #[test]
-fn event_rows_summarize_all_acceptances_and_dialog_retains_each_action() {
+fn event_rows_summarize_acceptances_and_tree_children_navigate_to_their_rule() {
     let mut app = crate::app::root(AppService::for_tests());
     let acceptances: Vec<_> = (0..14)
         .map(|index| {
@@ -589,22 +608,19 @@ fn event_rows_summarize_all_acceptances_and_dialog_retains_each_action() {
         text.contains("2 rules · 4 launches · 10 uncertain"),
         "{text}"
     );
-    app.open_event(&event, &mut EventCtx::default());
-    let (_, text) = render(&mut app, 130);
-    assert!(text.contains("Acceptances"), "{text}");
     let (layout, _) = render(&mut app, 130);
     let target = layout
         .focus_targets()
         .iter()
-        .find(|target| target.id.as_str() == "acceptance-list")
+        .find(|target| target.id.as_str() == crate::app::events::FOCUS)
         .unwrap();
     app.dispatch_focus(target, true, &mut tuicore::FocusCtx::default());
     let mut ctx = EventCtx::default();
-    app.dispatch_event(
-        &EventRoute::new(target.path.clone()),
-        &TuiEvent::Key(Key::Enter.into()),
-        &mut ctx,
-    );
+    let route = EventRoute::new(target.path.clone());
+    for key in [Key::Right, Key::Down] {
+        app.dispatch_event(&route, &TuiEvent::Key(key.into()), &mut ctx);
+    }
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
     assert!(matches!(ctx.messages(), [Msg::FocusRule(name)] if name == "third"));
     let mut navigation = EventCtx::default();
     for message in ctx.drain_messages() {

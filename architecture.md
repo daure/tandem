@@ -40,6 +40,16 @@ Presentation layers adapt input and output. `AppService` is the sole application
 
 ## State ownership
 
+`tandem mcp-instance` is a separate stdio adapter exposing only instance-local Start and Stop through
+`AppService`. Binding resolves its working directory against namespace-owned journal and ownership
+records and holds an open workspace-directory descriptor. Each action compares the live directory's
+device/inode with that pinned descriptor under the instance lock; lock ownership transfers through
+the existing lifecycle workers, excluding deletion and name reuse through completion. The surface
+has no caller-selected target or deletion operation and is not a host-process sandbox. Preparation
+seeds workspace configuration in syntax supported by OpenCode V1 and V2, with explicit Tandem settings,
+preserving existing root and `.opencode` JSON/JSONC configuration. Configuring the surface grants
+these lifecycle actions; stopping services remains independent of event-task completion.
+
 - Docker labels and inspected containers are authoritative for container-backed runtime inventory.
 - Successfully prepared service instances with no containers retain their service execution kind and
   launch topology in SQLite. Their inventory reports Not started; fresh Docker observations take precedence.
@@ -251,8 +261,16 @@ outcome, which does not certify prompt delivery or task completion. Confirmed pr
 the assigned instance; replay intentionally creates new actions. Assignment and its originating-provider
 notification commit together. The sidecar polls automation independently of open UI/MCP clients.
 
-`app/rules` projects two-row rule/acceptance DataViews and editable bottom dialogs through tuicore.
-Event details retain all acceptances; rule histories filter by rule identity. Exact history navigation
+Acceptance instance names include the event sequence and durable acceptance ID within the instance-name
+length limit. SQLite retains each acceptance's workspace and observed conversation metadata, excluding live
+pane attachment. Confirmed instance purge retains that linkage; event/provider deletion removes dependent
+history. Recreation uses the recorded identity with current template files, preserves OpenCode history,
+and requires confirmation that workspace files and runtime data will be freshly provisioned. The original
+dispatch record remains historical; recreation sends no rule prompt. Reopening a retained conversation
+requires its server-side history and server to remain available.
+
+`app/rules` projects rule lists, acceptance histories, and editable bottom dialogs through tuicore.
+The Events tree nests acceptances and their conversations beneath each event; rule histories filter by rule identity. Exact history navigation
 loads retained events beyond the feed and clears conflicting filters. MCP shares the same service
 contract for definitions, previews, event inspection, replay, and restricted retries.
 
@@ -311,7 +329,7 @@ address. Open clients whose executable was unlinked resolve its installed path f
 and freshness checks. Unverifiable ownership or incomplete shutdown blocks replacement.
 Sidecar and collector lifetimes are independent of open terminal clients. MCP remains a separate
 transport. An optional foreground `serve-events` mode supports
-protocol tests. Providers is the fourth tab, with lifecycle approval, bounded logs, and exact source
+protocol tests. Providers is the final tab, with lifecycle approval, bounded logs, and exact source
 links to the second Events tab.
 
 Provider deletion is an explicitly confirmed MCP service operation. An exclusive package lock excludes

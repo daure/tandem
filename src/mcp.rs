@@ -16,6 +16,7 @@ use crate::{
 };
 
 mod http;
+pub(crate) mod instance;
 
 #[derive(Clone)]
 struct McpServer {

@@ -51,20 +51,7 @@ pub(super) fn render(app: &mut App, width: u16) -> (tuicore::LayoutCtx, String) 
 }
 
 pub(super) fn show_all_events(app: &mut App) {
-    let (layout, _) = render(app, 130);
-    let feed = layout
-        .focus_targets()
-        .iter()
-        .find(|target| target.id.as_str() == crate::app::events::FOCUS)
-        .unwrap();
-    app.dispatch_event(
-        &EventRoute::new(feed.path.clone()),
-        &TuiEvent::Key(KeyEvent {
-            code: Key::Char('T'),
-            modifiers: KeyModifiers::SHIFT,
-        }),
-        &mut EventCtx::default(),
-    );
+    app.handle_message(Msg::SetRunningOnly(false), &mut EventCtx::default());
 }
 
 #[test]
@@ -230,10 +217,6 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     assert_eq!(row.event.event_id, "event-3");
     let event_id = row.event.event_id.clone();
     app.handle_message(Msg::OpenEvent(row), &mut EventCtx::default());
-    app.event(
-        &TuiEvent::Key(Key::Char(']').into()),
-        &mut EventCtx::default(),
-    );
     let text = render(&mut app, 130).1;
     assert!(
         text.contains(&format!("\"event_id\": \"{event_id}\"")),
@@ -626,6 +609,19 @@ fn stream_dropdown_fits_its_label_and_popup_rows_within_terminal_bounds() {
         })
         .unwrap();
     assert_eq!(field.area.width, 18);
+    let delete = layout
+        .focus_targets()
+        .iter()
+        .find(|target| {
+            target.id.as_str() == "button"
+                && target
+                    .path
+                    .keys()
+                    .iter()
+                    .any(|key| key.as_str() == "events-page")
+        })
+        .unwrap();
+    assert_eq!(field.area.right() + 1, delete.area.x);
     app.dispatch_event(
         &EventRoute::new(field.path.clone()),
         &TuiEvent::Key(KeyEvent {
@@ -841,7 +837,7 @@ fn events_navigation_repairs_focus_and_remains_available_without_opencode() {
 }
 
 #[test]
-fn handover_toggle_requires_assignment_and_preserves_stream_filter_on_refresh() {
+fn show_all_toggle_shares_visibility_and_preserves_stream_filter_on_refresh() {
     init_ui();
     let mut app = root(AppService::for_tests());
     let record = crate::store::events::Record {
@@ -883,7 +879,7 @@ fn handover_toggle_requires_assignment_and_preserves_stream_filter_on_refresh() 
     app.pages_mut()
         .tick(Duration::ZERO, AnimationSettings::default());
     let text = render(&mut app, 130).1;
-    assert!(text.contains("──●  |T|"), "{text}");
+    assert!(text.contains("○── 󰈈 |A|"), "{text}");
     assert!(text.contains("1 of 662 events"), "{text}");
     show_all_events(&mut app);
     for width in [40, 130] {
@@ -898,9 +894,9 @@ fn handover_toggle_requires_assignment_and_preserves_stream_filter_on_refresh() 
             usize::from(width),
             "{text}"
         );
-        assert!(text.contains(" |T|"), "{text}");
+        assert!(text.contains("󰈈 |A|"), "{text}");
         if width == 130 {
-            assert!(header.contains(""), "{text}");
+            assert!(header.contains("󰈈"), "{text}");
             assert!(
                 header.contains("Delete all events |X|  2 of 662 events"),
                 "{text}"
@@ -914,12 +910,16 @@ fn handover_toggle_requires_assignment_and_preserves_stream_filter_on_refresh() 
         let route = EventRoute::new(feed.path.clone());
         app.dispatch_focus(feed, true, &mut tuicore::FocusCtx::default());
         let toggle = TuiEvent::Key(KeyEvent {
-            code: Key::Char('T'),
+            code: Key::Char('A'),
             modifiers: tuicore::KeyModifiers::SHIFT,
         });
         let mut ctx = EventCtx::default();
         app.dispatch_event(&route, &toggle, &mut ctx);
-        assert!(ctx.messages().is_empty());
+        assert!(matches!(ctx.messages(), [Msg::SetRunningOnly(true)]));
+        for message in ctx.drain_messages() {
+            app.handle_message(message, &mut EventCtx::default());
+        }
+        assert!(app.running_only);
         let (_, text) = render(&mut app, width);
         assert!(text.contains("1 of 662 events"), "{text}");
         let mut activation = EventCtx::default();
@@ -940,7 +940,12 @@ fn handover_toggle_requires_assignment_and_preserves_stream_filter_on_refresh() 
                 .1
                 .contains(&format!("1 of {} events", snapshot.total))
         );
-        app.dispatch_event(&route, &toggle, &mut EventCtx::default());
+        let mut ctx = EventCtx::default();
+        app.dispatch_event(&route, &toggle, &mut ctx);
+        for message in ctx.drain_messages() {
+            app.handle_message(message, &mut EventCtx::default());
+        }
+        assert!(!app.running_only);
         let (_, text) = render(&mut app, width);
         assert!(text.contains(" alpha · #1 · Alex"), "{text}");
         assert!(!text.contains(" beta · #2 · Alex"), "{text}");

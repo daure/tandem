@@ -111,7 +111,12 @@ impl App {
         let tabs = Tabs::new(vec![
             Tab::new(
                 "Accepted events",
-                Rules::for_rule(shared, rule.definition.name, self.keys),
+                Rules::for_rule(
+                    shared,
+                    rule.definition.name,
+                    self.keys,
+                    self.pages_mut().acceptance_context(),
+                ),
             ),
             Tab::new("Script", script),
             Tab::new("Settings", settings),

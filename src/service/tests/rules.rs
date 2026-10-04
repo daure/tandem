@@ -33,6 +33,83 @@ fn definition(name: &str) -> Definition {
 }
 
 #[test]
+fn acceptance_recreation_requires_confirmation_and_preserves_the_original_dispatch() {
+    let service = AppService::for_tests();
+    service
+        .runtime
+        .block_on(service.create_template("blank".into()))
+        .unwrap();
+    let mut rule = definition("inspect");
+    rule.start_instance = false;
+    service.rules.store.save(rule, None, "main".into()).unwrap();
+    let token = service.register_provider_for_tests("sample");
+    service
+        .runtime
+        .block_on(service.ingest_events(
+            token,
+            Batch {
+                events: vec![crate::environments::events::tests::event("one")],
+            },
+        ))
+        .unwrap();
+    service.rules.store.evaluate().unwrap();
+    let mut acceptance = service
+        .rules
+        .store
+        .snapshot()
+        .unwrap()
+        .acceptances
+        .remove(0);
+    let error = service
+        .recreate_acceptance(acceptance.id, None, false)
+        .blocking_recv()
+        .unwrap()
+        .unwrap_err();
+    assert!(error.contains("confirmation_required"), "{error}");
+    let error = service
+        .recreate_acceptance(acceptance.id, None, true)
+        .blocking_recv()
+        .unwrap()
+        .unwrap_err();
+    assert!(error.contains("Dispatch is still active"), "{error}");
+    assert!(service.operations().is_empty());
+    acceptance.status = DispatchStatus::Launched;
+    acceptance.operation_id = Some("original-operation".into());
+    acceptance.session_id = Some("ses_original".into());
+    service.rules.store.update(&acceptance, false).unwrap();
+    service
+        .recreate_acceptance(acceptance.id, None, true)
+        .blocking_recv()
+        .unwrap()
+        .unwrap();
+    let record = startup::read(&service.environments.config, &acceptance.instance)
+        .unwrap()
+        .unwrap();
+    assert!(record.preserve_opencode_history);
+    assert!(!record.opencode_requested);
+    assert!(!record.start_instance);
+    assert_eq!(record.operation.state, OperationState::Succeeded);
+    assert!(
+        service
+            .environments
+            .config
+            .workspaces
+            .join(&acceptance.instance)
+            .is_dir()
+    );
+    assert_eq!(
+        service.rules.store.snapshot().unwrap().acceptances,
+        vec![acceptance.clone()]
+    );
+    let error = service
+        .recreate_acceptance(acceptance.id, None, true)
+        .blocking_recv()
+        .unwrap()
+        .unwrap_err();
+    assert!(error.contains("already in use"), "{error}");
+}
+
+#[test]
 fn rule_authorization_and_preview_keep_external_actions_explicit() {
     let mut service = AppService::for_tests();
     service.set_rule_session_for_tests("main");

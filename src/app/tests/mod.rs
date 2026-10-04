@@ -10,6 +10,7 @@ use crate::{
     store::environments::{EnvironmentSnapshot, Instance, InstanceService, Manifest, Template},
 };
 
+mod acceptance_tree;
 mod attached_sessions;
 mod bulk;
 mod completion;
@@ -40,6 +41,7 @@ mod resources;
 mod restart;
 mod rules;
 mod service_state;
+mod tab_counts;
 mod template_actions;
 mod template_files;
 mod toolbar;

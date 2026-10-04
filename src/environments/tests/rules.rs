@@ -217,7 +217,7 @@ fn all_matching_rules_accept_independently_and_replay_keeps_failed_and_successfu
     for acceptance in &snapshot.acceptances {
         assert_eq!(
             acceptance.instance,
-            format!("{}-{sequence}", acceptance.rule_name)
+            format!("{}-{sequence}-a{}", acceptance.rule_name, acceptance.id)
         );
     }
     let mut successful = snapshot.acceptances[0].clone();
@@ -267,11 +267,7 @@ fn all_matching_rules_accept_independently_and_replay_keeps_failed_and_successfu
     let snapshot = store.snapshot().unwrap();
     assert_eq!(snapshot.acceptances.len(), 4);
     for acceptance in &snapshot.acceptances {
-        let expected = if acceptance.attempt_id == attempt {
-            format!("{}-{sequence}-2", acceptance.rule_name)
-        } else {
-            format!("{}-{sequence}", acceptance.rule_name)
-        };
+        let expected = format!("{}-{sequence}-a{}", acceptance.rule_name, acceptance.id);
         assert_eq!(acceptance.instance, expected);
     }
     assert_eq!(
@@ -325,11 +321,11 @@ fn truncated_rule_names_keep_distinct_instances_and_stable_assignments() {
     let accepted = store.snapshot().unwrap().acceptances;
     assert_eq!(
         accepted[1].instance,
-        format!("{}-{sequence}", "a".repeat(38))
+        format!("{}-{sequence}-a{}", "a".repeat(35), accepted[1].id)
     );
     assert_eq!(
         accepted[0].instance,
-        format!("{}-{sequence}-2", "a".repeat(36))
+        format!("{}-{sequence}-a{}", "a".repeat(35), accepted[0].id)
     );
     for acceptance in &accepted {
         assert_eq!(acceptance.instance.len(), 40);

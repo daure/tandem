@@ -9,6 +9,7 @@ use crate::store::{
 };
 
 pub(super) mod catalog;
+mod workspaces;
 
 #[derive(Clone)]
 pub(crate) struct RuleStore {
@@ -70,24 +71,6 @@ fn encode(value: &impl serde::Serialize) -> Result<String, Error> {
 
 fn decode<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, Error> {
     serde_json::from_str(text).map_err(|error| Error::Storage(error.to_string()))
-}
-
-fn assign_instance(
-    transaction: &Transaction<'_>,
-    rule: &str,
-    sequence: i64,
-) -> Result<String, Error> {
-    let mut statement = transaction.prepare(
-        "SELECT EXISTS(SELECT 1 FROM rule_acceptances WHERE json_extract(NULLIF(payload, ''), '$.instance') = ?1)",
-    )?;
-    for ordinal in 1..=u32::MAX {
-        let name = rules::instance_name(rule, sequence, ordinal);
-        let assigned: bool = statement.query_row([&name], |row| row.get(0))?;
-        if !assigned {
-            return Ok(name);
-        }
-    }
-    Err(Error::Conflict("rule instance names are exhausted".into()))
 }
 
 impl RuleStore {
@@ -166,6 +149,7 @@ impl RuleStore {
             acceptances: acceptances(&transaction, None, &self.config.namespace)?,
             evaluation_errors,
             error: None,
+            workspaces: self.workspaces(&transaction)?,
         };
         drop(statement);
         transaction.commit()?;
@@ -247,7 +231,7 @@ impl RuleStore {
             Ok(true) => {
                 transaction.execute("INSERT INTO rule_acceptances(attempt_id, rule_name, payload) VALUES (?1, ?2, '')", params![attempt, name])?;
                 let id = transaction.last_insert_rowid();
-                let instance = assign_instance(&transaction, name, sequence)?;
+                let instance = rules::instance_name(name, sequence, id);
                 let prompt = rules::render_prompt(&rule.definition.initial_prompt, &input);
                 let timestamp = chrono::Utc::now().to_rfc3339();
                 let acceptance = Acceptance {

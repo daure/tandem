@@ -184,6 +184,17 @@ Read `core_guidance` together with this editable guidance for placement and clea
 
 ## Operations
 
+- Run `tandem mcp-instance` as the instance-local `tandem-instance` MCP server. It exposes
+  `start_self` and `stop_self` for the owning workspace
+  and its subdirectories. Configuring it grants those lifecycle actions for that instance. Start when
+  assigned work needs services; stop when they are no longer needed, after coordinating with other
+  sessions sharing the workspace. Start applies the trusted template and may rebuild or rerun setup.
+  Stop preserves data and the conversation; it does not certify task completion. Both calls wait for
+  completion. Workspace-only instances prepare or remain preserved without Docker.
+  Preparation creates `.opencode/opencode.json` in syntax accepted by OpenCode V1 and V2 when the
+  workspace has no root or `.opencode` JSON/JSONC configuration. Existing configuration is preserved.
+  Use the full management MCP only for separately approved cross-instance operations or deletion.
+  Scope is a tool boundary, not a sandbox against shell access.
 - With OpenCode integration and creation-history cleanup enabled (both default on), creating a new
   instance permanently deletes conversations for its exact workspace path, including history left by
   a deleted instance with the same name. Include this in creation approval. Existing instances and
@@ -209,8 +220,9 @@ Read `core_guidance` together with this editable guidance for placement and clea
   be started later. The default is true.
 - New OpenCode sessions receive service-state instructions before initial input. Explore code while
   automatic preparation runs; wait for readiness only when the work needs services. Verify readiness
-  for started services when needed. For stopped or prepare-only services, ask before starting them;
-  opening a session does not start containers. Generated service mappings describe configuration,
+  for started services when needed. For stopped or prepare-only services, use configured `start_self`
+  when assigned work requires them; otherwise ask before starting them.
+  Opening a session does not start containers. Generated service mappings describe configuration,
   not current availability.
 - Stop preserves instance data; deletion permanently removes its workspace and owned resources.
   With OpenCode integration enabled, instance purge first closes associated observed clients in the

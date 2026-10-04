@@ -22,7 +22,7 @@ cargo run -- serve          # HTTP MCP at http://127.0.0.1:7345/mcp
 and port. Release builds, including the installed binary, expose `serve` for HTTP MCP and launch the
 TUI with `tandem`.
 
-1. Press `T` or use the Template button to create a template named `website`; its folder contains only `tandem.json` with `{}`.
+1. Use MCP to create a template named `website`; its folder contains only `tandem.json` with `{}`.
 2. Press `Enter` on a template, instance or service to view its details. Template details include
    metadata, available Compose source and the manifest.
 3. Press `i`, enter `review`, then Enter or Ctrl+S to confirm execution; watch progress in Details.
@@ -56,10 +56,8 @@ The TUI refreshes runtime inventory asynchronously every ten seconds while its t
 every five minutes while unfocused, and immediately on regaining focus. Idle means terminal focus loss,
 not time since the last keypress; terminals or multiplexers without focus reporting keep the ten-second
 cadence. Local UI state updates every 250 ms.
-Template files load at startup and on manual Refresh (`R`). The toolbar refresh button refreshes
-the full inventory; it shows `󰑓 Refresh` at 100 columns or wider and `󰑓 R` on narrower terminals,
-with the displayed hotkey following configuration.
-Beside Refresh, ** Stop all** and ** Purge all** act across every template, including instances whose
+Press `Shift+R` on Sessions or Instances to refresh the full inventory manually; the key follows configuration.
+** Stop all** and ** Purge all** act across every template, including instances whose
 template files are missing. Their hotkeys are `S` and `P`; below 100 columns they show icons and hotkey
 badges. Both require confirmation for the
 targets captured when the dialog opens; instances created afterward are outside that confirmation.
@@ -311,12 +309,15 @@ Redelivering a deleted event creates a fresh receipt and can trigger enabled rul
 The stream multiselect at the top (`P`) lists `provider · stream` and filters by exact pairs. Enter toggles an option,
 Ctrl+J/Ctrl+K moves through options, and Ctrl+Enter applies the selection. An empty selection shows
 all streams. A stream row's **Stream events** action selects only that stream and clears event search.
-`Shift+Enter` clears the stream selection. The `T` toggle
-shows only events handed over to Tandem instances and is enabled at startup; acceptance alone does not establish assignment. The count
+`Shift+Enter` clears the stream selection. The **󰈈 show-all toggle** (`Shift+A`) shares its value
+with Sessions and Instances. It is off at startup, showing only events handed over to Tandem
+instances; acceptance alone does not establish assignment. The count
 at the right shows displayed events out of the full retained history. Changing a stream or handover filter selects the newest matching
 event and focuses the DataView. Escape or Ctrl+[ from the filters or toggles returns to the DataView.
 
-The first Events toggle, **󰕾 acceptance sound** (`Shift+N`), is off at startup. It plays for newly
+Events orders its toggles as **󰈈 show all**, **󰋚 history**, **󰕾 sound**, then **󰞖 following**.
+The Streams filter sits immediately before Delete all events.
+The sound toggle (`Shift+N`) shares its value with Sessions and is off at startup. It plays for newly
 accepted processing attempts across all providers, independently of filters and the active tab.
 Startup history is silent; replay can produce a new notification. Acceptances in the same refresh
 share one sound. `Shift+H` turns this toggle off.
@@ -481,8 +482,10 @@ custom fields through `event.metadata`.
 In a rule's acceptance list, Enter switches to Events and selects that exact retained event, clearing
 conflicting filters even outside the latest-200 feed. In an event's acceptance list, Enter selects its rule.
 Event dialogs open on **Acceptances**, followed by **Event details**.
-The `.` menu offers **Go to instance** (`i`) and **Go to OpenCode session** (`o`); both keys also work
-directly on the row. Session navigation is available once a conversation or assigned pane is recorded.
+Acceptance rows offer **Go to rule** (`r`), **Go to instance** (`v`), and **Go to OpenCode session** (`o`)
+through the `.` menu or directly from the row. `Ctrl+Enter` opens the instance's only service route or
+shows a route chooser when several are available. Routes require an available instance.
+Session navigation is available once a conversation or assigned pane is recorded.
 
 Create rules through MCP with `save_rule`. Use `list_rules`/`get_rule` to read revisions and acceptance
 history, `list_events`/`get_event` to inspect input, and `preview_rule` to check matches and resolved
@@ -583,13 +586,61 @@ and template ownership receipt; it checks Docker project membership before remov
 Recovery with missing execution-kind metadata requires Docker access. Unverifiable ownership leaves data intact.
 
 Workspace-only instances (blank, repository-only, or guidance-only) use a folder icon after
-preparation and guidance generation, retain their workspace path, and show a single subtle
-**(no services configured)** child when expanded. They hide
+preparation and guidance generation, retain their workspace path, and show a childless
+**Services** group when expanded. Their template icon is green when the template has instances. They hide
 CPU/memory metrics and disable container Start/Stop/Restart actions; OpenCode, Details and Delete remain
 available. Failed preparation retains completed checkouts and reports its error; retry New instance
 with the same template/name after correcting the cause. Docker failures do not make these workspaces stale.
 
 ## Agent workflow
+
+### Instance-local control
+
+`tandem mcp-instance` is a stdio MCP entry point in the released Tandem binary. It exposes only
+`start_self()` and `stop_self()`, with empty arguments. Its startup directory must be an owned instance
+workspace or a subdirectory. The connection pins that workspace's directory identity and namespace;
+each action rechecks ownership under the instance lock. Deleted or replaced workspaces require a new
+connection. All conversations in the workspace control the same instance.
+
+Start applies the trusted template, builds configured services, and waits for readiness; setup jobs
+may rerun. Stop verifies that instance's containers have stopped, preserving containers, workspace,
+volumes, and networks. Both leave OpenCode and the shared gateway running and return after completion.
+Workspace-only Start prepares without Docker; Stop preserves the workspace without work.
+Configuring the server grants these actions; coordinate with other sessions before stopping services.
+Stopping does not mark an event task complete. Shell access and the full management MCP remain separate
+capabilities, so this tool surface is not a security sandbox.
+
+Preparation writes `.opencode/opencode.json` before launching a creation-requested client when the
+workspace has no root or `.opencode` JSON/JSONC project configuration. The generated configuration uses
+syntax supported by OpenCode V1 and normalized by V2, with an eleven-minute MCP timeout for startup.
+It uses the absolute Tandem executable and explicit home, namespace, and gateway settings so shared
+OpenCode servers launch the MCP in the correct environment. Existing configuration is preserved;
+add this native V2 entry to it when needed:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "tandem-instance": {
+        "type": "local",
+        "command": ["tandem", "mcp-instance"],
+        "cwd": "."
+      }
+    }
+  },
+  "permissions": [
+    {"action": "tandem-instance_start_self", "resource": "*", "effect": "allow"},
+    {"action": "tandem-instance_stop_self", "resource": "*", "effect": "allow"}
+  ]
+}
+```
+
+For custom Tandem environments, add `TANDEM_HOME`, `TANDEM_NAMESPACE`, and `TANDEM_GATEWAY_PORT` to the
+server's `environment` object. Nested project overrides can replace the entry; preserve its full
+definition. Existing instances receive generated configuration on their next preparation/Start.
+
+### Management
 
 ```json
 {"command":"tandem","args":["mcp"]}
@@ -940,7 +991,7 @@ Workspace matching includes repository
 subdirectories and selects the closest owning workspace.
 
 The top **Sessions** tab groups conversations beneath instance rows and outside-Tandem
-directory groups. The tabs are **Sessions**, **Events**, **Rules**, **Providers**, and **Instances**.
+directory groups. The tabs are **Sessions**, **Events**, **Instances**, **Rules**, and **Providers**.
 **Instances** shows the template and instance tree. With OpenCode disabled, the tabs are
 **Instances**, **Events**, **Rules**, and **Providers**. Click a tab or
 press `[` / `]` from any main-view control to switch left / right. Instance/session switches retain
@@ -948,6 +999,8 @@ control focus; entering Events or Providers focuses its DataView.
 The tab header stays visually active; dialogs and action menus own their keyboard input.
 The **󰈈 show-all toggle** (`Shift+A`) reveals inactive instances, empty templates, and known
 OpenCode folders without open clients. It is off at startup and resets to off with `Shift+H`.
+Workspace-only instances remain visible in Instances and Sessions with show-all off, including
+folders without OpenCode clients or conversations.
 The Sessions tab orders groups as externals with attached clients, instances with attached clients,
 instances without attached clients, then externals without attached clients. Running instances
 without OpenCode sessions appear when show-all is enabled. Known folders come from conversations,
@@ -958,15 +1011,16 @@ timer, then the latest question with its activity indicator. Search includes tem
 History (`Shift+O`) controls saved and detached conversation children independently of folder
 visibility; with history off, only attached children appear. Select an inactive folder and press `n`
 to launch a new client. Both tabs retain creating and starting instances even before containers or
-OpenCode clients are observed; with show-all off, inactive instances stay hidden. The toolbar actions,
-filter values, and completion-sound setting are shared across both tabs. Each tab retains its own
+OpenCode clients are observed; with show-all off, inactive container-backed instances stay hidden. The toolbar actions,
+and filter values are shared across both tabs. Each tab retains its own
 expansion, selection, scroll position, and search. Inventory changes update both tabs; a removed
 selection moves to a surviving row in that tab when one is available.
 Clients without a conversation appear beneath their instance or external directory.
-The first toolbar toggle, **󰕾 completion sound** (`Shift+N`), plays the desktop completion sound when a freshly observed
-conversation changes from busy to idle. It is off by default and appears when the integration is
-enabled on toolbars at least 50 columns wide; its hotkey remains active at narrower widths. The
-desktop audio service controls playback. All toolbar toggles support mouse and keyboard activation.
+Sessions orders its toggles as **󰈈 show all**, **󰋚 history**, then **󰕾 sound**; Instances shows show all and history.
+The Sessions sound toggle (`Shift+N`) shares its value with Events and enables both completion and
+acceptance sounds. A freshly observed conversation changing from busy to idle or awaiting an answer
+plays the configured completion sound. Sound is off at startup and resets to off with `Shift+H`.
+The desktop audio service controls playback. All toolbar toggles support mouse and keyboard activation.
 
 A freshly observed conversation changing from busy to idle or awaiting an answer shows a `┃`
 marker spanning its lines in the far-left gutter. The marker and row background pulse twice

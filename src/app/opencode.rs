@@ -170,9 +170,9 @@ pub(super) fn attached_rows_for_owners(
     let session_instance_ids: std::collections::HashSet<_> = rows
         .iter()
         .filter(|row| {
-            row.instance
-                .as_deref()
-                .is_some_and(|name| row.running || row.starting || known_instances.contains(name))
+            row.instance.as_deref().is_some_and(|name| {
+                row.workspace_only || row.running || row.starting || known_instances.contains(name)
+            })
         })
         .map(|row| row.id.clone())
         .collect();
@@ -206,7 +206,9 @@ pub(super) fn attached_rows_for_owners(
             .filter(|row| visible_session(row))
             .filter_map(|row| row.parent.clone())
             .collect::<std::collections::HashSet<_>>();
-        grouped.retain(|row| row.parent.is_some() || session_parents.contains(&row.id));
+        grouped.retain(|row| {
+            row.workspace_only || row.parent.is_some() || session_parents.contains(&row.id)
+        });
     }
     folders::active_first(&mut grouped, snapshot, owners);
     resources::apply(&mut grouped, snapshot, owners);
@@ -578,6 +580,37 @@ fn append_session_rows(
             });
         }
     }
+}
+
+pub(super) fn acceptance_rows(
+    id: i64,
+    workspace: &str,
+    snapshot: &Snapshot,
+    show_saved: bool,
+) -> Vec<Row> {
+    let scope = format!("acceptance:{id}");
+    let mut rows = Vec::new();
+    let owns = |directory: &str| {
+        workspace_owner(directory, std::iter::once((workspace, workspace))).is_some()
+    };
+    let mut sessions: Vec<_> = snapshot
+        .sessions
+        .iter()
+        .filter(|session| owns(&session.directory) && (!session.saved() || show_saved))
+        .collect();
+    sessions.sort_by(|left, right| compare_sessions(left, right));
+    for session in sessions {
+        append_session_rows(&mut rows, &scope, &scope, session, true, snapshot);
+    }
+    for client in snapshot
+        .clients
+        .iter()
+        .filter(|client| owns(&client.directory))
+    {
+        rows.push(client_row(&scope, &scope, client, false, snapshot));
+    }
+    resources::apply(&mut rows, snapshot, &[]);
+    rows
 }
 
 fn context_detail(session: &Session) -> Option<String> {
@@ -1077,12 +1110,7 @@ impl App {
         if !self.service.opencode_enabled() {
             return true;
         }
-        if !self
-            .opencode_snapshot
-            .sessions
-            .iter()
-            .any(|session| session.id == *id)
-        {
+        if self.service.known_opencode_session(id).is_none() {
             return true;
         }
         let history = conversation::Conversation::new(self.service.opencode_conversation(id));

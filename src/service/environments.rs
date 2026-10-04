@@ -363,9 +363,13 @@ impl AppService {
         if action == "create_instance" {
             let settings = Arc::clone(&self.settings);
             let runtime = self.runtime.handle().clone();
+            let preserve_history = startup.preserve_opencode_history;
             startup.before_creation = Some(Box::new(move |workspace, deadline| {
                 settings.refresh()?;
-                if settings.opencode_enabled() && settings.clear_opencode_history() {
+                if !preserve_history
+                    && settings.opencode_enabled()
+                    && settings.clear_opencode_history()
+                {
                     runtime.block_on(crate::environments::opencode::clear_history(
                         workspace, deadline,
                     ))?;
@@ -377,7 +381,25 @@ impl AppService {
         let settings = Arc::clone(&self.settings);
         let observer = self.opencode.observer.clone();
         let runtime = self.runtime.handle().clone();
+        let rules = self.rules.clone();
+        let observed = self.opencode_snapshot();
         self.runtime.spawn_blocking(move || {
+            if matches!(
+                worker_operation.action.as_str(),
+                "delete_instance" | "delete_template"
+            ) && let Err(error) = rules
+                .store
+                .remember_workspaces(&environments.snapshot(), &observed)
+            {
+                environments.finish_operation(
+                    &worker_operation.id,
+                    Err(format!(
+                        "Cannot retain conversation history before purge: {error}"
+                    )),
+                );
+                notifier.publish(refresh);
+                return;
+            }
             notifier.publish(refresh);
             environments.execute(
                 worker_operation,

@@ -9,7 +9,7 @@ fn observed(count: u64) -> Snapshot {
 }
 
 fn enable(app: &mut App) {
-    app.handle_message(Msg::SetEventAcceptanceSound(true), &mut EventCtx::default());
+    app.handle_message(Msg::SetCompletionSound(true), &mut EventCtx::default());
 }
 
 #[test]
@@ -29,10 +29,7 @@ fn acceptance_sound_observes_new_attempts_without_replaying_history_or_stale_dat
     app.update_event_snapshot(observed(7));
     assert_eq!(app.service.completion_sound_count_for_tests(), 2);
 
-    app.handle_message(
-        Msg::SetEventAcceptanceSound(false),
-        &mut EventCtx::default(),
-    );
+    app.handle_message(Msg::SetCompletionSound(false), &mut EventCtx::default());
     app.update_event_snapshot(observed(8));
     enable(&mut app);
     app.update_event_snapshot(observed(8));
@@ -40,11 +37,11 @@ fn acceptance_sound_observes_new_attempts_without_replaying_history_or_stale_dat
     app.update_event_snapshot(observed(9));
     assert_eq!(app.service.completion_sound_count_for_tests(), 3);
     assert!(!app.events_active);
-    assert!(!app.completion_sound);
+    assert!(app.completion_sound);
 }
 
 #[test]
-fn events_sound_is_the_first_toggle_and_overview_mutes_it_in_both_integration_modes() {
+fn events_toggles_follow_a_o_n_gg_and_overview_mutes_shared_sound_in_both_integration_modes() {
     for opencode in [true, false] {
         let service = AppService::for_tests();
         service
@@ -58,7 +55,7 @@ fn events_sound_is_the_first_toggle_and_overview_mutes_it_in_both_integration_mo
         app.sync_overview_tab(&mut EventCtx::default());
         for width in [40, 130] {
             let (layout, text) = super::events::render(&mut app, width);
-            assert!(text.contains("󰕾 |N|"), "{text}");
+            assert!(text.contains("󰕾"), "{text}");
             let target = |hotkey: &str| {
                 layout
                     .focus_targets()
@@ -67,7 +64,11 @@ fn events_sound_is_the_first_toggle_and_overview_mutes_it_in_both_integration_mo
                     .unwrap()
             };
             let sound = target("shift+n");
-            assert!(sound.area.x < target("shift+t").area.x, "{text}");
+            assert!(
+                target("shift+a").area.x < target("shift+o").area.x,
+                "{text}"
+            );
+            assert!(target("shift+o").area.x < sound.area.x, "{text}");
             assert!(sound.area.x < target("gg").area.x, "{text}");
             let feed = layout
                 .focus_targets()
@@ -84,18 +85,47 @@ fn events_sound_is_the_first_toggle_and_overview_mutes_it_in_both_integration_mo
             for message in ctx.drain_messages() {
                 app.handle_message(message, &mut EventCtx::default());
             }
-            assert!(app.event_acceptance_sound);
-            assert!(app.toolbar_state.borrow().event_acceptance_sound);
-            assert!(!app.completion_sound);
+            assert!(app.completion_sound);
+            assert!(app.toolbar_state.borrow().completion_sound);
             assert_eq!(ctx.focus_request(), Some(&tuicore::FocusRequest::Keep));
             app.update_snapshot(snapshot());
-            assert!(app.toolbar_state.borrow().event_acceptance_sound);
+            assert!(app.toolbar_state.borrow().completion_sound);
+            if opencode {
+                app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut EventCtx::default());
+                let (layout, text) = super::events::render(&mut app, width);
+                assert!(text.contains("──● 󰕾"), "{text}");
+                let sound = layout
+                    .focus_targets()
+                    .iter()
+                    .find(|target| target.hotkey_sequences.iter().any(|key| key == "shift+n"))
+                    .unwrap();
+                let mut ctx = EventCtx::default();
+                app.dispatch_event(
+                    &EventRoute::new(sound.path.clone()),
+                    &TuiEvent::Mouse(tuicore::MouseEvent {
+                        kind: tuicore::MouseEventKind::Down(tuicore::MouseButton::Left),
+                        column: sound.area.x,
+                        row: sound.area.y,
+                        modifiers: KeyModifiers::NONE,
+                    }),
+                    &mut ctx,
+                );
+                for message in ctx.drain_messages() {
+                    app.handle_message(message, &mut EventCtx::default());
+                }
+                assert!(!app.completion_sound);
+                app.tabs_mut().select_index(1);
+                app.sync_overview_tab(&mut EventCtx::default());
+                let (_, text) = super::events::render(&mut app, width);
+                assert!(text.contains("○── 󰕾"), "{text}");
+                enable(&mut app);
+            }
             app.event(
                 &TuiEvent::Hotkey(HotkeyEvent::Commit("shift+h".into())),
                 &mut EventCtx::default(),
             );
-            assert!(!app.event_acceptance_sound);
-            assert!(!app.toolbar_state.borrow().event_acceptance_sound);
+            assert!(!app.completion_sound);
+            assert!(!app.toolbar_state.borrow().completion_sound);
             assert_eq!(app.tabs_mut().selected_index(), 0);
             app.tabs_mut().select_index(1);
             app.sync_overview_tab(&mut EventCtx::default());

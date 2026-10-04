@@ -9,6 +9,7 @@ use std::{
 use tokio::sync::oneshot;
 
 mod developer;
+mod recreation;
 
 use super::AppService;
 use crate::{
@@ -122,7 +123,14 @@ impl AppService {
         self.runtime.spawn_blocking(move || {
             let _guard = PollGuard(service.rules.clone());
             let revision = service.rules.revision.load(Ordering::Acquire);
-            let result = service.rule_cycle();
+            let result = service
+                .rules
+                .store
+                .remember_workspaces(
+                    &service.environment_snapshot(),
+                    &service.opencode_snapshot(),
+                )
+                .and_then(|()| service.rule_cycle());
             let observed = service.rules.store.snapshot();
             service
                 .rules

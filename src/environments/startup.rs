@@ -24,6 +24,8 @@ pub(crate) struct Record {
     pub branch_instances: bool,
     #[serde(default = "Instance::default_start_instance")]
     pub start_instance: bool,
+    #[serde(default)]
+    pub preserve_opencode_history: bool,
     pub kind: StartupKind,
     pub started_at: u64,
     pub timeout: u64,

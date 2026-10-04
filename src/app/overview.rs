@@ -23,6 +23,7 @@ pub(super) struct Pages {
     rules: super::rules::SharedState,
     event_focus: super::events::FocusState,
     rule_focus: super::rules::FocusState,
+    acceptance_context: super::acceptances::SharedContext,
 }
 
 impl Pages {
@@ -45,6 +46,9 @@ impl Pages {
             super::events::FocusRequest::default(),
         ));
         let rule_focus = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let acceptance_context = std::rc::Rc::new(std::cell::RefCell::new(
+            super::acceptances::Context::default(),
+        ));
         let pages = std::array::from_fn(|index| {
             let (key, page): (&str, Box<dyn TuiNode<Msg>>) = if index == 4 {
                 (
@@ -71,6 +75,8 @@ impl Pages {
                         providers.clone(),
                         event_focus.clone(),
                         toolbar.clone(),
+                        rules.clone(),
+                        acceptance_context.clone(),
                     )),
                 )
             } else {
@@ -85,11 +91,11 @@ impl Pages {
                             .child(
                                 "template-actions",
                                 toolbar::Toolbar::new(
-                                    keys[2],
                                     keys[4],
                                     keys[8],
                                     keys[9],
                                     toolbar.clone(),
+                                    index == 1,
                                 )
                                 .align_resources_with(states[index].clone()),
                                 FlexItem::fit_content(),
@@ -114,6 +120,7 @@ impl Pages {
             rules,
             event_focus,
             rule_focus,
+            acceptance_context,
         }
     }
 
@@ -139,6 +146,40 @@ impl Pages {
     }
     pub(super) fn rules_state(&self) -> super::rules::SharedState {
         self.rules.clone()
+    }
+    pub(super) fn tab_counts(&self) -> (usize, usize) {
+        let active_rules = self
+            .rules
+            .borrow()
+            .rules
+            .iter()
+            .filter(|rule| rule.definition.enabled)
+            .count();
+        let running_providers = self
+            .providers
+            .borrow()
+            .snapshot
+            .providers
+            .iter()
+            .filter(|provider| provider.status == crate::store::providers::Status::Running)
+            .count();
+        (active_rules, running_providers)
+    }
+    pub(super) fn acceptance_context(&self) -> super::acceptances::SharedContext {
+        self.acceptance_context.clone()
+    }
+    pub(super) fn update_acceptance_context(
+        &mut self,
+        inventory: &crate::store::environments::EnvironmentSnapshot,
+        opencode: &crate::store::opencode::Snapshot,
+    ) {
+        let mut context = self.acceptance_context.borrow_mut();
+        if context.inventory != *inventory {
+            context.inventory = inventory.clone();
+        }
+        if context.opencode != *opencode {
+            context.opencode = opencode.clone();
+        }
     }
     pub(super) fn update_rules(&mut self, snapshot: crate::store::rules::Snapshot) -> bool {
         if *self.rules.borrow() == snapshot {

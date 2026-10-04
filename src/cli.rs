@@ -115,6 +115,8 @@ enum Commands {
     },
     #[command(about = "Run protocol-only MCP server over stdin/stdout")]
     Mcp,
+    #[command(about = "Run start_self/stop_self MCP over stdio for the owning instance workspace")]
+    McpInstance,
     #[command(about = "Write private credentials for the four developer event providers")]
     ProvidersSetup,
     #[command(about = "Add disabled developer event rules, preserving existing rule settings")]
@@ -239,6 +241,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             crate::run()
         }
         Some(Commands::Mcp) => crate::run_mcp(),
+        Some(Commands::McpInstance) => crate::run_instance_mcp(),
         Some(Commands::ProvidersSetup) => {
             let service = crate::service::AppService::initialize()?;
             println!("{}", service.setup_developer_providers()?);

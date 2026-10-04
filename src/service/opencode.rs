@@ -86,6 +86,19 @@ impl Drop for Integration {
 }
 
 impl super::AppService {
+    pub(crate) fn known_opencode_session(&self, id: &str) -> Option<Session> {
+        self.opencode_snapshot()
+            .sessions
+            .into_iter()
+            .find(|session| session.id == id)
+            .or_else(|| {
+                self.rule_snapshot()
+                    .workspaces
+                    .into_values()
+                    .flat_map(|workspace| workspace.sessions)
+                    .find(|session| session.id == id)
+            })
+    }
     pub(crate) fn cancel_opencode_conversation(&self) {
         if let Some(task) = self
             .opencode
@@ -107,10 +120,7 @@ impl super::AppService {
             return Err("OpenCode integration is disabled".into());
         }
         let session = self
-            .opencode_snapshot()
-            .sessions
-            .into_iter()
-            .find(|session| session.id == id)
+            .known_opencode_session(id)
             .ok_or("OpenCode conversation is unavailable; refresh and try again")?;
         let settings = Arc::clone(&self.settings);
         let (mut sender, receiver) = tokio::sync::oneshot::channel();
@@ -204,11 +214,8 @@ impl super::AppService {
             return Err("OpenCode integration is disabled".into());
         }
         let snapshot = self.opencode_snapshot();
-        let session: Session = snapshot
-            .sessions
-            .iter()
-            .find(|session| session.id == id)
-            .cloned()
+        let session: Session = self
+            .known_opencode_session(id)
             .ok_or("OpenCode conversation is unavailable; refresh and try again")?;
         if let Some(pane) = &pane
             && !session.panes.contains(pane)

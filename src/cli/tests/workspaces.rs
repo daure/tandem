@@ -132,7 +132,8 @@ fn blank_workspaces_create_reopen_and_delete_without_git_or_docker() {
     fs::set_permissions(fixture.bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
     success(fixture.run(&["new-instance", "scratch", "-t", "website", "-o"]));
     let workspace = fixture.home.join("workspaces/scratch");
-    assert_eq!(fs::read_dir(&workspace).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(&workspace).unwrap().count(), 2);
+    assert!(workspace.join(".opencode/opencode.json").is_file());
     let guidance = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
     assert!(guidance.starts_with("# scratch\n"));
     for section in ["## Repositories", "## Services", "## Docker", "## HTTP"] {
@@ -208,7 +209,8 @@ fn guidance_only_workspaces_create_open_and_delete_without_git_or_docker() {
     ] {
         assert!(!generated.contains(unwanted), "{generated}");
     }
-    assert_eq!(fs::read_dir(&workspace).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(&workspace).unwrap().count(), 2);
+    assert!(workspace.join(".opencode/opencode.json").is_file());
     fs::write(workspace.join("notes.md"), "User work").unwrap();
     fs::write(workspace.join("AGENTS.md"), "Custom instructions\n").unwrap();
     fs::write(

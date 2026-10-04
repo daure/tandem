@@ -82,15 +82,19 @@ fn workspace_guidance_lists_declared_and_discovered_repositories_and_service_acc
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
     assert_eq!(
-        text.split_once("## HTTP URLs\n\n").unwrap().1,
+        text.split_once("## HTTP URLs\n\n")
+            .unwrap()
+            .1
+            .split_once("## Instance lifecycle")
+            .unwrap()
+            .0,
         concat!(
             "- `web`: `http://localhost:9876/review/web/`\n\nThese URLs use a shared gateway; container ports are internal.\n",
-            "\n## File placement\n\nKeep shared template assets read-only and secrets in private external files.\n",
-            "Put instance-local caches, temporary files, logs, and data under workspace `.local/{cache,tmp,logs,data}`\n",
-            "or project-owned named volumes. This is a convention; configure tools and mounts explicitly.\n",
-            "Ask before using shared storage and agree on its cleanup policy.\n"
+            "\n"
         )
     );
+    assert!(text.contains("use `start_self` when assigned work needs services"));
+    assert!(text.contains("`stop_self` when services are no longer needed"));
     assert!(!text.contains("{{"));
     assert!(!text.contains("`repo-sync`"));
     assert_eq!(text.matches("| — | `web` | — | — |").count(), 1);

@@ -32,6 +32,15 @@ pub fn run_mcp() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
+pub fn run_instance_mcp() -> Result<(), Box<dyn std::error::Error>> {
+    let service = AppService::initialize()?;
+    let scope = service.bind_instance_workspace()?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let result = runtime.block_on(mcp::instance::run_stdio(service.clone(), scope));
+    drop(runtime);
+    result
+}
+
 pub fn run_http(bind: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     let service = AppService::initialize()?;
     let runtime = tokio::runtime::Runtime::new()?;

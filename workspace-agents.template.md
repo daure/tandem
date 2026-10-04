@@ -33,6 +33,15 @@ For replicated services, use `exec --index N` to select a replica.
 Omit `-w CODE_PATH` for services without a code path.
 Building or recreating services also requires the instance's rendered Compose configuration.{{/services}}{{http_section}}
 
+## Instance lifecycle
+
+When `tandem-instance` MCP is available, use `start_self` when assigned work needs services and
+`stop_self` when services are no longer needed to release their resources. These actions are scoped
+to this workspace, preserve data, and leave OpenCode running. Coordinate with other sessions sharing
+the instance before stopping. Start applies the trusted template and may build or rerun setup jobs;
+both calls wait for completion. Otherwise ask before changing service state. Stopping is not proof
+of task success. Workspace-only instances have no service resources to release.
+
 ## File placement
 
 Keep shared template assets read-only and secrets in private external files.

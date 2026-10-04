@@ -436,6 +436,15 @@ fn session_views_follow_native_tab_positions_across_activity_changes() {
     let attached =
         super::super::opencode::attached_rows(rows::from_snapshot(&snapshot()), &observation);
     assert_eq!(ids(&attached), expected);
+    for show_saved in [false, true] {
+        let acceptance = super::super::opencode::acceptance_rows(
+            71,
+            "/tmp/workspaces/review",
+            &observation,
+            show_saved,
+        );
+        assert_eq!(ids(&acceptance), expected);
+    }
     for session in &mut observation.sessions {
         session.activity = Activity::AwaitingAnswer;
         session.updated += 1000;
@@ -443,6 +452,9 @@ fn session_views_follow_native_tab_positions_across_activity_changes() {
     let attached =
         super::super::opencode::attached_rows(rows::from_snapshot(&snapshot()), &observation);
     assert_eq!(ids(&attached), expected);
+    let acceptance =
+        super::super::opencode::acceptance_rows(71, "/tmp/workspaces/review", &observation, true);
+    assert_eq!(ids(&acceptance), expected);
 }
 
 #[test]

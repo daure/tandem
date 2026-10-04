@@ -28,9 +28,9 @@ def disable_history_cleanup(home):
 
 
 class Client:
-    def __init__(self, binary, environment):
+    def __init__(self, binary, environment, command="mcp", cwd=None):
         self.process = subprocess.Popen(
-            [str(binary), "mcp"], env=environment,
+            [str(binary), command], env=environment, cwd=cwd,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
         self.sequence = 0
@@ -49,7 +49,7 @@ class Client:
         self.process.stdin.write(json.dumps(payload).encode() + b"\n")
         self.process.stdin.flush()
 
-    def request(self, method, params, timeout=20):
+    def request(self, method, params, timeout=20, expect_error=False):
         self.sequence += 1
         self.send({"jsonrpc": "2.0", "id": self.sequence, "method": method, "params": params})
         deadline = time.monotonic() + timeout
@@ -58,6 +58,9 @@ class Client:
                 line, self.buffer = self.buffer.split(b"\n", 1)
                 message = json.loads(line)
                 if message.get("id") == self.sequence:
+                    if expect_error:
+                        assert "error" in message, message
+                        return message["error"]
                     assert "error" not in message, message
                     return message["result"]
             readable, _, _ = select.select([self.process.stdout], [], [], max(0, deadline - time.monotonic()))

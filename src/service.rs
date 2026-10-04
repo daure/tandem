@@ -8,6 +8,7 @@ mod creation;
 mod dev_server;
 mod environments;
 mod events;
+mod instance_mcp;
 mod lifecycle;
 mod opencode;
 mod providers;

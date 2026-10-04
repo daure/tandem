@@ -2,7 +2,7 @@ use super::*;
 use crate::store::providers::{Action, Manifest, Provider, Snapshot, Status};
 use std::time::Duration;
 
-fn provider(name: &str, status: Status) -> Provider {
+pub(super) fn provider(name: &str, status: Status) -> Provider {
     Provider {
         name: name.into(),
         directory: format!("/templates/providers/{name}"),
@@ -439,7 +439,7 @@ fn event_details_provider_logs_and_details_share_the_bottom_docked_size_across_t
 }
 
 #[test]
-fn providers_are_the_fourth_tab_with_owned_lifecycle_controls_and_confirmation() {
+fn providers_are_the_final_tab_with_owned_lifecycle_controls_and_confirmation() {
     init_ui();
     let mut app = crate::app::root(AppService::for_tests());
     app.update_snapshot(super::snapshot());
@@ -452,20 +452,20 @@ fn providers_are_the_fourth_tab_with_owned_lifecycle_controls_and_confirmation()
     });
     app.pages_mut()
         .tick(Duration::ZERO, AnimationSettings::default());
-    for _ in 0..3 {
+    for _ in 0..4 {
         app.event(
             &TuiEvent::Key(KeyEvent::from(Key::Char(']'))),
             &mut EventCtx::default(),
         );
     }
-    assert_eq!(app.tabs_mut().selected_index(), 3);
+    assert_eq!(app.tabs_mut().selected_index(), 4);
     assert!(app.providers_active);
     for width in [40, 130] {
         let (layout, text) = render(&mut app, width);
-        assert!(
-            text.contains("Providers") && text.contains("Paused"),
-            "{text}"
-        );
+        assert!(text.contains("Paused"), "{text}");
+        if width == 130 {
+            assert!(text.contains("Providers"), "{text}");
+        }
         assert!(
             layout
                 .focus_targets()
@@ -544,8 +544,11 @@ fn providers_are_the_fourth_tab_with_owned_lifecycle_controls_and_confirmation()
 fn entering_providers_focuses_the_data_view_without_stealing_focus_from_its_controls() {
     init_ui();
     for width in [40, 130] {
-        for previous in [2, 4] {
+        for previous in [3, 0] {
             for (mouse, routed) in [(false, false), (false, true), (true, true)] {
+                if mouse && width == 40 {
+                    continue;
+                }
                 let mut app = crate::app::root(AppService::for_tests());
                 app.pages_mut().update_providers(Snapshot {
                     providers: vec![provider("message", Status::Running)],
@@ -578,7 +581,7 @@ fn entering_providers_focuses_the_data_view_without_stealing_focus_from_its_cont
                         modifiers: KeyModifiers::NONE,
                     })
                 } else {
-                    TuiEvent::Key(KeyEvent::from(Key::Char(if previous == 2 {
+                    TuiEvent::Key(KeyEvent::from(Key::Char(if previous == 3 {
                         ']'
                     } else {
                         '['

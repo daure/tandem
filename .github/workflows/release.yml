@@ -97,6 +97,9 @@ jobs:
           mkdir smoke
           tar -xJf tandem-x86_64-unknown-linux-gnu.tar.xz -C smoke
           smoke/tandem-x86_64-unknown-linux-gnu/tandem --help
+          smoke/tandem-x86_64-unknown-linux-gnu/tandem mcp-instance --help
+          cd ../..
+          PYTHONDONTWRITEBYTECODE=1 python3 -W error src/mcp/tests/instance_smoke.py --binary target/distrib/smoke/tandem-x86_64-unknown-linux-gnu/tandem
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:

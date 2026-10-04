@@ -74,6 +74,13 @@ pub(crate) struct Snapshot {
     pub acceptances: Vec<Acceptance>,
     pub evaluation_errors: Vec<Evaluation>,
     pub error: Option<String>,
+    pub workspaces: std::collections::BTreeMap<i64, AcceptanceWorkspace>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct AcceptanceWorkspace {
+    pub directory: String,
+    pub sessions: Vec<super::opencode::Session>,
 }
 
 #[derive(Debug, Serialize)]
@@ -173,12 +180,11 @@ pub(crate) fn validate_prompt(source: &str) -> Result<(), String> {
     prompt::compile(source).map(|_| ())
 }
 
-pub(crate) fn instance_name(rule: &str, sequence: i64, ordinal: u32) -> String {
-    let suffix = if ordinal == 1 {
-        format!("-{sequence}")
-    } else {
-        format!("-{sequence}-{ordinal}")
-    };
+pub(crate) fn instance_name(rule: &str, sequence: i64, acceptance_id: i64) -> String {
+    let mut suffix = format!("-{sequence}-a{acceptance_id}");
+    if suffix.len() >= 40 {
+        suffix = format!("-a{acceptance_id}");
+    }
     let prefix = &rule[..rule.len().min(40 - suffix.len())];
     format!("{}{suffix}", prefix.trim_end_matches('-'))
 }

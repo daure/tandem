@@ -14,7 +14,7 @@ pub(super) fn directory_name(directory: &str) -> String {
 }
 
 impl super::Integration {
-    pub(super) fn spawn_navigation<T: Send + 'static>(
+    pub(in crate::service) fn spawn_navigation<T: Send + 'static>(
         self: &Arc<Self>,
         runtime: &tokio::runtime::Runtime,
         busy_message: &str,

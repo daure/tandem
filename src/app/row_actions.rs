@@ -2,7 +2,7 @@ use super::Msg;
 use crate::store::{
     events::Record,
     providers::{Action, Provider, Stream},
-    rules::{Acceptance, Rule},
+    rules::Rule,
 };
 
 #[derive(Debug)]
@@ -11,11 +11,11 @@ pub(crate) enum Target {
     Stream(Box<(Provider, Stream)>),
     Event(Box<Record>),
     Rule(Box<Rule>),
-    Acceptance(Box<Acceptance>),
+    AcceptanceContext(Box<super::acceptances::Target>),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum Command {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Command {
     Details,
     Start,
     Stop,
@@ -32,6 +32,11 @@ pub(super) enum Command {
     StreamEvents,
     Instance,
     Session,
+    CreateInstance,
+    NewSession,
+    PurgeInstance,
+    Rule,
+    Routes,
 }
 
 impl Command {
@@ -53,6 +58,11 @@ impl Command {
             Self::Deactivate => "Deactivate",
             Self::Instance => "Go to instance",
             Self::Session => "Go to OpenCode session",
+            Self::CreateInstance => "Recreate instance",
+            Self::NewSession => "New OpenCode session",
+            Self::PurgeInstance => "Purge instance",
+            Self::Rule => "Go to rule",
+            Self::Routes => "Open routes",
         }
     }
 
@@ -66,8 +76,13 @@ impl Command {
             Self::Replay => "r",
             Self::Delete => "x",
             Self::Activate | Self::Deactivate => "a",
-            Self::Instance => "i",
+            Self::Instance => "v",
             Self::Session => "o",
+            Self::CreateInstance => "i",
+            Self::NewSession => "n",
+            Self::PurgeInstance => "p",
+            Self::Rule => "r",
+            Self::Routes => "Ctrl+Enter",
         }
     }
 }
@@ -101,12 +116,27 @@ impl Target {
                     Command::Activate
                 },
             ],
-            Self::Acceptance(_) => vec![Command::Instance, Command::Session],
+            Self::AcceptanceContext(target) => {
+                let mut commands = vec![
+                    Command::Rule,
+                    Command::CreateInstance,
+                    Command::Instance,
+                    Command::Routes,
+                    Command::NewSession,
+                    Command::Session,
+                    Command::PurgeInstance,
+                ];
+                if target.selected.is_some() {
+                    commands.insert(0, Command::Details);
+                }
+                commands
+            }
         }
     }
 
     pub(super) fn enabled(&self, command: Command) -> bool {
         match (self, command) {
+            (Self::AcceptanceContext(target), command) => target.enabled(command),
             (Self::Stream(target), Command::StreamEvents) => target.0.manifest.is_some(),
             (Self::Stream(target), command) => command
                 .provider_action()
@@ -116,9 +146,6 @@ impl Target {
                 .is_none_or(|action| provider.action_unavailable(action).is_none()),
             (Self::Rule(rule), Command::Activate) => !rule.definition.enabled,
             (Self::Rule(rule), Command::Deactivate) => rule.definition.enabled,
-            (Self::Acceptance(row), Command::Session) => {
-                row.session_id.is_some() || row.pane.is_some()
-            }
             _ => true,
         }
     }
@@ -163,11 +190,7 @@ impl Target {
                 }
                 _ => None,
             },
-            Self::Acceptance(row) => match command {
-                Command::Instance => Some(Msg::AcceptanceInstance(row.instance.clone())),
-                Command::Session => Some(Msg::AcceptanceSession(row)),
-                _ => None,
-            },
+            Self::AcceptanceContext(target) => Some(Msg::AcceptanceAction(target, command)),
         }
     }
 }

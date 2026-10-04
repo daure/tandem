@@ -323,6 +323,5 @@ fn sound_dropdown_previews_and_saves_only_when_a_choice_is_confirmed() {
         assert_eq!(app.service.event_acceptance_sound_choice(), acceptance);
         assert_eq!(app.service.completion_sound_count_for_tests(), 1);
         assert!(!app.completion_sound);
-        assert!(!app.event_acceptance_sound);
     }
 }

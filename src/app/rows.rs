@@ -267,6 +267,7 @@ pub(super) struct Row {
     pub service: Option<(String, String)>,
     pub service_name: Option<String>,
     pub workspace: Option<String>,
+    pub workspace_only: bool,
     pub workspace_missing: bool,
     pub alternate_background: bool,
     pub gateway_url: Option<String>,
@@ -854,7 +855,9 @@ fn from_snapshot_with_operations_and_totals(
             ),
             status: None,
             icon: TEMPLATE_ICON,
-            tone: if running_count > 0 {
+            tone: if running_count > 0
+                || template.error.is_none() && template.workspace_only() && total_count > 0
+            {
                 Tone::Success
             } else if template.error.is_some() {
                 Tone::Error
@@ -1006,6 +1009,7 @@ fn from_snapshot_with_operations_and_totals(
             service: None,
             service_name: None,
             workspace: Some(instance.workspace.clone()),
+            workspace_only: instance.workspace_only,
             workspace_missing: false,
             alternate_background: false,
             gateway_url: None,
@@ -1112,6 +1116,7 @@ fn from_snapshot_with_operations_and_totals(
                 service_name: Some(service.name.clone()),
                 description: String::new(),
                 workspace: Some(instance.workspace.clone()),
+                workspace_only: false,
                 workspace_missing: false,
                 alternate_background: false,
                 gateway_url: service.url.clone(),

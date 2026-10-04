@@ -7,6 +7,7 @@ type BeforeCreation = Box<dyn FnOnce(&str, Instant) -> Result<(), String> + Send
 
 pub(crate) struct Startup {
     pub start_instance: bool,
+    pub preserve_opencode_history: bool,
     pub branch_instances: bool,
     pub description: Option<String>,
     pub opencode: Option<Option<String>>,
@@ -21,6 +22,7 @@ impl Default for Startup {
     fn default() -> Self {
         Self {
             start_instance: true,
+            preserve_opencode_history: false,
             branch_instances: false,
             description: None,
             opencode: None,

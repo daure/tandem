@@ -12,6 +12,7 @@ use crate::store::environments::{
 mod concurrency;
 mod creation_history;
 mod guidance;
+mod instance_mcp;
 mod manifest_updates;
 mod restart;
 mod service_preview;

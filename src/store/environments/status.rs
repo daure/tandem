@@ -430,11 +430,11 @@ impl Instance {
         if self.workspace_only {
             "This is a workspace-only instance; no service containers are configured. Work locally and ask the user if additional services are needed."
         } else if self.runtime.stale {
-            "Service state is uncertain; check Tandem before relying on services. Do not wait indefinitely or start services without asking the user."
+            "Service state is uncertain; check Tandem before relying on services. Do not wait indefinitely. Use configured start_self when assigned work requires services; otherwise ask the user before starting them."
         } else if self.is_starting() {
             Self::startup_instructions(true)
         } else if self.is_running() {
-            "Services are started; verify readiness if required for your work."
+            "Services are started; verify readiness if required for your work. Use configured stop_self when services are no longer needed, after coordinating with other sessions sharing the instance; this preserves data and leaves OpenCode running."
         } else {
             Self::startup_instructions(false)
         }
@@ -444,7 +444,7 @@ impl Instance {
         if start {
             "Services are starting automatically; explore the code while preparation runs, then wait for readiness before using services if they are required for the work you need to do."
         } else {
-            "Services won't start automatically; don't wait for or start them. Ask the user if they're needed for your work."
+            "Services won't start automatically; work locally without waiting for them. Use configured start_self if assigned work needs services; otherwise ask the user before starting them. Use configured stop_self when services are no longer needed, after coordinating with other sessions sharing the instance. Both actions preserve data and leave OpenCode running; stopping does not certify task success."
         }
     }
 

@@ -10,6 +10,7 @@ pub(crate) mod events;
 mod gateway;
 mod host_resources;
 mod inspection;
+mod instance_mcp;
 mod journal;
 mod lifecycle;
 pub(crate) mod opencode;
@@ -46,6 +47,7 @@ use crate::store::environments::{
 use command::Progress;
 use config::Config;
 pub(crate) use creation::Startup;
+pub(crate) use instance_mcp::InstanceScope;
 
 pub(crate) type BeforeDeletion<'a> = dyn Fn(&str, Instant) -> Result<(), String> + 'a;
 
@@ -821,9 +823,13 @@ impl Environments {
                     },
                 )
                 .map(Some),
-                "stop_instance" => {
-                    lifecycle::stop(&config, &operation.name, progress).map(|()| None)
-                }
+                "stop_instance" => lifecycle::stop_with_lock(
+                    &config,
+                    &operation.name,
+                    progress,
+                    startup.instance_lock,
+                )
+                .map(|()| None),
                 "restart_instance" | "restart_service" | "start_service" | "stop_service" => {
                     containers::change_state(
                         &config,

@@ -372,6 +372,7 @@ fn completion_sound_is_opt_in_and_plays_once_per_busy_to_idle_transition() {
     app.service
         .set_opencode_snapshot_for_tests(observation(Activity::Busy, false));
     app.update_snapshot(snapshot());
+    app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut EventCtx::default());
     app.event(
         &TuiEvent::Key(KeyEvent::from(Key::Char('N'))),
         &mut EventCtx::new(AnimationSettings::default()),
@@ -405,6 +406,7 @@ fn question_waits_notify_once_and_resume_normal_completion_feedback() {
     let service = AppService::for_tests();
     service.set_opencode_snapshot_for_tests(observation(Activity::Busy, false));
     let mut app = root(service);
+    app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut EventCtx::default());
     app.event(
         &TuiEvent::Key(KeyEvent::from(Key::Char('N'))),
         &mut EventCtx::new(AnimationSettings::default()),

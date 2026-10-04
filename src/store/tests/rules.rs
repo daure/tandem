@@ -15,26 +15,21 @@ pub(crate) fn definition(name: &str, script: &str) -> Definition {
 }
 
 #[test]
-fn instance_names_preserve_event_sequences_and_collision_suffixes_within_length_limits() {
+fn instance_names_preserve_acceptance_identity_within_length_limits() {
     assert_eq!(
         instance_name("jira-ticket-triage", 42, 1),
-        "jira-ticket-triage-42"
+        "jira-ticket-triage-42-a1"
     );
     assert_eq!(
         instance_name("jira-ticket-triage", 42, 2),
-        "jira-ticket-triage-42-2"
+        "jira-ticket-triage-42-a2"
     );
     let rule = "a".repeat(40);
-    for ordinal in [1, 2, u32::MAX] {
-        let name = instance_name(&rule, i64::MAX, ordinal);
+    for id in [1, 2, i64::MAX] {
+        let name = instance_name(&rule, i64::MAX, id);
         assert_eq!(name.len(), 40);
         super::super::environments::validate_instance_name(&name).unwrap();
-        let suffix = if ordinal == 1 {
-            format!("-{}", i64::MAX)
-        } else {
-            format!("-{}-{ordinal}", i64::MAX)
-        };
-        assert!(name.ends_with(&suffix), "{name}");
+        assert!(name.ends_with(&format!("-a{id}")), "{name}");
     }
 }
 
