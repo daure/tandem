@@ -30,6 +30,41 @@ fn conversation(id: &str, title: &str) -> Session {
 }
 
 #[test]
+fn confirmed_event_instance_purge_returns_focus_to_the_event_tree() {
+    init_ui();
+    let mut app = crate::app::root(AppService::for_tests());
+    app.update_snapshot(snapshot());
+    app.tabs_mut().select_index(1);
+    app.after_event(&mut EventCtx::default());
+    let target = Target::new(
+        &acceptance(),
+        None,
+        &app.pages_mut().acceptance_context().borrow(),
+        false,
+    );
+    app.acceptance_action(target, Command::PurgeInstance, &mut EventCtx::default());
+    assert!(app.view.is_active());
+
+    let mut ctx = EventCtx::default();
+    app.handle_message(Msg::Submit, &mut ctx);
+
+    assert!(!app.view.is_active());
+    assert!(app.events_active);
+    assert!(
+        matches!(ctx.focus_request(), Some(tuicore::FocusRequest::Target(id)) if id.as_str() == crate::app::events::FOCUS),
+        "{:?}",
+        ctx.focus_request()
+    );
+    let (layout, _) = render(&mut app, 160);
+    assert!(
+        layout
+            .focus_targets()
+            .iter()
+            .any(|target| target.id.as_str() == crate::app::events::FOCUS)
+    );
+}
+
+#[test]
 fn acceptance_conversation_picker_lists_retained_titles_and_original_identity() {
     init_ui();
     let mut app = crate::app::root(AppService::for_tests());
@@ -55,7 +90,37 @@ fn acceptance_conversation_picker_lists_retained_titles_and_original_identity() 
     let target = Target::new(&acceptance, Some(&workspace), &Context::default(), false);
     assert!(target.enabled(Command::Session));
     assert!(target.conversations.is_empty());
-    app.acceptance_action(target, Command::Session, &mut EventCtx::default());
+    app.open_rule(acceptance.rule.clone(), &mut EventCtx::default());
+    let (layout, _) = render(&mut app, 160);
+    let focus = layout
+        .focus_targets()
+        .iter()
+        .find(|target| target.id.as_str() == "acceptance-list")
+        .unwrap();
+    app.dispatch_focus(focus, true, &mut tuicore::FocusCtx::default());
+    let route = EventRoute::new(focus.path.clone());
+    let mut ctx = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Char('.').into()), &mut ctx);
+    let (layout, text) = render(&mut app, 160);
+    assert!(
+        text.lines()
+            .any(|line| line.contains("Go to OpenCode session") && line.contains("Enter / o")),
+        "{text}"
+    );
+    app.dispatch_event(
+        &EventRoute::new(layout.overlays().last().unwrap().route_path.clone()),
+        &TuiEvent::Key(Key::Esc.into()),
+        &mut EventCtx::default(),
+    );
+    app.dispatch_focus(focus, true, &mut tuicore::FocusCtx::default());
+    let mut ctx = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
+    assert!(
+        matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Session)] if target.acceptance.id == acceptance.id)
+    );
+    for message in ctx.drain_messages() {
+        app.handle_message(message, &mut EventCtx::default());
+    }
     let (_, text) = render(&mut app, 160);
     assert!(text.contains("Original task · original"), "{text}");
     assert!(text.contains("Follow-up task"), "{text}");
@@ -134,6 +199,12 @@ fn event_tree_keeps_exact_acceptance_and_conversation_actions_after_inventory_re
         .unwrap();
     app.dispatch_focus(focus, true, &mut tuicore::FocusCtx::default());
     let route = EventRoute::new(focus.path.clone());
+    let mut ctx = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
+    assert!(matches!(ctx.messages(), [Msg::OpenEvent(row)] if row.sequence == 7));
+    let mut ctx = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Char('d').into()), &mut ctx);
+    assert!(matches!(ctx.messages(), [Msg::OpenEvent(row)] if row.sequence == 7));
     for key in [Key::Right, Key::Down] {
         app.dispatch_event(
             &route,
@@ -147,6 +218,14 @@ fn event_tree_keeps_exact_acceptance_and_conversation_actions_after_inventory_re
     let (_, text) = render(&mut app, 160);
     assert!(text.contains("inspect #71 · event #7"), "{text}");
     assert!(text.contains("review · Running · 󰠲 website"), "{text}");
+    let mut ctx = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Char('d').into()), &mut ctx);
+    assert!(matches!(ctx.messages(), [Msg::FocusRule(name)] if name == "inspect"));
+    let mut ctx = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
+    assert!(
+        matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Session)] if target.acceptance.id == 71 && target.selected.is_none())
+    );
     for (key, command) in [
         ('r', Command::Rule),
         ('v', Command::Instance),
@@ -183,7 +262,17 @@ fn event_tree_keeps_exact_acceptance_and_conversation_actions_after_inventory_re
         );
     }
     let mut ctx = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Char('d').into()), &mut ctx);
+    assert!(
+        matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Details)] if target.selected.as_ref().unwrap().label.contains("Active task"))
+    );
+    let mut ctx = EventCtx::default();
     app.dispatch_event(&route, &TuiEvent::Key(Key::Char('o').into()), &mut ctx);
+    assert!(
+        matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Session)] if target.selected.as_ref().unwrap().label.contains("Active task"))
+    );
+    let mut ctx = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
     assert!(
         matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Session)] if target.selected.as_ref().unwrap().label.contains("Active task"))
     );
@@ -283,6 +372,17 @@ fn acceptance_shortcuts_open_its_routes_and_focus_its_rule_from_both_views() {
                 );
             }
         }
+        let mut activation = EventCtx::default();
+        app.dispatch_event(
+            &route,
+            &TuiEvent::Key(Key::Char('d').into()),
+            &mut activation,
+        );
+        if history {
+            assert!(matches!(activation.messages(), [Msg::FocusEvent(7)]));
+        } else {
+            assert!(matches!(activation.messages(), [Msg::FocusRule(name)] if name == "inspect"));
+        }
         let mut ctx = EventCtx::default();
         app.dispatch_event(
             &route,
@@ -357,7 +457,7 @@ fn acceptance_shortcuts_open_its_routes_and_focus_its_rule_from_both_views() {
         let mut ctx = EventCtx::default();
         app.dispatch_event(
             &EventRoute::new(focus.path.clone()),
-            &TuiEvent::Key(Key::Enter.into()),
+            &TuiEvent::Key(Key::Char('d').into()),
             &mut ctx,
         );
         assert!(

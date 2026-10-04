@@ -68,6 +68,11 @@ impl AppService {
             .lease()
             .map_err(|error| error.to_string())?
             .ok_or("Rule work is in progress; retry recreation after it finishes")?;
+        let requested = store.acceptance(id).map_err(|error| error.to_string())?;
+        let _event = store
+            .event_lease(requested.event_sequence)
+            .map_err(|error| error.to_string())?
+            .ok_or("Event work is in progress; retry recreation after it finishes")?;
         let snapshot = store.snapshot().map_err(|error| error.to_string())?;
         let acceptance = snapshot
             .acceptances

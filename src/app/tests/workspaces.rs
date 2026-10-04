@@ -38,6 +38,7 @@ fn workspace_only_instances_remain_visible_in_both_views_without_opencode_client
                     .find(|row| row.id == "instance:folder")
                     .unwrap();
                 assert_eq!(folder.icon, rows::WORKSPACE_ICON);
+                assert_eq!(folder.tone, rows::Tone::Success);
                 if running_only {
                     assert!(!projected.iter().any(|row| row.id == "instance:review"));
                 }
@@ -152,7 +153,7 @@ fn repository_setup_rows_precede_jobs_and_copy_absolute_checkout_paths() {
 }
 
 #[test]
-fn workspace_rows_keep_a_childless_services_group() {
+fn workspace_rows_only_include_populated_groups() {
     init_ui();
     let mut inventory = snapshot();
     inventory.templates[0].compose_file.clear();
@@ -164,26 +165,22 @@ fn workspace_rows_keep_a_childless_services_group() {
     let rows = rows::from_snapshot(&inventory);
     let instance = rows.iter().find(|row| row.id == "instance:review").unwrap();
     assert_eq!(instance.status, None);
-    assert_eq!(instance.icon, "");
-    assert_eq!(instance.tone, crate::app::rows::Tone::Normal);
+    assert_eq!(instance.icon, "󱥾");
+    assert_eq!(instance.tone, crate::app::rows::Tone::Success);
     let instance_text = instance.text("", None);
     assert_eq!(
         instance_text.lines[0].to_string(),
-        " review · (no description)"
+        "󱥾 review · (no description)"
     );
     assert_eq!(
         instance_text.lines[0].spans[0].style.fg,
-        Some(tuicore::theme().text_fg())
+        Some(tuicore::theme().success_fg())
     );
     assert!(instance.resource_text().to_string().is_empty());
-    let services = rows.iter().find(|row| row.id == "services:review").unwrap();
-    assert_eq!(services.parent.as_deref(), Some("instance:review"));
-    assert_eq!(services.text("", None).to_string(), "󰒋 Services");
-    assert_eq!(services.height(), 1);
     assert!(
         !rows
             .iter()
-            .any(|row| row.parent.as_deref() == Some("services:review"))
+            .any(|row| row.parent.as_deref() == Some("instance:review"))
     );
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows);
@@ -196,7 +193,7 @@ fn workspace_rows_keep_a_childless_services_group() {
 }
 
 #[test]
-fn inactive_instance_icons_are_green_for_live_opencode_sessions() {
+fn workspace_icons_are_green_and_stopped_icons_follow_live_opencode_sessions() {
     use crate::store::opencode::{Activity, Pane, Session, Snapshot};
 
     init_ui();
@@ -265,14 +262,14 @@ fn inactive_instance_icons_are_green_for_live_opencode_sessions() {
             assert_eq!(
                 text.lines[0].to_string(),
                 if workspace_only {
-                    " review · (no description)"
+                    "󱥾 review · (no description)"
                 } else {
                     " review · Stopped · (no description)"
                 }
             );
             assert_eq!(
                 text.lines[0].spans[0].style.fg,
-                Some(if green {
+                Some(if workspace_only || green {
                     tuicore::theme().success_fg()
                 } else {
                     inactive_tone.color()

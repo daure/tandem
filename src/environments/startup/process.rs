@@ -187,7 +187,11 @@ pub(crate) fn claim(
 }
 
 #[cfg(unix)]
-fn inherit(config: &Config, resource: &str, descriptor: i32) -> Result<gateway::Lock, String> {
+pub(crate) fn inherit(
+    config: &Config,
+    resource: &str,
+    descriptor: i32,
+) -> Result<gateway::Lock, String> {
     use std::os::{fd::FromRawFd, unix::fs::MetadataExt};
     if descriptor < 3 || unsafe { libc::fcntl(descriptor, libc::F_GETFD) } == -1 {
         return Err("startup lock descriptor is unavailable".into());
@@ -211,6 +215,6 @@ fn inherit(config: &Config, resource: &str, descriptor: i32) -> Result<gateway::
 }
 
 #[cfg(not(unix))]
-fn inherit(_: &Config, _: &str, _: i32) -> Result<gateway::Lock, String> {
+pub(crate) fn inherit(_: &Config, _: &str, _: i32) -> Result<gateway::Lock, String> {
     Err("detached startup requires Unix".into())
 }

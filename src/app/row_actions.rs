@@ -1,6 +1,6 @@
 use super::Msg;
 use crate::store::{
-    events::Record,
+    events::{Deletion, Record},
     providers::{Action, Provider, Stream},
     rules::Rule,
 };
@@ -68,7 +68,7 @@ impl Command {
 
     pub(super) fn hotkey(self) -> &'static str {
         match self {
-            Self::Details | Self::ProviderDetails | Self::StreamDetails => "Enter",
+            Self::Details | Self::ProviderDetails | Self::StreamDetails => "d",
             Self::Start | Self::Stop | Self::StartStream | Self::StopStream => "s",
             Self::Provider => "p",
             Self::Logs => "o",
@@ -88,6 +88,20 @@ impl Command {
 }
 
 impl Target {
+    pub(super) fn enter_command(&self) -> Command {
+        match self {
+            Self::Provider(_) => Command::Logs,
+            Self::Stream(_) => Command::StreamEvents,
+            Self::Event(_) | Self::Rule(_) => Command::Details,
+            Self::AcceptanceContext(_) => Command::Session,
+        }
+    }
+
+    pub(super) fn enter_message(self) -> Option<Msg> {
+        let command = self.enter_command();
+        self.message(command)
+    }
+
     pub(super) fn commands(&self) -> Vec<Command> {
         match self {
             Self::Provider(_) => vec![
@@ -128,6 +142,8 @@ impl Target {
                 ];
                 if target.selected.is_some() {
                     commands.insert(0, Command::Details);
+                } else {
+                    commands.push(Command::Delete);
                 }
                 commands
             }
@@ -178,7 +194,7 @@ impl Target {
             Self::Event(row) => match command {
                 Command::Details => Some(Msg::OpenEvent(row)),
                 Command::Replay => Some(Msg::ReplayEvent(row.sequence)),
-                Command::Delete => Some(Msg::DeleteEvents(Some(row.sequence))),
+                Command::Delete => Some(Msg::DeleteEvents(Deletion::Event(row.sequence))),
                 Command::Provider => Some(Msg::ShowProvider(row.provider.clone())),
                 _ => None,
             },

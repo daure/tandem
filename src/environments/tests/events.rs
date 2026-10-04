@@ -1,9 +1,12 @@
 use super::*;
-use crate::store::events::{Event, Payload};
+use crate::store::events::{Deletion, Event, Payload};
 use serde_json::json;
 
 #[path = "event_severity.rs"]
 mod event_severity;
+
+#[path = "event_deletion.rs"]
+mod event_deletion;
 
 pub(crate) fn event(id: &str) -> Event {
     serde_json::from_value(json!({
@@ -257,8 +260,14 @@ fn event_deletion_removes_history_and_feedback_only_in_its_namespace() {
         .unwrap()
         .receipts[0]
         .sequence;
-    assert!(matches!(store.delete(Some(foreign)), Err(Error::NotFound)));
-    assert_eq!(store.delete(Some(receipts[0].sequence)).unwrap(), 1);
+    assert!(matches!(
+        store.delete(Deletion::Event(foreign)),
+        Err(Error::NotFound)
+    ));
+    assert_eq!(
+        store.delete(Deletion::Event(receipts[0].sequence)).unwrap(),
+        1
+    );
     assert!(matches!(
         store.record(receipts[0].sequence),
         Err(Error::NotFound)
@@ -267,8 +276,8 @@ fn event_deletion_removes_history_and_feedback_only_in_its_namespace() {
     let notifications = store.notifications(&token).unwrap();
     assert_eq!(notifications.len(), 1);
     assert_eq!(notifications[0].sequence, receipts[1].sequence);
-    assert_eq!(store.delete(None).unwrap(), 1);
-    assert_eq!(store.delete(None).unwrap(), 0);
+    assert_eq!(store.delete(Deletion::All).unwrap(), 1);
+    assert_eq!(store.delete(Deletion::All).unwrap(), 0);
     assert_eq!(
         EventStore::open(&config).unwrap().snapshot().unwrap().total,
         1

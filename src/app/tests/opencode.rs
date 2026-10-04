@@ -1211,7 +1211,7 @@ fn session_menu_and_shortcut_open_or_goto_the_panel() {
         let expected = if attached { "Goto panel" } else { "Open panel" };
         assert!(
             text.lines()
-                .any(|line| line.contains(expected) && line.trim_end().ends_with('o')),
+                .any(|line| line.contains(expected) && line.contains("Enter / o")),
             "{text}"
         );
         assert_eq!(
@@ -1229,7 +1229,7 @@ fn session_menu_and_shortcut_open_or_goto_the_panel() {
         );
         let mut shortcut_ctx = EventCtx::new(AnimationSettings::default());
         app.event(
-            &TuiEvent::Key(KeyEvent::from(Key::Char('o'))),
+            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
             &mut shortcut_ctx,
         );
         assert!(shortcut_ctx.notifications().is_empty());
@@ -1486,7 +1486,7 @@ fn closing_a_pane_hides_it_across_stale_observations_and_restores_it_on_failure(
 }
 
 #[test]
-fn enter_opens_a_bottom_conversation_dialog_without_jumping_to_the_pane() {
+fn d_opens_a_bottom_conversation_dialog_without_jumping_to_the_pane() {
     init_ui();
     for width in [80, 130] {
         let mut app = root(AppService::for_tests());
@@ -1522,7 +1522,7 @@ fn enter_opens_a_bottom_conversation_dialog_without_jumping_to_the_pane() {
             Some("opencode:review:ses_review".into()),
         );
         let mut ctx = EventCtx::new(AnimationSettings::default());
-        app.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+        app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('d'))), &mut ctx);
         assert!(app.details_open);
         assert!(app.view.is_active());
         assert!(app.opencode_action.is_none());

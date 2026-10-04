@@ -1,6 +1,89 @@
 use super::*;
 
 #[test]
+fn streams_start_expanded_and_overview_expands_them_from_every_tab() {
+    init_ui();
+    for tab in 0..5 {
+        for event in [
+            TuiEvent::Key(KeyEvent {
+                code: Key::Char('H'),
+                modifiers: KeyModifiers::SHIFT,
+            }),
+            TuiEvent::Hotkey(HotkeyEvent::Commit("shift+h".into())),
+        ] {
+            let mut app = crate::app::root(AppService::for_tests());
+            let providers = ["alpha", "beta"].map(|name| {
+                let mut row = provider(name, Status::Running);
+                row.streams = vec![crate::store::providers::Stream {
+                    name: format!("{name}-stream"),
+                    controllable: true,
+                    enabled: true,
+                    status: Status::Running,
+                    operation: None,
+                    error: None,
+                    total: 10,
+                    handovers: 2,
+                }];
+                row
+            });
+            let mut snapshot = Snapshot {
+                providers: providers.into(),
+                error: None,
+            };
+            app.pages_mut().update_providers(snapshot.clone());
+            app.pages_mut()
+                .tick(Duration::ZERO, AnimationSettings::default());
+            let streams_tab = app.providers_tab_index();
+            app.tabs_mut().select_index(streams_tab);
+            app.after_event(&mut EventCtx::default());
+            let (layout, text) = render(&mut app, 130);
+            for name in ["alpha-stream", "beta-stream"] {
+                assert!(text.contains(name), "{text}");
+            }
+            let target = layout
+                .focus_targets()
+                .iter()
+                .find(|target| target.id.as_str() == crate::app::providers::FOCUS)
+                .unwrap();
+            app.dispatch_focus(target, true, &mut tuicore::FocusCtx::default());
+            app.dispatch_event(
+                &EventRoute::new(target.path.clone()),
+                &TuiEvent::Key(Key::Char('z').into()),
+                &mut EventCtx::default(),
+            );
+            snapshot.providers[0].streams[0].total += 1;
+            app.pages_mut().update_providers(snapshot);
+            app.pages_mut()
+                .tick(Duration::ZERO, AnimationSettings::default());
+            let text = render(&mut app, 130).1;
+            assert!(
+                !text.contains("alpha-stream") && !text.contains("beta-stream"),
+                "{text}"
+            );
+            app.tabs_mut().select_index(tab);
+            app.after_event(&mut EventCtx::default());
+            let (layout, _) = render(&mut app, 130);
+            let target = layout
+                .focus_targets()
+                .iter()
+                .find(|target| target.id.as_str() == "tabs")
+                .unwrap();
+            app.dispatch_event(
+                &EventRoute::new(target.path.clone()),
+                &event,
+                &mut EventCtx::default(),
+            );
+            app.tabs_mut().select_index(streams_tab);
+            app.after_event(&mut EventCtx::default());
+            let text = render(&mut app, 130).1;
+            for name in ["alpha-stream", "beta-stream"] {
+                assert!(text.contains(name), "tab {tab}: {text}");
+            }
+        }
+    }
+}
+
+#[test]
 fn provider_rows_show_stream_driven_collector_transitions_without_masking_active_siblings() {
     init_ui();
     for (runtime, action, sibling_enabled, sibling_status, expected) in [
@@ -161,7 +244,11 @@ fn provider_tree_targets_stream_details_menus_and_confirmations_independently() 
         &mut EventCtx::default(),
     );
     let mut ctx = EventCtx::default();
-    app.dispatch_event(&route, &TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+    app.dispatch_event(
+        &route,
+        &TuiEvent::Key(KeyEvent::from(Key::Char('d'))),
+        &mut ctx,
+    );
     assert!(
         matches!(ctx.messages(), [Msg::ProviderStreamDetails(name, stream)] if name == "message" && stream.name == "messages")
     );
@@ -192,9 +279,20 @@ fn provider_tree_targets_stream_details_menus_and_confirmations_independently() 
     ] {
         assert!(text.contains(label), "{text}");
     }
+    assert!(
+        text.lines()
+            .any(|line| line.contains("Stream events") && line.contains("Enter / e")),
+        "{text}"
+    );
     app.event(
         &TuiEvent::Key(KeyEvent::from(Key::Esc)),
         &mut EventCtx::default(),
+    );
+    app.dispatch_focus(target, true, &mut tuicore::FocusCtx::default());
+    let mut activation = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut activation);
+    assert!(
+        matches!(activation.messages(), [Msg::ProviderStreamEvents(name, stream)] if name == "dev-message" && stream == "messages")
     );
     app.handle_message(
         Msg::ProviderStreamAction("message".into(), "messages".into(), Action::Stop),

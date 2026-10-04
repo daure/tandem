@@ -439,7 +439,7 @@ fn event_details_provider_logs_and_details_share_the_bottom_docked_size_across_t
 }
 
 #[test]
-fn providers_are_the_final_tab_with_owned_lifecycle_controls_and_confirmation() {
+fn streams_are_the_final_tab_with_owned_lifecycle_controls_and_confirmation() {
     init_ui();
     let mut app = crate::app::root(AppService::for_tests());
     app.update_snapshot(super::snapshot());
@@ -464,7 +464,7 @@ fn providers_are_the_final_tab_with_owned_lifecycle_controls_and_confirmation() 
         let (layout, text) = render(&mut app, width);
         assert!(text.contains("Paused"), "{text}");
         if width == 130 {
-            assert!(text.contains("Providers"), "{text}");
+            assert!(text.contains("Streams"), "{text}");
         }
         assert!(
             layout
@@ -492,7 +492,7 @@ fn providers_are_the_final_tab_with_owned_lifecycle_controls_and_confirmation() 
     assert!(app.menu_layer().is_active());
     let text = render(&mut app, 130).1;
     for (label, key) in [
-        ("Provider details", "Enter"),
+        ("Provider details", "d"),
         ("Start provider", "s"),
         ("Stop provider", "s"),
         ("Logs", "o"),
@@ -502,12 +502,30 @@ fn providers_are_the_final_tab_with_owned_lifecycle_controls_and_confirmation() 
             .find(|line| line.contains(&format!("{label}   ")))
             .unwrap();
         assert!(line.trim_end_matches([' ', '┃']).ends_with(key), "{line}");
+        if label == "Logs" {
+            assert!(line.contains("Enter / o"), "{line}");
+        }
     }
     app.event(
         &TuiEvent::Key(KeyEvent::from(Key::Esc)),
         &mut EventCtx::default(),
     );
     assert!(!app.menu_layer().is_active());
+    app.dispatch_focus(target, true, &mut tuicore::FocusCtx::default());
+    let mut activation = EventCtx::default();
+    app.dispatch_event(
+        &route,
+        &TuiEvent::Key(KeyEvent::from(Key::Char('d'))),
+        &mut activation,
+    );
+    assert!(
+        matches!(activation.messages(), [Msg::ProviderDetails(provider)] if provider.name == "message")
+    );
+    let mut activation = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut activation);
+    assert!(
+        matches!(activation.messages(), [Msg::ProviderAction(name, Action::Logs)] if name == "message")
+    );
     let mut action = EventCtx::default();
     app.dispatch_event(
         &route,
@@ -569,7 +587,7 @@ fn entering_providers_focuses_the_data_view_without_stealing_focus_from_its_cont
                         .lines()
                         .next()
                         .unwrap()
-                        .split_once("Providers")
+                        .split_once("Streams")
                         .unwrap()
                         .0
                         .chars()

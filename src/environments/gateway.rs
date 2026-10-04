@@ -59,6 +59,15 @@ pub(crate) fn lock(config: &Config, resource: &str) -> Result<Lock, String> {
     Ok(Lock(file, true))
 }
 
+pub(super) fn try_lock(config: &Config, resource: &str) -> Result<Option<Lock>, String> {
+    let file = open_lock(config, resource)?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(Lock(file, true))),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(error) => Err(lock_error(resource, error)),
+    }
+}
+
 pub(super) fn is_locked(config: &Config, resource: &str) -> Result<bool, String> {
     let file = open_lock(config, resource)?;
     match file.try_lock_shared() {

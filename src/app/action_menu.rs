@@ -1,4 +1,8 @@
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    time::Duration,
+};
 
 use ratatui::{
     Frame,
@@ -29,6 +33,7 @@ pub(super) enum Action {
     Yank,
     UpdateDescription,
     OpenBrowser,
+    OpenRoutes,
     OpenPanel,
     GotoPanel,
     CloseSession,
@@ -59,7 +64,9 @@ impl Action {
             | Self::CopyCheckoutPath => unreachable!("copy actions have fixed hotkeys"),
             Self::Yank => unreachable!("yank opens its own menu"),
             Self::UpdateDescription => unreachable!("description editing opens its own dialog"),
-            Self::OpenBrowser => unreachable!("browser action has a fixed hotkey"),
+            Self::OpenBrowser | Self::OpenRoutes => {
+                unreachable!("route actions have a fixed hotkey")
+            }
             Self::OpenPanel
             | Self::GotoPanel
             | Self::CloseSession
@@ -90,6 +97,7 @@ impl Action {
             Self::Yank => "Yank",
             Self::UpdateDescription => "Update description",
             Self::OpenBrowser => "Open in browser",
+            Self::OpenRoutes => "Open routes",
             Self::OpenPanel => "Open panel",
             Self::GotoPanel => "Goto panel",
             Self::CloseSession => "Close session",
@@ -119,6 +127,7 @@ pub(super) struct ActionMenu {
     enabled: Rc<RefCell<Vec<Action>>>,
     field_area: Rect,
     row_target: Option<super::row_actions::Target>,
+    enter_action: Rc<Cell<Option<Action>>>,
 }
 
 pub(super) struct Target {
@@ -136,6 +145,7 @@ pub(super) struct Target {
     pub new_opencode: bool,
     pub close_opencode_group: bool,
     pub workspace_missing: bool,
+    pub enter_action: Option<Action>,
 }
 
 impl ActionMenu {
@@ -144,6 +154,8 @@ impl ActionMenu {
         let selection = Rc::clone(&selected);
         let enabled = Rc::new(RefCell::new(Vec::new()));
         let enabled_for_renderer = Rc::clone(&enabled);
+        let enter_action = Rc::new(Cell::new(None));
+        let enter_for_renderer = Rc::clone(&enter_action);
         let labels = keys;
         let dropdown = Dropdown::single_rich(
             [Action::Yank],
@@ -154,6 +166,7 @@ impl ActionMenu {
                     *action,
                     &labels,
                     enabled_for_renderer.borrow().contains(action),
+                    enter_for_renderer.get() == Some(*action),
                 )
             },
         )
@@ -174,11 +187,13 @@ impl ActionMenu {
             enabled,
             field_area: Rect::default(),
             row_target: None,
+            enter_action,
         }
     }
 
     pub(super) fn open(&mut self, target: Target, ctx: &mut EventCtx<Msg>) {
         self.row_target = None;
+        self.enter_action.set(target.enter_action);
         self.actions = if let Some((attached, _)) = target.opencode_session {
             if attached {
                 vec![Action::GotoPanel, Action::CloseSession]
@@ -256,6 +271,9 @@ impl ActionMenu {
         if target.close_opencode_group {
             self.actions.push(Action::CloseSessions);
         }
+        if target.enter_action == Some(Action::OpenRoutes) {
+            self.actions.insert(0, Action::OpenRoutes);
+        }
         *self.enabled.borrow_mut() = self
             .actions
             .iter()
@@ -277,6 +295,8 @@ impl ActionMenu {
     }
 
     pub(super) fn open_row(&mut self, target: super::row_actions::Target, ctx: &mut EventCtx<Msg>) {
+        self.enter_action
+            .set(Some(Action::Row(target.enter_command())));
         self.actions = target.commands().into_iter().map(Action::Row).collect();
         *self.enabled.borrow_mut() = self
             .actions
@@ -310,14 +330,20 @@ impl ActionMenu {
         (self.enabled.borrow().contains(&action)
             || matches!(
                 self.row_target,
-                Some(super::row_actions::Target::Provider(_) | super::row_actions::Target::Stream(_))
+                Some(
+                    super::row_actions::Target::Provider(_) | super::row_actions::Target::Stream(_)
+                )
             ))
         .then_some(action)
     }
 
     fn delete_hotkey(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
-        if matches!(self.row_target, Some(super::row_actions::Target::Event(_)))
-            && self.dropdown.search_query().is_empty()
+        if self.row_target.as_ref().is_some_and(|target| {
+            target
+                .commands()
+                .contains(&super::row_actions::Command::Delete)
+                && target.enabled(super::row_actions::Command::Delete)
+        }) && self.dropdown.search_query().is_empty()
             && matches!(event, TuiEvent::Key(key) if KeySpec::plain('x').matches(*key))
         {
             *self.selected.borrow_mut() = Some(Action::Row(super::row_actions::Command::Delete));
@@ -329,7 +355,7 @@ impl ActionMenu {
     }
 }
 
-fn action_text(action: Action, keys: &[KeySpec; 10], enabled: bool) -> Text<'static> {
+fn action_text(action: Action, keys: &[KeySpec; 10], enabled: bool, enter: bool) -> Text<'static> {
     let label = action.label();
     let hotkey = match action {
         Action::Row(command) => command.hotkey().into(),
@@ -337,8 +363,8 @@ fn action_text(action: Action, keys: &[KeySpec; 10], enabled: bool) -> Text<'sta
         Action::CopyInstanceName => "yi".into(),
         Action::CopyServiceName => String::new(),
         Action::Yank => "y".into(),
-        Action::UpdateDescription => "d".into(),
-        Action::OpenBrowser => open_route_key().label(),
+        Action::UpdateDescription => "e".into(),
+        Action::OpenBrowser | Action::OpenRoutes => open_route_key().label(),
         Action::OpenPanel | Action::GotoPanel => open_panel_key().label(),
         Action::CloseSession | Action::CloseSessions => "c".into(),
         Action::NewSession => "n".into(),
@@ -347,6 +373,11 @@ fn action_text(action: Action, keys: &[KeySpec; 10], enabled: bool) -> Text<'sta
             .copied()
             .map(KeySpec::label)
             .unwrap_or_default(),
+    };
+    let hotkey = if enter {
+        format!("Enter / {hotkey}")
+    } else {
+        hotkey
     };
     let spacing = usize::from(MENU_CONTENT_WIDTH)
         .saturating_sub(line_width(&Line::from(label)))
@@ -462,7 +493,7 @@ mod tests {
     #[test]
     fn action_rows_fill_the_menu_width() {
         let service = AppService::for_tests();
-        let text = action_text(Action::Details, &service.environment_keys(), true);
+        let text = action_text(Action::Details, &service.environment_keys(), true, false);
 
         assert_eq!(line_width(&text.lines[0]), usize::from(MENU_FIELD_WIDTH));
     }
@@ -487,6 +518,11 @@ mod tests {
             new_opencode: true,
             close_opencode_group: false,
             workspace_missing: false,
+            enter_action: Some(if opencode_session.0 {
+                Action::GotoPanel
+            } else {
+                Action::OpenPanel
+            }),
         };
 
         menu.open(target((true, false)), &mut ctx);

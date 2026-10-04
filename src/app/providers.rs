@@ -65,7 +65,7 @@ impl Providers {
             .columns(vec![
                 Column::multiline(
                     "provider",
-                    "Providers",
+                    "Streams",
                     Constraint::Fill(1),
                     move |row: &Row, _| {
                         if let Some(stream) = &row.stream {
@@ -222,6 +222,7 @@ impl Providers {
             self.sync();
             self.view.clear_search();
             self.view.clear_filters();
+            self.view.expand_all();
             if self.view.is_searching() {
                 self.view.on_key(tuicore::Key::Enter, Rect::default());
             }
@@ -258,6 +259,18 @@ impl Providers {
             return false;
         };
         let provider = &row.provider;
+        if KeySpec::key(tuicore::Key::Enter).matches(*key) && self.view.is_focused() {
+            let target = if let Some(stream) = &row.stream {
+                super::row_actions::Target::Stream(Box::new((provider.clone(), stream.clone())))
+            } else {
+                super::row_actions::Target::Provider(Box::new(provider.clone()))
+            };
+            if let Some(message) = target.enter_message() {
+                ctx.emit(message);
+            }
+            ctx.stop_propagation();
+            return true;
+        }
         if let Some(stream) = &row.stream {
             if KeySpec::plain('.').matches(*key) {
                 ctx.emit(Msg::OpenRowMenu(super::row_actions::Target::Stream(

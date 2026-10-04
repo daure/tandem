@@ -43,6 +43,10 @@ dependency.
 It teaches agents using Tandem how to configure templates, manage repository/workspace workflows,
 and operate environments safely. Existing runtime copies are user-owned and preserved.
 
+The instance-scoped MCP uses `instance-agent-instructions.md` as its editable guidance seed and
+`instance-core-guidance.md` as its bundled baseline. Keep that guidance focused on scoped lifecycle,
+accepted-task reporting, preservation before purge, and historical-report reuse.
+
 - Keep it concise and self-contained. Consolidate related guidance when adding a rule; never refer readers to other documents, source-checkout guides, or external resources.
 - Include only facts that change an MCP agent's decisions. Distinguish Tandem guarantees from template conventions.
 - MCP schemas own tool parameters; the README owns TUI usage; this file and `architecture.md` own contributor guidance.

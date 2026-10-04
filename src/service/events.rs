@@ -11,7 +11,7 @@ use tokio::sync::oneshot;
 use super::AppService;
 use crate::{
     environments::{config::Config, events::EventStore},
-    store::events::{Batch, Error, Ingestion, ProviderNotification, Snapshot},
+    store::events::{Batch, Deletion, Error, Ingestion, ProviderNotification, Snapshot},
 };
 
 pub(super) struct Integration {
@@ -169,22 +169,11 @@ impl AppService {
         receiver
     }
 
-    pub(crate) fn delete_events(
-        &self,
-        sequence: Option<i64>,
-    ) -> oneshot::Receiver<Result<i64, Error>> {
-        let service = self.clone();
+    pub(crate) fn delete_events(&self, target: Deletion) -> oneshot::Receiver<Result<i64, Error>> {
+        let store = self.events.store.clone();
         let (sender, receiver) = oneshot::channel();
         self.runtime.spawn_blocking(move || {
-            let result = (|| {
-                let _lease = service
-                    .rules
-                    .store
-                    .lease()?
-                    .ok_or_else(|| Error::Conflict("rule worker is busy; try again".into()))?;
-                service.events.store.delete(sequence)
-            })();
-            let _ = sender.send(result);
+            let _ = sender.send(store.delete(target));
         });
         receiver
     }
@@ -201,3 +190,7 @@ impl AppService {
         self.events.store.register_provider(name).unwrap()
     }
 }
+
+#[cfg(test)]
+#[path = "tests/event_deletion.rs"]
+mod tests;

@@ -34,6 +34,7 @@ pub(super) struct State {
     searching: bool,
     rows_changed: bool,
     reset_view: bool,
+    expand_view: bool,
     center_highlighted: bool,
     select_first: bool,
     select_created: Option<(bool, String)>,
@@ -95,6 +96,12 @@ pub(super) fn is_searching(state: &SharedState) -> bool {
 
 pub(super) fn request_view_reset(state: &SharedState) {
     state.borrow_mut().reset_view = true;
+}
+
+pub(super) fn request_expanded_overview(state: &SharedState) {
+    let mut state = state.borrow_mut();
+    state.reset_view = true;
+    state.expand_view = true;
 }
 
 pub(super) fn request_center_highlighted(state: &SharedState) {
@@ -175,6 +182,7 @@ pub(super) struct Instances {
     timer_display_phase: Duration,
     completion: Rc<RefCell<completion::Markers>>,
     scroll_preset: tuicore::ScrollPreset,
+    initial_expansion_pending: bool,
 }
 
 struct SessionTimer {
@@ -189,11 +197,8 @@ impl Instances {
             let state = state.borrow();
             (state.rows.clone(), state.attached_sessions_only)
         };
-        let expanded = if agent_view {
-            Self::fully_expanded_ids(&rows, true)
-        } else {
-            Self::overview_expanded_ids(&rows)
-        };
+        let initial_expansion_pending = !rows.iter().any(|row| row.instance.is_some());
+        let expanded = Self::fully_expanded_ids(&rows, agent_view);
         let spinner = Rc::new(RefCell::new(Spinner::new()));
         let cell_spinner = Rc::clone(&spinner);
         let memory_spinner = Rc::clone(&spinner);
@@ -270,6 +275,7 @@ impl Instances {
             timer_display_phase: Duration::ZERO,
             completion,
             scroll_preset: tuicore::preset().scroll(),
+            initial_expansion_pending,
         };
         instances.tick_session_timers(Duration::ZERO);
         instances.record_highlighted();
@@ -282,6 +288,10 @@ impl Instances {
             self.reset_search_and_selection();
         }
         let changed = self.sync_updated_rows();
+        if std::mem::take(&mut self.state.borrow_mut().expand_view) {
+            self.expand_overview();
+            self.after_event();
+        }
         changed || reset
     }
 
@@ -362,11 +372,15 @@ impl Instances {
             })
             .map(|row| row.id.clone())
             .collect::<Vec<_>>();
-        let new_instances = rows
+        let instances_with_new_children = rows
             .iter()
             .filter(|row| {
                 row.instance.is_some()
-                    && !self.tree.rows().iter().any(|current| current.id == row.id)
+                    && !self
+                        .tree
+                        .rows()
+                        .iter()
+                        .any(|current| current.parent.as_ref() == Some(&row.id))
             })
             .map(|row| row.id.clone())
             .collect::<Vec<_>>();
@@ -433,8 +447,14 @@ impl Instances {
         for id in templates_with_new_children {
             self.tree.expand(&id);
         }
-        for id in new_instances {
+        for id in instances_with_new_children {
             self.tree.expand(&id);
+        }
+        if self.initial_expansion_pending
+            && self.tree.rows().iter().any(|row| row.instance.is_some())
+        {
+            self.expand_overview();
+            self.initial_expansion_pending = false;
         }
         if let Some(id) = retained_highlight {
             let mut current = id.clone();
@@ -633,15 +653,23 @@ impl Instances {
 
     fn focus_expanded_overview(&mut self, ctx: &mut EventCtx<Msg>) {
         self.reset_search_and_selection();
+        self.expand_overview();
+        self.tree.reveal_highlighted();
+        self.after_event();
+        ctx.focus(super::initial_focus());
+    }
+
+    fn expand_overview(&mut self) {
+        let highlighted = self.tree.highlighted_id();
         self.tree.collapse_all();
         let expanded_ids =
             Self::fully_expanded_ids(self.tree.rows(), self.state.borrow().attached_sessions_only);
         for id in expanded_ids {
             self.tree.expand(&id);
         }
-        self.tree.reveal_highlighted();
-        self.after_event();
-        ctx.focus(super::initial_focus());
+        if let Some(id) = highlighted {
+            self.tree.highlight_id(&id);
+        }
     }
 
     fn toggles_overview_expansion(&self, event: &TuiEvent) -> bool {

@@ -5,6 +5,7 @@ use serde_json::Value;
 use super::events::Event;
 
 mod prompt;
+pub(crate) mod reports;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

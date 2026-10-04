@@ -7,7 +7,7 @@ use std::{
 };
 
 use super::{Environments, config::Config, gateway, journal, ownership, removal, templates};
-use crate::store::environments::Instance;
+use crate::store::environments::{Instance, InstanceInstructions};
 
 #[derive(Debug)]
 pub(crate) struct InstanceScope {
@@ -19,6 +19,24 @@ pub(crate) struct InstanceScope {
 }
 
 impl Environments {
+    pub(crate) fn instance_instructions(
+        &self,
+        scope: &InstanceScope,
+    ) -> Result<InstanceInstructions, String> {
+        let _lock = gateway::lock(&self.config, &format!("instance-{}", scope.name))?;
+        let instance = self.verify_instance_scope(scope)?;
+        let file = self.config.instance_instructions();
+        Ok(InstanceInstructions {
+            file: file.display().to_string(),
+            core_guidance: include_str!("../../instance-core-guidance.md").into(),
+            markdown: super::config::read_text(&file)?,
+            instance: instance.name,
+            template: instance.template,
+            workspace: instance.workspace,
+            namespace: self.config.namespace.clone(),
+        })
+    }
+
     pub(crate) fn bind_instance_workspace(&self) -> Result<InstanceScope, String> {
         self.bind_instance_directory(&std::env::current_dir().map_err(|error| error.to_string())?)
     }
@@ -58,7 +76,7 @@ impl Environments {
         Ok(scope)
     }
 
-    fn verify_instance_scope(&self, scope: &InstanceScope) -> Result<Instance, String> {
+    pub(crate) fn verify_instance_scope(&self, scope: &InstanceScope) -> Result<Instance, String> {
         if scope.home != self.config.home || scope.namespace != self.config.namespace {
             return Err("instance MCP scope belongs to another Tandem home or namespace".into());
         }
@@ -111,6 +129,14 @@ impl Environments {
         }
         Ok((instance, lock))
     }
+
+    pub(crate) fn admit_instance_conclusion(
+        &self,
+        scope: &InstanceScope,
+    ) -> Result<(Instance, gateway::Lock), String> {
+        let lock = gateway::lock(&self.config, &format!("instance-{}", scope.name))?;
+        Ok((self.verify_instance_scope(scope)?, lock))
+    }
 }
 
 pub(super) fn prepare_config(config: &Config, workspace: &Path) -> Result<(), String> {
@@ -152,8 +178,12 @@ pub(super) fn prepare_config(config: &Config, workspace: &Path) -> Result<(), St
             }
         }},
         "permission": {
+            "tandem-instance_get_instructions": "allow",
             "tandem-instance_start_self": "allow",
-            "tandem-instance_stop_self": "allow"
+            "tandem-instance_stop_self": "allow",
+            "tandem-instance_conclude": "allow",
+            "tandem-instance_search_events": "allow",
+            "tandem-instance_get_event_report": "allow"
         }
     });
     let mut file =

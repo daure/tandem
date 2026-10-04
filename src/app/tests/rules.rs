@@ -543,7 +543,7 @@ fn acceptance_navigation_loads_a_retained_event_and_clears_conflicting_source_fi
     let mut ctx = EventCtx::default();
     app.dispatch_event(
         &EventRoute::new(target.path.clone()),
-        &TuiEvent::Key(Key::Enter.into()),
+        &TuiEvent::Key(Key::Char('d').into()),
         &mut ctx,
     );
     assert!(
@@ -620,7 +620,7 @@ fn event_rows_summarize_acceptances_and_tree_children_navigate_to_their_rule() {
     for key in [Key::Right, Key::Down] {
         app.dispatch_event(&route, &TuiEvent::Key(key.into()), &mut ctx);
     }
-    app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Char('d').into()), &mut ctx);
     assert!(matches!(ctx.messages(), [Msg::FocusRule(name)] if name == "third"));
     let mut navigation = EventCtx::default();
     for message in ctx.drain_messages() {
@@ -646,7 +646,7 @@ fn event_rows_summarize_acceptances_and_tree_children_navigate_to_their_rule() {
     let mut ctx = EventCtx::default();
     app.dispatch_event(
         &EventRoute::new(target.path.clone()),
-        &TuiEvent::Key(Key::Enter.into()),
+        &TuiEvent::Key(Key::Char('d').into()),
         &mut ctx,
     );
     assert!(matches!(ctx.messages(), [Msg::OpenRule(rule)] if rule.definition.name == "third"));
@@ -761,12 +761,15 @@ fn rule_menu_and_row_hotkey_offer_the_action_for_the_selected_state() {
             app.handle_message(message, &mut EventCtx::default());
         }
         let text = render(&mut app, 130).1;
-        for (label, key) in [("View details", "Enter"), (command.label(), "a")] {
+        for (label, key) in [("View details", "d"), (command.label(), "a")] {
             let line = text
                 .lines()
                 .find(|line| line.contains(&format!("{label}   ")))
                 .unwrap();
             assert!(line.trim_end_matches([' ', '┃']).ends_with(key), "{text}");
+            if label == "View details" {
+                assert!(line.contains("Enter / d"), "{line}");
+            }
         }
         for character in command.label().chars() {
             app.event(
@@ -831,7 +834,7 @@ fn rule_menu_and_row_hotkey_offer_the_action_for_the_selected_state() {
         let effects = dispatcher.dispatch_event(
             &mut app,
             &EventRoute::new(focus.current_path()),
-            &TuiEvent::Key(Key::Enter.into()),
+            &TuiEvent::Key(Key::Char('d').into()),
             AnimationSettings::default(),
         );
         assert!(

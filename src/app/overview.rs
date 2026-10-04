@@ -155,15 +155,16 @@ impl Pages {
             .iter()
             .filter(|rule| rule.definition.enabled)
             .count();
-        let running_providers = self
+        let running_streams = self
             .providers
             .borrow()
             .snapshot
             .providers
             .iter()
-            .filter(|provider| provider.status == crate::store::providers::Status::Running)
+            .flat_map(|provider| &provider.streams)
+            .filter(|stream| stream.status == crate::store::providers::Status::Running)
             .count();
-        (active_rules, running_providers)
+        (active_rules, running_streams)
     }
     pub(super) fn acceptance_context(&self) -> super::acceptances::SharedContext {
         self.acceptance_context.clone()
@@ -191,16 +192,10 @@ impl Pages {
     pub(super) fn focus_event(&mut self, record: crate::store::events::Record) {
         self.event_focus.borrow_mut().record = Some(record);
     }
-    pub(super) fn forget_event(&mut self, sequence: Option<i64>) {
+    pub(super) fn forget_event(&mut self, deletion: crate::store::events::Deletion) {
         let mut request = self.event_focus.borrow_mut();
-        request.deletion = Some(sequence);
-        if request
-            .record
-            .as_ref()
-            .is_some_and(|row| sequence.is_none_or(|id| id == row.sequence))
-        {
-            request.record = None;
-        }
+        request.deletion = Some(deletion);
+        deletion.forget_record(&mut request.record);
     }
     pub(super) fn highlight_rule(&mut self, name: &str) -> bool {
         if !self
@@ -356,7 +351,7 @@ impl Pages {
                 continue;
             }
             if index < 2 {
-                super::instances::request_view_reset(&self.states[index]);
+                super::instances::request_expanded_overview(&self.states[index]);
                 page.tick(Duration::ZERO, ctx.animation());
             } else {
                 page.child_mut()

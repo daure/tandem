@@ -353,7 +353,17 @@ pub(super) fn delete(
     progress: Progress,
     before_deletion: &super::BeforeDeletion<'_>,
 ) -> Result<(), String> {
-    delete_with_provenance(config, name, None, progress, before_deletion)
+    delete_with_lock(config, name, progress, before_deletion, None)
+}
+
+pub(super) fn delete_with_lock(
+    config: &Config,
+    name: &str,
+    progress: Progress,
+    before_deletion: &super::BeforeDeletion<'_>,
+    lock: Option<gateway::Lock>,
+) -> Result<(), String> {
+    delete_with_provenance(config, name, None, progress, before_deletion, lock)
 }
 
 pub(super) fn delete_for_provider(
@@ -363,7 +373,14 @@ pub(super) fn delete_for_provider(
     progress: Progress,
     before_deletion: &super::BeforeDeletion<'_>,
 ) -> Result<(), String> {
-    delete_with_provenance(config, name, Some(operation), progress, before_deletion)
+    delete_with_provenance(
+        config,
+        name,
+        Some(operation),
+        progress,
+        before_deletion,
+        None,
+    )
 }
 
 fn delete_with_provenance(
@@ -372,10 +389,14 @@ fn delete_with_provenance(
     operation: Option<&str>,
     progress: Progress,
     before_deletion: &super::BeforeDeletion<'_>,
+    lock: Option<gateway::Lock>,
 ) -> Result<(), String> {
     validate_instance_name(name)?;
     let deadline = Instant::now() + Duration::from_secs(60);
-    let _lock = gateway::lock(config, &format!("instance-{name}"))?;
+    let _lock = match lock {
+        Some(lock) => lock,
+        None => gateway::lock(config, &format!("instance-{name}"))?,
+    };
     if let Some(operation) = operation {
         match super::startup::read(config, name)? {
             Some(record) if record.operation.id == operation => {}

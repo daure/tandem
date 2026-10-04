@@ -146,6 +146,13 @@ impl Target {
             }
             Command::NewSession => self.instance.is_some() && self.workspace.is_some(),
             Command::Session => self.has_conversations,
+            Command::Delete => {
+                self.selected.is_none()
+                    && !matches!(
+                        self.acceptance.status,
+                        DispatchStatus::Provisioning | DispatchStatus::Launching
+                    )
+            }
             _ => true,
         }
     }
@@ -223,10 +230,13 @@ impl Target {
             Command::NewSession,
             Command::Session,
             Command::PurgeInstance,
+            Command::Delete,
         ]
         .into_iter()
-        .find(|command| KeySpec::plain(command.hotkey().chars().next().unwrap()).matches(*key))
-        {
+        .find(|command| {
+            KeySpec::plain(command.hotkey().chars().next().unwrap()).matches(*key)
+                || *command == Command::Session && KeySpec::key(tuicore::Key::Enter).matches(*key)
+        }) {
             if self.enabled(command) {
                 ctx.emit(Msg::AcceptanceAction(Box::new(self.clone()), command));
             } else {

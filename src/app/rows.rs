@@ -14,7 +14,7 @@ use super::{details, properties::Property};
 mod setup;
 
 pub(super) const TEMPLATE_ICON: &str = "󰠲";
-pub(super) const WORKSPACE_ICON: &str = "";
+pub(super) const WORKSPACE_ICON: &str = "󱥾";
 pub(super) const STOPPED_ICON: &str = "";
 const GATEWAY_ICON: &str = "";
 const PORT_ICON: &str = "󰈀";
@@ -185,7 +185,7 @@ fn instance_summary(instance: &Instance, startup: Option<&StartupTiming>) -> Ins
     InstanceSummary {
         label: (!workspace_ready).then_some(summary.label),
         tone: if workspace_ready {
-            Tone::Normal
+            Tone::Success
         } else {
             summary.severity.into()
         },
@@ -1036,9 +1036,15 @@ fn from_snapshot_with_operations_and_totals(
             .iter()
             .filter(|service| !service.one_shot)
             .count();
-        let services = setup::services(&instance_row, instance, service_count, starting);
-        let services_id = services.id.clone();
-        rows.push(services);
+        let services_id = format!("services:{}", instance.name);
+        if service_count > 0 {
+            rows.push(setup::services(
+                &instance_row,
+                instance,
+                service_count,
+                starting,
+            ));
+        }
         for service in &instance.services {
             let service_id = if service.runtime.replica > 1 {
                 format!(

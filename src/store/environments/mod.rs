@@ -313,6 +313,17 @@ impl Operation {
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
+pub(crate) struct InstanceInstructions {
+    pub file: String,
+    pub core_guidance: String,
+    pub markdown: String,
+    pub instance: String,
+    pub template: String,
+    pub workspace: String,
+    pub namespace: String,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 pub(crate) struct Instructions {
     pub file: String,
     pub core_guidance: String,

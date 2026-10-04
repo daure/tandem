@@ -1,5 +1,5 @@
 use super::*;
-use crate::store::events::Batch;
+use crate::store::events::{Batch, Deletion};
 
 fn definition(name: &str, script: &str) -> Definition {
     Definition {
@@ -119,7 +119,7 @@ fn event_deletion_preserves_rules_and_rate_limits_and_protects_active_dispatches
     ).unwrap();
     let store = RuleStore::open(&config).unwrap();
     assert_eq!(store.snapshot().unwrap().acceptances, vec![acceptance]);
-    assert_eq!(events.delete(Some(sequence)).unwrap(), 1);
+    assert_eq!(events.delete(Deletion::Event(sequence)).unwrap(), 1);
     let current = store.snapshot().unwrap();
     assert_eq!(current.rules, vec![rule]);
     assert!(current.acceptances.is_empty());
@@ -150,13 +150,16 @@ fn event_deletion_preserves_rules_and_rate_limits_and_protects_active_dispatches
         acceptance.status = status;
         store.update(&acceptance, false).unwrap();
         let before = events.snapshot().unwrap();
-        assert!(matches!(events.delete(None), Err(Error::Conflict(_))));
+        assert!(matches!(
+            events.delete(Deletion::All),
+            Err(Error::Conflict(_))
+        ));
         assert_eq!(events.snapshot().unwrap(), before);
         assert_eq!(events.notifications(&token).unwrap().len(), 1);
     }
     acceptance.status = DispatchStatus::Failed;
     store.update(&acceptance, false).unwrap();
-    assert_eq!(events.delete(None).unwrap(), 1);
+    assert_eq!(events.delete(Deletion::All).unwrap(), 1);
     assert!(store.snapshot().unwrap().acceptances.is_empty());
     assert_eq!(
         RuleStore::open(&config)

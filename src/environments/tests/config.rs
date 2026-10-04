@@ -1,10 +1,10 @@
 use super::*;
 
 #[test]
-fn action_keys_support_enter_for_details_and_configurable_letters() {
+fn action_keys_default_to_d_for_details_and_support_configurable_letters_and_enter() {
     let directory = tempfile::tempdir().unwrap();
     let config = Config::at(directory.path().to_path_buf(), "keys-test".into(), 9876).unwrap();
-    assert!(config.keys[0].matches(KeyEvent::from(Key::Enter)));
+    assert!(config.keys[0].matches(KeyEvent::from(Key::Char('d'))));
     assert!(
         !config
             .keys
@@ -12,7 +12,7 @@ fn action_keys_support_enter_for_details_and_configurable_letters() {
             .any(|key| key.matches(KeyEvent::from(Key::Char('v'))))
     );
     for (name, value, expected) in [
-        ("INFO", "Enter", config.keys[0]),
+        ("INFO", "Enter", KeySpec::key(Key::Enter)),
         ("INFO", "i", KeySpec::plain('i')),
         ("REFRESH", "R", KeySpec::shifted('r')),
     ] {

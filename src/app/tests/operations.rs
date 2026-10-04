@@ -86,7 +86,7 @@ fn instance_descriptions_can_be_edited_and_saved_during_lifecycle_operations() {
         assert!(app.instance_has_operation("review"));
         let mut ctx = EventCtx::new(AnimationSettings::default());
 
-        app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('d'))), &mut ctx);
+        app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('e'))), &mut ctx);
 
         assert!(app.view.is_active(), "{action}");
         app.handle_message(

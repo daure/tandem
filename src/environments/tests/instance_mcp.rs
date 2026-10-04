@@ -30,6 +30,12 @@ fn instance_control_binds_nested_workspaces_and_holds_the_lifecycle_lock() {
         assert!(error.contains("busy"));
         drop(lock);
     }
+    let (instance, lock) = environment.admit_instance_conclusion(&scope).unwrap();
+    assert_eq!(instance.name, "review");
+    assert!(gateway::lock(&config, "instance-review").is_err());
+    assert!(environment.admit_instance_conclusion(&scope).is_err());
+    assert!(environment.instance_instructions(&scope).is_err());
+    drop(lock);
     assert!(environment.bind_instance_directory(&config.home).is_err());
     assert!(
         environment
@@ -58,11 +64,20 @@ fn instance_control_rejects_deleted_recreated_and_symlinked_workspaces() {
     fs::remove_dir_all(&path).unwrap();
     journal::forget(&config, "review").unwrap();
     assert!(environment.admit_instance_self(&scope, false).is_err());
+    assert!(environment.admit_instance_conclusion(&scope).is_err());
     owned_workspace(&config, "review");
     for start in [false, true] {
         let error = environment.admit_instance_self(&scope, start).unwrap_err();
         assert!(error.contains("replaced"));
     }
+    let error = environment.admit_instance_conclusion(&scope).unwrap_err();
+    assert!(error.contains("replaced"));
+    assert!(
+        environment
+            .instance_instructions(&scope)
+            .unwrap_err()
+            .contains("replaced")
+    );
     let fresh = environment.bind_instance_directory(&path).unwrap();
     assert!(environment.admit_instance_self(&fresh, false).is_ok());
     fs::remove_dir_all(&path).unwrap();
@@ -70,6 +85,7 @@ fn instance_control_rejects_deleted_recreated_and_symlinked_workspaces() {
     std::os::unix::fs::symlink(outside.path(), &path).unwrap();
     assert!(environment.bind_instance_directory(&path).is_err());
     assert!(environment.admit_instance_self(&fresh, false).is_err());
+    assert!(environment.admit_instance_conclusion(&fresh).is_err());
 }
 
 #[test]
@@ -99,7 +115,20 @@ fn workspace_mcp_configuration_pins_environment_and_preserves_user_configuration
     assert_eq!(server["environment"]["TANDEM_NAMESPACE"], config.namespace);
     assert_eq!(server["timeout"], 660_000);
     assert_eq!(value["permission"]["tandem-instance_start_self"], "allow");
+    assert_eq!(
+        value["permission"]["tandem-instance_get_instructions"],
+        "allow"
+    );
     assert_eq!(value["permission"]["tandem-instance_stop_self"], "allow");
+    assert_eq!(value["permission"]["tandem-instance_conclude"], "allow");
+    assert_eq!(
+        value["permission"]["tandem-instance_search_events"],
+        "allow"
+    );
+    assert_eq!(
+        value["permission"]["tandem-instance_get_event_report"],
+        "allow"
+    );
     let custom = "// custom settings\n{\"model\":\"custom/model\"}\n";
     fs::remove_file(&path).unwrap();
     fs::write(workspace.join(".opencode/opencode.jsonc"), custom).unwrap();

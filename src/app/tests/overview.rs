@@ -99,7 +99,7 @@ fn tabs_retain_independent_expansion_and_selection() {
 }
 
 #[test]
-fn external_workspace_expansion_survives_switches_and_the_sessions_overview_shortcut() {
+fn external_workspace_expansion_survives_switches_and_overview_restores_default_expansion() {
     let mut app = app();
     let mut observation = super::attached_sessions::observation();
     let mut session = observation.sessions[0].clone();
@@ -138,8 +138,37 @@ fn external_workspace_expansion_survives_switches_and_the_sessions_overview_shor
     assert!(app.attached_sessions_only);
     assert!(render(&mut app).1.contains("External conversation"));
     switch(&mut app);
-    assert!(render(&mut app).1.contains("External conversation"));
+    assert!(!render(&mut app).1.contains("External conversation"));
     assert_eq!(app.selected().unwrap().id, "opencode-workspaces");
+}
+
+#[test]
+fn instances_start_fully_expanded_and_overview_restores_collapsed_groups() {
+    let mut app = app();
+    switch(&mut app);
+    let text = render(&mut app).1;
+    assert!(text.contains("Conversation busy"), "{text}");
+    assert!(text.contains("http://localhost:9876/review/web/"), "{text}");
+    select(&mut app, "services:review");
+    key(&mut app, Key::Left);
+    app.update_snapshot(snapshot());
+    let text = render(&mut app).1;
+    assert!(
+        !text.contains("http://localhost:9876/review/web/"),
+        "{text}"
+    );
+    switch(&mut app);
+    app.event(
+        &TuiEvent::Hotkey(HotkeyEvent::Commit("shift+h".into())),
+        &mut EventCtx::new(AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        }),
+    );
+    switch(&mut app);
+    let text = render(&mut app).1;
+    assert!(text.contains("Conversation busy"), "{text}");
+    assert!(text.contains("http://localhost:9876/review/web/"), "{text}");
 }
 
 #[test]

@@ -13,6 +13,7 @@ use rusqlite::OptionalExtension;
 use serde_json::json;
 
 mod cleanup;
+mod conclusion;
 mod existing;
 mod history;
 mod inspection;

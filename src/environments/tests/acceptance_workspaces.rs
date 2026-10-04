@@ -1,7 +1,7 @@
 use crate::environments::{config::Config, events::EventStore, rules::RuleStore};
 use crate::store::{
     environments::{EnvironmentSnapshot, Instance},
-    events::Batch,
+    events::{Batch, Deletion},
     opencode::{Activity, Pane, Session, Snapshot},
 };
 
@@ -97,6 +97,8 @@ fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_own
             .workspaces
             .is_empty()
     );
-    events.delete(Some(acceptance.event_sequence)).unwrap();
+    events
+        .delete(Deletion::Event(acceptance.event_sequence))
+        .unwrap();
     assert!(restarted.snapshot().unwrap().workspaces.is_empty());
 }

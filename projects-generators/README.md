@@ -58,6 +58,13 @@ helpers retain their inherited environment. To use another fixture root, source 
 The generated environment isolates Tandem storage, Docker resource names, and the gateway port;
 Tandem's development HTTP MCP listener still uses its configured/default address.
 
+Instance MCP configurations can use the checkout's absolute `target/debug/tandem` path with the
+fixture home, namespace, and gateway settings. Rebuild with `cargo build --bin tandem` to install
+the current tools at that path, then reconnect the instance MCP in open OpenCode clients.
+Each connection starts with `get_instructions`, returning bundled baseline guidance and editable
+`projects/.tandem/instance-instructions.md`. Existing OpenCode configurations and workspace guidance
+are user-owned; add the scoped server and allow its tools explicitly when updating those fixtures.
+
 `--seed-commits` explicitly authorizes one seed commit per source repository and one for the shared template catalog. Without it, repositories
 have empty histories and must be committed before cloning. The generator never commits the Tandem
 checkout or updates Git configuration. Seed commits use a fixed fixture identity and timestamp;
@@ -112,7 +119,7 @@ provider Start enables all its streams and provider Stop halts the collector.
 
 Open the second tab, **Events**. Four row styles arrive every three seconds, with source-specific
 data, shared people/attachments/relations, bounded supporting context, and custom metadata.
-Enter opens details and its per-rule Acceptances tab. Enabled predicates accept matching events
+`d` opens event details; expanding an event reveals its acceptances. Enabled predicates accept matching events
 automatically; `r` requests confirmed replay of any retained event using current enabled rules.
 `p` selects the originating provider; Providers' **Events** action shows only that source.
 The provider multiselect filters sources; an empty selection shows all providers.

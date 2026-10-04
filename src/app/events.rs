@@ -15,7 +15,7 @@ use tuicore::{
 };
 
 use super::Msg;
-use crate::store::events::{Record, Snapshot};
+use crate::store::events::{Deletion, Record, Snapshot};
 
 mod filters;
 mod rows;
@@ -30,12 +30,12 @@ pub(super) type FilterState = Rc<RefCell<Option<Vec<StreamKey>>>>;
 #[derive(Default)]
 pub(super) struct FocusRequest {
     pub(super) record: Option<Record>,
-    pub(super) deletion: Option<Option<i64>>,
+    pub(super) deletion: Option<Deletion>,
     pub(super) reset_filters: bool,
 }
 pub(super) type FocusState = Rc<RefCell<FocusRequest>>;
 type EventToggles = Split<Toggle<Msg>, Split<Toggle<Msg>, Split<Toggle<Msg>, Toggle<Msg>>>>;
-type EventStatus = Split<Split<Paragraph, Button<Msg>>, Paragraph>;
+type EventStatus = Split<Split<Button<Msg>, Button<Msg>>, Paragraph>;
 type EventControls = Split<Dropdown<StreamKey, StreamKey>, EventStatus>;
 type HeaderRow = Split<EventToggles, EventControls>;
 type EventView = Split<Split<HeaderRow, Paragraph>, DataView<Entry, String>>;
@@ -59,6 +59,7 @@ pub(super) struct Events {
     rules: super::rules::SharedState,
     context: super::acceptances::SharedContext,
     projected: Vec<Entry>,
+    initial_roots_expanded: bool,
     spinner: Rc<RefCell<Spinner>>,
 }
 
@@ -160,13 +161,18 @@ impl Events {
                 stream_filter,
                 Split::horizontal(
                     Split::horizontal(
-                        Paragraph::new("").wrap(false),
                         Button::new("Delete all events")
                             .hotkey("shift+x")
                             .hotkey_focus_enabled(false)
                             .hotkey_label_mode(HotkeyLabelMode::Inline)
-                            .on_press(|| Msg::DeleteEvents(None)),
-                    ),
+                            .on_press(|| Msg::DeleteEvents(Deletion::All)),
+                        Button::new("Delete ignored events")
+                            .hotkey("shift+i")
+                            .hotkey_focus_enabled(false)
+                            .hotkey_label_mode(HotkeyLabelMode::Inline)
+                            .on_press(|| Msg::DeleteEvents(Deletion::Ignored)),
+                    )
+                    .gap(1),
                     Paragraph::new("Waiting for event providers").wrap(false),
                 )
                 .gap(1),
@@ -199,6 +205,7 @@ impl Events {
             rules,
             context,
             projected: Vec::new(),
+            initial_roots_expanded: false,
             spinner,
         }
     }
@@ -239,13 +246,8 @@ impl Events {
         let sound_changed = sound_toggle.is_checked() != sound;
         sound_toggle.set_value(sound);
         let deletion = self.requested.borrow_mut().deletion.take();
-        if let Some(sequence) = deletion
-            && self
-                .pinned
-                .as_ref()
-                .is_some_and(|row| sequence.is_none_or(|id| id == row.sequence))
-        {
-            self.pinned = None;
+        if let Some(deletion) = deletion {
+            deletion.forget_record(&mut self.pinned);
         }
         let requested = self.requested.borrow_mut().record.take();
         let reset_filters = std::mem::take(&mut self.requested.borrow_mut().reset_filters);
@@ -337,6 +339,10 @@ impl Events {
             .unwrap_or_else(|| format!("{} of {} events", records.len(), snapshot.total));
         self.view.second_mut().set_rows(projected.clone());
         self.projected = projected;
+        if !self.initial_roots_expanded && !self.projected.is_empty() {
+            self.expand_roots();
+            self.initial_roots_expanded = true;
+        }
         let highlighted = self.view.second().highlighted_id();
         let reset = filtered || handovers_changed;
         self.highlight_top();
@@ -428,7 +434,20 @@ impl Events {
         self.view.second_mut().clear_search();
         self.view.second_mut().clear_filters();
         self.sync();
+        self.expand_roots();
         self.follow_top(ctx);
+    }
+
+    fn expand_roots(&mut self) {
+        let roots: Vec<_> = self
+            .projected
+            .iter()
+            .filter(|row| matches!(row, Entry::Event(_)))
+            .map(Entry::id)
+            .collect();
+        for id in roots {
+            self.view.second_mut().expand(&id);
+        }
     }
 
     fn follow_top(&mut self, ctx: &mut EventCtx<Msg>) {
@@ -518,7 +537,12 @@ impl Events {
             return true;
         }
         if KeySpec::shifted('x').matches(*key) {
-            ctx.emit(Msg::DeleteEvents(None));
+            ctx.emit(Msg::DeleteEvents(Deletion::All));
+            ctx.stop_propagation();
+            return true;
+        }
+        if KeySpec::shifted('i').matches(*key) {
+            ctx.emit(Msg::DeleteEvents(Deletion::Ignored));
             ctx.stop_propagation();
             return true;
         }
@@ -528,6 +552,9 @@ impl Events {
         let Some(entry) = self.projected.iter().find(|row| row.id() == id) else {
             return false;
         };
+        if KeySpec::key(tuicore::Key::Enter).matches(*key) && !self.view.second().is_focused() {
+            return false;
+        }
         if let Some(target) = entry.target() {
             return target.action(event, ctx);
         }
@@ -541,6 +568,11 @@ impl Events {
                     Box::new(row.clone()),
                 )));
             }
+        } else if KeySpec::key(tuicore::Key::Enter).matches(*key) {
+            if let Some(message) = super::row_actions::Target::Event(record.clone()).enter_message()
+            {
+                ctx.emit(message);
+            }
         } else if KeySpec::plain('p').matches(*key) {
             if let Some(row) = self.row(id) {
                 ctx.emit(Msg::ShowProvider(row.provider.clone()));
@@ -548,7 +580,7 @@ impl Events {
         } else if KeySpec::plain('r').matches(*key) {
             ctx.emit(Msg::ReplayEvent(id));
         } else if KeySpec::plain('x').matches(*key) {
-            ctx.emit(Msg::DeleteEvents(Some(id)));
+            ctx.emit(Msg::DeleteEvents(Deletion::Event(id)));
         } else {
             return false;
         }
@@ -688,6 +720,7 @@ impl TuiNode<Msg> for Events {
         .preferred
         .width;
         let compact = area.width < 60;
+        let follow_width = follow_width.saturating_sub(if compact { 5 } else { 0 });
         let sound_width = sound_width.saturating_sub(if compact { 4 } else { 0 });
         let history_width = history_width.saturating_sub(if compact { 4 } else { 0 });
         let sound_follow_width = sound_width.saturating_add(follow_width).saturating_add(1);
@@ -704,7 +737,7 @@ impl TuiNode<Msg> for Events {
             .second_mut()
             .second_mut()
             .first_mut()
-            .second_mut();
+            .first_mut();
         delete.set_label(if compact {
             " X"
         } else {
@@ -715,20 +748,41 @@ impl TuiNode<Msg> for Events {
         } else {
             HotkeyLabelMode::Inline
         });
-        let delete_width = self
-            .header()
-            .second()
-            .second()
-            .first()
-            .second()
-            .measure(LayoutProposal::unbounded())
-            .preferred
-            .width;
+        let all_width = delete.measure(LayoutProposal::unbounded()).preferred.width;
+        let ignored = self
+            .header_mut()
+            .second_mut()
+            .second_mut()
+            .first_mut()
+            .second_mut();
+        ignored.set_label(if compact {
+            " I"
+        } else {
+            "Delete ignored events"
+        });
+        ignored.set_hotkey_label_mode(if compact {
+            HotkeyLabelMode::PreferMnemonic
+        } else {
+            HotkeyLabelMode::Inline
+        });
+        let ignored_width = ignored.measure(LayoutProposal::unbounded()).preferred.width;
+        let delete_width = all_width.saturating_add(ignored_width).saturating_add(1);
+        let minimum_stream_width = self
+            .filter
+            .borrow()
+            .as_ref()
+            .filter(|selected| selected.len() == 1)
+            .map(|selected| {
+                (line_width(&Line::from(selected[0].label())).min(u16::MAX as usize) as u16)
+                    .saturating_add(2)
+            })
+            .unwrap_or(20)
+            .min(stream_width);
         let narrow = area.width
             < controls_width
                 .saturating_add(delete_width)
                 .saturating_add(status_width)
-                .saturating_add(stream_width.min(20))
+                .saturating_add(minimum_stream_width)
                 .saturating_add(4);
         self.view.set_constraints(
             Constraint::Length(if narrow { 2 } else { 1 }),
@@ -773,9 +827,10 @@ impl TuiNode<Msg> for Events {
             );
         let status = self.header_mut().second_mut().second_mut();
         status.set_constraints(Constraint::Length(delete_width), Constraint::Fill(1));
-        status
-            .first_mut()
-            .set_constraints(Constraint::Length(0), Constraint::Length(delete_width));
+        status.first_mut().set_constraints(
+            Constraint::Length(all_width),
+            Constraint::Length(ignored_width),
+        );
         status.second_mut().set_text("");
         self.view.first_mut().second_mut().set_text("");
         let result = <EventView as TuiNode<Msg>>::layout(&mut self.view, area, ctx);
@@ -895,17 +950,24 @@ impl TuiNode<Msg> for Events {
 }
 
 impl super::App {
-    pub(super) fn confirm_delete_events(&mut self, sequence: Option<i64>, ctx: &mut EventCtx<Msg>) {
-        let (title, prose) = if sequence.is_some() {
-            ("Delete event", "Delete this event and history?")
-        } else {
-            ("Delete all events", "Delete all events and history?")
+    pub(super) fn confirm_delete_events(&mut self, target: Deletion, ctx: &mut EventCtx<Msg>) {
+        let (title, prose) = match target {
+            Deletion::Event(_) => ("Delete event", "Delete this event and history?"),
+            Deletion::All => ("Delete all events", "Delete all events and history?"),
+            Deletion::Ignored => (
+                "Delete ignored events",
+                "Delete all events with no acceptances and their history? This includes events outside the current feed filters.",
+            ),
+            Deletion::Acceptance(_) => (
+                "Delete acceptance",
+                "Delete this acceptance and its retained workspace linkage and feedback? Its event, instance and OpenCode sessions are preserved.",
+            ),
         };
         let modal = super::dialogs::dialog(title)
             .actions([
                 tuicore::DialogAction::new("Ok")
                     .hotkey(KeySpec::plain('o'))
-                    .on_trigger(move || Msg::DeleteEventsConfirmed(sequence)),
+                    .on_trigger(move || Msg::DeleteEventsConfirmed(target)),
                 tuicore::DialogAction::new("Cancel")
                     .hotkey(KeySpec::plain('c'))
                     .on_trigger(|| Msg::Close),
@@ -1014,8 +1076,8 @@ impl super::App {
         let deletion = self.event_deletion.take();
         match result {
             Ok(_) => {
-                if let Some(sequence) = deletion {
-                    self.pages_mut().forget_event(sequence);
+                if let Some(target) = deletion {
+                    self.pages_mut().forget_event(target);
                 }
                 self.service.poll_events();
                 self.service.poll_rules();

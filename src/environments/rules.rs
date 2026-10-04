@@ -9,6 +9,7 @@ use crate::store::{
 };
 
 pub(super) mod catalog;
+mod reports;
 mod workspaces;
 
 #[derive(Clone)]
@@ -74,6 +75,21 @@ fn decode<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, Error> {
 }
 
 impl RuleStore {
+    pub(crate) fn event_lease(&self, sequence: i64) -> Result<Option<super::gateway::Lock>, Error> {
+        self.events.event_lease(sequence)
+    }
+
+    pub(crate) fn acceptance(&self, id: i64) -> Result<Acceptance, Error> {
+        let payload: String = self.events.connection()?.query_row(
+            "SELECT a.payload FROM rule_acceptances a
+             JOIN event_attempts p ON p.id = a.attempt_id JOIN events e ON e.sequence = p.event_sequence
+             WHERE e.namespace = ?1 AND a.id = ?2",
+            params![self.config.namespace, id],
+            |row| row.get(0),
+        ).optional()?.ok_or(Error::NotFound)?;
+        decode(&payload)
+    }
+
     pub(crate) fn provider_deleting(&self, sequence: i64) -> Result<bool, Error> {
         Ok(self.events.connection()?.query_row(
             "SELECT EXISTS(SELECT 1 FROM events e JOIN provider_deletions d ON d.namespace=e.namespace AND d.source=e.provider WHERE e.namespace=?1 AND e.sequence=?2)",

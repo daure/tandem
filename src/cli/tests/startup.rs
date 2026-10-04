@@ -13,6 +13,7 @@ use super::*;
 mod tui;
 
 pub(super) struct Client {
+    pub(super) info: Value,
     child: Child,
     input: Option<ChildStdin>,
     replies: mpsc::Receiver<Value>,
@@ -48,12 +49,13 @@ impl Client {
             }
         });
         let mut client = Self {
+            info: Value::Null,
             child,
             input,
             replies,
             next_id: 1,
         };
-        client.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "startup-test", "version": "1"}}));
+        client.info = client.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "startup-test", "version": "1"}}));
         client.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
         client
     }
@@ -64,6 +66,12 @@ impl Client {
     }
 
     pub(super) fn request(&mut self, method: &str, params: Value) -> Value {
+        let response = self.request_raw(method, params);
+        assert!(response.get("error").is_none(), "{response}");
+        response["result"].clone()
+    }
+
+    pub(super) fn request_raw(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
         self.send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
@@ -73,8 +81,7 @@ impl Client {
                 .recv_timeout(Duration::from_secs(15))
                 .expect("MCP response timed out");
             if response["id"] == id {
-                assert!(response.get("error").is_none(), "{response}");
-                return response["result"].clone();
+                return response;
             }
         }
     }
@@ -88,7 +95,7 @@ impl Client {
         serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
     }
 
-    fn close(&mut self, signal: Option<i32>) {
+    pub(super) fn close(&mut self, signal: Option<i32>) {
         if let Some(signal) = signal {
             assert_eq!(unsafe { libc::kill(-(self.child.id() as i32), signal) }, 0);
         } else {

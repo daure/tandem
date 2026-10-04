@@ -8,6 +8,7 @@ use crate::store::events::{
     ProviderNotification, Receipt, Record, Snapshot,
 };
 
+mod deletion;
 mod provider_deletion;
 mod streams;
 
@@ -63,6 +64,9 @@ impl EventStore {
         transaction.execute_batch(include_str!("../../migrations/0011_rule_definitions.sql"))?;
         transaction.execute_batch(include_str!(
             "../../migrations/0015_acceptance_workspaces.sql"
+        ))?;
+        transaction.execute_batch(include_str!(
+            "../../migrations/0016_acceptance_reports.sql"
         ))?;
         let scoped_dispatch_history: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('rule_dispatch_starts') WHERE name = 'namespace')",
@@ -436,66 +440,6 @@ impl EventStore {
         )?;
         transaction.commit()?;
         Ok(attempt)
-    }
-
-    pub(crate) fn delete(&self, sequence: Option<i64>) -> Result<i64, Error> {
-        let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(sequence) = sequence {
-            self.source(&transaction, sequence)?;
-        }
-        let deleting: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM events e JOIN provider_deletions d
-             ON d.namespace = e.namespace AND d.source = e.provider
-             WHERE e.namespace = ?1 AND (?2 IS NULL OR e.sequence = ?2))",
-            params![self.namespace, sequence],
-            |row| row.get(0),
-        )?;
-        if deleting {
-            return Err(Error::Conflict(
-                "events belong to an incomplete provider deletion; retry delete_provider".into(),
-            ));
-        }
-        let active: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM rule_acceptances a
-             JOIN event_attempts p ON p.id = a.attempt_id JOIN events e ON e.sequence = p.event_sequence
-             WHERE e.namespace = ?1 AND (?2 IS NULL OR e.sequence = ?2)
-             AND json_extract(a.payload, '$.status') IN ('provisioning', 'launching'))",
-            params![self.namespace, sequence],
-            |row| row.get(0),
-        )?;
-        if active {
-            return Err(Error::Conflict(
-                "events have active rule actions; try again when they finish".into(),
-            ));
-        }
-        transaction.execute(
-            "DELETE FROM provider_notifications WHERE namespace = ?1
-             AND json_extract(payload, '$.sequence') IN
-             (SELECT sequence FROM events WHERE namespace = ?1 AND (?2 IS NULL OR sequence = ?2))",
-            params![self.namespace, sequence],
-        )?;
-        for table in ["rule_evaluations", "rule_acceptances"] {
-            transaction.execute(
-                &format!(
-                    "DELETE FROM {table} WHERE attempt_id IN
-                     (SELECT p.id FROM event_attempts p JOIN events e ON e.sequence = p.event_sequence
-                      WHERE e.namespace = ?1 AND (?2 IS NULL OR e.sequence = ?2))"
-                ),
-                params![self.namespace, sequence],
-            )?;
-        }
-        transaction.execute(
-            "DELETE FROM event_attempts WHERE event_sequence IN
-             (SELECT sequence FROM events WHERE namespace = ?1 AND (?2 IS NULL OR sequence = ?2))",
-            params![self.namespace, sequence],
-        )?;
-        let count = transaction.execute(
-            "DELETE FROM events WHERE namespace = ?1 AND (?2 IS NULL OR sequence = ?2)",
-            params![self.namespace, sequence],
-        )?;
-        transaction.commit()?;
-        Ok(count as i64)
     }
 
     fn source(&self, connection: &Connection, sequence: i64) -> Result<(String, String), Error> {

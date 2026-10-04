@@ -645,6 +645,11 @@ fn setup_group_uses_one_line_and_its_children_show_only_labels() {
         snapshot.instances[0].services.push(setup);
         let mut tree = Instances::new(instances::state(rows::from_snapshot(&snapshot)));
         expand_first_instance(&mut tree);
+        tree.focus(None, true, &mut tuicore::FocusCtx::default());
+        let mut events = EventCtx::new(AnimationSettings::default());
+        for key in [Key::Home, Key::Down, Key::Down, Key::Left] {
+            tree.event(&TuiEvent::Key(KeyEvent::from(key)), &mut events);
+        }
         let terminal = render(&mut tree, 110);
         let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
         let group = lines
@@ -655,8 +660,6 @@ fn setup_group_uses_one_line_and_its_children_show_only_labels() {
         assert!(lines[group + 1].contains("Service"), "{lines:#?}");
         assert!(lines[group + 2].contains("web · Running"), "{lines:#?}");
 
-        tree.focus(None, true, &mut tuicore::FocusCtx::default());
-        let mut events = EventCtx::new(AnimationSettings::default());
         for key in [Key::Home, Key::Down, Key::Down, Key::Right] {
             tree.event(&TuiEvent::Key(KeyEvent::from(key)), &mut events);
         }
@@ -840,7 +843,7 @@ fn startup_expands_instances_when_they_arrive_after_the_template_listing() {
     assert!(text.contains("review · Running"));
     assert!(text.contains("second · Running"));
     assert!(text.contains("Service"));
-    assert!(!text.contains(" web"));
+    assert!(text.contains(" web"));
     tree.focus(None, true, &mut tuicore::FocusCtx::default());
     tree.event(
         &TuiEvent::Key(KeyEvent::from(Key::Left)),

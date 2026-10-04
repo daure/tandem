@@ -15,6 +15,7 @@ use crate::store::environments::{
 };
 
 mod process;
+pub(super) use process::inherit;
 pub(crate) use process::{claim, launch};
 
 #[derive(Clone, Deserialize, Serialize)]

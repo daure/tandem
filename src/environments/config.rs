@@ -104,7 +104,7 @@ impl Config {
             namespace,
             port,
             keys: [
-                KeySpec::key(Key::Enter),
+                KeySpec::plain('d'),
                 KeySpec::plain('i'),
                 KeySpec::shifted('t'),
                 KeySpec::plain('s'),
@@ -141,12 +141,23 @@ impl Config {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error.to_string()),
         }
+        match private_file(&config.instance_instructions(), true) {
+            Ok(mut file) => file
+                .write_all(include_bytes!("../../instance-agent-instructions.md"))
+                .map_err(|error| error.to_string())?,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.to_string()),
+        }
         super::workspace_template::install(&config)?;
         Ok(config)
     }
 
     pub fn workspace_agents_template(&self) -> PathBuf {
         self.home.join("workspace-agents.template.md")
+    }
+
+    pub fn instance_instructions(&self) -> PathBuf {
+        self.home.join("instance-instructions.md")
     }
 
     pub fn origin(&self) -> String {

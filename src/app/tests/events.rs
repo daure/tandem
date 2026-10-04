@@ -2,7 +2,7 @@ use super::*;
 use crate::store::events::{Batch, Payload};
 use std::time::{Duration, Instant};
 
-fn refresh_events(app: &mut App, count: u64) {
+pub(super) fn refresh_events(app: &mut App, count: u64) {
     refresh_events_until(app, |snapshot| snapshot.total == count);
 }
 
@@ -188,7 +188,7 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     assert!(app.menu_layer().is_active());
     let text = render(&mut app, 130).1;
     for (label, key) in [
-        ("View details", "Enter"),
+        ("View details", "d"),
         ("Replay", "r"),
         ("Go to provider", "p"),
         ("Delete", "x"),
@@ -198,6 +198,9 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
             .find(|line| line.contains(&format!("{label}   ")))
             .unwrap();
         assert!(line.trim_end_matches([' ', '┃']).ends_with(key), "{line}");
+        if label == "View details" {
+            assert!(line.contains("Enter / d"), "{line}");
+        }
     }
     app.event(
         &TuiEvent::Key(KeyEvent::from(Key::Esc)),
@@ -207,7 +210,7 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     let mut activation = EventCtx::default();
     app.dispatch_event(
         &route,
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &TuiEvent::Key(KeyEvent::from(Key::Char('d'))),
         &mut activation,
     );
     let row = match activation.messages() {
@@ -235,7 +238,7 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     let mut activation = EventCtx::default();
     app.dispatch_event(
         &route,
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &TuiEvent::Key(KeyEvent::from(Key::Char('d'))),
         &mut activation,
     );
     assert!(
@@ -249,7 +252,7 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     let mut activation = EventCtx::default();
     app.dispatch_event(
         &route,
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &TuiEvent::Key(KeyEvent::from(Key::Char('d'))),
         &mut activation,
     );
     let selected = match activation.messages() {
@@ -268,7 +271,7 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     let mut activation = EventCtx::default();
     app.dispatch_event(
         &route,
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &TuiEvent::Key(KeyEvent::from(Key::Char('d'))),
         &mut activation,
     );
     assert!(matches!(activation.messages(), [Msg::OpenEvent(row)] if row.sequence == selected));
@@ -898,7 +901,10 @@ fn show_all_toggle_shares_visibility_and_preserves_stream_filter_on_refresh() {
         if width == 130 {
             assert!(header.contains("󰈈"), "{text}");
             assert!(
-                header.contains("Delete all events |X|  2 of 662 events"),
+                header.contains("Delete all events |X|")
+                    && header.contains("Delete ignored events |I|")
+                    && header.find("Delete all events").unwrap()
+                        < header.find("Delete ignored events").unwrap(),
                 "{text}"
             );
         }
@@ -925,7 +931,7 @@ fn show_all_toggle_shares_visibility_and_preserves_stream_filter_on_refresh() {
         let mut activation = EventCtx::default();
         app.dispatch_event(
             &route,
-            &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+            &TuiEvent::Key(KeyEvent::from(Key::Char('d'))),
             &mut activation,
         );
         assert!(

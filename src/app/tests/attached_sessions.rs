@@ -262,7 +262,7 @@ fn attached_mode_keeps_history_and_running_filters_enabled() {
         let text = lines.join("\n");
         assert!(lines[0].contains("Sessions · Events"), "{text}");
         if width >= 80 {
-            assert!(lines[0].contains("Instances · Rules · Providers"), "{text}");
+            assert!(lines[0].contains("Instances · Rules · Streams"), "{text}");
         }
         let history = layout
             .focus_targets()

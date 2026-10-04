@@ -245,6 +245,32 @@ pub(crate) struct Record {
     pub acceptances: Vec<super::rules::Acceptance>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Deletion {
+    All,
+    Ignored,
+    Event(i64),
+    Acceptance(i64),
+}
+
+impl Deletion {
+    pub(crate) fn forget_record(self, record: &mut Option<Record>) {
+        let Some(row) = record else { return };
+        let remove = match self {
+            Self::All => true,
+            Self::Ignored => row.acceptances.is_empty(),
+            Self::Event(sequence) => row.sequence == sequence,
+            Self::Acceptance(id) => {
+                row.acceptances.retain(|acceptance| acceptance.id != id);
+                false
+            }
+        };
+        if remove {
+            *record = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub(crate) struct Snapshot {
     pub records: Vec<Record>,

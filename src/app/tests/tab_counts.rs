@@ -1,8 +1,8 @@
 use super::*;
-use crate::store::providers::{Snapshot, Status};
+use crate::store::providers::{Snapshot, Status, Stream};
 
 #[test]
-fn tab_counts_follow_active_rules_and_running_providers_and_hide_zero_counts() {
+fn tab_counts_follow_active_rules_and_collecting_streams_and_hide_zero_counts() {
     init_ui();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     for opencode_enabled in [true, false] {
@@ -27,6 +27,7 @@ fn tab_counts_follow_active_rules_and_running_providers_and_hide_zero_counts() {
             providers: [
                 Status::Running,
                 Status::Running,
+                Status::Running,
                 Status::Paused,
                 Status::Stopped,
                 Status::Starting,
@@ -39,19 +40,53 @@ fn tab_counts_follow_active_rules_and_running_providers_and_hide_zero_counts() {
             .collect(),
             error: None,
         };
+        for (index, provider) in providers.providers[..2].iter_mut().enumerate() {
+            provider.streams = [
+                Status::Running,
+                if index == 0 {
+                    Status::Running
+                } else {
+                    Status::Stopped
+                },
+                Status::Starting,
+                Status::Paused,
+                Status::NotStarted,
+                Status::Unknown,
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, status)| Stream {
+                name: format!("stream-{index}"),
+                controllable: true,
+                enabled: status != Status::Stopped,
+                status,
+                operation: None,
+                error: None,
+                total: 0,
+                handovers: 0,
+            })
+            .collect();
+        }
         let selected = app.providers_tab_index();
         app.tabs_mut().select_index(selected);
         app.sync_overview_tab(&mut EventCtx::default());
-        for (active_rules, running_providers, expected) in [
-            (3, 2, "Rules (3) · Providers (2)"),
-            (1, 1, "Rules (1) · Providers (1)"),
-            (0, 0, "Rules · Providers"),
+        for (active_rules, running_streams, expected) in [
+            (3, 3, "Rules (3) · Streams (3)"),
+            (2, 2, "Rules (2) · Streams (2)"),
+            (1, 1, "Rules (1) · Streams (1)"),
+            (0, 0, "Rules · Streams"),
         ] {
             for (index, rule) in rules.rules.iter_mut().enumerate() {
                 rule.definition.enabled = index < active_rules;
             }
-            for (index, provider) in providers.providers[..2].iter_mut().enumerate() {
-                provider.status = if index < running_providers {
+            for (index, stream) in providers
+                .providers
+                .iter_mut()
+                .flat_map(|provider| &mut provider.streams)
+                .filter(|stream| stream.status == Status::Running)
+                .enumerate()
+            {
+                stream.status = if index < running_streams {
                     Status::Running
                 } else {
                     Status::Stopped

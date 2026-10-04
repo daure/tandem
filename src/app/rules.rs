@@ -286,7 +286,17 @@ impl Rules {
         let Some(row) = self.rows.iter().find(|row| row.id() == id) else {
             return false;
         };
+        if KeySpec::key(tuicore::Key::Enter).matches(*key) && !self.view.base().is_focused() {
+            return false;
+        }
         match row {
+            Entry::Rule(rule) if KeySpec::key(tuicore::Key::Enter).matches(*key) => {
+                if let Some(message) =
+                    super::row_actions::Target::Rule(rule.clone()).enter_message()
+                {
+                    ctx.emit(message);
+                }
+            }
             Entry::Rule(rule) if KeySpec::plain('.').matches(*key) => {
                 ctx.emit(Msg::OpenRowMenu(super::row_actions::Target::Rule(
                     rule.clone(),

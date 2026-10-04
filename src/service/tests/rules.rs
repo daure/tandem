@@ -1,5 +1,5 @@
 use super::*;
-use crate::store::events::Batch;
+use crate::store::events::{Batch, Deletion};
 
 impl AppService {
     pub(crate) fn set_rule_session_for_tests(&mut self, current: &str) {
@@ -30,6 +30,115 @@ fn definition(name: &str) -> Definition {
         enabled: true,
         start_instance: true,
     }
+}
+
+#[test]
+fn dispatch_skips_busy_events_without_blocking_unrelated_work() {
+    let service = AppService::for_tests();
+    service
+        .runtime
+        .block_on(service.set_opencode_enabled(false).unwrap())
+        .unwrap()
+        .unwrap();
+    service
+        .rules
+        .store
+        .save(definition("inspect"), None, "main".into())
+        .unwrap();
+    let token = service.register_provider_for_tests("sample");
+    service
+        .runtime
+        .block_on(service.ingest_events(
+            token,
+            Batch {
+                events: vec![
+                    crate::environments::events::tests::event("first"),
+                    crate::environments::events::tests::event("second"),
+                ],
+            },
+        ))
+        .unwrap();
+    service.rules.store.evaluate().unwrap();
+    let snapshot = service.rules.store.snapshot().unwrap();
+    let busy = &snapshot.acceptances[1];
+    let _event = service
+        .rules
+        .store
+        .event_lease(busy.event_sequence)
+        .unwrap()
+        .unwrap();
+    service.rule_cycle().unwrap();
+    assert_eq!(
+        service.rules.store.acceptance(busy.id).unwrap().status,
+        DispatchStatus::Queued
+    );
+    assert_eq!(
+        service
+            .rules
+            .store
+            .acceptance(snapshot.acceptances[0].id)
+            .unwrap()
+            .status,
+        DispatchStatus::Failed
+    );
+    assert!(service.operations().is_empty());
+}
+
+#[test]
+fn stale_dispatch_snapshots_do_not_admit_or_launch_deleted_acceptances() {
+    let service = AppService::for_tests();
+    service
+        .rules
+        .store
+        .save(definition("inspect"), None, "main".into())
+        .unwrap();
+    let token = service.register_provider_for_tests("sample");
+    service
+        .runtime
+        .block_on(service.ingest_events(
+            token,
+            Batch {
+                events: vec![crate::environments::events::tests::event("one")],
+            },
+        ))
+        .unwrap();
+    service.rules.store.evaluate().unwrap();
+    let requested = service
+        .rules
+        .store
+        .snapshot()
+        .unwrap()
+        .acceptances
+        .remove(0);
+    service
+        .delete_events(Deletion::Event(requested.event_sequence))
+        .blocking_recv()
+        .unwrap()
+        .unwrap();
+    let mut available = 4;
+    service
+        .advance_retained_acceptance(&requested, &mut available)
+        .unwrap();
+    assert_eq!(available, 4);
+    assert!(service.operations().is_empty());
+    assert!(
+        service
+            .rules
+            .store
+            .snapshot()
+            .unwrap()
+            .acceptances
+            .is_empty()
+    );
+    let connection =
+        rusqlite::Connection::open(service.environments.config.home.join("settings.sqlite3"))
+            .unwrap();
+    let starts: i64 = connection
+        .query_row("SELECT count(*) FROM rule_dispatch_starts", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(starts, 0);
 }
 
 #[test]
@@ -200,14 +309,16 @@ fn incomplete_provider_deletion_blocks_queued_dispatch_across_service_restarts()
     let events = crate::environments::events::EventStore::open(config).unwrap();
     assert!(
         events
-            .delete(Some(queued[0].event_sequence))
+            .delete(crate::store::events::Deletion::Event(
+                queued[0].event_sequence
+            ))
             .unwrap_err()
             .to_string()
             .contains("incomplete provider deletion")
     );
     assert!(
         events
-            .delete(None)
+            .delete(crate::store::events::Deletion::All)
             .unwrap_err()
             .to_string()
             .contains("incomplete provider deletion")
@@ -308,6 +419,63 @@ fn restart_surfaces_interrupted_launches_without_repeating_successful_siblings()
             .contains("uncertain")
     );
     assert!(recovered.operations().is_empty());
+}
+
+#[test]
+fn reported_acceptances_preserve_dispatch_history_and_require_cleanup_retry() {
+    let service = AppService::for_tests();
+    service
+        .rules
+        .store
+        .save(definition("inspect"), None, "main".into())
+        .unwrap();
+    let token = service.register_provider_for_tests("sample");
+    service
+        .runtime
+        .block_on(service.ingest_events(
+            token,
+            Batch {
+                events: vec![crate::environments::events::tests::event("one")],
+            },
+        ))
+        .unwrap();
+    service.rules.store.evaluate().unwrap();
+    let mut acceptance = service
+        .rules
+        .store
+        .snapshot()
+        .unwrap()
+        .acceptances
+        .remove(0);
+    service
+        .rules
+        .store
+        .save_report(
+            acceptance.id,
+            &crate::store::rules::reports::ReportInput {
+                title: "Investigation ended".into(),
+                summary: "Saved evidence".into(),
+                markdown: "# Evidence\nThe work ended before dispatch reconciliation.\n".into(),
+            },
+        )
+        .unwrap();
+    service.rule_cycle().unwrap();
+    assert_eq!(
+        service.rules.store.snapshot().unwrap().acceptances,
+        vec![acceptance.clone()]
+    );
+    assert!(service.operations().is_empty());
+    acceptance.status = DispatchStatus::Failed;
+    service.rules.store.update(&acceptance, false).unwrap();
+    let error = service
+        .runtime
+        .block_on(service.retry_acceptance(acceptance.id, true))
+        .unwrap_err();
+    assert!(error.contains("conclusion report"), "{error}");
+    assert_eq!(
+        service.rules.store.snapshot().unwrap().acceptances,
+        vec![acceptance]
+    );
 }
 
 #[test]

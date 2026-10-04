@@ -160,8 +160,8 @@ pub(crate) enum Msg {
     OpenEvent(Box<crate::store::events::Record>),
     ReplayEvent(i64),
     ReplayEventConfirmed(i64),
-    DeleteEvents(Option<i64>),
-    DeleteEventsConfirmed(Option<i64>),
+    DeleteEvents(crate::store::events::Deletion),
+    DeleteEventsConfirmed(crate::store::events::Deletion),
     OpenRule(Box<crate::store::rules::Rule>),
     SaveRule(Box<crate::store::rules::Rule>),
     RuleBulkAction(bool),
@@ -285,7 +285,7 @@ pub(crate) struct App {
     provider_stream_confirmation: Option<(String, String, crate::store::providers::Action)>,
     provider_bulk_confirmation: Option<(Vec<String>, crate::store::providers::Action)>,
     event_action: Option<tokio::sync::oneshot::Receiver<Result<i64, crate::store::events::Error>>>,
-    event_deletion: Option<Option<i64>>,
+    event_deletion: Option<crate::store::events::Deletion>,
     rule_save: Option<tokio::sync::oneshot::Receiver<Result<crate::store::rules::Rule, String>>>,
     rule_saves: Vec<crate::store::rules::Rule>,
     rule_editor: Option<Rc<RefCell<rules::Draft>>>,
@@ -302,7 +302,11 @@ pub(crate) struct App {
 pub(crate) fn root(service: AppService) -> App {
     #[cfg(test)]
     tests::init_ui();
-    tuicore::set_keybindings(tuicore::keybindings().with_tabs_close([KeySpec::plain('x')]));
+    tuicore::set_keybindings(
+        tuicore::keybindings()
+            .with_tabs_close([KeySpec::plain('x')])
+            .with_data_view_activate([KeySpec::plain('d')]),
+    );
     let keys = service.environment_keys();
     let snapshot = service.environment_snapshot();
     let opencode_enabled = service.opencode_enabled();
@@ -704,11 +708,11 @@ impl App {
             Msg::ProviderBulkAction(action) => self.request_provider_bulk_action(action, ctx),
             Msg::ProviderDetails(provider) => self.open_provider_details(&provider, ctx),
             Msg::OpenEvent(row) => self.open_event(&row, ctx),
-            Msg::DeleteEvents(sequence) => self.confirm_delete_events(sequence, ctx),
-            Msg::DeleteEventsConfirmed(sequence) => {
+            Msg::DeleteEvents(target) => self.confirm_delete_events(target, ctx),
+            Msg::DeleteEventsConfirmed(target) => {
                 if self.event_action.is_none() {
-                    self.event_action = Some(self.service.delete_events(sequence));
-                    self.event_deletion = Some(sequence);
+                    self.event_action = Some(self.service.delete_events(target));
+                    self.event_deletion = Some(target);
                 }
                 self.handle_message(Msg::Close, ctx);
             }
@@ -1056,10 +1060,7 @@ impl App {
                     Ok(operation) => {
                         self.operation_accepted(operation);
                         ctx.request_layout();
-                        self.view.set_active_with_context(false, ctx);
-                        ctx.focus(initial_focus());
-                        self.intent = None;
-                        self.details_open = false;
+                        self.handle_message(Msg::Close, ctx);
                     }
                     Err(error) => {
                         self.view.layer_mut().set_bottom_left(error);
@@ -1243,6 +1244,63 @@ impl App {
         layer.layer_mut().set_dock_edge_borders(dock.edge_borders());
     }
 
+    fn row_enter_action(&self, row: &Row) -> Option<action_menu::Action> {
+        use action_menu::Action;
+        if row.informational {
+            return None;
+        }
+        if let Some(target) = &row.opencode {
+            return match target {
+                opencode::Target::Session { .. } | opencode::Target::Client { .. } => {
+                    Some(if target.attached() {
+                        Action::GotoPanel
+                    } else {
+                        Action::OpenPanel
+                    })
+                }
+                opencode::Target::Workspace => None,
+            };
+        }
+        if row.cleanup_target.is_some() {
+            return Some(Action::Details);
+        }
+        if row.is_template() && row.template_available {
+            return Some(Action::NewInstance);
+        }
+        if row.gateway_url.is_some() {
+            return Some(Action::OpenBrowser);
+        }
+        if row.service.is_none()
+            && row.checkout_path.is_none()
+            && row
+                .instance
+                .as_deref()
+                .is_some_and(|name| !self.instance_routes(name).is_empty())
+        {
+            return Some(Action::OpenRoutes);
+        }
+        None
+    }
+
+    fn activate_row(&mut self, ctx: &mut EventCtx<Msg>) -> bool {
+        let Some(row) = self.selected() else {
+            return false;
+        };
+        let Some(action) = self.row_enter_action(&row) else {
+            return false;
+        };
+        match action {
+            action_menu::Action::OpenPanel | action_menu::Action::GotoPanel => {
+                self.activate_opencode(&row, ctx);
+            }
+            action_menu::Action::OpenBrowser | action_menu::Action::OpenRoutes => {
+                self.open_selected_route(ctx);
+            }
+            _ => self.action(action.index(), ctx),
+        }
+        true
+    }
+
     fn open_action_menu(&mut self, ctx: &mut EventCtx<Msg>) -> bool {
         let Some(row) = self.selected() else {
             return false;
@@ -1254,6 +1312,7 @@ impl App {
             self.service.opencode_enabled() && opencode::new_session_directory(&row).is_some();
         let close_opencode_group =
             self.service.opencode_enabled() && opencode::close_scope(&row).is_some();
+        let enter_action = self.row_enter_action(&row);
         let menu = self.menu_layer_mut();
         menu.layer_mut().open(
             action_menu::Target {
@@ -1268,6 +1327,7 @@ impl App {
                 new_opencode,
                 close_opencode_group,
                 workspace_missing: row.workspace_missing,
+                enter_action,
                 opencode_session: row
                     .opencode
                     .as_ref()
@@ -1319,6 +1379,10 @@ impl App {
                 }
                 action_menu::Action::OpenBrowser => {
                     self.open_gateway(ctx);
+                    return;
+                }
+                action_menu::Action::OpenRoutes => {
+                    self.open_selected_route(ctx);
                     return;
                 }
                 action_menu::Action::OpenPanel | action_menu::Action::GotoPanel => {
@@ -1775,6 +1839,12 @@ impl App {
         if instances::is_searching(&self.instances) {
             return false;
         }
+        if matches!(event, TuiEvent::Key(key) if KeySpec::key(tuicore::Key::Enter).matches(*key))
+            && self.activate_row(ctx)
+        {
+            ctx.stop_propagation();
+            return true;
+        }
         if let TuiEvent::Key(key) = event
             && KeySpec::shifted('n').matches(*key)
             && self.service.opencode_enabled()
@@ -1816,7 +1886,7 @@ impl App {
             return true;
         }
         if let TuiEvent::Key(key) = event
-            && KeySpec::plain('d').matches(*key)
+            && KeySpec::plain('e').matches(*key)
             && self.open_description_editor(ctx)
         {
             ctx.stop_propagation();
@@ -2119,7 +2189,7 @@ fn overview_tabs(opencode_enabled: bool, sessions: bool, counts: (usize, usize))
     if opencode_enabled {
         pages.push(Tab::text("Instances", ""));
     }
-    for (title, count) in [("Rules", counts.0), ("Providers", counts.1)] {
+    for (title, count) in [("Rules", counts.0), ("Streams", counts.1)] {
         let title = if count == 0 {
             title.into()
         } else {

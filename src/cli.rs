@@ -48,6 +48,14 @@ enum Commands {
         instance_fd: i32,
         lease_fd: i32,
     },
+    #[command(hide = true)]
+    ConclusionWorker {
+        acceptance_id: i64,
+        name: String,
+        instance_fd: i32,
+        rules_fd: i32,
+        completion_fd: i32,
+    },
     #[command(about = "Install the OpenCode TUI companion and print its tui.json plugin entry")]
     OpencodeSetup,
     #[command(about = "List instances with runtime status and workspace paths")]
@@ -115,7 +123,9 @@ enum Commands {
     },
     #[command(about = "Run protocol-only MCP server over stdin/stdout")]
     Mcp,
-    #[command(about = "Run start_self/stop_self MCP over stdio for the owning instance workspace")]
+    #[command(
+        about = "Run instance lifecycle and acceptance-report MCP over stdio for the owning workspace"
+    )]
     McpInstance,
     #[command(about = "Write private credentials for the four developer event providers")]
     ProvidersSetup,
@@ -215,6 +225,18 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             lease_fd,
         }) => crate::service::AppService::run_startup_worker(&name, &id, instance_fd, lease_fd)
             .map_err(Into::into),
+        Some(Commands::ConclusionWorker {
+            acceptance_id,
+            name,
+            instance_fd,
+            rules_fd,
+            completion_fd,
+        }) => crate::service::AppService::run_conclusion_worker(
+            acceptance_id,
+            &name,
+            [instance_fd, rules_fd, completion_fd],
+        )
+        .map_err(Into::into),
         Some(Commands::OpencodeSetup) => {
             let service = crate::service::AppService::initialize()?;
             println!("{}", service.setup_opencode()?);

@@ -256,13 +256,14 @@ impl AppService {
                     .lease()
                     .map_err(|error| error.to_string())?
                     .ok_or("rule worker is busy; try again")?;
-                let mut acceptance = store
-                    .snapshot()
+                let requested = store.acceptance(id).map_err(|error| error.to_string())?;
+                let _event = store.event_lease(requested.event_sequence)
                     .map_err(|error| error.to_string())?
-                    .acceptances
-                    .into_iter()
-                    .find(|row| row.id == id)
-                    .ok_or("acceptance not found")?;
+                    .ok_or("event work is in progress; retry after it finishes")?;
+                let mut acceptance = store.acceptance(id).map_err(|error| error.to_string())?;
+                if store.reported_acceptances().map_err(|error| error.to_string())?.contains(&id) {
+                    return Err("acceptance has a conclusion report; inspect its cleanup outcome instead of retrying dispatch".into());
+                }
                 if acceptance.status != DispatchStatus::Failed
                     || acceptance.launch_started_at.is_some()
                     || acceptance.resolved_prompt.is_none()
@@ -285,9 +286,11 @@ impl AppService {
         };
         store.evaluate()?;
         let snapshot = store.snapshot()?;
+        let reported = store.reported_acceptances()?;
         let active = snapshot
             .acceptances
             .iter()
+            .filter(|row| !reported.contains(&row.id))
             .filter(|row| {
                 matches!(
                     row.status,
@@ -297,31 +300,52 @@ impl AppService {
             .count();
         let mut available = 4usize.saturating_sub(active);
         // Oldest accepted work gets the first available dispatch slot.
-        for mut acceptance in snapshot.acceptances.into_iter().rev() {
-            if store.provider_deleting(acceptance.event_sequence)? {
+        for acceptance in snapshot.acceptances.into_iter().rev() {
+            if reported.contains(&acceptance.id) {
                 continue;
             }
-            if acceptance.status == DispatchStatus::Queued {
-                if available == 0 || !store.admit_dispatch(acceptance.id)? {
-                    continue;
-                }
-                available -= 1;
+            self.advance_retained_acceptance(&acceptance, &mut available)?;
+        }
+        Ok(())
+    }
+
+    fn advance_retained_acceptance(
+        &self,
+        requested: &Acceptance,
+        available: &mut usize,
+    ) -> Result<(), Error> {
+        if !matches!(
+            requested.status,
+            DispatchStatus::Queued | DispatchStatus::Provisioning | DispatchStatus::Launching
+        ) {
+            return Ok(());
+        }
+        let store = &self.rules.store;
+        let Some(_event) = store.event_lease(requested.event_sequence)? else {
+            return Ok(());
+        };
+        let mut acceptance = match store.acceptance(requested.id) {
+            Ok(acceptance) => acceptance,
+            Err(Error::NotFound) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if store.provider_deleting(acceptance.event_sequence)? {
+            return Ok(());
+        }
+        if acceptance.status == DispatchStatus::Queued {
+            if *available == 0 || !store.admit_dispatch(acceptance.id)? {
+                return Ok(());
             }
-            if !matches!(
-                acceptance.status,
-                DispatchStatus::Queued | DispatchStatus::Provisioning | DispatchStatus::Launching
-            ) {
-                continue;
-            }
-            if let Err(error) = self.advance_dispatch(&mut acceptance) {
-                acceptance.status = if acceptance.launch_started_at.is_some() {
-                    DispatchStatus::Uncertain
-                } else {
-                    DispatchStatus::Failed
-                };
-                acceptance.error = Some(error);
-                store.update(&acceptance, false)?;
-            }
+            *available -= 1;
+        }
+        if let Err(error) = self.advance_dispatch(&mut acceptance) {
+            acceptance.status = if acceptance.launch_started_at.is_some() {
+                DispatchStatus::Uncertain
+            } else {
+                DispatchStatus::Failed
+            };
+            acceptance.error = Some(error);
+            store.update(&acceptance, false)?;
         }
         Ok(())
     }

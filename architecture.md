@@ -40,15 +40,29 @@ Presentation layers adapt input and output. `AppService` is the sole application
 
 ## State ownership
 
-`tandem mcp-instance` is a separate stdio adapter exposing only instance-local Start and Stop through
+`tandem mcp-instance` is a separate stdio adapter exposing instance-local Start, Stop and Conclude through
 `AppService`. Binding resolves its working directory against namespace-owned journal and ownership
 records and holds an open workspace-directory descriptor. Each action compares the live directory's
 device/inode with that pinned descriptor under the instance lock; lock ownership transfers through
 the existing lifecycle workers, excluding deletion and name reuse through completion. The surface
-has no caller-selected target or deletion operation and is not a host-process sandbox. Preparation
+provides `get_instructions` with bound identity, bundled `instance-core-guidance.md`, and editable
+`instance-instructions.md` seeded from `instance-agent-instructions.md`. Existing editable guidance
+is preserved and reread per call. Initialization directs agents to read both fields before using tools
+and ask the user to resolve conflicts. Guidance reads verify the pinned workspace under its instance lock.
+The surface has no caller-selected lifecycle target and is not a host-process sandbox. Preparation
 seeds workspace configuration in syntax supported by OpenCode V1 and V2, with explicit Tandem settings,
 preserving existing root and `.opencode` JSON/JSONC configuration. Configuring the surface grants
-these lifecycle actions; stopping services remains independent of event-task completion.
+these lifecycle actions; stopping services remains independent of event-task completion. Conclude
+requires one retained acceptance matching the owned instance and template. It commits an immutable
+acceptance-owned report before transferring the instance lock, rule-worker lease and conclusion lease
+to a detached worker. The worker closes associated clients regardless of the observation setting and
+purges owned resources through the existing deletion contract. Client closure may interrupt the MCP
+reply; the report retains cleanup state and failure details, and a lost conclusion lease projects an
+interrupted outcome. Identical reports allow cleanup retry; different report contents conflict.
+Reported acceptances retain dispatch history and are excluded from dispatch admission and retries.
+Namespace-scoped report search matches any case-insensitive literal substring in title, summary or
+Markdown and returns acceptance summaries; report retrieval uses the acceptance ID. Report storage
+is independent of instance state and cascades only with acceptance/event/provider history deletion.
 
 - Docker labels and inspected containers are authoritative for container-backed runtime inventory.
 - Successfully prepared service instances with no containers retain their service execution kind and
@@ -216,9 +230,16 @@ profile renderers are pure presentation; the root coordinator retains modal/focu
 capability-specific event logic lives in `app/events`.
 
 Confirmed event deletion removes namespace-scoped events, processing history, pending rule work,
-and associated feedback atomically under the rule-worker lease. Provisioning or launching actions
-block deletion. Instances, sessions, provider credentials, and rule definitions are preserved.
-Dispatch admission history is namespace-owned and survives event deletion to enforce rate limits.
+and associated feedback atomically while holding leases only for the selected events. Dispatch, retry,
+and recreation admission hold the same event lease and reread retained acceptance identity before
+acting. Provisioning, launching, or active conclusion cleanup blocks deletion of affected history.
+Instances, sessions, provider credentials, rule definitions, and namespace dispatch admission history
+are preserved. Bulk deletion is atomic when any selected event is busy.
+Ignored-event deletion selects all retained namespace events with zero acceptances and removes their
+pending work in one database transaction, including pending events; it requires no worker or event lease.
+Acceptance deletion removes one acceptance, retained workspace linkage, and assignment feedback while
+preserving its event, sibling acceptances, completed evaluations, instances, sessions, and admission
+history. Event and acceptance deletion preserve records owned by incomplete provider deletion.
 
 Processing attempts are pending or accepted. Acceptance means a rule matched and durably triggered
 an independent action. Explicit replay of any retained event uses current enabled rules with a separate,
@@ -307,7 +328,7 @@ the same lifecycle lock. Stream completion publishes verified collector and stre
 Durable control-request timestamps project enabled streams as Starting for up to ten seconds while awaiting
 their first acknowledgment. Errors, timeouts and expired acknowledgments remain unverified; readiness does
 not depend on source events.
-The Providers DataView projects provider parents and stream children with stable identities, independent
+The Streams DataView projects provider parents and stream children with stable identities, independent
 details, scoped menus, retained-history counts, and exact provider/stream event links. Observed streams without
 declared control capability remain inspectable without claiming collection state or offering lifecycle actions.
 
@@ -329,7 +350,7 @@ address. Open clients whose executable was unlinked resolve its installed path f
 and freshness checks. Unverifiable ownership or incomplete shutdown blocks replacement.
 Sidecar and collector lifetimes are independent of open terminal clients. MCP remains a separate
 transport. An optional foreground `serve-events` mode supports
-protocol tests. Providers is the final tab, with lifecycle approval, bounded logs, and exact source
+protocol tests. Streams is the final tab, with lifecycle approval, bounded logs, and exact source
 links to the second Events tab.
 
 Provider deletion is an explicitly confirmed MCP service operation. An exclusive package lock excludes

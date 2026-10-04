@@ -48,7 +48,7 @@ fn tabs_share_toolbar_controls_and_retain_separate_searches() {
             );
             assert_eq!(app.attached_sessions_only, sessions);
             let text = rendered_lines(&toolbar_terminal(&mut app, width), area).join("\n");
-            assert_eq!(text.contains("Conversation busy"), sessions, "{text}");
+            assert!(text.contains("Conversation busy"), "{text}");
             assert_eq!(text.contains("Service"), !sessions, "{text}");
         }
 
@@ -215,7 +215,7 @@ fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_en
         let header =
             rendered_lines(&toolbar_terminal(&mut app, 130), Rect::new(0, 0, 130, 30))[0].clone();
         assert!(
-            header.contains("Sessions · Events · Instances · Rules · Providers"),
+            header.contains("Sessions · Events · Instances · Rules · Streams"),
             "{header}"
         );
         for _ in 0..2 {

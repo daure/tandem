@@ -16,6 +16,7 @@ mod bulk;
 mod completion;
 mod completion_navigation;
 mod creation;
+mod event_deletion;
 mod event_sound;
 mod events;
 mod events_navigation;
@@ -39,6 +40,7 @@ mod providers;
 mod refresh;
 mod resources;
 mod restart;
+mod row_enter;
 mod rules;
 mod service_state;
 mod tab_counts;
@@ -682,7 +684,7 @@ fn startup_waits_for_complete_inventory_before_showing_and_selecting_rows() {
 }
 
 #[test]
-fn data_view_starts_expanded_through_instances() {
+fn data_view_starts_fully_expanded_through_services() {
     init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
@@ -700,7 +702,7 @@ fn data_view_starts_expanded_through_instances() {
     let text = rendered_lines(&terminal, area).join("");
     assert!(text.contains("review"));
     assert!(text.contains("Service"));
-    assert!(!text.contains("http://localhost:9876/review/web/"));
+    assert!(text.contains("http://localhost:9876/review/web/"));
     assert!(!text.contains("Templates / instances"));
     assert!(!text.contains("Status"));
 }
@@ -812,7 +814,7 @@ fn details_hotkey_opens_the_selected_template_in_bottom_tabs() {
     app.layout(area, &mut tuicore::LayoutCtx::new());
     app.event(
         &TuiEvent::Key(KeyEvent {
-            code: Key::Enter,
+            code: Key::Char('d'),
             modifiers: KeyModifiers::NONE,
         }),
         &mut events,
@@ -1005,7 +1007,7 @@ fn description_hotkey_opens_an_unpadded_text_editor_in_insert_mode() {
     let area = Rect::new(0, 0, 130, 40);
     let mut events = EventCtx::new(AnimationSettings::default());
 
-    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('d'))), &mut events);
+    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('e'))), &mut events);
 
     assert!(app.view.is_active());
     let mut layout = LayoutEngine::new();
@@ -1216,11 +1218,13 @@ fn details_hotkey_opens_the_selected_instance_in_a_bottom_dialog() {
     super::instances::set_highlighted(&app.instances, Some("instance:review".into()));
 
     app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &TuiEvent::Key(KeyEvent::from(Key::Char('d'))),
         &mut EventCtx::new(AnimationSettings::default()),
     );
 
     assert!(app.view.is_active());
+    assert!(app.details_open);
+    assert!(app.intent.is_none());
     assert!(app.service.opened_system_targets().is_empty());
 }
 
@@ -1232,7 +1236,7 @@ fn details_hotkey_opens_the_selected_routed_service() {
     super::instances::set_highlighted(&app.instances, Some("service:review:web".into()));
 
     app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &TuiEvent::Key(KeyEvent::from(Key::Char('d'))),
         &mut EventCtx::new(AnimationSettings::default()),
     );
 
@@ -1262,7 +1266,7 @@ fn template_action_menu_keeps_typed_hotkeys_in_its_search() {
     let lines = rendered_lines(&terminal, area);
     for (label, hotkey) in [
         ("Copy template name", "yy"),
-        ("View details", "Enter"),
+        ("View details", "d"),
         ("New instance", "i"),
         ("Stop all instances", "s"),
         ("Purge all instances", "p"),
@@ -1321,8 +1325,8 @@ fn instance_action_menu_lists_instance_actions() {
     let lines = rendered_lines(&terminal, area);
     for (label, hotkey) in [
         ("Yank", "y"),
-        ("Update description", "d"),
-        ("View details", "Enter"),
+        ("Update description", "e"),
+        ("View details", "d"),
         ("New instance", "i"),
         ("Start instance", "s"),
         ("Stop instance", "s"),
@@ -1413,9 +1417,11 @@ fn active_data_view_search_keeps_action_hotkeys_as_search_text() {
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
     let mut events = EventCtx::new(AnimationSettings::default());
     super::instances::set_searching(&app.instances, true);
-    app.event(&TuiEvent::Key(KeyEvent::from(Key::Char('n'))), &mut events);
+    for key in ['n', 'd', 'e'] {
+        app.event(&TuiEvent::Key(KeyEvent::from(Key::Char(key))), &mut events);
 
-    assert!(super::instances::is_searching(&app.instances));
-    assert!(app.intent.is_none());
-    assert!(!app.view.is_active());
+        assert!(super::instances::is_searching(&app.instances));
+        assert!(app.intent.is_none());
+        assert!(!app.view.is_active());
+    }
 }

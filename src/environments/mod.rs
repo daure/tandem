@@ -1,6 +1,7 @@
 mod cleanup;
 mod command;
 mod compose;
+pub(crate) mod conclusion;
 pub(crate) mod config;
 mod containers;
 mod cpu_temperature;
@@ -845,10 +846,14 @@ impl Environments {
                     )
                     .map(|()| None)
                 }
-                "delete_instance" => {
-                    lifecycle::delete(&config, &operation.name, progress, before_deletion)
-                        .map(|()| None)
-                }
+                "delete_instance" => lifecycle::delete_with_lock(
+                    &config,
+                    &operation.name,
+                    progress,
+                    before_deletion,
+                    startup.instance_lock,
+                )
+                .map(|()| None),
                 "stop_template" => {
                     lifecycle::stop_template(&config, &operation.name, progress).map(|()| None)
                 }

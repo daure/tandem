@@ -49,6 +49,12 @@ impl App {
             return;
         }
         match command {
+            Command::Delete => self.handle_message(
+                Msg::DeleteEvents(crate::store::events::Deletion::Acceptance(
+                    target.acceptance.id,
+                )),
+                ctx,
+            ),
             Command::Rule => self.handle_message(Msg::FocusRule(target.acceptance.rule_name), ctx),
             Command::Routes => {
                 let routes = self.instance_routes(&target.acceptance.instance);

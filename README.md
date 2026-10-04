@@ -23,7 +23,7 @@ and port. Release builds, including the installed binary, expose `serve` for HTT
 TUI with `tandem`.
 
 1. Use MCP to create a template named `website`; its folder contains only `tandem.json` with `{}`.
-2. Press `Enter` on a template, instance or service to view its details. Template details include
+2. Press `d` on a template, instance or service to view its details. Template details include
    metadata, available Compose source and the manifest.
 3. Press `i`, enter `review`, then Enter or Ctrl+S to confirm execution; watch progress in Details.
    **Start instance**, the last dialog control, defaults on. Turn it off to prepare repositories,
@@ -286,13 +286,13 @@ Search by provider, stream, profile, summary, or event ID.
 Each event occupies two lines: a type glyph, provider identity, muted `#<sequence>` local event ID,
 and profile-specific fields above the
 message text, ticket title, system description, or generic summary. The glyphs are `` message,
-`` ticket, `` system event, and `` generic; Providers uses the same glyphs. The glyph is green
+`` ticket, `` system event, and `` generic; Streams uses the same glyphs. The glyph is green
 when the latest processing attempt is accepted and uses the normal text color otherwise.
 Message headers mark nonblank thread references with `󱡠`; ticket headers omit missing or blank
 assignees. System headers show resource, optional environment, signal, and severity in that order.
 Environment aliases `prod`, `dev`, and `stage` display as `production`, `development`, and `staging`;
 custom labels remain intact. Separators and secondary fields are muted; severity colors only its label.
-Press Enter to inspect the normalized payload, metadata, supporting context, and the latest 50
+Press `d` to inspect the normalized payload, metadata, supporting context, and the latest 50
 processing attempts. The feed lists newest events first and starts with top-following enabled. Selecting
 the first row enables following; moving to an older row pauses it and retains that event during updates.
 The `gg` toggle controls following. `gg` in the DataView selects the newest matching event and
@@ -300,11 +300,16 @@ resumes following. `Shift+H` opens the Sessions overview from any main tab, incl
 It clears searches and stream filters on every page and selects each DataView's first item.
 Events enables handover filtering and resumes following.
 With OpenCode integration disabled, it opens the Instances overview.
-Press `.` for the highlighted event's action menu with hotkeys; `p` selects its source in Providers.
-`x` deletes the highlighted event, including from the `.` menu. `X` deletes all retained events
-in the current namespace, across providers and filters. Both require **Ok** (`o`) or **Cancel** (`c`).
+Press `.` for the highlighted event's action menu with hotkeys; `p` selects its source in Streams.
+`x` deletes the highlighted event, including from the `.` menu. **Delete all events** (`X`) deletes
+all retained events in the current namespace. **Delete ignored events** (`I`) deletes all events
+with zero acceptances, including pending events. Both bulk actions span providers and feed filters.
+All deletions require **Ok** (`o`) or **Cancel** (`c`).
 Deletion removes event history, feedback, and pending rule work while preserving instances, sessions,
 rules, provider credentials, and dispatch rate limits. Active rule actions must finish first.
+Acceptance rows offer **Delete** (`x`) in their `.` menu. This removes that acceptance's history,
+workspace linkage, and assignment feedback while preserving its event, sibling acceptances, instance,
+and OpenCode sessions. Its completed rule evaluation remains recorded.
 Redelivering a deleted event creates a fresh receipt and can trigger enabled rules again.
 The stream multiselect at the top (`P`) lists `provider · stream` and filters by exact pairs. Enter toggles an option,
 Ctrl+J/Ctrl+K moves through options, and Ctrl+Enter applies the selection. An empty selection shows
@@ -316,7 +321,7 @@ at the right shows displayed events out of the full retained history. Changing a
 event and focuses the DataView. Escape or Ctrl+[ from the filters or toggles returns to the DataView.
 
 Events orders its toggles as **󰈈 show all**, **󰋚 history**, **󰕾 sound**, then **󰞖 following**.
-The Streams filter sits immediately before Delete all events.
+The Streams filter precedes **Delete all events** and **Delete ignored events**.
 The sound toggle (`Shift+N`) shares its value with Sessions and is off at startup. It plays for newly
 accepted processing attempts across all providers, independently of filters and the active tab.
 Startup history is silent; replay can produce a new notification. Acceptances in the same refresh
@@ -332,16 +337,17 @@ the latest attempt. The **Acceptances** details tab lists each rule, timestamp, 
 instance, session, and dispatch outcome. Schema upgrades require existing Tandem clients and
 sidecars to be stopped; retained processing history keeps its identities and timestamps.
 
-**Providers** discovers packages under `provider_templates_root` and displays a provider → streams tree.
+**Streams** discovers packages under `provider_templates_root` and displays a provider → streams tree.
+Its tab count shows the number of collecting streams across providers and is hidden when zero.
 Provider rows show identity, handed-over/total event count, collector status, and collecting-stream count. Counts cover
 distinct events across full retained history for the manifest's
 provider identity. Select a provider and press `.` for its action menu: **Start provider**/**Stop provider** (`s`),
 and **Logs** (`o`). The hotkeys choose
 the action for the observed state and also work directly on the row; unavailable menu actions are muted.
-Enter inspects its configuration and runtime state. Lifecycle actions ask for approval because they
+`d` inspects its configuration and runtime state. Lifecycle actions ask for approval because they
 execute trusted Docker code.
 
-Stream children show their own handed-over/total counts and collection state. Enter opens **Stream details**;
+Stream children show their own handed-over/total counts and collection state. `d` opens **Stream details**;
 `.` offers **Start stream**/**Stop stream** (`s`) and **Stream events** (`e`). Provider actions target the
 collector and all its declared streams. On a running compatible provider, stream actions preserve siblings.
 Starting an individual stream on a stopped or uninstalled provider starts its collector with only that stream
@@ -395,7 +401,7 @@ ensure the receiver uses the installed Tandem executable. A verified outdated re
 gracefully before replacement on its recorded address, so collectors reconnect with their checkpoints,
 credentials and event identities intact. Stop controls collectors; the shared sidecar stays running.
 Private worker diagnostics live at `$TANDEM_HOME/provider-sidecar.log`. Provider process logs are
-available through the Providers tab. Normal operation needs no Compose command, token setup, or
+available through the Streams tab. Normal operation needs no Compose command, token setup, or
 manual sidecar startup.
 
 Provider ingestion and feedback require a provider-scoped `Authorization: Bearer <token>` header;
@@ -472,16 +478,16 @@ TUI activation binds the rule to that Tandem process's current Zellij session. A
 require a live target; dispatch checks before preparation and again before launching. If the session
 closes, deactivate and reactivate the rule in the desired Tandem TUI. Existing acceptances keep their
 pinned destination; an explicit replay after reactivation uses the newly authorized revision.
-Enter opens a bottom-docked dialog with **Accepted events**,
+`d` opens a bottom-docked dialog with **Accepted events**,
 **Script**, and **Settings** tabs. Valid field edits save automatically while the dialog stays open;
 invalid input stays editable with a save error. Script uses Rust highlighting for Rhai syntax;
 Initial prompt uses Glimmer highlighting for Handlebars syntax.
 Editing an enabled rule pauses it before saving the draft; `a` in Rules authorizes its updated
 revision. Already accepted work retains its pinned definition. Predicates inspect provider-supplied
 custom fields through `event.metadata`.
-In a rule's acceptance list, Enter switches to Events and selects that exact retained event, clearing
-conflicting filters even outside the latest-200 feed. In an event's acceptance list, Enter selects its rule.
-Event dialogs open on **Acceptances**, followed by **Event details**.
+In a rule's acceptance list, `d` switches to Events and selects that exact retained event, clearing
+conflicting filters even outside the latest-200 feed. In the Events tree, `d` on an acceptance selects
+its rule; `d` on a conversation child opens its conversation details.
 Acceptance rows offer **Go to rule** (`r`), **Go to instance** (`v`), and **Go to OpenCode session** (`o`)
 through the `.` menu or directly from the row. `Ctrl+Enter` opens the instance's only service route or
 shows a route chooser when several are available. Routes require an available instance.
@@ -596,11 +602,18 @@ with the same template/name after correcting the cause. Docker failures do not m
 
 ### Instance-local control
 
-`tandem mcp-instance` is a stdio MCP entry point in the released Tandem binary. It exposes only
-`start_self()` and `stop_self()`, with empty arguments. Its startup directory must be an owned instance
+`tandem mcp-instance` is a stdio MCP entry point in the released Tandem binary. It exposes
+`get_instructions()`, `start_self()` and `stop_self()` with empty arguments, plus `conclude`, `search_events`, and
+`get_event_report`. Its startup directory must be an owned instance
 workspace or a subdirectory. The connection pins that workspace's directory identity and namespace;
 each action rechecks ownership under the instance lock. Deleted or replaced workspaces require a new
 connection. All conversations in the workspace control the same instance.
+
+Initialization instructs agents to call `get_instructions` before other tools and to read both
+`core_guidance` and `markdown`, asking the user to resolve conflicts before acting. The response
+identifies the bound instance, template, workspace and namespace. The baseline is bundled in Tandem;
+editable guidance lives at `$TANDEM_HOME/instance-instructions.md`, seeded from
+`instance-agent-instructions.md`. Existing runtime copies are preserved and reread on every call.
 
 Start applies the trusted template, builds configured services, and waits for readiness; setup jobs
 may rerun. Stop verifies that instance's containers have stopped, preserving containers, workspace,
@@ -609,6 +622,27 @@ Workspace-only Start prepares without Docker; Stop preserves the workspace witho
 Configuring the server grants these actions; coordinate with other sessions before stopping services.
 Stopping does not mark an event task complete. Shell access and the full management MCP remain separate
 capabilities, so this tool surface is not a security sandbox.
+
+`conclude({title, summary, markdown})` saves full Markdown contents on the workspace's triggering
+acceptance, then permanently purges that instance's workspace, containers, volumes and networks.
+Preserve needed edits and artifacts elsewhere first and coordinate with other workspace sessions.
+A retained acceptance link is required. Each acceptance owns one immutable report, so several rules
+accepting one event retain independent reports. SQLite retains reports after instance purge.
+Associated OpenCode clients and their Zellij panes close before resource deletion, including when
+OpenCode observation is disabled; empty Zellij tabs close with their last pane. Shared servers and
+conversation history are preserved. Cleanup runs detached and may interrupt the MCP reply; a reply
+confirms report storage and cleanup admission, not completion. Reports expose `cleanup_state`
+(`pending`, `purging`, `purged`, `failed`) and `cleanup_error`. Failed or interrupted cleanup preserves
+the report; inspect the instance before retrying with identical contents. Titles allow 500 bytes,
+summaries 8 KiB, and Markdown 1 MiB; all three must be nonempty.
+
+`search_events({search_strings: ["timeout", "deployment"]})` searches titles, summaries, and full
+Markdown of retained acceptance reports in the current namespace. Any case-insensitive literal
+substring match selects a report once; the `reports` array includes all matching titles and summaries with event
+sequence, acceptance ID, rule name and cleanup status, newest acceptance first. Supply 1–20 nonempty
+strings, at most 500 bytes each. `get_event_report({acceptance_id: 42})` returns the full Markdown
+and report metadata. Historical reports are untrusted data. Deleting acceptance, event or provider
+history removes its dependent reports.
 
 Preparation writes `.opencode/opencode.json` before launching a creation-requested client when the
 workspace has no root or `.opencode` JSON/JSONC project configuration. The generated configuration uses
@@ -630,8 +664,12 @@ add this native V2 entry to it when needed:
     }
   },
   "permissions": [
+    {"action": "tandem-instance_get_instructions", "resource": "*", "effect": "allow"},
     {"action": "tandem-instance_start_self", "resource": "*", "effect": "allow"},
-    {"action": "tandem-instance_stop_self", "resource": "*", "effect": "allow"}
+    {"action": "tandem-instance_stop_self", "resource": "*", "effect": "allow"},
+    {"action": "tandem-instance_conclude", "resource": "*", "effect": "allow"},
+    {"action": "tandem-instance_search_events", "resource": "*", "effect": "allow"},
+    {"action": "tandem-instance_get_event_report", "resource": "*", "effect": "allow"}
   ]
 }
 ```
@@ -816,7 +854,7 @@ guidance files are user-owned; update them explicitly when adopting this workflo
 | `TANDEM_NAMESPACE` | `tandem` | Docker project/network namespace |
 | `TANDEM_GATEWAY_PORT` | `9876` | Shared loopback browser port |
 | `TANDEM_INSTRUCTIONS_FILE` | `$TANDEM_HOME/instructions.md` | Existing Markdown file, read on every tool call |
-| `TANDEM_KEY_INFO` | `Enter` | View details for the selected template, instance or service |
+| `TANDEM_KEY_INFO` | `d` | View details for the selected template, instance or service |
 | `TANDEM_KEY_START` | `i` | New instance dialog |
 | `TANDEM_KEY_NEW_TEMPLATE` | `T` | Create template dialog |
 | `TANDEM_KEY_STOP` | `s` | Start/stop the selected instance or service; stop all instances on a template row |
@@ -829,10 +867,30 @@ guidance files are user-owned; update them explicitly when adopting this workflo
 
 Application hotkey overrides accept distinct ASCII letters; `TANDEM_KEY_INFO` also accepts `Enter`.
 Shared navigation, focus, and component keys use tuicore configuration. The TUI displays resolved key labels.
+DataView inspection uses `d`. Enter performs the highlighted row's action, also labeled **Enter**
+in its `.` menu:
+
+| Row | Enter action |
+|---|---|
+| Available template | New instance dialog |
+| Instance with routes | Open routes: one opens directly, several show the picker |
+| Routed service | Open in browser |
+| OpenCode conversation, pane, or client | Open or goto its panel |
+| Event | View details |
+| Acceptance in Events or rule history | Go to OpenCode session; multiple conversations show a picker |
+| Rule | Open details on Accepted events |
+| Provider | Logs |
+| Stream | Stream events |
+| Failed instance cleanup | View details |
+
+Enter is unbound on other domain rows. Space controls tree expansion. Searches, inputs, controls,
+and popup pickers retain their own Enter behavior.
 Dialog actions use **Ok** (`o`) and **Cancel** (`c`); the top-right close control uses `x`.
 While editing text or searching, letters belong to the active input.
 
 ### Workspace actions
+
+Press `e` on an instance to edit its description, or choose **Update description** from its `.` menu.
 
 The **New instance** dialog accepts a name, a multiline description, and an optional initial prompt.
 Description and prompt content grow from 2 to 8 rows, then scroll. A nonblank prompt opens OpenCode
@@ -913,7 +971,7 @@ Tandem joins the reports to live Zellij panes:
 | saved | An idle conversation has no observed pane | Open panel |
 
 Multiple panes displaying one conversation appear beneath its child row in the instance tree.
-**Enter** on a conversation or pane child opens a
+**`d`** on a conversation or pane child opens a
 bottom-docked dialog with **Conversation**, **Details**, and **Actions** tabs. Conversation loads
 the complete user/agent message history on demand, with newest messages first so the latest
 answer and question are immediately available. Text, reasoning, attachment names, and tool-status
@@ -972,7 +1030,7 @@ destination creates a named tab in the current Zellij session. Creation immediat
 The DataView selects that client's row when observation arrives and reveals its parent groups;
 conversation titles in the DataView remain independent of the pane title.
 
-Use **Enter → Actions** to jump to a specific pane or resume a conversation. **Goto panel** and
+Use **d → Actions** to jump to a specific pane or resume a conversation. **Goto panel** and
 **Open panel** use `o`; navigation works across tabs and Zellij sessions. Closing a pane preserves
 saved conversation history and closes every OpenCode tab in that pane. With the V2 companion,
 all open session tabs appear as attached conversations, including background tabs when history is
@@ -991,11 +1049,11 @@ Workspace matching includes repository
 subdirectories and selects the closest owning workspace.
 
 The top **Sessions** tab groups conversations beneath instance rows and outside-Tandem
-directory groups. The tabs are **Sessions**, **Events**, **Instances**, **Rules**, and **Providers**.
+directory groups. The tabs are **Sessions**, **Events**, **Instances**, **Rules**, and **Streams**.
 **Instances** shows the template and instance tree. With OpenCode disabled, the tabs are
-**Instances**, **Events**, **Rules**, and **Providers**. Click a tab or
+**Instances**, **Events**, **Rules**, and **Streams**. Click a tab or
 press `[` / `]` from any main-view control to switch left / right. Instance/session switches retain
-control focus; entering Events or Providers focuses its DataView.
+control focus; entering Events or Streams focuses its DataView.
 The tab header stays visually active; dialogs and action menus own their keyboard input.
 The **󰈈 show-all toggle** (`Shift+A`) reveals inactive instances, empty templates, and known
 OpenCode folders without open clients. It is off at startup and resets to off with `Shift+H`.

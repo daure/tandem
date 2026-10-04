@@ -3,6 +3,17 @@ use crate::store::events::{Record, Snapshot};
 use std::time::Duration;
 
 fn update_events(app: &mut App, count: i64) {
+    app.pages_mut().update_events(event_snapshot(count));
+    app.pages_mut().tick(
+        Duration::ZERO,
+        AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+}
+
+fn event_snapshot(count: i64) -> Snapshot {
     let records = (1..=count)
         .rev()
         .map(|sequence| {
@@ -25,18 +36,11 @@ fn update_events(app: &mut App, count: i64) {
             }
         })
         .collect();
-    app.pages_mut().update_events(Snapshot {
+    Snapshot {
         records,
         total: count as u64,
         ..Default::default()
-    });
-    app.pages_mut().tick(
-        Duration::ZERO,
-        AnimationSettings {
-            enabled: false,
-            ..Default::default()
-        },
-    );
+    }
 }
 
 fn render(app: &mut App) -> (tuicore::LayoutCtx, String) {
@@ -104,7 +108,11 @@ fn control_bracket() -> TuiEvent {
 
 fn selected(app: &mut App, route: &EventRoute) -> i64 {
     let mut ctx = EventCtx::default();
-    app.dispatch_event(route, &TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+    app.dispatch_event(
+        route,
+        &TuiEvent::Key(KeyEvent::from(Key::Char('d'))),
+        &mut ctx,
+    );
     match ctx.messages() {
         [Msg::OpenEvent(row)] => row.sequence,
         other => panic!("Unexpected messages: {other:?}"),
@@ -209,6 +217,7 @@ fn eye_controls_share_show_all_across_sessions_events_and_instances() {
 fn events_follow_the_newest_row_until_navigation_leaves_the_top() {
     let mut app = events_app(20);
     let route = focus_feed(&mut app);
+    send(&mut app, &route, TuiEvent::Key(Key::Char('z').into()));
     assert_eq!(selected(&mut app, &route), 20);
     let text = render(&mut app).1;
     assert!(text.contains("──● 󰞖 |gg|"), "{text}");
@@ -418,6 +427,30 @@ fn an_empty_event_feed_follows_its_first_arrival() {
 }
 
 #[test]
+fn event_tree_selects_the_next_survivor_or_previous_at_the_end() {
+    for (removed, expected) in [(3, 2), (2, 1), (1, 2)] {
+        let mut app = events_app(3);
+        let route = focus_feed(&mut app);
+        send(&mut app, &route, TuiEvent::Key(Key::Char('z').into()));
+        for _ in 0..3 - removed {
+            send(&mut app, &route, TuiEvent::Key(Key::Down.into()));
+        }
+        assert_eq!(selected(&mut app, &route), removed);
+
+        let mut snapshot = event_snapshot(3);
+        snapshot.records.retain(|record| record.sequence != removed);
+        snapshot.total -= 1;
+        app.pages_mut()
+            .forget_event(crate::store::events::Deletion::Event(removed));
+        app.pages_mut().update_events(snapshot);
+        app.pages_mut()
+            .tick(Duration::ZERO, AnimationSettings::default());
+
+        assert_eq!(selected(&mut app, &route), expected);
+    }
+}
+
+#[test]
 fn overview_resets_search_and_selection_on_all_tabs_and_returns_to_sessions() {
     init_ui();
     for tab in [0, 1, 2, 3, 4] {
@@ -559,7 +592,7 @@ fn overview_resets_search_and_selection_on_all_tabs_and_returns_to_sessions() {
                             let ctx = send(
                                 &mut app,
                                 &EventRoute::new(list.path.clone()),
-                                TuiEvent::Key(KeyEvent::from(Key::Enter)),
+                                TuiEvent::Key(KeyEvent::from(Key::Char('d'))),
                             );
                             assert!(
                                 matches!(ctx.messages(), [Msg::ProviderDetails(provider)] if provider.name == "alpha")
@@ -581,6 +614,59 @@ fn overview_resets_search_and_selection_on_all_tabs_and_returns_to_sessions() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn overview_expands_every_event_root_from_any_tab() {
+    for tab in 0..5 {
+        for event in [shifted('h'), hotkey("shift+h")] {
+            let mut app = events_app(3);
+            let route = focus_feed(&mut app);
+            send(&mut app, &route, TuiEvent::Key(Key::Char('z').into()));
+            let text = render(&mut app).1;
+            assert!(!text.contains("matching #"), "{text}");
+            select_tab(&mut app, tab);
+            let (layout, _) = render(&mut app);
+            let target = focus_target(&layout, "tabs");
+            app.dispatch_focus(&target, true, &mut tuicore::FocusCtx::default());
+            send(&mut app, &EventRoute::new(target.path.clone()), event);
+            select_tab(&mut app, 1);
+            let text = render(&mut app).1;
+            for sequence in 1..=3 {
+                assert!(
+                    text.contains(&format!("matching #{sequence} · event #{sequence}")),
+                    "tab {tab}: {text}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn startup_expands_event_roots_when_the_feed_arrives_and_refresh_preserves_collapses() {
+    init_ui();
+    let mut app = crate::app::root(AppService::for_tests());
+    update_events(&mut app, 0);
+    update_events(&mut app, 3);
+    select_tab(&mut app, 1);
+    let text = render(&mut app).1;
+    for sequence in 1..=3 {
+        assert!(
+            text.contains(&format!("matching #{sequence} · event #{sequence}")),
+            "{text}"
+        );
+    }
+    let route = focus_feed(&mut app);
+    send(&mut app, &route, TuiEvent::Key(Key::Left.into()));
+    update_events(&mut app, 4);
+    let text = render(&mut app).1;
+    assert!(!text.contains("matching #3 · event #3"), "{text}");
+    for sequence in 1..=2 {
+        assert!(
+            text.contains(&format!("matching #{sequence} · event #{sequence}")),
+            "{text}"
+        );
     }
 }
 
