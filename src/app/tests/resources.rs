@@ -351,13 +351,17 @@ fn instance_summaries_use_the_most_actionable_service_state() {
 #[test]
 fn service_group_icon_summarizes_runtime_service_health() {
     init_ui();
-    for (statuses, expected) in [
-        (["healthy", "up"], Tone::Success),
-        (["down (exit 0)", "down (exit 0)"], Tone::Muted),
-        (["healthy", "down (exit 0)"], Tone::Warning),
-        (["healthy", "boot"], Tone::Info),
-        (["boot", "created"], Tone::Info),
-        (["healthy", "unhealthy"], Tone::Error),
+    for (statuses, expected, icon) in [
+        (["healthy", "up"], Tone::Success, "󰒋"),
+        (["down (exit 0)", "down (exit 0)"], Tone::Muted, "󰒏"),
+        (["created", "created"], Tone::Muted, "󰒏"),
+        (["created", "down (exit 0)"], Tone::Muted, "󰒏"),
+        (["healthy", "down (exit 0)"], Tone::Warning, "󰒋"),
+        (["healthy", "boot"], Tone::Info, "󰒋"),
+        (["boot", "created"], Tone::Info, "󰒋"),
+        (["healthy", "unhealthy"], Tone::Error, "󰒋"),
+        (["unhealthy", "unhealthy"], Tone::Error, "󰒋"),
+        (["unknown", "created"], Tone::Warning, "󰒋"),
     ] {
         let mut snapshot = snapshot();
         let mut second = snapshot.instances[0].services[0].clone();
@@ -368,10 +372,31 @@ fn service_group_icon_summarizes_runtime_service_health() {
             service.status = status.into();
         }
 
-        let tree = rows::from_snapshot(&snapshot);
-        let group = tree.iter().find(|row| row.id == "services:review").unwrap();
-        assert_eq!(group.icon, "󰒋");
-        assert_eq!(group.tone, expected, "{statuses:?}");
+        for starting in [false, true] {
+            if starting {
+                snapshot.startup.insert(
+                    "review".into(),
+                    crate::store::environments::StartupTiming {
+                        elapsed_milliseconds: 0,
+                        estimate_milliseconds: None,
+                        kind: crate::store::environments::StartupKind::Cold,
+                    },
+                );
+            }
+            let tree = rows::from_snapshot(&snapshot);
+            let group = tree.iter().find(|row| row.id == "services:review").unwrap();
+            assert_eq!(
+                group.icon,
+                if starting { "󰒋" } else { icon },
+                "{statuses:?}"
+            );
+            let tone = if starting && expected != Tone::Error {
+                Tone::Info
+            } else {
+                expected
+            };
+            assert_eq!(group.tone, tone, "{statuses:?}");
+        }
     }
 }
 

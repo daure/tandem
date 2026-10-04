@@ -14,6 +14,7 @@ fn rule(name: &str) -> Definition {
         script: "fn matches(event) { event.event_id == \"accepted\" }".into(),
         template: "blank".into(),
         model: "openai/test".into(),
+        variant: None,
         initial_prompt: "Inspect {{event.summary}}".into(),
         enabled: true,
         start_instance: false,

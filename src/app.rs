@@ -982,7 +982,12 @@ impl App {
                             &self.name,
                             template.clone(),
                             self.description.clone(),
-                            self.creation.opencode(),
+                            self.creation
+                                .opencode()
+                                .map(|prompt| crate::store::opencode::Launch {
+                                    prompt,
+                                    ..Default::default()
+                                }),
                             self.creation.start_instance,
                         ) {
                             Ok(crate::service::CreateInstanceOutcome::Existing) => {

@@ -27,6 +27,7 @@ fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_own
                 script: "fn matches(event) { true }".into(),
                 template: "blank".into(),
                 model: "openai/test".into(),
+                variant: None,
                 initial_prompt: "Inspect {{event.summary}}".into(),
                 enabled: true,
                 start_instance: false,

@@ -9,7 +9,7 @@ pub(crate) enum NewInstanceOutcome {
 
 impl AppService {
     pub(super) fn configure_startup_opencode(&self, startup: &mut Startup, name: &str) {
-        let Some(prompt) = startup.opencode.take() else {
+        let Some(launch) = startup.opencode.take() else {
             return;
         };
         let settings = std::sync::Arc::clone(&self.settings);
@@ -33,7 +33,7 @@ impl AppService {
                         &integration,
                         workspace,
                         &name,
-                        prompt.as_deref(),
+                        &launch,
                         Some(instructions),
                     ),
                 )
@@ -54,22 +54,22 @@ impl AppService {
         &self,
         name: &str,
         template: String,
-        opencode: Option<Option<String>>,
+        opencode: Option<crate::store::opencode::Launch>,
         description: Option<String>,
         start_instance: bool,
     ) -> Result<NewInstanceOutcome, String> {
+        if let Some(launch) = &opencode {
+            launch.validate()?;
+        }
         let (existing, instance_lock) = self.environments.admit_new_instance(name, &template)?;
         if opencode.is_some() {
             self.validate_opencode_launch()?;
         }
         if let Some(instance) = existing {
-            if let Some(initial_prompt) = opencode {
+            if let Some(launch) = opencode {
                 let workspace = self.environments.workspace(name)?;
-                self.runtime.block_on(self.launch_instance_opencode(
-                    &workspace,
-                    name,
-                    initial_prompt.as_deref(),
-                ))?;
+                self.runtime
+                    .block_on(self.launch_instance_opencode(&workspace, name, &launch))?;
             }
             return Ok(NewInstanceOutcome::Existing(instance));
         }

@@ -514,6 +514,34 @@ fn historical_acceptances_show_report_outcomes_and_offer_report_reads_without_an
         text.contains("Acceptance report") && text.contains("Loading report"),
         "{text}"
     );
+    assert!(
+        [
+            "Title",
+            "Summary",
+            "Report",
+            "Incident reviewed",
+            "Verification evidence retained",
+            "Client closure failed"
+        ]
+        .iter()
+        .all(|value| text.contains(value)),
+        "{text}"
+    );
+    for width in [160, 56, 160] {
+        let (_, text) = render(&mut app, width);
+        let header = text
+            .lines()
+            .position(|line| line.contains("Acceptance report"))
+            .unwrap();
+        assert_eq!(header, 6, "{text}");
+        let line = text.lines().nth(header).unwrap();
+        let panel_width = width * crate::app::details_width_percent(width) / 100;
+        assert_eq!(
+            line.trim().chars().count(),
+            usize::from(panel_width),
+            "{text}"
+        );
+    }
     let mut pending = report;
     pending.cleanup_state = crate::store::rules::reports::CleanupState::Purging;
     assert!(

@@ -246,18 +246,26 @@ export default { id: "test.route", setup(ctx) {
                 wait_for(lambda: not records() or all(not Path(f'/proc/{record["pid"]}').exists() for record in records()), timeout=15)
                 assert api('/api/session/active')['data'] == {}
                 print('PASS: closing the client removes presence; no model run occurred')
-                guided_pane = zj('action', 'new-pane', '--stacked', '--name', '', '--cwd', str(workspace), '--',
-                                'env', 'TANDEM_INITIAL_PROMPT=', f'TANDEM_SESSION_INSTRUCTIONS={instructions}',
-                                'TANDEM_SESSION_MODEL=', binary, str(workspace), '--server', url)
-                guided_pane_id = int(guided_pane.removeprefix('terminal_'))
-                guided = wait_for(lambda: next((record for record in records()
-                    if record['pane_id'] == guided_pane_id and record['id']), None))
-                assert any(entry['key'] == 'tandem.services' and entry['value'] == instructions
-                           for entry in api(f'/api/experimental/session/{guided["id"]}/instructions/entries')['data'])
-                assert api('/api/session/active')['data'] == {}
-                zj('action', 'close-pane', '--pane-id', guided_pane)
-                wait_for(lambda: not records() or all(not Path(f'/proc/{record["pid"]}').exists() for record in records()), timeout=15)
-                print('PASS: client startup attaches durable instructions without submitting a model prompt')
+                for model, variant, expected in [
+                    ('', '', None),
+                    ('openai/gpt-5.2', '', {'providerID': 'openai', 'id': 'gpt-5.2', 'variant': 'default'}),
+                    ('openai/gpt-5.2', 'high', {'providerID': 'openai', 'id': 'gpt-5.2', 'variant': 'high'}),
+                ]:
+                    guided_pane = zj('action', 'new-pane', '--stacked', '--name', '', '--cwd', str(workspace), '--',
+                                    'env', 'TANDEM_INITIAL_PROMPT=', f'TANDEM_SESSION_INSTRUCTIONS={instructions}',
+                                    f'TANDEM_SESSION_MODEL={model}', f'TANDEM_SESSION_VARIANT={variant}',
+                                    binary, str(workspace), '--server', url)
+                    guided_pane_id = int(guided_pane.removeprefix('terminal_'))
+                    guided = wait_for(lambda: next((record for record in records()
+                        if record['pane_id'] == guided_pane_id and record['id']), None))
+                    assert any(entry['key'] == 'tandem.services' and entry['value'] == instructions
+                               for entry in api(f'/api/experimental/session/{guided["id"]}/instructions/entries')['data'])
+                    actual = api(f'/api/session/{guided["id"]}')['data'].get('model')
+                    assert actual == expected, {'requested': model, 'variant': variant, 'expected': expected, 'actual': actual}
+                    assert api('/api/session/active')['data'] == {}
+                    zj('action', 'close-pane', '--pane-id', guided_pane)
+                    wait_for(lambda: not records() or all(not Path(f'/proc/{record["pid"]}').exists() for record in records()), timeout=15)
+                print('PASS: client startup preserves default or explicit model/variant and durable instructions without model prompts')
             finally:
                 if created:
                     subprocess.run([zellij, 'kill-session', name], env=env, capture_output=True, timeout=10)

@@ -60,6 +60,14 @@ impl App {
                 Msg::RuleDraftChanged(model_draft.clone())
             });
         let template_draft = draft.clone();
+        let variant_draft = draft.clone();
+        let variant = TextInput::new()
+            .value(rule.definition.variant.as_deref().unwrap_or_default())
+            .on_change(move |value| {
+                variant_draft.borrow_mut().rule.definition.variant =
+                    (!value.is_empty()).then_some(value);
+                Msg::RuleDraftChanged(variant_draft.clone())
+            });
         let template = TextInput::new()
             .value(&rule.definition.template)
             .on_change(move |value| {
@@ -100,6 +108,11 @@ impl App {
                 .child(
                     "model",
                     FormField::new("Session model", model),
+                    FlexItem::fit_content(),
+                )
+                .child(
+                    "variant",
+                    FormField::new("Thinking variant (blank uses OpenCode default)", variant),
                     FlexItem::fit_content(),
                 )
                 .child(

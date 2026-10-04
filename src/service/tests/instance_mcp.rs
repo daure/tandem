@@ -86,6 +86,7 @@ fn conclusion_saves_acceptance_reports_before_detached_purge_and_rejects_unlinke
                 script: "fn matches(event) { true }".into(),
                 template: "blank".into(),
                 model: "openai/test".into(),
+                variant: None,
                 initial_prompt: "Inspect {{event.summary}}".into(),
                 enabled: true,
                 start_instance: false,

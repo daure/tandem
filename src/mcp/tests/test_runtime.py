@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import tempfile
 import time
@@ -9,6 +10,76 @@ from stdio_smoke import BINARY, Client, disable_history_cleanup
 
 @unittest.skipUnless(os.name == "posix" and BINARY.is_file(), "Build Tandem before runtime integration tests")
 class RuntimeTests(unittest.TestCase):
+    def test_creation_model_and_variant_reach_the_detached_client_with_optional_defaults(self):
+        with tempfile.TemporaryDirectory(prefix="tandem-session-selection-") as directory:
+            root = Path(directory)
+            home = root / "home"
+            disable_history_cleanup(home)
+            zellij = root / "zellij"
+            zellij.write_text("""#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+args = sys.argv[1:]
+if 'list-sessions' in args:
+    print('main')
+elif 'list-panes' in args:
+    print(json.dumps([{'id': 100, 'is_plugin': False, 'exited': False, 'tab_id': 9, 'tab_name': 'review'}]))
+elif 'new-tab' in args or 'new-pane' in args:
+    Path(os.environ['TANDEM_HOME'], 'client-command.json').write_text(json.dumps(args))
+    print('9' if 'new-tab' in args else 'terminal_100')
+""")
+            zellij.chmod(0o755)
+            docker = root / "docker"
+            docker.write_text("#!/bin/sh\nexit 0\n")
+            docker.chmod(0o755)
+            environment = {**os.environ, "PATH": f"{root}{os.pathsep}{os.environ['PATH']}",
+                           "TANDEM_HOME": str(home), "TANDEM_NAMESPACE": "selection-test",
+                           "ZELLIJ_SESSION_NAME": "main", "XDG_STATE_HOME": str(root / "state"),
+                           "OC_DAEMON_STATE": str(root / "daemons")}
+            environment.pop("TANDEM_INSTRUCTIONS_FILE", None)
+            client = Client(BINARY, environment)
+            try:
+                client.tool("create_template", {"name": "blank"})
+                command = home / "client-command.json"
+                operation = client.tool("create_instance", {
+                    "template": "blank", "name": "no-client", "confirmed": True, "wait": True,
+                })
+                self.assertEqual(operation["state"], "succeeded")
+                self.assertFalse(command.exists())
+                for index, (selection, model, variant) in enumerate([
+                    ({}, "", ""),
+                    ({"model": "openai/test"}, "openai/test", ""),
+                    ({"model": "openai/test", "variant": "high"}, "openai/test#high", "high"),
+                    ({"variant": "high"}, "", "high"),
+                ]):
+                    with self.subTest(selection=selection):
+                        operation = client.tool("create_instance", {
+                            "template": "blank", "name": f"review-{index}", "confirmed": True,
+                            "wait": True, "opencode": True, "initial_prompt": "Inspect literal 'text'", **selection,
+                        })
+                        self.assertEqual(operation["state"], "succeeded")
+                        args = json.loads(command.read_text())
+                        self.assertIn(f"TANDEM_SESSION_MODEL={model}", args)
+                        self.assertIn(f"TANDEM_SESSION_VARIANT={variant}", args)
+                        self.assertIn("TANDEM_INITIAL_PROMPT=Inspect literal 'text'", args)
+                        command.unlink()
+                for selection in [
+                    {"model": "openai/test"},
+                    {"opencode": True, "model": "invalid"},
+                    {"opencode": True, "variant": ""},
+                    {"opencode": True, "model": "openai/test#fast", "variant": "high"},
+                ]:
+                    result = client.request("tools/call", {"name": "create_instance", "arguments": {
+                        "template": "blank", "name": "invalid", "confirmed": True, **selection,
+                    }})
+                    self.assertTrue(result.get("isError"), result)
+                    self.assertFalse((home / "workspaces/invalid").exists())
+                    self.assertFalse(command.exists())
+            finally:
+                client.close()
+
     def test_manifest_schema_and_validated_update_round_trip_through_stdio(self):
         with tempfile.TemporaryDirectory(prefix="tandem-manifest-") as directory:
             root = Path(directory)

@@ -18,6 +18,7 @@ pub(super) fn rule(name: &str) -> Rule {
             script: "fn matches(event) { event.profile == \"message\" }".into(),
             template: "website".into(),
             model: "openai/test".into(),
+            variant: None,
             initial_prompt: "Inspect {{event.data.text}}".into(),
             enabled: false,
             start_instance: true,
@@ -822,7 +823,9 @@ fn rule_menu_and_row_hotkey_offer_the_action_for_the_selected_state() {
                 .unwrap();
             let icon = if enabled { "" } else { "" };
             assert!(
-                row.contains(&format!("{icon} editable 󰠲 website 󰧑 openai/test 󰒋")),
+                row.contains(&format!(
+                    "{icon} editable 󰠲 website 󰧑 openai/test · default · 󰒋"
+                )),
                 "{text}"
             );
             assert_eq!(
@@ -1540,6 +1543,36 @@ fn field_input_autosaves_without_closing_or_replacing_the_editor() {
     );
     assert!(app.view.is_active());
     assert!(render(&mut app, 130).1.contains("editable event handler!"));
+    app.dispatch_focus(input, false, &mut tuicore::FocusCtx::default());
+    settings_input(
+        &mut app,
+        "variant",
+        &[
+            Key::Enter,
+            Key::Char('h'),
+            Key::Char('i'),
+            Key::Char('g'),
+            Key::Char('h'),
+            Key::Esc,
+        ],
+    );
+    finish_autosaves(&mut app);
+    assert_eq!(saved_rule(&app).definition.variant.as_deref(), Some("high"));
+    settings_input(
+        &mut app,
+        "variant",
+        &[
+            Key::Enter,
+            Key::Home,
+            Key::Delete,
+            Key::Delete,
+            Key::Delete,
+            Key::Delete,
+            Key::Esc,
+        ],
+    );
+    finish_autosaves(&mut app);
+    assert_eq!(saved_rule(&app).definition.variant, None);
 }
 
 #[test]
@@ -1555,7 +1588,8 @@ fn rapid_edits_save_the_latest_fields_and_survive_dialog_close() {
         let mut draft = draft.borrow_mut();
         draft.rule.definition.description = "latest edit".into();
         draft.rule.definition.script = "fn matches(event) { false }".into();
-        draft.rule.definition.model = "custom/model#fast".into();
+        draft.rule.definition.model = "custom/model".into();
+        draft.rule.definition.variant = Some("fast".into());
         draft.rule.definition.initial_prompt = "Read {{event}}".into();
     }
     app.handle_message(Msg::RuleDraftChanged(draft), &mut EventCtx::default());
@@ -1565,9 +1599,12 @@ fn rapid_edits_save_the_latest_fields_and_survive_dialog_close() {
     assert_eq!(saved.revision, 3);
     assert_eq!(saved.definition.description, "latest edit");
     assert_eq!(saved.definition.script, "fn matches(event) { false }");
-    assert_eq!(saved.definition.model, "custom/model#fast");
+    assert_eq!(saved.definition.model, "custom/model");
+    assert_eq!(saved.definition.variant.as_deref(), Some("fast"));
     assert_eq!(saved.definition.initial_prompt, "Read {{event}}");
     assert!(!app.view.is_active());
+    show_rules(&mut app, vec![saved]);
+    assert!(render(&mut app, 160).1.contains("custom/model · fast · 󰒋"));
 }
 
 #[test]

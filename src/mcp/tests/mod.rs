@@ -81,6 +81,10 @@ fn template_tools_return_object_payloads_and_mutations_require_confirmation() {
             .create_instance(Parameters(super::CreateInstanceInput {
                 template: "website".into(),
                 name: "review".into(),
+                opencode: false,
+                initial_prompt: None,
+                model: None,
+                variant: None,
                 confirmed: false,
                 wait: true,
                 start_instance: true,

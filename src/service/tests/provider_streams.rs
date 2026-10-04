@@ -212,6 +212,7 @@ fn stream_handovers_count_distinct_dispatched_events_across_rules_and_replays() 
                     script: "fn matches(event) { true }".into(),
                     template: "blank".into(),
                     model: "openai/test".into(),
+                    variant: None,
                     initial_prompt: "Inspect {{event.data.text}}".into(),
                     enabled: true,
                     start_instance: true,

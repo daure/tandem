@@ -71,7 +71,6 @@ pub(super) fn append(rows: &mut Vec<Row>, instance: &Instance, starting: bool) {
 pub(super) fn services(parent: &Row, instance: &Instance, count: usize, starting: bool) -> Row {
     let mut group = child(parent, format!("services:{}", instance.name));
     group.label = if count == 1 { "Service" } else { "Services" }.into();
-    group.icon = "󰒋";
     let services = instance
         .services
         .iter()
@@ -81,6 +80,16 @@ pub(super) fn services(parent: &Row, instance: &Instance, count: usize, starting
         .iter()
         .map(|service| service.status_summary())
         .collect::<Vec<_>>();
+    group.icon = if !starting
+        && !summaries.is_empty()
+        && summaries
+            .iter()
+            .all(|summary| matches!(summary.status, Status::NotStarted | Status::Stopped))
+    {
+        "󰒏"
+    } else {
+        "󰒋"
+    };
     group.metrics = if instance.suppress_resources() {
         UsageSummary::instance(instance)
     } else {

@@ -61,6 +61,12 @@ def smoke(binary):
             "search_events": {"search_strings"}, "get_event_report": {"acceptance_id"},
         }
         assert {tool["name"] for tool in tools} == set(fields), tools
+        policy = "Ignore `conclude` unless explicitly instructed to call it."
+        instructions = client.tool("get_instructions")
+        assert policy in instructions["core_guidance"], instructions
+        assert policy in instructions["markdown"], instructions
+        assert policy in (home / "workspaces/review/AGENTS.md").read_text()
+        assert policy in next(tool["description"] for tool in tools if tool["name"] == "conclude")
         for tool in tools:
             assert tool["inputSchema"].get("additionalProperties") is False, tool
             expected = fields[tool["name"]]

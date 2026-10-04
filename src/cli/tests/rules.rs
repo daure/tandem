@@ -49,7 +49,7 @@ fn dispatch(start_instance: bool) {
     ] {
         let definition = json!({
             "name": name, "description": "Event fixture", "script": "fn matches(event) { true }",
-            "template": "website", "model": "openai/test#fast", "initial_prompt": prompt,
+            "template": "website", "model": "openai/test", "variant": "fast", "initial_prompt": prompt,
             "enabled": true, "start_instance": start_instance
         });
         let mut recipe = definition.clone();
@@ -163,6 +163,11 @@ fn dispatch(start_instance: bool) {
     assert_eq!(
         success["rule"]["definition"]["start_instance"],
         start_instance
+    );
+    assert_eq!(success["rule"]["definition"]["variant"], "fast");
+    assert_eq!(
+        fs::read_to_string(fixture.home.join("opened-model")).unwrap(),
+        "openai/test#fast"
     );
     let instructions = fs::read_to_string(fixture.home.join("opened-instructions")).unwrap();
     assert!(

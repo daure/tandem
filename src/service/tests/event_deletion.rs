@@ -19,6 +19,7 @@ fn accepted_events(service: &AppService) -> (String, Vec<Acceptance>) {
                 script: "fn matches(event) { true }".into(),
                 template: "blank".into(),
                 model: "openai/test".into(),
+                variant: None,
                 initial_prompt: "Inspect {{event.summary}}".into(),
                 enabled: true,
                 start_instance: false,

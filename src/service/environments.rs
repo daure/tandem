@@ -132,9 +132,12 @@ impl AppService {
         name: &str,
         template: String,
         description: String,
-        opencode: Option<Option<String>>,
+        opencode: Option<crate::store::opencode::Launch>,
         start_instance: bool,
     ) -> Result<CreateInstanceOutcome, String> {
+        if let Some(launch) = &opencode {
+            launch.validate()?;
+        }
         if let Some(instance) = self
             .environments
             .snapshot()
@@ -254,12 +257,17 @@ impl AppService {
         timeout: u64,
         confirmed: bool,
         start_instance: bool,
+        opencode: Option<crate::store::opencode::Launch>,
     ) -> Result<Operation, String> {
         if !confirmed {
             return Err("confirmation_required: this prepares repositories with host Git and trusted template configuration".into());
         }
         if !(5..=900).contains(&timeout) {
             return Err("timeout_seconds must be between 5 and 900".into());
+        }
+        if let Some(launch) = &opencode {
+            launch.validate()?;
+            self.validate_opencode_launch()?;
         }
         let operation = self
             .environments
@@ -269,6 +277,7 @@ impl AppService {
             timeout,
             Startup {
                 start_instance,
+                opencode,
                 ..Default::default()
             },
         ))

@@ -154,6 +154,15 @@ struct CreateInstanceInput {
     template: String,
     /// Instance name; 1–40 letters, digits or hyphens; starts with a letter/digit; gateway is reserved.
     name: String,
+    /// Open a fresh OpenCode session in the current Zellij session (default false).
+    #[serde(default)]
+    opencode: bool,
+    /// Optional literal initial prompt; requires opencode=true.
+    initial_prompt: Option<String>,
+    /// Optional provider/model selection; requires opencode=true. Omitted uses OpenCode's default.
+    model: Option<String>,
+    /// Optional model-specific thinking variant; requires opencode=true. Omitted uses OpenCode's default.
+    variant: Option<String>,
     /// Approval for host Git, trusted Compose privileges, and permanent OpenCode history cleanup when enabled (default on).
     #[serde(default)]
     confirmed: bool,
@@ -527,12 +536,22 @@ impl McpServer {
         &self,
         Parameters(input): Parameters<CreateInstanceInput>,
     ) -> Result<Json<Operation>, String> {
+        if !input.opencode
+            && (input.initial_prompt.is_some() || input.model.is_some() || input.variant.is_some())
+        {
+            return Err("initial_prompt, model and variant require opencode=true".into());
+        }
         let operation = self.service.submit_instance_creation(
             &input.name,
             input.template,
             input.timeout_seconds,
             input.confirmed,
             input.start_instance,
+            input.opencode.then_some(crate::store::opencode::Launch {
+                prompt: input.initial_prompt,
+                model: input.model,
+                variant: input.variant,
+            }),
         )?;
         if input.wait {
             self.service.wait_operation(&operation.id).await.map(Json)

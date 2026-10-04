@@ -1,7 +1,7 @@
 use ratatui::text::Text;
 use tuicore::{
     Dropdown, DropdownCommitMode, DropdownSearchMode, DropdownVariant, EventCtx, Flex, FlexItem,
-    Notification, Paragraph,
+    Notification, Paragraph, TextInput, TextareaInput,
 };
 
 use super::{Command, Msg, Target};
@@ -51,37 +51,68 @@ impl App {
         }
         match command {
             Command::Report => {
-                let report = super::super::markdown::Markdown::new(
+                let report = super::super::markdown::Markdown::readonly(
                     "report",
                     Ok(self.service.read_event_report(target.acceptance.id)),
-                    |report| {
-                        format!(
-                            "# {}\n\n{}\n\nAcceptance #{} · event #{}\n\nCleanup: {:?}{}\n\n---\n\n{}",
-                            report.details.title,
-                            report.details.summary,
-                            report.details.acceptance_id,
-                            report.details.event_sequence,
-                            report.details.cleanup_state,
+                    |report| report.markdown,
+                );
+                let details = target.report.as_ref();
+                let metadata = format!(
+                    "Acceptance #{} · event #{}{}",
+                    target.acceptance.id,
+                    target.acceptance.event_sequence,
+                    details
+                        .map(|report| format!(
+                            " · Cleanup: {:?}{}",
+                            report.cleanup_state,
                             report
-                                .details
                                 .cleanup_error
-                                .map(|error| format!("\n\n{error}"))
+                                .as_ref()
+                                .map(|error| format!("\n{error}"))
                                 .unwrap_or_default(),
-                            report.markdown
-                        )
-                    },
+                        ))
+                        .unwrap_or_default(),
                 );
                 self.intent = None;
-                self.open_compact(
+                self.open(
                     Box::new(
-                        dialogs::dialog("Acceptance report").host(Flex::column().child(
-                            "report",
-                            report,
-                            FlexItem::fill(1),
-                        )),
+                        dialogs::dialog("Acceptance report").host(
+                            Flex::column()
+                                .child(
+                                    "title",
+                                    TextInput::new().panel("Title").disabled(true).value(
+                                        details
+                                            .map(|report| report.title.as_str())
+                                            .unwrap_or_default(),
+                                    ),
+                                    FlexItem::fit_content(),
+                                )
+                                .child(
+                                    "summary",
+                                    TextareaInput::new()
+                                        .panel("Summary")
+                                        .disabled(true)
+                                        .min_rows(2)
+                                        .max_rows(8)
+                                        .value(
+                                            details
+                                                .map(|report| report.summary.as_str())
+                                                .unwrap_or_default(),
+                                        ),
+                                    FlexItem::fit_content(),
+                                )
+                                .child(
+                                    "metadata",
+                                    Paragraph::new(metadata),
+                                    FlexItem::fit_content(),
+                                )
+                                .child("report", report, FlexItem::fill(1)),
+                        ),
                     ),
                     ctx,
                 );
+                self.details_open = true;
+                self.resize_details_dialog();
             }
             Command::Delete => self.handle_message(
                 Msg::DeleteEvents(crate::store::events::Deletion::Acceptance(

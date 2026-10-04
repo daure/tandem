@@ -13,7 +13,10 @@ fn opencode_creation_is_rejected_before_admission_when_integration_is_disabled()
             "review",
             "website".into(),
             "Review\nenvironment".into(),
-            Some(prompt),
+            Some(crate::store::opencode::Launch {
+                prompt,
+                ..Default::default()
+            }),
             true,
         );
         assert!(matches!(result, Err(error) if error == "OpenCode integration is disabled"));

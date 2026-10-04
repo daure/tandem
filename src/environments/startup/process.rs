@@ -81,7 +81,7 @@ fn spawn(
     record: &Record,
     lock: &gateway::Lock,
     lease: &gateway::Lock,
-    opencode: Option<&Option<String>>,
+    opencode: Option<&crate::store::opencode::Launch>,
 ) -> Result<Child, String> {
     use std::os::unix::process::CommandExt;
     // Keep the worker on the running executable inode when a rebuild replaces its pathname.
@@ -150,7 +150,7 @@ fn spawn(
     _: &Record,
     _: &gateway::Lock,
     _: &gateway::Lock,
-    _: Option<&Option<String>>,
+    _: Option<&crate::store::opencode::Launch>,
 ) -> Result<Child, String> {
     Err("detached startup requires Unix".into())
 }

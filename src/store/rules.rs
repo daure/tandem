@@ -16,6 +16,9 @@ pub(crate) struct Definition {
     pub script: String,
     pub template: String,
     pub model: String,
+    /// Optional model-specific thinking variant; omitted leaves OpenCode's default selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
     pub initial_prompt: String,
     #[serde(default)]
     pub enabled: bool,
@@ -91,6 +94,7 @@ pub(crate) struct Preview {
     pub resolved_prompt: Option<String>,
     pub template: String,
     pub model: String,
+    pub variant: Option<String>,
 }
 
 fn engine() -> rhai::Engine {
@@ -145,26 +149,7 @@ pub(crate) fn validate(definition: &Definition) -> Result<(), String> {
     if definition.description.len() > 1000 || definition.description.chars().any(char::is_control) {
         return Err("description must be at most 1000 bytes without control characters".into());
     }
-    let (provider, model) = definition
-        .model
-        .split_once('/')
-        .ok_or("model must be provider/model, optionally followed by #variant")?;
-    if provider.is_empty()
-        || model.is_empty()
-        || model.starts_with('#')
-        || definition.model.len() > 200
-        || !provider
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_-.".contains(&byte))
-        || !definition
-            .model
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"/_-.#:".contains(&byte))
-        || model.ends_with('#')
-        || definition.model.matches('#').count() > 1
-    {
-        return Err("model must be provider/model, optionally followed by #variant".into());
-    }
+    definition.session_launch().validate()?;
     if definition.script.len() > 32_768
         || definition.initial_prompt.trim().is_empty()
         || definition.initial_prompt.contains('\0')
@@ -180,6 +165,16 @@ pub(crate) fn validate(definition: &Definition) -> Result<(), String> {
 
 pub(crate) fn validate_prompt(source: &str) -> Result<(), String> {
     prompt::compile(source).map(|_| ())
+}
+
+impl Definition {
+    pub(crate) fn session_launch(&self) -> super::opencode::Launch {
+        super::opencode::Launch {
+            model: Some(self.model.clone()),
+            variant: self.variant.clone(),
+            prompt: None,
+        }
+    }
 }
 
 pub(crate) fn instance_name(rule: &str, sequence: i64, acceptance_id: i64) -> String {

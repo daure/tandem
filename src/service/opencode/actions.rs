@@ -62,7 +62,7 @@ impl AppService {
         &self,
         workspace: &str,
         name: &str,
-        initial_prompt: Option<&str>,
+        launch: &crate::store::opencode::Launch,
     ) -> Result<(), String> {
         launch_instance_opencode(
             Arc::clone(&self.environments),
@@ -70,7 +70,7 @@ impl AppService {
             &self.opencode,
             workspace,
             name,
-            initial_prompt,
+            launch,
         )
         .await
     }
@@ -182,7 +182,7 @@ pub(in crate::service) async fn launch_instance_opencode(
     integration: &super::Integration,
     workspace: &str,
     name: &str,
-    initial_prompt: Option<&str>,
+    launch: &crate::store::opencode::Launch,
 ) -> Result<(), String> {
     validate_launch(settings, integration)?;
     let target = workspace.to_owned();
@@ -196,7 +196,7 @@ pub(in crate::service) async fn launch_instance_opencode(
         integration,
         workspace,
         name,
-        initial_prompt,
+        launch,
         Some(instructions),
     )
     .await
@@ -207,7 +207,7 @@ pub(in crate::service) async fn launch_workspace_opencode(
     integration: &super::Integration,
     workspace: &str,
     name: &str,
-    initial_prompt: Option<&str>,
+    launch: &crate::store::opencode::Launch,
     instructions: Option<&str>,
 ) -> Result<(), String> {
     validate_launch(settings, integration)?;
@@ -227,12 +227,12 @@ pub(in crate::service) async fn launch_workspace_opencode(
     validate_launch(settings, integration)?;
     integration
         .observer
-        .new_session(
+        .new_session_selected(
             workspace,
             name,
             current,
             destination.as_ref(),
-            initial_prompt,
+            launch,
             instructions,
         )
         .await

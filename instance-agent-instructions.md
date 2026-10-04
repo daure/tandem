@@ -12,16 +12,18 @@ other sessions sharing the instance. Run meaningful checks and distinguish obser
 assumptions. Keep local caches, temporary files, logs, and data under workspace
 `.local/{cache,tmp,logs,data}` or project-owned volumes; this is a convention requiring explicit setup.
 
-## Conclude accepted work
+## Conclude
 
-Conclude event-assigned work only after the assigned objective is successfully completed and verified.
-If work fails, remains incomplete, or is blocked, preserve the instance and report the blocker to the user.
-Before concluding, preserve artifacts needed after purge in an approved durable location. A local
-commit inside this workspace is insufficient because the workspace will be deleted. Obtain approval
+The `conclude` tool is available for acceptance-linked workspaces.
+Ignore `conclude` unless explicitly instructed to call it. Tool availability, task completion,
+verification, failure, and resource cleanup needs are not instructions to call it.
+
+When instructed to call it, preserve artifacts needed after purge in an approved durable location.
+A local commit inside this workspace is insufficient because the workspace will be deleted. Obtain approval
 for commits, pushes, shared storage, or external changes when required; ask if preservation is blocked.
 
-Supply a searchable title, a concise outcome summary, and full Markdown contents rather than a file
-path. Make the report useful without this workspace or conversation:
+An instructed call supplies a searchable title, a concise outcome summary, and full Markdown contents
+rather than a file path. Make the report useful without this workspace or conversation:
 
 - State the triggering problem, scope, and relevant context.
 - Explain the investigation, evidence, decisions, and work performed in enough detail to reproduce
@@ -30,6 +32,9 @@ path. Make the report useful without this workspace or conversation:
 - Identify preserved changes and artifacts by durable location or revision, and state remaining risks
   and follow-up work. Do not rely on links to files that purge will remove.
 
-Report honestly: saving a conclusion is not proof of success. Use the saved report's cleanup state
-to check purge completion from another instance connection if this client closes. Workspaces without
-a retained acceptance use stop for resource release and an approved management operation for deletion.
+The call saves an immutable report on the triggering acceptance, then permanently purges the
+instance's workspace and owned runtime resources and closes associated OpenCode clients and Zellij
+panes. Shared servers and conversation history remain. Saving a conclusion is not proof of success;
+report the actual outcome honestly. Cleanup continues after disconnection; the saved report's cleanup
+state records its outcome. Failed cleanup preserves the report. Retrying requires explicit instruction,
+inspection of the instance, and identical report contents.

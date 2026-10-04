@@ -8,10 +8,44 @@ pub(crate) fn definition(name: &str, script: &str) -> Definition {
         script: script.into(),
         template: "blank".into(),
         model: "openai/test-model".into(),
+        variant: None,
         initial_prompt: "Inspect {{event.data.text}} from {{event.provider}}".into(),
         enabled: true,
         start_instance: true,
     }
+}
+
+#[test]
+fn optional_rule_variants_preserve_defaults_and_embedded_selection() {
+    let mut value =
+        serde_json::to_value(definition("sample", "fn matches(event) { true }")).unwrap();
+    assert!(value.get("variant").is_none());
+    let rule: Definition = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(rule.variant, None);
+    assert_eq!(
+        rule.session_launch().selector().as_deref(),
+        Some("openai/test-model")
+    );
+    value["variant"] = json!("high");
+    let rule: Definition = serde_json::from_value(value.clone()).unwrap();
+    validate(&rule).unwrap();
+    assert_eq!(
+        rule.session_launch().selector().as_deref(),
+        Some("openai/test-model#high")
+    );
+    value["model"] = json!("openai/test-model#fast");
+    assert!(
+        validate(&serde_json::from_value(value.clone()).unwrap())
+            .unwrap_err()
+            .contains("conflicts")
+    );
+    value.as_object_mut().unwrap().remove("variant");
+    let rule: Definition = serde_json::from_value(value).unwrap();
+    validate(&rule).unwrap();
+    assert_eq!(
+        rule.session_launch().selector().as_deref(),
+        Some("openai/test-model#fast")
+    );
 }
 
 #[test]

@@ -52,7 +52,8 @@ and ask the user to resolve conflicts. Guidance reads verify the pinned workspac
 The surface has no caller-selected lifecycle target and is not a host-process sandbox. Preparation
 seeds workspace configuration in syntax supported by OpenCode V1 and V2, with explicit Tandem settings,
 preserving existing root and `.opencode` JSON/JSONC configuration. Configuring the surface grants
-these lifecycle actions; stopping services remains independent of event-task completion. Conclude
+these lifecycle capabilities; guidance treats Conclude as instruction-only, independently of task
+completion or cleanup needs. Stopping services remains independent of event-task completion. Conclude
 requires one retained acceptance matching the owned instance, template and originating startup lineage. It commits an immutable
 acceptance-owned report before transferring the instance lock, rule-worker lease and conclusion lease
 to a detached worker. The worker closes associated clients regardless of the observation setting and
@@ -168,7 +169,10 @@ Creation requests persist a default-on service-start flag. Prepare-only requests
 repository and Compose preparation while skipping Compose up, gateway startup and readiness waits.
 New instance sessions receive state-aware guidance before initial input; session opening leaves container
 state unchanged. V2 uses durable session instruction entries. V1 appends synthetic no-reply context.
-Rule launches set their model/variant at session creation and send task input after attaching guidance.
+Rule launches set their model and optional variant at session creation and send task input after attaching guidance.
+CLI and MCP creation requests carry optional model/variant selections through the detached worker;
+omitted selections leave OpenCode's defaults intact. V2 variant-only requests resolve the default model
+before creating the session. Launch selections are client-scoped and leave shared server configuration unchanged.
 Bulk closure selects observed panes by instance ownership or exact external directory and excludes
 owned panes from the external aggregate. With integration enabled, instance purge closes associated
 clients under the instance lock after ownership validation and before resource deletion. Verified local

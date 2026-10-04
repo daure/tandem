@@ -7,6 +7,64 @@ pub(crate) mod observation;
 pub(crate) mod resources;
 pub(crate) mod retention;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Launch {
+    pub prompt: Option<String>,
+    pub model: Option<String>,
+    pub variant: Option<String>,
+}
+
+impl Launch {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if let Some(model) = &self.model {
+            let (provider, path) = model
+                .split_once('/')
+                .ok_or("model must be provider/model, optionally followed by #variant")?;
+            if provider.is_empty()
+                || path.is_empty()
+                || path.starts_with('#')
+                || path.ends_with('#')
+                || model.len() > 200
+                || model.matches('#').count() > 1
+                || !provider
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_-.".contains(&byte))
+                || !model
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"/_-.#:".contains(&byte))
+            {
+                return Err("model must be provider/model, optionally followed by #variant".into());
+            }
+            if let Some((_, embedded)) = model.split_once('#')
+                && self
+                    .variant
+                    .as_deref()
+                    .is_some_and(|variant| variant != embedded)
+            {
+                return Err("variant conflicts with the model's #variant".into());
+            }
+        }
+        if let Some(variant) = &self.variant
+            && (variant.is_empty()
+                || variant.len() > 100
+                || !variant
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_-.:".contains(&byte)))
+        {
+            return Err("variant must contain 1 to 100 letters, digits, underscores, hyphens, dots or colons".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn selector(&self) -> Option<String> {
+        self.model.as_ref().map(|model| match &self.variant {
+            Some(variant) if !model.contains('#') => format!("{model}#{variant}"),
+            _ => model.clone(),
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Activity {

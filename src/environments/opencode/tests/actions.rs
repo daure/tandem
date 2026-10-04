@@ -39,6 +39,7 @@ fn new_sessions_attach_without_resuming_and_stack_in_the_observed_tab() {
         "TANDEM_INITIAL_PROMPT=Explain 'this'; $(touch injected)\nsecond line".into(),
         "TANDEM_SESSION_INSTRUCTIONS=Services won't start automatically".into(),
         "TANDEM_SESSION_MODEL=".into(),
+        "TANDEM_SESSION_VARIANT=".into(),
         "opencode".into(),
         "attach".into(),
         server.url.clone(),
@@ -88,6 +89,7 @@ fn new_sessions_start_opencode_in_a_named_tab_without_a_known_server() {
         "TANDEM_INITIAL_PROMPT=".into(),
         "TANDEM_SESSION_INSTRUCTIONS=".into(),
         "TANDEM_SESSION_MODEL=".into(),
+        "TANDEM_SESSION_VARIANT=".into(),
     ];
     client.extend(navigation::new_client_command(directory));
     let command = navigation::client_command(&client).join(" ");
@@ -229,6 +231,7 @@ fn new_tab_returns_the_command_pane_with_an_application_owned_title_in_a_multi_p
         "TANDEM_INITIAL_PROMPT=".into(),
         "TANDEM_SESSION_INSTRUCTIONS=".into(),
         "TANDEM_SESSION_MODEL=".into(),
+        "TANDEM_SESSION_VARIANT=".into(),
     ];
     client.extend(navigation::new_client_command(directory));
     let command = navigation::client_command(&client).join(" ");

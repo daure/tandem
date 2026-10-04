@@ -50,6 +50,8 @@ fn new_instance_accepts_long_short_and_mixed_options() {
             opencode,
             description,
             start_instance,
+            model,
+            variant,
         }) = parse(&arguments).unwrap().command
         else {
             panic!("expected new-instance");
@@ -62,6 +64,26 @@ fn new_instance_accepts_long_short_and_mixed_options() {
         );
         assert_eq!(description.as_deref(), expected_description);
         assert!(start_instance);
+        assert!(model.is_none());
+        assert!(variant.is_none());
+    }
+}
+
+#[test]
+fn session_model_and_variant_flags_require_opencode() {
+    for flag in ["--model", "--variant"] {
+        assert!(
+            parse(&[
+                "tandem",
+                "new-instance",
+                "review",
+                "-t",
+                "website",
+                flag,
+                "high"
+            ])
+            .is_err()
+        );
     }
 }
 

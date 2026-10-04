@@ -29,6 +29,7 @@ fn definition(name: &str) -> Definition {
         script: "fn matches(event) { true }".into(),
         template: "blank".into(),
         model: "openai/test".into(),
+        variant: None,
         initial_prompt: "Inspect {{event.data.text}}".into(),
         enabled: true,
         start_instance: true,
@@ -267,7 +268,8 @@ fn rule_authorization_and_preview_keep_external_actions_explicit() {
             },
         ))
         .unwrap();
-    let rule = definition("match");
+    let mut rule = definition("match");
+    rule.variant = Some("high".into());
     let error = service
         .runtime
         .block_on(service.save_rule(rule.clone(), None, Some("main".into()), false))
@@ -279,6 +281,8 @@ fn rule_authorization_and_preview_keep_external_actions_explicit() {
         .block_on(service.preview_rule(rule.clone(), receipt.receipts[0].sequence))
         .unwrap();
     assert!(preview.matched);
+    assert_eq!(preview.model, "openai/test");
+    assert_eq!(preview.variant.as_deref(), Some("high"));
     assert_eq!(
         preview.resolved_prompt.as_deref(),
         Some("Inspect Please inspect this event")

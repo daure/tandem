@@ -56,11 +56,12 @@ impl Entry {
     fn search(&self) -> String {
         match self {
             Self::Rule(rule) => format!(
-                "{} {} {} {}",
+                "{} {} {} {} {}",
                 rule.definition.name,
                 rule.definition.description,
                 rule.definition.template,
-                rule.definition.model
+                rule.definition.model,
+                rule.definition.variant.as_deref().unwrap_or_default()
             ),
             Self::Acceptance(row) => row.search(),
         }
@@ -374,10 +375,21 @@ fn entry_text(row: &Entry) -> Text<'static> {
                     }),
                 ),
                 Span::raw(format!(
-                    "{} 󰠲 {} 󰧑 {} ",
+                    "{} 󰠲 {} 󰧑 {} · {} · ",
                     clean(&rule.definition.name),
                     clean(&rule.definition.template),
-                    clean(&rule.definition.model)
+                    clean(rule.definition.model.split('#').next().unwrap_or_default()),
+                    clean(
+                        rule.definition
+                            .variant
+                            .as_deref()
+                            .or_else(|| rule
+                                .definition
+                                .model
+                                .split_once('#')
+                                .map(|(_, variant)| variant))
+                            .unwrap_or("default")
+                    )
                 )),
                 Span::raw(if rule.definition.start_instance {
                     "󰒋"

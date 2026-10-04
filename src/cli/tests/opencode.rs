@@ -31,6 +31,8 @@ fn blank_sessions_clear_inherited_prompts() {
         fixture
             .command(&["new-instance", "review", "-t", "website", "-o"])
             .env("TANDEM_INITIAL_PROMPT", "inherited prompt must not run")
+            .env("TANDEM_SESSION_MODEL", "inherited/model#high")
+            .env("TANDEM_SESSION_VARIANT", "high")
             .spawn()
             .unwrap(),
     );
@@ -41,6 +43,14 @@ fn blank_sessions_clear_inherited_prompts() {
     );
     assert_eq!(
         fs::read_to_string(fixture.home.join("opened-parameters")).unwrap(),
+        ""
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.home.join("opened-model")).unwrap(),
+        ""
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.home.join("opened-variant")).unwrap(),
         ""
     );
     let calls = fs::read_to_string(fixture.home.join("zellij-calls")).unwrap();
@@ -76,6 +86,81 @@ fn opencode_requires_zellij_and_enabled_integration_before_provisioning() {
             }),
             "{error}"
         );
+        assert!(!fixture.home.join("workspaces/review").exists());
+        assert!(!fixture.home.join("opened").exists());
+    }
+}
+
+#[test]
+fn model_and_variant_selections_reach_the_detached_creation_client() {
+    for (options, model, variant, flags) in [
+        (
+            vec!["--model", "openai/test", "--variant", "high"],
+            "openai/test#high",
+            "high",
+            vec!["--model", "openai/test", "--variant", "high"],
+        ),
+        (
+            vec!["--model", "openai/test"],
+            "openai/test",
+            "",
+            vec!["--model", "openai/test"],
+        ),
+        (
+            vec!["--variant", "high"],
+            "",
+            "high",
+            vec!["--variant", "high"],
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let mut args = vec!["new-instance", "review", "-t", "website", "-o"];
+        args.extend(options);
+        let output = fixture.run(&args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.home.join("opened-model")).unwrap(),
+            model
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.home.join("opened-variant")).unwrap(),
+            variant
+        );
+        let mut expected = vec![
+            fixture
+                .home
+                .join("workspaces/review")
+                .to_str()
+                .unwrap()
+                .to_owned(),
+        ];
+        expected.extend(flags.into_iter().map(str::to_owned));
+        assert_eq!(
+            fs::read_to_string(fixture.home.join("opencode-args"))
+                .unwrap()
+                .split_terminator('\0')
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn invalid_session_selection_blocks_instance_creation() {
+    for options in [
+        vec!["--model", "invalid"],
+        vec!["--variant", ""],
+        vec!["--model", "openai/test#fast", "--variant", "high"],
+    ] {
+        let fixture = Fixture::new();
+        let mut args = vec!["new-instance", "review", "-t", "website", "-o"];
+        args.extend(options);
+        let output = fixture.run(&args);
+        assert!(!output.status.success());
         assert!(!fixture.home.join("workspaces/review").exists());
         assert!(!fixture.home.join("opened").exists());
     }
@@ -238,6 +323,8 @@ if [ -f app/file.txt ]; then
 fi
 printf '%s' "$TANDEM_INITIAL_PROMPT" > "$TANDEM_HOME/opened-parameters"
 printf '%s' "$TANDEM_SESSION_INSTRUCTIONS" > "$TANDEM_HOME/opened-instructions"
+printf '%s' "$TANDEM_SESSION_MODEL" > "$TANDEM_HOME/opened-model"
+printf '%s' "$TANDEM_SESSION_VARIANT" > "$TANDEM_HOME/opened-variant"
 printf '%s\0' "$@" > "$TANDEM_HOME/opencode-args"
 printf '%s\n' "$PWD" >> "$TANDEM_HOME/opened"
 "#;

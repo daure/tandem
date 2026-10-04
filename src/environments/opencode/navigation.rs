@@ -16,7 +16,7 @@ pub(super) fn new_client_command(directory: &str) -> Vec<String> {
     vec![
         "/bin/sh".into(),
         "-c".into(),
-        "case \"$(opencode --version)\" in 'opencode v2.'*|2.*) if command -v opencode-station >/dev/null 2>&1; then exec opencode-station run; else exec opencode \"$1\" --standalone --auto; fi;; *) exec opencode \"$1\";; esac".into(),
+        "case \"$(opencode --version)\" in 'opencode v2.'*|2.*) if command -v opencode-station >/dev/null 2>&1; then exec opencode-station run; else exec opencode \"$1\" --standalone --auto; fi;; *) exec opencode \"$@\";; esac".into(),
         "tandem-opencode-client".into(),
         directory.into(),
     ]
@@ -329,6 +329,29 @@ impl Observer {
         initial_prompt: Option<&str>,
         instructions: Option<&str>,
     ) -> Result<Pane, String> {
+        self.new_session_selected(
+            directory,
+            name,
+            current,
+            destination,
+            &crate::store::opencode::Launch {
+                prompt: initial_prompt.map(str::to_owned),
+                ..Default::default()
+            },
+            instructions,
+        )
+        .await
+    }
+
+    pub(crate) async fn new_session_selected(
+        &self,
+        directory: &str,
+        name: &str,
+        current: &str,
+        destination: Option<&Pane>,
+        launch: &crate::store::opencode::Launch,
+        instructions: Option<&str>,
+    ) -> Result<Pane, String> {
         if current.is_empty() {
             return Err("Run Tandem inside Zellij to create an OpenCode session".into());
         }
@@ -350,14 +373,38 @@ impl Observer {
             "env".into(),
             format!(
                 "TANDEM_INITIAL_PROMPT={}",
-                initial_prompt.unwrap_or_default()
+                launch.prompt.as_deref().unwrap_or_default()
             ),
         ];
         command.push(format!(
             "TANDEM_SESSION_INSTRUCTIONS={}",
             instructions.unwrap_or_default()
         ));
-        command.push("TANDEM_SESSION_MODEL=".into());
+        command.push(format!(
+            "TANDEM_SESSION_MODEL={}",
+            launch.selector().unwrap_or_default()
+        ));
+        command.push(format!(
+            "TANDEM_SESSION_VARIANT={}",
+            launch.variant.as_deref().unwrap_or_default()
+        ));
+        let selector = launch.selector();
+        let (model, variant) =
+            selector
+                .as_deref()
+                .map_or((None, launch.variant.as_deref()), |selector| {
+                    let (model, variant) = selector
+                        .split_once('#')
+                        .map_or((selector, None), |(model, variant)| (model, Some(variant)));
+                    (Some(model), variant)
+                });
+        let mut selection = Vec::<String>::new();
+        if let Some(model) = model {
+            selection.extend(["--model".into(), model.into()]);
+        }
+        if let Some(variant) = variant {
+            selection.extend(["--variant".into(), variant.into()]);
+        }
         command.extend(if let Some(server) = server {
             let client = transport::client()?;
             let _: serde_json::Value = get(&client, &server, "/global/health").await?;
@@ -369,17 +416,21 @@ impl Observer {
                     directory.into(),
                 ]
             } else {
-                vec![
+                let mut client = vec![
                     "opencode".into(),
                     "attach".into(),
                     server,
                     "--dir".into(),
                     directory.into(),
-                ]
+                ];
+                client.extend(selection);
+                client
             }
         } else {
             // Select the adapter inside the pane, after direnv resolves its station and PATH.
-            new_client_command(directory)
+            let mut client = new_client_command(directory);
+            client.extend(selection);
+            client
         });
         self.launch_panel(directory, name, current, destination, &command)
             .await
@@ -419,6 +470,7 @@ impl Observer {
                     .map(|variant| format!("#{variant}"))
                     .unwrap_or_default()
             ),
+            "TANDEM_SESSION_VARIANT=".into(),
         ];
         command.extend(rule_client_command(model, variant));
         self.launch_panel(directory, name, current, None, &command)

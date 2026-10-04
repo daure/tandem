@@ -93,6 +93,18 @@ enum Commands {
             help = "Open a fresh OpenCode session in Zellij before repository cloning, optionally submitting an initial prompt through the Tandem companion"
         )]
         opencode: Option<Option<String>>,
+        #[arg(
+            long,
+            requires = "opencode",
+            help = "OpenCode provider/model; omitted uses its default"
+        )]
+        model: Option<String>,
+        #[arg(
+            long,
+            requires = "opencode",
+            help = "OpenCode thinking variant; omitted uses its default"
+        )]
+        variant: Option<String>,
         #[arg(short = 'd', long)]
         description: Option<String>,
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set, help = "Start configured services; false prepares the instance without Compose startup")]
@@ -286,6 +298,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             name,
             template,
             opencode,
+            model,
+            variant,
             description,
             start_instance,
         }) => {
@@ -294,7 +308,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             let (instance, status) = match service.new_instance(
                 &name,
                 template,
-                opencode,
+                opencode.map(|prompt| crate::store::opencode::Launch {
+                    prompt,
+                    model,
+                    variant,
+                }),
                 description,
                 start_instance,
             )? {

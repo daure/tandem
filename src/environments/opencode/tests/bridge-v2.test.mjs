@@ -115,16 +115,26 @@ test("V2 presence follows router forms and model metadata without exposing crede
   await assert.rejects(readFile(join(root, `${process.pid}.json`)), { code: "ENOENT" })
 })
 
-test("V2 attaches instructions before optional literal task input with the requested model", async (t) => {
-  for (const text of ["", "Literal 'text'; $(not-a-shell)"]) {
-    await t.test(text || "instructions only", async (t) => {
+test("V2 session selections preserve defaults and attach instructions before optional task input", async (t) => {
+  const selections = [
+    [undefined, undefined, undefined],
+    ["openai/test", undefined, { providerID: "openai", id: "test" }],
+    ["openai/test#fast", undefined, { providerID: "openai", id: "test", variant: "fast" }],
+    ["openai/test", "high", { providerID: "openai", id: "test", variant: "high" }],
+    [undefined, "high", { providerID: "default-provider", id: "default-model", variant: "high" }],
+  ]
+  for (const [text, modelName, variantName, selected] of ["", "Literal 'text'; $(not-a-shell)"].flatMap((text) => selections.map((selection) => [text, ...selection]))) {
+    await t.test(`${text || "instructions only"}: ${modelName ?? "default"}/${variantName ?? "default"}`, async (t) => {
       const root = await mkdtemp(join(tmpdir(), "tandem-v2-prompt-"))
       t.after(() => rm(root, { recursive: true, force: true }))
       const inherited = process.env.TANDEM_INITIAL_PROMPT
       process.env.TANDEM_INITIAL_PROMPT = text
       process.env.TANDEM_SESSION_INSTRUCTIONS = "Services won't start automatically"
-      process.env.TANDEM_SESSION_MODEL = "openai/test#fast"
-      t.after(() => { delete process.env.TANDEM_SESSION_INSTRUCTIONS; delete process.env.TANDEM_SESSION_MODEL })
+      if (modelName) process.env.TANDEM_SESSION_MODEL = modelName
+      else delete process.env.TANDEM_SESSION_MODEL
+      if (variantName) process.env.TANDEM_SESSION_VARIANT = variantName
+      else delete process.env.TANDEM_SESSION_VARIANT
+      t.after(() => { delete process.env.TANDEM_SESSION_INSTRUCTIONS; delete process.env.TANDEM_SESSION_MODEL; delete process.env.TANDEM_SESSION_VARIANT })
       t.after(() => { if (inherited === undefined) delete process.env.TANDEM_INITIAL_PROMPT; else process.env.TANDEM_INITIAL_PROMPT = inherited })
       let route = { type: "home" }
       const calls = []
@@ -132,6 +142,7 @@ test("V2 attaches instructions before optional literal task input with the reque
         options: { presenceDirectory: root }, location: { directory: "/work/review" },
         client: {
           server: { info: async () => ({ urls: ["http://127.0.0.1:4199"] }) },
+          model: { default: async (input) => { calls.push(["default", input]); return { data: { providerID: "default-provider", id: "default-model" } } } },
           session: {
             create: async (input) => { calls.push(["create", input]); return { id: "ses_new" } },
             prompt: async (input) => { calls.push(["prompt", input]) },
@@ -143,12 +154,15 @@ test("V2 attaches instructions before optional literal task input with the reque
       }
       const dispose = await plugin.setup(context, reactiveForTest())
       t.after(dispose)
-      const expected = [["create", { location: { directory: "/work/review" }, model: { providerID: "openai", id: "test", variant: "fast" } }],
+      const expected = [["create", { location: { directory: "/work/review" }, ...(selected ? { model: selected } : {}) }],
         ["instructions", { sessionID: "ses_new", key: "tandem.services", value: "Services won't start automatically" }],
         ["route", { type: "session", sessionID: "ses_new" }]]
       if (text) expected.push(["prompt", { sessionID: "ses_new", text }])
+      if (!modelName && variantName) expected.unshift(["default", { location: { directory: "/work/review" } }])
       assert.deepEqual(calls, expected)
       assert.equal(process.env.TANDEM_INITIAL_PROMPT, undefined)
+      assert.equal(process.env.TANDEM_SESSION_MODEL, undefined)
+      assert.equal(process.env.TANDEM_SESSION_VARIANT, undefined)
     })
   }
 })

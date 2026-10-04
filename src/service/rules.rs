@@ -227,6 +227,7 @@ impl AppService {
                         .transpose()?,
                     template: definition.template,
                     model: definition.model,
+                    variant: definition.variant,
                 })
             })
             .await
@@ -437,7 +438,12 @@ impl AppService {
                         &workspace,
                         &acceptance.instance,
                         &acceptance.rule.zellij_session,
-                        &acceptance.rule.definition.model,
+                        &acceptance
+                            .rule
+                            .definition
+                            .session_launch()
+                            .selector()
+                            .unwrap(),
                         acceptance
                             .resolved_prompt
                             .as_deref()

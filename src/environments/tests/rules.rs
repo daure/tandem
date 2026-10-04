@@ -8,6 +8,7 @@ fn definition(name: &str, script: &str) -> Definition {
         script: script.into(),
         template: "blank".into(),
         model: "openai/test".into(),
+        variant: None,
         initial_prompt: "Inspect {{event.data.text}}".into(),
         enabled: true,
         start_instance: true,

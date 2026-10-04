@@ -132,6 +132,7 @@ Source output may contain secrets from template files; handle it accordingly.
 tandem new-instance review --template website
 tandem new-instance review -t website --opencode
 tandem new-instance review -t website -o "Explain this project"
+tandem new-instance review -t website -o --model openai/gpt-6.1-sol-fast --variant high
 tandem new-instance review -t website --start-instance=false
 tandem start-instance review
 tandem stop-instance review
@@ -175,6 +176,10 @@ are not needed. Ownership mismatches and concurrent instance operations are reje
 Quote multiline or multiword prompts; use `--opencode="--text"` for text beginning with a hyphen.
 Without the flag, creation opens no client. `--description` (also `-d`) sets the new instance description.
 OpenCode launches require Tandem to run inside Zellij with the OpenCode integration enabled.
+`--model provider/model` and `--variant high` require `--opencode`; both are optional and leave
+OpenCode's defaults intact when omitted. A variant-only selection uses OpenCode's default model.
+MCP `create_instance` accepts the same selection through `opencode=true`, `model`, `variant`, and
+optional `initial_prompt`. Its default prepares an instance without launching OpenCode.
 CLI client launches use an observed instance pane's tab for a stacked pane, otherwise Tandem creates
 an instance-named tab. The TUI's **New OpenCode session** opens a session tab in an existing V2 client;
 without a tab-capable client, it uses this pane placement and launch logic.
@@ -199,7 +204,8 @@ Ensure the printed entry is in the plugin array. Each new client receives
 `TANDEM_INITIAL_PROMPT` and instance-state instructions; the companion consumes and clears them,
 waits for client readiness, creates a conversation and attaches instructions before any initial prompt.
 Without prompt text, instructed instance sessions open without requesting a model reply.
-Ordinary sessions use the configured agent/model defaults; rule sessions use their pinned model/variant.
+Sessions use OpenCode's configured defaults unless an explicit selection is supplied;
+rule sessions use their pinned model and optional variant.
 The prompt travels as a literal environment value; avoid including secrets.
 CLI success confirms requested preparation/readiness and pane launch, not prompt delivery or model completion.
 The companion reports submission failures in the new client and does not retry uncertain requests.
@@ -468,7 +474,7 @@ deduplicate notifications and reconcile their external side effects before ackno
 ## Event rules
 
 **Rules** is a main tab after Instances. Each rule occupies two rows showing its enabled state,
-name, handler template, model, and description. `a` activates or deactivates the selected rule; Space
+name, handler template, model, thinking variant, service-start state, and description. `a` activates or deactivates the selected rule; Space
 also toggles it. `.` opens its action menu with hotkey labels. The top-right `A` button offers
 **Activate all** when no rules are active, or **Deactivate all** when any rule is active.
 Single-rule activation and deactivation save immediately and report success or failure in a notification.
@@ -498,7 +504,7 @@ history, `list_events`/`get_event` to inspect input, and `preview_rule` to check
 prompts without contacting an agent or creating an instance. Updates require the saved revision.
 Shared definitions live in `$TANDEM_HOME/templates/rules/<name>/rule.json`, alongside the instance
 and provider catalogs in the template Git repository. Each file contains `name`, `script`, `template`,
-`model`, and `initial_prompt`, with optional `description` and `start_instance` (default true).
+`model`, and `initial_prompt`, with optional `variant`, `description`, and `start_instance` (default true).
 The name must match its directory. Activation (`enabled`), Zellij targets, revisions, and execution
 history live locally in `settings.sqlite3`; omit `enabled` from the file and set it through `save_rule`
 or the TUI. File additions are discovered automatically as inactive rules. Direct edits pause the rule
@@ -541,9 +547,13 @@ Event text stays literal and HTML escaping is disabled. Missing interpolated fie
 levels and 50,000 template evaluations, including empty loop bodies. Templates are in-memory and
 expose no filesystem, network, or script helpers. Empty/NUL-containing results or output above
 64 KiB fail that action while retaining its acceptance.
-Models use `provider/model#variant`, with the variant optional. Model syntax is validated locally;
-availability and credentials belong to the configured OpenCode environment. V2 rule launches require
-`opencode-station run` with model/prompt/variant support; V1 launches use `opencode`.
+Models use `provider/model`; the optional `variant` selects model-specific thinking, such as `high`.
+An omitted variant uses OpenCode's default. `provider/model#variant` is also accepted; a separate
+variant must agree with an embedded one. The rule editor's blank variant field uses that default,
+and rule rows display `model · variant ·` followed by the service-start icon.
+Selection syntax is validated locally; supported models, variants, and credentials belong to the
+configured OpenCode environment. V2 rule launches use `opencode-station run` with the Tandem
+companion configuring the session; V1 launches use `opencode`.
 
 Authorization covers every future match of that enabled revision, including trusted template code,
 host credentials, model costs, and creation-history cleanup when enabled. External text is task data,
@@ -623,9 +633,10 @@ Configuring the server grants these actions; coordinate with other sessions befo
 Stopping does not mark an event task complete. Shell access and the full management MCP remain separate
 capabilities, so this tool surface is not a security sandbox.
 
-`conclude({title, summary, markdown})` saves full Markdown contents on the workspace's triggering
+Agents ignore `conclude` unless explicitly instructed to call it; task completion and cleanup needs
+do not trigger it. An instructed `conclude({title, summary, markdown})` call saves full Markdown contents on the workspace's triggering
 acceptance, then permanently purges that instance's workspace, containers, volumes and networks.
-Preserve needed edits and artifacts elsewhere first and coordinate with other workspace sessions.
+Before an instructed call, preserve needed edits and artifacts elsewhere and coordinate with other workspace sessions.
 A retained acceptance link is required. Each acceptance owns one immutable report, so several rules
 accepting one event retain independent reports. SQLite retains reports after instance purge.
 Associated OpenCode clients and their Zellij panes close before resource deletion, including when
@@ -633,7 +644,7 @@ OpenCode observation is disabled; empty Zellij tabs close with their last pane. 
 conversation history are preserved. Cleanup runs detached and may interrupt the MCP reply; a reply
 confirms report storage and cleanup admission, not completion. Reports expose `cleanup_state`
 (`pending`, `purging`, `purged`, `failed`) and `cleanup_error`. Failed or interrupted cleanup preserves
-the report; inspect the instance before retrying with identical contents. Titles allow 500 bytes,
+the report; retries require explicit instruction, instance inspection, and identical contents. Titles allow 500 bytes,
 summaries 8 KiB, and Markdown 1 MiB; all three must be nonempty.
 
 `search_events({search_strings: ["timeout", "deployment"]})` searches titles, summaries, and full

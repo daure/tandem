@@ -11,7 +11,7 @@ pub(crate) struct Startup {
     pub origin_operation_id: Option<String>,
     pub branch_instances: bool,
     pub description: Option<String>,
-    pub opencode: Option<Option<String>>,
+    pub opencode: Option<crate::store::opencode::Launch>,
     pub opencode_result: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
     pub instance_lock: Option<gateway::Lock>,
     pub before_creation: Option<BeforeCreation>,

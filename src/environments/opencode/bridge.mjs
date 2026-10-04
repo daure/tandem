@@ -59,6 +59,11 @@ const plugin = {
         },
       },
       client: { session: {
+        async defaultModel(directory, options) {
+          const result = await context.client.model.default({ location: { directory } }, options)
+          if (!result.data) throw new Error("OpenCode has no default model")
+          return { providerID: result.data.providerID, id: result.data.id }
+        },
         async create({ directory, model }, options) {
           return { data: await context.client.session.create({ location: { directory }, ...(model ? { model } : {}) }, options) }
         },
@@ -90,9 +95,11 @@ const plugin = {
     let initialPrompt = process.env.TANDEM_INITIAL_PROMPT
     let initialInstructions = process.env.TANDEM_SESSION_INSTRUCTIONS || undefined
     let initialModel = process.env.TANDEM_SESSION_MODEL || undefined
+    let initialVariant = process.env.TANDEM_SESSION_VARIANT || undefined
     delete process.env.TANDEM_INITIAL_PROMPT
     delete process.env.TANDEM_SESSION_INSTRUCTIONS
     delete process.env.TANDEM_SESSION_MODEL
+    delete process.env.TANDEM_SESSION_VARIANT
     const root = options.presenceDirectory ?? join(
       process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"), "tandem/opencode",
     )
@@ -105,15 +112,17 @@ const plugin = {
     const tabControl = api.tabs ? await serveTabs(api, initialRequest.signal) : undefined
 
     const initializeConversation = async () => {
-      if (stopped || !api.state.ready || (initialPrompt === undefined && initialInstructions === undefined)) return
+      if (stopped || !api.state.ready || (initialPrompt === undefined && initialInstructions === undefined && initialModel === undefined && initialVariant === undefined)) return
       const text = initialPrompt
       const instructions = initialInstructions
       const modelName = initialModel
+      const selectedVariant = initialVariant
       // Consume before awaiting: an uncertain HTTP result must never trigger a second submission.
       initialPrompt = undefined
       initialInstructions = undefined
       initialModel = undefined
-      if (!text?.trim() && !instructions) return
+      initialVariant = undefined
+      if (!text?.trim() && !instructions && !modelName && !selectedVariant) return
       try {
         if (api.route.current.name !== "home") throw new Error("Client already has a conversation")
         const directory = api.state.path.directory
@@ -121,9 +130,13 @@ const plugin = {
           throwOnError: true,
           signal: AbortSignal.any([initialRequest.signal, AbortSignal.timeout(15_000)]),
         }
-        const [modelID, variant] = modelName?.split("#") ?? []
+        const [modelID, embeddedVariant] = modelName?.split("#") ?? []
+        const variant = selectedVariant ?? embeddedVariant
         const [providerID, ...modelPath] = modelID?.split("/") ?? []
-        const model = modelName ? { providerID, id: modelPath.join("/"), ...(variant ? { variant } : {}) } : undefined
+        let model = modelName ? { providerID, id: modelPath.join("/"), ...(variant ? { variant } : {}) } : undefined
+        if (!model && variant && api.client.session.defaultModel) {
+          model = { ...await api.client.session.defaultModel(directory, options), variant }
+        }
         const result = await api.client.session.create({ directory, ...(model ? { model } : {}) }, options)
         if (stopped) return
         if (!result.data?.id) throw new Error("Session creation returned no session")
@@ -136,13 +149,14 @@ const plugin = {
           directory,
           sessionID: result.data.id,
           parts: [{ type: "text", text }],
-          ...(model ? { model: { providerID: model.providerID, modelID: model.id }, variant } : {}),
+          ...(model ? { model: { providerID: model.providerID, modelID: model.id } } : {}),
+          ...(variant ? { variant } : {}),
         }, options)
       } catch {
         if (!stopped) api.ui.toast({
           variant: "error",
           title: "Tandem session setup",
-          message: "Could not configure session instructions or submit the initial prompt. Check this conversation before retrying; delivery may be uncertain.",
+          message: "Could not configure the session model, variant or instructions, or submit the initial prompt. Check this conversation before retrying; delivery may be uncertain.",
         })
       }
     }
