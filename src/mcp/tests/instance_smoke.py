@@ -57,6 +57,7 @@ def smoke(binary):
         tools = client.request("tools/list", {})["tools"]
         fields = {
             "start_self": set(), "stop_self": set(), "get_instructions": set(),
+            "update_repositories": set(),
             "conclude": {"title", "summary", "markdown"},
             "search_events": {"search_strings"}, "get_event_report": {"acceptance_id"},
         }
@@ -66,7 +67,9 @@ def smoke(binary):
         assert policy in instructions["core_guidance"], instructions
         assert policy in instructions["markdown"], instructions
         assert policy in (home / "workspaces/review/AGENTS.md").read_text()
-        assert policy in next(tool["description"] for tool in tools if tool["name"] == "conclude")
+        description = next(tool["description"] for tool in tools if tool["name"] == "conclude")
+        assert "Ignore unless explicitly instructed" in description, description
+        assert "cleanup needs do not authorize conclude" in description, description
         for tool in tools:
             assert tool["inputSchema"].get("additionalProperties") is False, tool
             expected = fields[tool["name"]]
