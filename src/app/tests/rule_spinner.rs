@@ -61,6 +61,6 @@ fn rule_history_animates_starting_instances_when_animations_are_enabled() {
         context.borrow_mut().inventory.startup.clear();
         view.tick(Duration::from_millis(80), settings);
         let text = render(&mut view);
-        assert!(text.contains(" review"), "{text}");
+        assert!(text.contains(" review · Running"), "{text}");
     }
 }

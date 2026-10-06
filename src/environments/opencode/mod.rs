@@ -1,5 +1,5 @@
-mod conversation;
 pub(crate) mod cleanup;
+mod conversation;
 mod discovery;
 pub(crate) mod events;
 mod history;
