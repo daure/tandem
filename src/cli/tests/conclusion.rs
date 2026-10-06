@@ -167,7 +167,11 @@ fn scoped_conclusion_survives_mcp_kill_and_retains_searchable_reports_after_reso
         json!({"instance": "reader", "cleanup_state": "pending"})
     );
     reader.close(Some(libc::SIGKILL));
-    wait_for(|| !fixture.home.join("workspaces/reader").exists());
+    wait_for(|| {
+        !fixture.home.join("workspaces/reader").exists()
+            && fixture.runtime_record("reader", "journal").is_none()
+            && fixture.runtime_record("reader", "startup").is_none()
+    });
     assert!(fixture.runtime_record("reader", "journal").is_none());
     assert!(fixture.runtime_record("reader", "startup").is_none());
     assert_eq!(
@@ -229,7 +233,11 @@ fn unlinked_conclusion_preserves_resources_on_close_failure_and_survives_retry_d
     wait_for(|| fixture.home.join("closing").exists());
     agent.close(Some(libc::SIGKILL));
     fs::write(fixture.home.join("release-close"), "").unwrap();
-    wait_for(|| !fixture.home.join("workspaces/review").exists());
+    wait_for(|| {
+        !fixture.home.join("workspaces/review").exists()
+            && fixture.runtime_record("review", "journal").is_none()
+            && fixture.runtime_record("review", "startup").is_none()
+    });
     assert!(fixture.home.join("workspaces/reader").is_dir());
     assert!(fixture.runtime_record("review", "journal").is_none());
     assert_eq!(
