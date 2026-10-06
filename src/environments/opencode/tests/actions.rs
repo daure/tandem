@@ -551,7 +551,10 @@ fn zellij_drains_stderr_concurrently_and_bounds_diagnostics() {
             60000 => assert_eq!(result.unwrap(), "[]"),
             4000 => {
                 let error = result.unwrap_err();
-                assert!(error.contains("list-panes failed (exit status: 2)"));
+                assert!(
+                    error.contains("list-panes failed (exit status: 2)"),
+                    "{error}"
+                );
                 assert!(error.ends_with("(see Tandem diagnostic log)"));
                 assert!(error.len() < 2200);
             }
