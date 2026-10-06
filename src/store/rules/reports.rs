@@ -52,6 +52,16 @@ pub(crate) struct ReportSummary {
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub(crate) enum ConclusionReceipt {
+    Reported(ReportSummary),
+    Unreported {
+        instance: String,
+        cleanup_state: CleanupState,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub(crate) struct Report {
     #[serde(flatten)]
     pub details: ReportSummary,

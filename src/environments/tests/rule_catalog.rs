@@ -15,6 +15,7 @@ fn definition() -> Definition {
         initial_prompt: "Inspect {{event.data.text}}".into(),
         enabled: true,
         start_instance: false,
+        focus_pane: true,
     }
 }
 

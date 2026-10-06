@@ -20,7 +20,7 @@ fn provider_fixture() -> Fixture {
         let directory = fixture.home.join("templates/providers").join(name);
         fs::create_dir_all(&directory).unwrap();
         let manifest = json!({
-            "schema_version": 1, "name": format!("dev-{name}"), "profile": "generic",
+            "schema_version": 2, "name": format!("dev-{name}"),
             "description": "Provider fixture", "protocol": "tandem-events-v1"
         });
         fs::write(directory.join("Dockerfile"), "FROM scratch\n").unwrap();

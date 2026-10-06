@@ -17,6 +17,7 @@ pub(crate) enum Target {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Command {
     Details,
+    OpenLink,
     Start,
     Stop,
     Logs,
@@ -38,12 +39,16 @@ pub(crate) enum Command {
     Rule,
     Routes,
     Report,
+    RenameSession,
+    DeleteSession,
+    ClosePanel,
 }
 
 impl Command {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Details => "View details",
+            Self::OpenLink => "Open link",
             Self::Start => "Start provider",
             Self::Stop => "Stop provider",
             Self::StartStream => "Start stream",
@@ -65,6 +70,9 @@ impl Command {
             Self::Rule => "Go to rule",
             Self::Routes => "Open routes",
             Self::Report => "View report",
+            Self::RenameSession => "Rename OpenCode session",
+            Self::DeleteSession => "Delete OpenCode session",
+            Self::ClosePanel => "Close OpenCode panel",
         }
     }
 
@@ -73,18 +81,21 @@ impl Command {
             Self::Details | Self::ProviderDetails | Self::StreamDetails => "d",
             Self::Start | Self::Stop | Self::StartStream | Self::StopStream => "s",
             Self::Provider => "p",
-            Self::Logs => "o",
+            Self::Logs | Self::OpenLink => "Enter",
             Self::StreamEvents => "e",
             Self::Replay => "r",
             Self::Delete => "x",
             Self::Activate | Self::Deactivate => "a",
             Self::Instance => "v",
-            Self::Session => "o",
+            Self::Session => "Enter",
             Self::CreateInstance => "i",
             Self::NewSession => "n",
             Self::PurgeInstance => "p",
             Self::Rule => "r",
-            Self::Routes => "Ctrl+Enter",
+            Self::RenameSession => "r",
+            Self::DeleteSession => "x",
+            Self::ClosePanel => "c",
+            Self::Routes => "Enter",
             Self::Report => "f",
         }
     }
@@ -95,8 +106,15 @@ impl Target {
         match self {
             Self::Provider(_) => Command::Logs,
             Self::Stream(_) => Command::StreamEvents,
-            Self::Event(_) | Self::Rule(_) => Command::Details,
-            Self::AcceptanceContext(_) => Command::Session,
+            Self::Event(_) => Command::OpenLink,
+            Self::Rule(_) => Command::Details,
+            Self::AcceptanceContext(target) => {
+                if target.selected.is_some() {
+                    Command::Session
+                } else {
+                    Command::Routes
+                }
+            }
         }
     }
 
@@ -120,6 +138,7 @@ impl Target {
                 Command::StreamEvents,
             ],
             Self::Event(_) => vec![
+                Command::OpenLink,
                 Command::Details,
                 Command::Replay,
                 Command::Provider,
@@ -141,13 +160,20 @@ impl Target {
                     Command::Instance,
                     Command::Routes,
                     Command::NewSession,
-                    Command::Session,
                     Command::PurgeInstance,
                 ];
                 if target.selected.is_some() {
                     commands.insert(0, Command::Details);
+                    commands.push(Command::Session);
+                    commands.push(Command::ClosePanel);
                 } else {
                     commands.push(Command::Delete);
+                }
+                if target.selected.as_ref().is_some_and(|row| {
+                    matches!(row.opencode, Some(super::opencode::Target::Session { .. }))
+                }) {
+                    commands.retain(|command| *command != Command::Rule);
+                    commands.extend([Command::RenameSession, Command::DeleteSession]);
                 }
                 commands
             }
@@ -197,6 +223,7 @@ impl Target {
             }
             Self::Event(row) => match command {
                 Command::Details => Some(Msg::OpenEvent(row)),
+                Command::OpenLink => Some(Msg::OpenEventLink(row)),
                 Command::Replay => Some(Msg::ReplayEvent(row.sequence)),
                 Command::Delete => Some(Msg::DeleteEvents(Deletion::Event(row.sequence))),
                 Command::Provider => Some(Msg::ShowProvider(row.provider.clone())),
@@ -210,7 +237,25 @@ impl Target {
                 }
                 _ => None,
             },
-            Self::AcceptanceContext(target) => Some(Msg::AcceptanceAction(target, command)),
+            Self::AcceptanceContext(target) => {
+                if matches!(command, Command::RenameSession | Command::DeleteSession) {
+                    let Some(super::opencode::Target::Session { id, .. }) = target
+                        .selected
+                        .as_ref()
+                        .and_then(|row| row.opencode.as_ref())
+                    else {
+                        return None;
+                    };
+                    let action = if command == Command::RenameSession {
+                        super::opencode::SessionAction::Rename
+                    } else {
+                        super::opencode::SessionAction::Delete
+                    };
+                    Some(Msg::OpencodeSessionAction(id.clone(), action))
+                } else {
+                    Some(Msg::AcceptanceAction(target, command))
+                }
+            }
         }
     }
 }

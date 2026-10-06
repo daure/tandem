@@ -51,7 +51,7 @@ fn workspace(service: &AppService, name: &str) -> Arc<InstanceScope> {
 }
 
 #[test]
-fn conclusion_saves_acceptance_reports_before_detached_purge_and_rejects_unlinked_workspaces() {
+fn conclusion_purges_owned_workspaces_and_saves_linked_acceptance_reports() {
     let service = AppService::for_tests();
     service
         .runtime
@@ -63,19 +63,32 @@ fn conclusion_saves_acceptance_reports_before_detached_purge_and_rejects_unlinke
         .block_on(service.create_template("blank".into()))
         .unwrap();
     let unlinked = workspace(&service, "manual");
-    let error = service
+    let receipt = service
         .runtime
         .block_on(service.conclude_instance(unlinked, report()))
-        .unwrap_err();
-    assert!(error.contains("acceptance"), "{error}");
-    assert!(
-        service
-            .environments
-            .config
-            .workspaces
-            .join("manual")
-            .is_dir()
+        .unwrap();
+    assert_eq!(
+        receipt,
+        ConclusionReceipt::Unreported {
+            instance: "manual".into(),
+            cleanup_state: CleanupState::Pending,
+        }
     );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while service
+        .environments
+        .config
+        .workspaces
+        .join("manual")
+        .exists()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "conclusion purge timed out"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+    assert!(service.rules.store.snapshot().unwrap().reports.is_empty());
     service
         .rules
         .store
@@ -90,6 +103,7 @@ fn conclusion_saves_acceptance_reports_before_detached_purge_and_rejects_unlinke
                 initial_prompt: "Inspect {{event.summary}}".into(),
                 enabled: true,
                 start_instance: false,
+                focus_pane: true,
             },
             None,
             "main".into(),
@@ -126,6 +140,9 @@ fn conclusion_saves_acceptance_reports_before_detached_purge_and_rejects_unlinke
         .runtime
         .block_on(service.conclude_instance(scope.clone(), report()))
         .unwrap();
+    let ConclusionReceipt::Reported(receipt) = receipt else {
+        panic!("linked conclusion must save its report");
+    };
     assert_eq!(receipt.acceptance_id, acceptance.id);
     assert_eq!(receipt.event_sequence, acceptance.event_sequence);
     assert_eq!(receipt.cleanup_state, CleanupState::Pending);
@@ -158,14 +175,6 @@ fn conclusion_saves_acceptance_reports_before_detached_purge_and_rejects_unlinke
             .workspaces
             .join(&acceptance.instance)
             .exists()
-    );
-    assert!(
-        service
-            .environments
-            .config
-            .workspaces
-            .join("manual")
-            .is_dir()
     );
     assert_eq!(
         service.rules.store.snapshot().unwrap().acceptances,

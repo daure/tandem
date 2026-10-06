@@ -66,6 +66,9 @@ impl RuleStore {
             workspace.directory = directory;
             for session in &observed.sessions {
                 if session.stale
+                    || workspace
+                        .removed_sessions
+                        .contains(&(session.server.clone(), session.id.clone()))
                     || workspace_owner(
                         &session.directory,
                         std::iter::once((
@@ -98,6 +101,26 @@ impl RuleStore {
                     "INSERT INTO rule_acceptance_workspaces(acceptance_id, payload) VALUES (?1, ?2)
                      ON CONFLICT(acceptance_id) DO UPDATE SET payload=excluded.payload",
                     params![acceptance.id, encode(&workspace)?],
+                )?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn update_opencode_history(
+        &self,
+        edits: &std::collections::BTreeMap<(String, String), Option<String>>,
+    ) -> Result<(), Error> {
+        let mut connection = self.events.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for (id, mut workspace) in self.workspaces(&transaction)? {
+            let previous = workspace.clone();
+            workspace.edit_sessions(edits);
+            if workspace != previous {
+                transaction.execute(
+                    "UPDATE rule_acceptance_workspaces SET payload=?1 WHERE acceptance_id=?2",
+                    params![encode(&workspace)?, id],
                 )?;
             }
         }

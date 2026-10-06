@@ -36,6 +36,13 @@ impl AppService {
             self.settings.startup_averages(StartupKind::Hot);
         for instance in &snapshot.instances {
             if let Some(startup) = snapshot.startup.get_mut(&instance.name) {
+                let workspace_only = instance.workspace_only
+                    || snapshot.templates.iter().any(|template| {
+                        template.name == instance.template && template.workspace_only()
+                    });
+                if startup.prepare_only && !workspace_only {
+                    continue;
+                }
                 startup.estimate_milliseconds = match startup.kind {
                     StartupKind::Cold => snapshot
                         .cold_startup_averages_milliseconds
@@ -87,7 +94,7 @@ impl AppService {
         self.open_system_target(url)
     }
 
-    fn open_system_target(&self, target: &str) -> Result<(), String> {
+    pub(super) fn open_system_target(&self, target: &str) -> Result<(), String> {
         #[cfg(test)]
         {
             self.state
@@ -352,6 +359,10 @@ impl AppService {
         mut startup: Startup,
     ) -> Operation {
         let action = operation.action.as_str();
+        if action == "create_instance" {
+            self.environments
+                .set_start_instance(&operation.id, startup.start_instance);
+        }
         if action == "create_instance" && startup.writer.is_none() {
             startup.branch_instances = self.branch_instances();
             return self.schedule_startup(operation, timeout, startup);
@@ -359,7 +370,8 @@ impl AppService {
         let operation_id = operation.id.clone();
         let environments = Arc::clone(&self.environments);
         let worker_operation = operation.clone();
-        let startup_timing = (action == "create_instance" && startup.start_instance)
+        let start_instance = startup.start_instance;
+        let startup_timing = (action == "create_instance")
             .then(|| {
                 worker_operation
                     .template
@@ -415,6 +427,11 @@ impl AppService {
             if let Some((template, kind)) = startup_timing
                 && let Ok(operation) = environments.operation(&operation_id)
                 && operation.state == OperationState::Succeeded
+                && (start_instance
+                    || operation
+                        .instance
+                        .as_ref()
+                        .is_some_and(|instance| instance.workspace_only))
             {
                 match settings.record_startup(template, kind, operation.elapsed_milliseconds) {
                     Ok(()) => notifier.publish(Refresh::Settings),

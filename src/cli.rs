@@ -22,6 +22,8 @@ pub struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     #[command(hide = true)]
+    OpencodeCleanupWorker { result_fd: i32 },
+    #[command(hide = true)]
     ProviderSidecarWorker {
         #[arg(long, default_value = "127.0.0.1:0", value_parser = parse_loopback)]
         bind: SocketAddr,
@@ -203,6 +205,9 @@ impl From<ProviderCommand> for crate::store::providers::Action {
 pub fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::try_parse_from(std::env::args_os()).unwrap_or_else(|error| error.exit());
     match cli.command {
+        Some(Commands::OpencodeCleanupWorker { result_fd }) => {
+            crate::service::AppService::run_opencode_cleanup_worker(result_fd).map_err(Into::into)
+        }
         Some(Commands::ProviderSidecarWorker { bind }) => {
             let service = crate::service::AppService::initialize()?;
             service.run_provider_sidecar_worker(bind)

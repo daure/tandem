@@ -145,8 +145,23 @@ pub(super) async fn raw(
     path: &str,
     method: reqwest::Method,
 ) -> Result<Option<serde_json::Value>, String> {
+    raw_body(client, server, path, method, None).await
+}
+
+pub(super) async fn raw_body(
+    client: &reqwest::Client,
+    server: &str,
+    path: &str,
+    method: reqwest::Method,
+    body: Option<serde_json::Value>,
+) -> Result<Option<serde_json::Value>, String> {
     let server = local_server(server).ok_or("OpenCode server must be local HTTP")?;
     let mut request = client.request(method, format!("{server}{path}"));
+    if let Some(body) = body {
+        request = request
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.to_string());
+    }
     if let Some(password) = password(&server) {
         request = request.basic_auth(
             std::env::var("OPENCODE_SERVER_USERNAME").unwrap_or_else(|_| "opencode".into()),

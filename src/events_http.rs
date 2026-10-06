@@ -159,9 +159,16 @@ async fn acknowledge_stream(
     headers: HeaderMap,
     Json(control): Json<crate::store::providers::StreamControl>,
 ) -> Result<impl IntoResponse, Error> {
+    let stream = control.stream.clone();
     service
         .acknowledge_provider_stream(token(&headers)?, control)
-        .await?;
+        .await
+        .map_err(|error| match error {
+            Error::Storage(message) => {
+                Error::Storage(format!("POST /v1/streams/ack stream={stream:?}: {message}"))
+            }
+            error => error,
+        })?;
     Ok(StatusCode::NO_CONTENT)
 }
 

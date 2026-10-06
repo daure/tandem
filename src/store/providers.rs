@@ -1,20 +1,26 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Manifest {
     pub schema_version: u32,
     pub name: String,
-    pub profile: String,
     pub description: String,
     pub protocol: String,
     #[serde(default)]
     pub feedback: Vec<String>,
     #[serde(default)]
-    pub streams: Vec<String>,
+    pub streams: Vec<StreamDeclaration>,
     #[serde(default)]
     pub stream_control: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StreamDeclaration {
+    pub name: String,
+    pub profile: String,
 }
 
 impl Manifest {
@@ -22,24 +28,90 @@ impl Manifest {
         crate::store::environments::validate_name(&self.name)?;
         let mut streams = std::collections::BTreeSet::new();
         for stream in &self.streams {
-            validate_stream(stream)?;
-            if !streams.insert(stream) {
+            validate_stream(&stream.name)?;
+            validate_profile(&stream.profile)?;
+            if !streams.insert(&stream.name) {
                 return Err("provider stream names must be unique".into());
             }
         }
         if self.stream_control && self.streams.is_empty() {
             return Err("stream control requires declared streams".into());
         }
-        if self.schema_version != 1
-            || self.protocol != "tandem-events-v1"
-            || !["message", "ticket", "system_event", "generic"].contains(&self.profile.as_str())
-        {
-            return Err(
-                "provider requires schema_version 1, tandem-events-v1, and a supported profile"
-                    .into(),
-            );
+        if self.schema_version != 2 || self.protocol != "tandem-events-v1" {
+            return Err("provider requires schema_version 2 and tandem-events-v1".into());
         }
         Ok(())
+    }
+}
+
+fn validate_profile(profile: &str) -> Result<(), String> {
+    if !["message", "ticket", "system_event", "generic"].contains(&profile) {
+        return Err("stream requires a supported profile".into());
+    }
+    Ok(())
+}
+
+impl<'de> Deserialize<'de> for Manifest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Input {
+            schema_version: u32,
+            name: String,
+            description: String,
+            protocol: String,
+            #[serde(default)]
+            feedback: Vec<String>,
+            #[serde(default)]
+            streams: Vec<StreamInput>,
+            #[serde(default)]
+            stream_control: bool,
+            profile: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum StreamInput {
+            Declaration(StreamDeclaration),
+            Name(String),
+        }
+
+        let input = Input::deserialize(deserializer)?;
+        let legacy_profile = match (input.schema_version, input.profile) {
+            (1, Some(profile)) => {
+                validate_profile(&profile).map_err(serde::de::Error::custom)?;
+                Some(profile)
+            }
+            (2, None) => None,
+            _ => {
+                return Err(serde::de::Error::custom(
+                    "provider requires schema_version 2 with stream profiles, or schema_version 1 with a provider profile",
+                ));
+            }
+        };
+        let streams = input
+            .streams
+            .into_iter()
+            .map(|stream| match (stream, &legacy_profile) {
+                (StreamInput::Declaration(declaration), None) => Ok(declaration),
+                (StreamInput::Name(name), Some(profile)) => Ok(StreamDeclaration {
+                    name,
+                    profile: profile.clone(),
+                }),
+                _ => Err(serde::de::Error::custom(
+                    "stream declarations must match the provider schema version",
+                )),
+            })
+            .collect::<Result<_, D::Error>>()?;
+        Ok(Self {
+            schema_version: 2,
+            name: input.name,
+            description: input.description,
+            protocol: input.protocol,
+            feedback: input.feedback,
+            streams,
+            stream_control: input.stream_control,
+        })
     }
 }
 
@@ -147,6 +219,7 @@ pub(crate) struct Provider {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct Stream {
     pub name: String,
+    pub profile: Option<String>,
     pub controllable: bool,
     pub enabled: bool,
     pub status: Status,
@@ -155,6 +228,10 @@ pub(crate) struct Stream {
     pub total: u64,
     pub handovers: u64,
 }
+
+#[cfg(test)]
+#[path = "tests/providers.rs"]
+mod tests;
 
 impl Stream {
     pub(crate) fn start_stop_action(&self, provider: &Provider) -> Action {

@@ -17,6 +17,7 @@ mod completion;
 mod completion_navigation;
 mod creation;
 mod event_deletion;
+mod event_links;
 mod event_sound;
 mod events;
 mod events_navigation;
@@ -32,6 +33,7 @@ mod opencode_observation;
 mod opencode_order;
 mod opencode_resources;
 mod opencode_selection;
+mod opencode_sessions;
 mod operations;
 mod optimistic_purge;
 mod overview;
@@ -41,6 +43,7 @@ mod refresh;
 mod resources;
 mod restart;
 mod row_enter;
+mod rule_spinner;
 mod rules;
 mod service_state;
 mod tab_counts;
@@ -684,7 +687,7 @@ fn startup_waits_for_complete_inventory_before_showing_and_selecting_rows() {
 }
 
 #[test]
-fn data_view_starts_fully_expanded_through_services() {
+fn data_view_starts_with_roots_expanded_one_level() {
     init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
@@ -701,14 +704,14 @@ fn data_view_starts_fully_expanded_through_services() {
 
     let text = rendered_lines(&terminal, area).join("");
     assert!(text.contains("review"));
-    assert!(text.contains("Service"));
-    assert!(text.contains("http://localhost:9876/review/web/"));
+    assert!(!text.contains("Service"));
+    assert!(!text.contains("http://localhost:9876/review/web/"));
     assert!(!text.contains("Templates / instances"));
     assert!(!text.contains("Status"));
 }
 
 #[test]
-fn global_h_clears_search_focuses_the_first_item_and_expands_all_rows() {
+fn global_h_clears_search_focuses_the_first_item_and_expands_roots_one_level() {
     init_ui();
     let mut app = root(AppService::for_tests());
     app.set_rows_for_tests(rows::from_snapshot(&snapshot()));
@@ -750,9 +753,9 @@ fn global_h_clears_search_focuses_the_first_item_and_expands_all_rows() {
         })
         .unwrap();
     assert!(rendered_lines(&terminal, area).join("").contains("review"));
-    assert!(rendered_lines(&terminal, area).join("").contains("Service"));
+    assert!(!rendered_lines(&terminal, area).join("").contains("Service"));
     assert!(
-        rendered_lines(&terminal, area)
+        !rendered_lines(&terminal, area)
             .join("")
             .contains("http://localhost:9876/review/web/")
     );
@@ -770,6 +773,7 @@ fn z_toggles_templates_and_instances_without_expanding_their_groups() {
     setup.port = None;
     snapshot.instances[0].services.push(setup);
     let mut tree = super::Instances::new(super::instances::state(rows::from_snapshot(&snapshot)));
+    tree.expand_for_tests("instance:review");
     let area = Rect::new(0, 0, 130, 40);
     tree.layout(area, &mut tuicore::LayoutCtx::new());
     tree.focus(None, true, &mut tuicore::FocusCtx::default());

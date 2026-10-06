@@ -96,6 +96,11 @@ impl App {
                     FlexItem::fit_content(),
                 )
                 .child(
+                    "focus-pane",
+                    super::enabled::SettingsToggle::focus_pane(draft.clone()),
+                    FlexItem::fit_content(),
+                )
+                .child(
                     "description",
                     FormField::new("Description", description),
                     FlexItem::fit_content(),
@@ -186,6 +191,15 @@ impl App {
         self.set_rule_draft_toggle(draft, PendingToggle::StartInstance(start), ctx);
     }
 
+    pub(in crate::app) fn set_rule_draft_focus_pane(
+        &mut self,
+        draft: Rc<RefCell<Draft>>,
+        focus: bool,
+        ctx: &mut EventCtx<Msg>,
+    ) {
+        self.set_rule_draft_toggle(draft, PendingToggle::FocusPane(focus), ctx);
+    }
+
     fn set_rule_draft_toggle(
         &mut self,
         draft: Rc<RefCell<Draft>>,
@@ -217,6 +231,10 @@ impl App {
             }
             PendingToggle::StartInstance(start) => {
                 target.definition.start_instance = start;
+                Some(target.zellij_session)
+            }
+            PendingToggle::FocusPane(focus) => {
+                target.definition.focus_pane = focus;
                 Some(target.zellij_session)
             }
         };
@@ -378,6 +396,9 @@ impl App {
                         draft.rule.zellij_session = rule.zellij_session.clone();
                         if matches!(toggle, Some(PendingToggle::StartInstance(_))) {
                             draft.rule.definition.start_instance = rule.definition.start_instance;
+                        }
+                        if matches!(toggle, Some(PendingToggle::FocusPane(_))) {
+                            draft.rule.definition.focus_pane = rule.definition.focus_pane;
                         }
                         if !draft.dirty {
                             draft.rule = rule.clone();

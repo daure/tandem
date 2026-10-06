@@ -96,6 +96,32 @@ pub(crate) struct RepositoryCheckout {
     pub cloned: bool,
 }
 
+#[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq)]
+pub(crate) struct RepositoryUpdates {
+    pub instance: String,
+    pub repositories: Vec<RepositoryUpdate>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema, PartialEq, Eq)]
+pub(crate) struct RepositoryUpdate {
+    pub target: String,
+    pub branch: Option<String>,
+    pub upstream: Option<String>,
+    pub before: Option<String>,
+    pub after: Option<String>,
+    pub status: RepositoryUpdateStatus,
+    pub reason: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RepositoryUpdateStatus {
+    Updated,
+    Current,
+    Skipped,
+    Failed,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub(crate) struct InstanceService {
     pub name: String,
@@ -262,6 +288,9 @@ pub(crate) struct StartupTiming {
     pub elapsed_milliseconds: u64,
     pub estimate_milliseconds: Option<u64>,
     pub kind: StartupKind,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub prepare_only: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]

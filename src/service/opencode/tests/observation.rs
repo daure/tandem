@@ -9,6 +9,32 @@ use std::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[test]
+fn initial_observation_completes_on_empty_results_or_failure_and_resets_per_generation() {
+    let owner = Arc::new(Integration::new());
+    let integration = Arc::downgrade(&owner);
+    assert!(!owner.state.lock().unwrap().initial_observation_complete);
+
+    publish(&integration, 0, Ok(Snapshot::default()));
+    assert!(owner.state.lock().unwrap().initial_observation_complete);
+
+    owner.reset();
+    publish(&integration, 0, Ok(Snapshot::default()));
+    assert!(!owner.state.lock().unwrap().initial_observation_complete);
+
+    publish(
+        &integration,
+        1,
+        Err("OpenCode observation timed out".into()),
+    );
+    let state = owner.state.lock().unwrap();
+    assert!(state.initial_observation_complete);
+    assert_eq!(
+        state.snapshot.error.as_deref(),
+        Some("OpenCode observation timed out")
+    );
+}
+
+#[test]
 fn unverified_clients_retry_quietly_stop_tracking_and_recover_on_receipt_changes() {
     let root = tempfile::tempdir().unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();

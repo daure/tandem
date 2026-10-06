@@ -5,9 +5,9 @@ fn stream_lifecycle_waits_for_collector_acknowledgment_and_preserves_siblings() 
     let fixture = provider_fixture();
     let connection = rusqlite::Connection::open(fixture.home.join("settings.sqlite3")).unwrap();
     let manifest = json!({
-        "schema_version": 1, "name": "dev-message", "profile": "message",
+        "schema_version": 2, "name": "dev-message",
         "description": "Fixture", "protocol": "tandem-events-v1",
-        "streams": ["samples", "sibling"], "stream_control": true,
+        "streams": [{"name": "samples", "profile": "message"}, {"name": "sibling", "profile": "ticket"}], "stream_control": true,
     });
     fs::write(
         fixture
@@ -134,6 +134,8 @@ fn stream_lifecycle_waits_for_collector_acknowledgment_and_preserves_siblings() 
         let provider = inspect();
         assert_eq!(provider["status"], "running");
         let streams = provider["streams"].as_array().unwrap();
+        assert_eq!(streams[0]["profile"], "message");
+        assert_eq!(streams[1]["profile"], "ticket");
         assert_eq!(
             streams[0]["status"],
             if enabled { "running" } else { "stopped" }

@@ -23,6 +23,9 @@ pub(super) fn apply(rows: &mut [Row], snapshot: &Snapshot, owners: &[Owner]) {
         .filter(|process| process.error.is_some())
         .collect();
     for row in rows {
+        if matches!(row.opencode, Some(Target::Session { pane: None, .. })) {
+            continue;
+        }
         let usage = if let Some(instance) = &row.instance {
             totals.instances.get(instance)
         } else if row.is_template() {

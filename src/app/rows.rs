@@ -214,7 +214,7 @@ fn startup_label(status: &str, startup: &StartupTiming) -> String {
     if startup.elapsed_milliseconds < estimate {
         return format!(
             "{status} {}",
-            format_seconds(estimate - startup.elapsed_milliseconds)
+            compact_duration(estimate - startup.elapsed_milliseconds)
         );
     }
     if startup.elapsed_milliseconds == estimate {
@@ -222,12 +222,8 @@ fn startup_label(status: &str, startup: &StartupTiming) -> String {
     }
     format!(
         "{status} {} over estimate",
-        format_seconds(startup.elapsed_milliseconds - estimate)
+        compact_duration(startup.elapsed_milliseconds - estimate)
     )
-}
-
-fn format_seconds(milliseconds: u64) -> String {
-    format!("{}s", milliseconds.div_ceil(1_000))
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]

@@ -73,6 +73,101 @@ fn select(app: &mut App, id: &str) {
 }
 
 #[test]
+fn startup_shows_inventory_and_sessions_together_with_the_top_row_selected() {
+    for sessions_first in [false, true] {
+        init_ui();
+        let service = AppService::for_tests();
+        service.reset_opencode_for_tests();
+        let mut observation = super::attached_sessions::observation();
+        let mut external = observation.sessions[0].clone();
+        external.id = "external".into();
+        external.directory = "/work/alpha".into();
+        observation.sessions.push(external.clone());
+        if sessions_first {
+            service.set_opencode_snapshot_for_tests(observation.clone());
+        }
+        let mut app = crate::app::root(service);
+        let mut inventory = snapshot();
+        inventory.instances[0].workspace_only = true;
+        inventory.instances[0].services.clear();
+        let text = render(&mut app).1;
+        assert!(app.selected().is_none());
+        assert!(!text.contains("review"));
+        assert!(!text.contains("/work/alpha"));
+        app.update_snapshot(inventory.clone());
+        let text = render(&mut app).1;
+        if !sessions_first {
+            assert!(app.selected().is_none());
+            assert!(!text.contains("review"));
+            app.handle_message(
+                Msg::SetRunningOnly(false),
+                &mut EventCtx::new(AnimationSettings::default()),
+            );
+            assert!(!render(&mut app).1.contains("review"));
+            app.service
+                .set_opencode_snapshot_for_tests(observation.clone());
+            app.update_snapshot(inventory.clone());
+            render(&mut app);
+        }
+        assert_eq!(app.selected().unwrap().id, "opencode-workspace:/work/alpha");
+
+        external.id = "earlier".into();
+        external.directory = "/work/aardvark".into();
+        observation.sessions.push(external.clone());
+        app.service
+            .set_opencode_snapshot_for_tests(observation.clone());
+        app.update_snapshot(inventory.clone());
+        render(&mut app);
+        assert_eq!(app.selected().unwrap().id, "opencode-workspace:/work/alpha");
+
+        key(&mut app, Key::Down);
+        let selected = app.selected().unwrap().id;
+        external.id = "latest".into();
+        external.directory = "/work/aaa".into();
+        observation.sessions.push(external);
+        app.service.set_opencode_snapshot_for_tests(observation);
+        app.update_snapshot(inventory);
+        render(&mut app);
+        assert_eq!(app.selected().unwrap().id, selected);
+    }
+}
+
+#[test]
+fn startup_releases_the_list_when_opencode_is_empty_failed_or_disabled() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    for outcome in ["empty", "failed", "disabled"] {
+        let service = AppService::for_tests();
+        service.reset_opencode_for_tests();
+        let mut app = crate::app::root(service);
+        let mut inventory = snapshot();
+        inventory.instances[0].workspace_only = true;
+        inventory.instances[0].services.clear();
+        app.update_snapshot(inventory.clone());
+        assert!(!render(&mut app).1.contains("review"));
+        assert!(app.selected().is_none());
+
+        if outcome == "disabled" {
+            runtime
+                .block_on(app.service.set_opencode_enabled(false).unwrap())
+                .unwrap()
+                .unwrap();
+        } else {
+            app.service
+                .set_opencode_snapshot_for_tests(crate::store::opencode::Snapshot {
+                    error: (outcome == "failed").then(|| "OpenCode observation timed out".into()),
+                    ..Default::default()
+                });
+        }
+        app.update_snapshot(inventory);
+        assert!(render(&mut app).1.contains("review"));
+        assert_eq!(app.selected().unwrap().template, "website");
+        if outcome != "disabled" {
+            assert_eq!(app.selected().unwrap().id, "instance:review");
+        }
+    }
+}
+
+#[test]
 fn tabs_retain_independent_expansion_and_selection() {
     let mut app = app();
     assert!(render(&mut app).1.contains("Conversation busy"));
@@ -82,7 +177,7 @@ fn tabs_retain_independent_expansion_and_selection() {
 
     switch(&mut app);
     assert!(render(&mut app).1.contains("review"));
-    key(&mut app, Key::Char('z'));
+    key(&mut app, Key::Left);
     assert!(!render(&mut app).1.contains("review"));
     let instances_selection = app.selected().unwrap().id;
     assert_ne!(sessions_selection, instances_selection);
@@ -143,20 +238,22 @@ fn external_workspace_expansion_survives_switches_and_overview_restores_default_
 }
 
 #[test]
-fn instances_start_fully_expanded_and_overview_restores_collapsed_groups() {
+fn instances_start_with_roots_expanded_one_level_and_overview_restores_that_depth() {
     let mut app = app();
     switch(&mut app);
     let text = render(&mut app).1;
-    assert!(text.contains("Conversation busy"), "{text}");
-    assert!(text.contains("http://localhost:9876/review/web/"), "{text}");
+    assert!(text.contains("review"), "{text}");
+    assert!(!text.contains("Conversation busy"), "{text}");
+    assert!(!text.contains("Service"), "{text}");
+    select(&mut app, "instance:review");
+    key(&mut app, Key::Right);
+    select(&mut app, "sessions:review");
+    key(&mut app, Key::Right);
     select(&mut app, "services:review");
-    key(&mut app, Key::Left);
+    key(&mut app, Key::Right);
     app.update_snapshot(snapshot());
     let text = render(&mut app).1;
-    assert!(
-        !text.contains("http://localhost:9876/review/web/"),
-        "{text}"
-    );
+    assert!(text.contains("http://localhost:9876/review/web/"), "{text}");
     switch(&mut app);
     app.event(
         &TuiEvent::Hotkey(HotkeyEvent::Commit("shift+h".into())),
@@ -167,8 +264,13 @@ fn instances_start_fully_expanded_and_overview_restores_collapsed_groups() {
     );
     switch(&mut app);
     let text = render(&mut app).1;
-    assert!(text.contains("Conversation busy"), "{text}");
-    assert!(text.contains("http://localhost:9876/review/web/"), "{text}");
+    assert!(text.contains("review"), "{text}");
+    assert!(!text.contains("Conversation busy"), "{text}");
+    assert!(!text.contains("Service"), "{text}");
+    assert!(
+        !text.contains("http://localhost:9876/review/web/"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -220,15 +322,19 @@ fn purge_updates_the_inactive_tab_without_resetting_surviving_rows() {
 }
 
 #[test]
-fn asynchronous_creation_selects_only_its_originating_tab() {
+fn asynchronous_creation_expands_only_its_originating_tab_and_preserves_selection() {
     for origin_sessions in [false, true] {
         let mut app = app();
         if !origin_sessions {
             switch(&mut app);
         }
         render(&mut app);
+        let origin_selection = app.selected().unwrap().id;
         let (sender, reply) = tokio::sync::oneshot::channel();
-        app.opencode_action = Some(PendingAction::creation(reply, app.instances.clone()));
+        app.opencode_action = Some(PendingAction::creation(
+            reply,
+            crate::app::opencode::CreationView::Instances(app.instances.clone()),
+        ));
         switch(&mut app);
         key(&mut app, Key::Char('z'));
         let selection = app.selected().unwrap().id;
@@ -247,7 +353,12 @@ fn asynchronous_creation_selects_only_its_originating_tab() {
             ..observation.clients[0].clone()
         });
         app.service.set_opencode_snapshot_for_tests(observation);
-        sender.send(Ok(pane)).unwrap();
+        sender
+            .send(Ok(crate::store::opencode::SessionLocation {
+                session_id: None,
+                pane,
+            }))
+            .unwrap();
         app.poll_opencode_action();
         app.update_snapshot(snapshot());
         app.pages_mut()
@@ -255,7 +366,7 @@ fn asynchronous_creation_selects_only_its_originating_tab() {
         assert_eq!(app.selected().unwrap().id, selection);
         assert_eq!(render(&mut app).1, before);
         switch(&mut app);
-        assert_eq!(app.selected().unwrap().id, "opencode-client:review:new:99");
+        assert_eq!(app.selected().unwrap().id, origin_selection);
         assert!(render(&mut app).1.contains("Created client"));
     }
 }

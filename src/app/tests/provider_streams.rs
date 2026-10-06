@@ -1,6 +1,116 @@
 use super::*;
 
 #[test]
+fn stream_archetype_icons_share_the_collection_status_color() {
+    init_ui();
+    let theme = tuicore::theme();
+    for (status, operation, controllable, label, color) in [
+        (
+            Status::Running,
+            None,
+            true,
+            "Collecting",
+            theme.success_fg(),
+        ),
+        (Status::Stopped, None, true, "Stopped", theme.muted_fg()),
+        (
+            Status::Paused,
+            None,
+            true,
+            "Provider paused",
+            theme.warning_fg(),
+        ),
+        (
+            Status::NotStarted,
+            None,
+            true,
+            "Not started",
+            theme.muted_fg(),
+        ),
+        (Status::Starting, None, true, "Starting...", theme.info_fg()),
+        (
+            Status::Unknown,
+            None,
+            true,
+            "Unverified",
+            theme.warning_fg(),
+        ),
+        (Status::Unknown, None, false, "Observed", theme.muted_fg()),
+        (
+            Status::Running,
+            Some(Action::Start),
+            true,
+            "Starting...",
+            theme.info_fg(),
+        ),
+        (
+            Status::Running,
+            Some(Action::Stop),
+            true,
+            "Stopping...",
+            theme.info_fg(),
+        ),
+    ] {
+        let mut app = root(AppService::for_tests());
+        let mut row = provider("source", Status::Running);
+        row.streams = ["message", "ticket", "system_event", "generic"]
+            .map(|profile| crate::store::providers::Stream {
+                name: profile.into(),
+                profile: Some(profile.into()),
+                controllable,
+                enabled: true,
+                status,
+                operation,
+                error: None,
+                total: 10,
+                handovers: 2,
+            })
+            .into();
+        app.pages_mut().update_providers(Snapshot {
+            providers: vec![row],
+            error: None,
+        });
+        app.pages_mut()
+            .tick(Duration::ZERO, AnimationSettings::default());
+        app.handle_message(
+            Msg::ShowProvider("dev-source".into()),
+            &mut EventCtx::default(),
+        );
+        let area = Rect::new(0, 0, 130, 30);
+        app.layout(area, &mut tuicore::LayoutCtx::new());
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| {
+                let mut ctx = RenderCtx::new();
+                app.render(frame, area, &mut ctx);
+                ctx.flush(frame);
+            })
+            .unwrap();
+        let lines = rendered_lines(&terminal, area);
+        assert!(lines.iter().any(|line| line.contains("󰑬 dev-source")));
+        for (profile, icon) in [
+            ("message", ""),
+            ("ticket", ""),
+            ("system_event", ""),
+            ("generic", ""),
+        ] {
+            let y = lines
+                .iter()
+                .position(|line| line.contains(&format!("{icon} {profile} ·  2/10 · {label}")))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let icon_x = (0..area.width)
+                .find(|x| buffer[(*x, y as u16)].symbol() == icon)
+                .unwrap();
+            assert_eq!(buffer[(icon_x, y as u16)].fg, color, "{profile}: {label}");
+            let status_x = lines[y].find(label).unwrap();
+            let status_x = lines[y][..status_x].chars().count() as u16;
+            assert_eq!(buffer[(status_x, y as u16)].fg, color, "{profile}: {label}");
+        }
+    }
+}
+
+#[test]
 fn streams_start_expanded_and_overview_expands_them_from_every_tab() {
     init_ui();
     for tab in 0..5 {
@@ -16,6 +126,7 @@ fn streams_start_expanded_and_overview_expands_them_from_every_tab() {
                 let mut row = provider(name, Status::Running);
                 row.streams = vec![crate::store::providers::Stream {
                     name: format!("{name}-stream"),
+                    profile: Some("message".into()),
                     controllable: true,
                     enabled: true,
                     status: Status::Running,
@@ -136,6 +247,7 @@ fn provider_rows_show_stream_driven_collector_transitions_without_masking_active
         row.streams = [
             crate::store::providers::Stream {
                 name: "messages".into(),
+                profile: Some("message".into()),
                 controllable: true,
                 enabled: true,
                 status: if action == Some(Action::Stop) {
@@ -150,6 +262,7 @@ fn provider_rows_show_stream_driven_collector_transitions_without_masking_active
             },
             crate::store::providers::Stream {
                 name: "reactions".into(),
+                profile: Some("message".into()),
                 controllable: true,
                 enabled: sibling_enabled,
                 status: sibling_status,
@@ -188,6 +301,7 @@ fn provider_tree_targets_stream_details_menus_and_confirmations_independently() 
         .enumerate()
         .map(|(index, name)| crate::store::providers::Stream {
             name: name.into(),
+            profile: Some("message".into()),
             controllable: true,
             enabled: index == 0,
             status: if index == 0 {

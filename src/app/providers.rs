@@ -17,10 +17,7 @@ use tuicore::{
     TickResult, TreeAdapter, TuiEvent, TuiNode,
 };
 
-use super::{
-    Msg,
-    events::{clean, profile_icon},
-};
+use super::{Msg, events::clean};
 use crate::store::providers::{Action, ActionError, Provider, Snapshot, Status};
 
 mod rows;
@@ -300,25 +297,15 @@ impl Providers {
             ctx.emit(Msg::OpenRowMenu(super::row_actions::Target::Provider(
                 Box::new(provider.clone()),
             )));
-        } else {
-            let action = [
-                (
-                    's',
-                    if matches!(provider.status, Status::Running | Status::Paused) {
-                        Action::Stop
-                    } else {
-                        Action::Start
-                    },
-                ),
-                ('o', Action::Logs),
-            ]
-            .into_iter()
-            .find(|(character, _)| KeySpec::plain(*character).matches(*key))
-            .map(|(_, action)| action);
-            let Some(action) = action else {
-                return false;
+        } else if KeySpec::plain('s').matches(*key) {
+            let action = if matches!(provider.status, Status::Running | Status::Paused) {
+                Action::Stop
+            } else {
+                Action::Start
             };
             ctx.emit(Msg::ProviderAction(provider.name.clone(), action));
+        } else {
+            return false;
         }
         ctx.stop_propagation();
         true
@@ -364,13 +351,6 @@ fn display_operation(provider: &Provider) -> Option<Action> {
 
 fn row_text(provider: &Provider, handovers: u64, total: u64) -> Text<'static> {
     let theme = tuicore::theme();
-    let icon = profile_icon(
-        provider
-            .manifest
-            .as_ref()
-            .map(|manifest| manifest.profile.as_str())
-            .unwrap_or("generic"),
-    );
     let operation = display_operation(provider);
     let color = match (operation, provider.status) {
         (Some(Action::Start | Action::Stop), _) => theme.info_fg(),
@@ -403,11 +383,13 @@ fn row_text(provider: &Provider, handovers: u64, total: u64) -> Text<'static> {
     };
     Text::from(Line::from(vec![
         Span::styled(
-            icon,
+            "󰑬",
             if matches!(operation, Some(Action::Start | Action::Stop)) {
                 Style::default().fg(theme.info_fg())
             } else if provider.status == Status::Running {
                 Style::default().fg(theme.success_fg())
+            } else if matches!(provider.status, Status::NotStarted | Status::Stopped) {
+                Style::default().fg(theme.muted_fg())
             } else {
                 Style::default()
             },

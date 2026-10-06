@@ -387,19 +387,19 @@ fn filter_toggles_center_the_selected_row() {
         ..AnimationSettings::default()
     };
     for (agents, selected_id, label) in [
-        (false, "instance:instance-15", "instance-15 ·"),
-        (true, "instance:instance-15", "instance-15 ·"),
+        (false, "instance:instance-31", "instance-31 ·"),
+        (true, "instance:instance-31", "instance-31 ·"),
         (
             true,
-            "opencode:instance-15:instance-15-true",
-            "Conversation instance-15-true",
+            "opencode:instance-31:instance-31-true",
+            "Conversation instance-31-true",
         ),
     ] {
         for key in ['O', 'A'] {
             let mut app = root(AppService::for_tests());
             let mut inventory = snapshot();
             let instance = inventory.instances[0].clone();
-            inventory.instances = (0..30)
+            inventory.instances = (0..60)
                 .map(|index| {
                     let mut instance = instance.clone();
                     instance.name = format!("instance-{index:02}");

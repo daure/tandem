@@ -18,6 +18,7 @@ fn rule(name: &str) -> Definition {
         initial_prompt: "Inspect {{event.summary}}".into(),
         enabled: true,
         start_instance: false,
+        focus_pane: true,
     }
 }
 
@@ -133,6 +134,7 @@ fn acceptance_deletion_preserves_its_event_siblings_resources_and_completed_eval
             directory: directory.display().to_string(),
             ..Default::default()
         }],
+        ..Default::default()
     };
     events
         .connection()

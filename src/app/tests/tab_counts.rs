@@ -57,6 +57,7 @@ fn tab_counts_follow_active_rules_and_collecting_streams_and_hide_zero_counts() 
             .enumerate()
             .map(|(index, status)| Stream {
                 name: format!("stream-{index}"),
+                profile: Some("generic".into()),
                 controllable: true,
                 enabled: status != Status::Stopped,
                 status,

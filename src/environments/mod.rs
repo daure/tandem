@@ -70,6 +70,7 @@ struct Job {
     started_at: u64,
     timeout_seconds: u64,
     startup_kind: Option<StartupKind>,
+    start_instance: bool,
     completion_generation: Option<u64>,
     external: bool,
     owner_pid: u32,
@@ -136,6 +137,7 @@ impl Environments {
                         .unwrap_or(u64::MAX),
                     estimate_milliseconds: None,
                     kind: job.startup_kind.unwrap_or_default(),
+                    prepare_only: !job.start_instance,
                 },
             );
         }
@@ -628,6 +630,7 @@ impl Environments {
                 started_at: journal::now(),
                 timeout_seconds: 900,
                 startup_kind,
+                start_instance: true,
                 completion_generation: None,
                 external: false,
                 owner_pid: std::process::id(),
@@ -774,6 +777,17 @@ impl Environments {
             .unwrap_or_else(|error| error.into_inner())
             .get(id)
             .and_then(|job| job.startup_kind)
+    }
+
+    pub(crate) fn set_start_instance(&self, id: &str, start_instance: bool) {
+        if let Some(job) = self
+            .operations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_mut(id)
+        {
+            job.start_instance = start_instance;
+        }
     }
 
     pub fn operation(&self, id: &str) -> Result<Operation, String> {

@@ -8,6 +8,7 @@ mod history;
 pub(crate) mod history_server;
 mod purge;
 mod questions;
+mod sessions;
 mod startup;
 mod tabs;
 mod v2;

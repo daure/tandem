@@ -6,10 +6,10 @@ use ratatui::{
 };
 use std::{cell::RefCell, rc::Rc, time::Duration};
 use tuicore::{
-    AnimationSettings, Button, ChildKey, ChildSlot, Column, DataView, DataViewTypedEvent,
+    Animated, AnimationSettings, Button, ChildKey, ChildSlot, Column, DataView, DataViewTypedEvent,
     DialogLayer, EventCtx, EventOutcome, EventRoute, FocusCtx, FocusId, FocusTarget,
     HotkeyLabelMode, KeySpec, LayoutCtx, LayoutProposal, LayoutResult, LayoutSizeHint,
-    LifecycleCtx, RenderCtx, TickResult, TuiEvent, TuiNode,
+    LifecycleCtx, RenderCtx, Spinner, TickResult, TuiEvent, TuiNode,
 };
 
 mod dialogs;
@@ -38,6 +38,7 @@ pub(crate) struct Draft {
 pub(crate) enum PendingToggle {
     Enabled(bool),
     StartInstance(bool),
+    FocusPane(bool),
 }
 
 #[derive(Clone, PartialEq)]
@@ -86,6 +87,7 @@ pub(super) struct Rules {
     view_area: Rect,
     requested: FocusState,
     context: super::acceptances::SharedContext,
+    spinner: Rc<RefCell<Spinner>>,
 }
 
 impl Rules {
@@ -116,6 +118,8 @@ impl Rules {
     ) -> Self {
         let rules = matches!(scope, Scope::Rules);
         let details = shared.clone();
+        let spinner = Rc::new(RefCell::new(Spinner::new()));
+        let cell_spinner = spinner.clone();
         let view = DataView::new(Vec::new(), Entry::id)
             .focus_id(if rules { FOCUS } else { "acceptance-list" })
             .columns(vec![
@@ -124,7 +128,7 @@ impl Rules {
                     if rules { "Rules" } else { "Acceptances" },
                     Constraint::Fill(1),
                     move |row: &Entry, _| {
-                        let mut text = entry_text(row);
+                        let mut text = entry_text(row, cell_spinner.borrow().glyph());
                         if let Entry::Rule(rule) = row
                             && let Some(error) = details
                                 .borrow()
@@ -181,6 +185,7 @@ impl Rules {
             view_area: Rect::default(),
             requested: Rc::new(RefCell::new(None)),
             context: Rc::new(RefCell::new(super::acceptances::Context::default())),
+            spinner,
         };
         result.sync();
         result
@@ -357,7 +362,7 @@ fn bulk_enabled(snapshot: &Snapshot) -> bool {
     !snapshot.rules.iter().any(|rule| rule.definition.enabled)
 }
 
-fn entry_text(row: &Entry) -> Text<'static> {
+fn entry_text(row: &Entry, spinner: &str) -> Text<'static> {
     let theme = tuicore::theme();
     match row {
         Entry::Rule(rule) => Text::from(vec![
@@ -399,7 +404,7 @@ fn entry_text(row: &Entry) -> Text<'static> {
             ]),
             Line::from(clean(&rule.definition.description)),
         ]),
-        Entry::Acceptance(row) => row.text("⠋", None),
+        Entry::Acceptance(row) => row.text(spinner, None),
     }
 }
 

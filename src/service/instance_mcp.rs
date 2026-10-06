@@ -4,12 +4,22 @@ use super::AppService;
 use crate::{
     environments::{InstanceScope, Startup, conclusion, config::Config},
     store::{
-        environments::{InstanceInstructions, Operation, OperationState},
-        rules::reports::{CleanupState, Report, ReportInput, ReportSummary},
+        environments::{InstanceInstructions, Operation, OperationState, RepositoryUpdates},
+        rules::reports::{CleanupState, ConclusionReceipt, Report, ReportInput, ReportSummary},
     },
 };
 
 impl AppService {
+    pub(crate) async fn update_instance_repositories(
+        &self,
+        scope: Arc<InstanceScope>,
+    ) -> Result<RepositoryUpdates, String> {
+        let environments = self.environments.clone();
+        tokio::task::spawn_blocking(move || environments.update_instance_repositories(&scope))
+            .await
+            .map_err(|error| format!("repository update worker failed: {error}"))?
+    }
+
     pub(crate) async fn get_instance_instructions(
         &self,
         scope: Arc<InstanceScope>,
@@ -66,7 +76,7 @@ impl AppService {
         &self,
         scope: Arc<InstanceScope>,
         input: ReportInput,
-    ) -> Result<ReportSummary, String> {
+    ) -> Result<ConclusionReceipt, String> {
         input.validate()?;
         let service = self.clone();
         tokio::task::spawn_blocking(move || {
@@ -83,15 +93,24 @@ impl AppService {
                 .store
                 .instance_acceptance(&instance)
                 .map_err(|error| error.to_string())?;
-            let completion = conclusion::reserve(&service.environments.config, acceptance.id)?;
-            let report = service
-                .rules
-                .store
-                .save_report(acceptance.id, &input)
-                .map_err(|error| error.to_string())?;
+            let id = acceptance.as_ref().map_or(0, |acceptance| acceptance.id);
+            let completion = conclusion::reserve(&service.environments.config, id, &instance.name)?;
+            let receipt = if let Some(acceptance) = &acceptance {
+                let report = service
+                    .rules
+                    .store
+                    .save_report(acceptance.id, &input)
+                    .map_err(|error| error.to_string())?;
+                ConclusionReceipt::Reported(report.details)
+            } else {
+                ConclusionReceipt::Unreported {
+                    instance: instance.name.clone(),
+                    cleanup_state: CleanupState::Pending,
+                }
+            };
             match conclusion::launch(
                 &service.environments.config,
-                acceptance.id,
+                id,
                 &instance.name,
                 instance_lock,
                 rules,
@@ -106,18 +125,22 @@ impl AppService {
                             );
                         }
                     });
-                    Ok(report.details)
+                    Ok(receipt)
                 }
                 Err(error) => {
-                    service
-                        .rules
-                        .store
-                        .set_report_cleanup(acceptance.id, CleanupState::Failed, Some(&error))
-                        .map_err(|error| error.to_string())?;
-                    Err(format!(
-                        "Report saved for acceptance {}; cleanup could not start: {error}",
-                        acceptance.id
-                    ))
+                    if let Some(acceptance) = acceptance {
+                        service
+                            .rules
+                            .store
+                            .set_report_cleanup(acceptance.id, CleanupState::Failed, Some(&error))
+                            .map_err(|error| error.to_string())?;
+                        Err(format!(
+                            "Report saved for acceptance {}; cleanup could not start: {error}",
+                            acceptance.id
+                        ))
+                    } else {
+                        Err(format!("Conclusion cleanup could not start: {error}"))
+                    }
                 }
             }
         })
@@ -177,19 +200,21 @@ impl AppService {
         let claimed = conclusion::claim(&config, id, name, descriptors)?;
         let service = Self::from_config(config).map_err(|error| error.to_string())?;
         let result = service.purge_concluded_instance(id, name, &claimed);
-        service
-            .rules
-            .store
-            .set_report_cleanup(
-                id,
-                if result.is_ok() {
-                    CleanupState::Purged
-                } else {
-                    CleanupState::Failed
-                },
-                result.as_ref().err().map(String::as_str),
-            )
-            .map_err(|error| error.to_string())?;
+        if id != 0 {
+            service
+                .rules
+                .store
+                .set_report_cleanup(
+                    id,
+                    if result.is_ok() {
+                        CleanupState::Purged
+                    } else {
+                        CleanupState::Failed
+                    },
+                    result.as_ref().err().map(String::as_str),
+                )
+                .map_err(|error| error.to_string())?;
+        }
         result
     }
 
@@ -199,13 +224,15 @@ impl AppService {
         name: &str,
         claimed: &conclusion::Claimed,
     ) -> Result<(), String> {
-        let report = self
-            .rules
-            .store
-            .event_report(id)
-            .map_err(|error| error.to_string())?;
-        if report.details.cleanup_state != CleanupState::Pending {
-            return Err("conclusion request is not available for this worker".into());
+        if id != 0 {
+            let report = self
+                .rules
+                .store
+                .event_report(id)
+                .map_err(|error| error.to_string())?;
+            if report.details.cleanup_state != CleanupState::Pending {
+                return Err("conclusion request is not available for this worker".into());
+            }
         }
         let scope = self
             .environments
@@ -216,13 +243,15 @@ impl AppService {
             .store
             .instance_acceptance(&instance)
             .map_err(|error| error.to_string())?;
-        if acceptance.id != id {
+        if acceptance.as_ref().map_or(0, |acceptance| acceptance.id) != id {
             return Err("conclusion acceptance does not own this instance".into());
         }
-        self.rules
-            .store
-            .set_report_cleanup(id, CleanupState::Purging, None)
-            .map_err(|error| error.to_string())?;
+        if id != 0 {
+            self.rules
+                .store
+                .set_report_cleanup(id, CleanupState::Purging, None)
+                .map_err(|error| error.to_string())?;
+        }
         self.retain_instance_history(&instance)?;
         let operation = self.environments.begin("delete_instance", name, None)?;
         self.environments.execute(

@@ -22,13 +22,68 @@ fn activate(app: &mut App, id: &str, label: &str, menu: bool) {
         app.dispatch_event(&route, &TuiEvent::Key(Key::Char('.').into()), &mut ctx);
         let (_, text) = super::events::render(app, 130);
         let action = text.lines().find(|line| line.contains(label)).unwrap();
-        assert!(action.contains("Enter /"), "{action}");
+        assert!(action.contains("Enter"), "{action}");
         for character in label.chars() {
             app.event(&TuiEvent::Key(Key::Char(character).into()), &mut ctx);
         }
         app.event(&TuiEvent::Key(Key::Enter.into()), &mut ctx);
     } else {
         app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
+    }
+}
+
+#[test]
+fn sessions_instance_enter_and_menu_select_the_instance_on_the_instances_page() {
+    init_ui();
+    for menu in [false, true] {
+        for status in ["running", "stopped", "workspace"] {
+            let mut inventory = snapshot();
+            let mut other = inventory.instances[0].clone();
+            other.name = "other".into();
+            other.workspace = "/tmp/workspaces/other".into();
+            inventory.instances.push(other);
+            match status {
+                "stopped" => inventory.instances[0].services[0].status = "down (exit 0)".into(),
+                "workspace" => {
+                    inventory.instances[0].workspace_only = true;
+                    inventory.instances[0].services.clear();
+                }
+                _ => {}
+            }
+            let mut app = root(AppService::for_tests());
+            app.service
+                .set_opencode_snapshot_for_tests(super::attached_sessions::observation());
+            app.update_snapshot(inventory);
+            let route = select(&mut app, "instance:other");
+            for character in "/other".chars() {
+                app.dispatch_event(
+                    &route,
+                    &TuiEvent::Key(Key::Char(character).into()),
+                    &mut EventCtx::default(),
+                );
+            }
+            app.dispatch_event(
+                &route,
+                &TuiEvent::Key(Key::Enter.into()),
+                &mut EventCtx::default(),
+            );
+            app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut EventCtx::default());
+            activate(&mut app, "instance:review", "Goto instance", menu);
+            let (_, text) = super::events::render(&mut app, 130);
+            assert_eq!(app.tabs_mut().selected_index(), app.instances_tab_index());
+            assert!(!app.attached_sessions_only);
+            assert_eq!(app.selected().unwrap().id, "instance:review");
+            assert_eq!(
+                app.selected().unwrap().parent.as_deref(),
+                Some("template:/tmp/templates/website")
+            );
+            assert!(text.contains("review"), "{text}");
+            assert!(!app.view.is_active());
+            assert!(!app.route_layer().is_active());
+            assert!(app.service.opened_system_targets().is_empty());
+            assert!(app.service.operations().is_empty());
+            assert!(app.opencode_action.is_none());
+        }
     }
 }
 

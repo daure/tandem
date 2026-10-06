@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
     sync::{
         Arc, Mutex,
@@ -22,8 +22,14 @@ pub struct Data {
     pub awaiting_answer: bool,
     pub status_failure: bool,
     pub delete_failure: bool,
+    pub delete_failure_for: Option<String>,
     pub delete_lies: bool,
     pub unfiltered_list: bool,
+    pub rename_lies: bool,
+    pub renamed: Vec<Value>,
+    pub interrupted: Vec<String>,
+    pub interrupt_failure: bool,
+    pub interrupt_lies: bool,
 }
 
 pub struct Server {
@@ -52,12 +58,27 @@ impl Server {
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
                 let mut request = String::new();
-                if BufReader::new(stream.try_clone().unwrap())
-                    .read_line(&mut request)
-                    .is_err()
-                {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                if reader.read_line(&mut request).is_err() {
                     continue;
                 }
+                let mut length = 0;
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                if reader.read_exact(&mut body).is_err() {
+                    continue;
+                }
+                let payload: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
                 let mut parts = request.split_whitespace();
                 let method = parts.next().unwrap_or_default();
                 let Some(path) = parts.next() else {
@@ -70,6 +91,20 @@ impl Server {
                     .map(|(_, value)| value.into_owned())
                     .unwrap_or_default();
                 let mut data = shared.lock().unwrap();
+                if method == "PATCH" {
+                    let id = url
+                        .path()
+                        .strip_prefix("/api/session/")
+                        .or_else(|| url.path().strip_prefix("/session/"));
+                    if let Some(id) = id {
+                        data.renamed.push(payload.clone());
+                        if !data.rename_lies
+                            && let Some(session) = data.sessions.get_mut(id)
+                        {
+                            session["title"] = payload["title"].clone();
+                        }
+                    }
+                }
                 let (status, body) = if data.v2 {
                     respond_v2(&mut data, method, &url)
                 } else {
@@ -96,7 +131,7 @@ impl Server {
         self.data.lock().unwrap().sessions.insert(
             id.into(),
             json!({
-                "id": id, "directory": directory, "parentID": parent
+                "id": id, "directory": directory, "parentID": parent, "title": "Fixture", "time": {"updated": 1}
             }),
         );
     }
@@ -110,7 +145,9 @@ fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static st
     };
     let native = |mut session: Value| {
         session["location"] = json!({"directory": session["directory"]});
-        session["title"] = json!("Fixture");
+        if session["title"].is_null() {
+            session["title"] = json!("Fixture");
+        }
         session["time"] = json!({"updated": 1});
         session.as_object_mut().unwrap().remove("directory");
         session
@@ -163,6 +200,19 @@ fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static st
             "200 OK",
             json!({"data":if data.approval { json!([{"sessionID":"ses_old"}]) } else { json!([]) }}),
         ),
+        path if method == "POST" && path.ends_with("/interrupt") => {
+            let id = path
+                .strip_prefix("/api/session/")
+                .unwrap()
+                .strip_suffix("/interrupt")
+                .unwrap();
+            assert_eq!(query("resume").as_deref(), Some("false"));
+            interrupt(data, id)
+        }
+        path if path.ends_with("/form") => (
+            "200 OK",
+            json!({"data":if data.awaiting_answer { json!([{"sessionID":"ses_old"}]) } else { json!([]) }}),
+        ),
         path if path.ends_with("/inbox") => (
             "200 OK",
             json!({"data":if data.queued { json!([{"id":"msg_parked"}]) } else { json!([]) }}),
@@ -183,13 +233,16 @@ fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static st
                 return ("404 Not Found", json!({}));
             };
             if method == "DELETE" {
-                if data.delete_failure {
+                if data.delete_failure || data.delete_failure_for.as_deref() == Some(id) {
                     return ("500 Internal Server Error", json!({}));
                 }
                 data.deleted.push(id.into());
                 if !data.delete_lies {
-                    data.sessions.remove(id);
+                    remove_tree(data, id);
                 }
+                return ("204 No Content", Value::Null);
+            }
+            if method == "PATCH" && data.sessions.contains_key(id) {
                 return ("204 No Content", Value::Null);
             }
             match data.sessions.get(id) {
@@ -229,6 +282,7 @@ fn respond(data: &mut Data, method: &str, path: &str, directory: &str) -> (&'sta
                 json!([])
             },
         ),
+        "/permission" => ("200 OK", json!([])),
         _ => {
             let Some(id) = path.strip_prefix("/session/") else {
                 return ("404 Not Found", json!({}));
@@ -244,13 +298,18 @@ fn respond(data: &mut Data, method: &str, path: &str, directory: &str) -> (&'sta
                     ),
                 );
             }
+            if method == "POST"
+                && let Some(id) = id.strip_suffix("/abort")
+            {
+                return interrupt(data, id);
+            }
             if method == "DELETE" {
-                if data.delete_failure {
+                if data.delete_failure || data.delete_failure_for.as_deref() == Some(id) {
                     return ("500 Internal Server Error", json!({}));
                 }
                 data.deleted.push(id.into());
                 if !data.delete_lies {
-                    data.sessions.remove(id);
+                    remove_tree(data, id);
                 }
                 return ("200 OK", json!(true));
             }
@@ -259,6 +318,31 @@ fn respond(data: &mut Data, method: &str, path: &str, directory: &str) -> (&'sta
                 None => ("404 Not Found", json!({})),
             }
         }
+    }
+}
+
+fn interrupt(data: &mut Data, id: &str) -> (&'static str, Value) {
+    if data.interrupt_failure {
+        return ("500 Internal Server Error", json!({}));
+    }
+    data.interrupted.push(id.to_owned());
+    if id == "ses_old" && !data.interrupt_lies {
+        data.busy = false;
+        data.awaiting_answer = false;
+    }
+    ("200 OK", json!({"interrupted": true}))
+}
+
+fn remove_tree(data: &mut Data, id: &str) {
+    let mut queue = vec![id.to_owned()];
+    while let Some(id) = queue.pop() {
+        queue.extend(
+            data.sessions
+                .values()
+                .filter(|session| session["parentID"] == id)
+                .filter_map(|session| session["id"].as_str().map(str::to_owned)),
+        );
+        data.sessions.remove(&id);
     }
 }
 

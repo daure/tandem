@@ -12,6 +12,7 @@ fn starting_instances_show_a_bounded_countdown_then_an_overrun() {
             elapsed_milliseconds: 6_001,
             estimate_milliseconds: Some(18_000),
             kind: StartupKind::Cold,
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -24,17 +25,21 @@ fn starting_instances_show_a_bounded_countdown_then_an_overrun() {
     );
     service.status = "boot".into();
     snapshot.instances[0].services.push(service);
-    for (elapsed, expected) in [
-        (6_001, "󰜗 Starting 12s"),
-        (18_000, "󰜗 Starting taking longer than usual"),
-        (31_001, "󰜗 Starting 14s over estimate"),
+    for (elapsed, estimate, expected) in [
+        (6_001, 18_000, "󰜗 Starting 12s"),
+        (18_000, 18_000, "󰜗 Starting taking longer than usual"),
+        (31_001, 18_000, "󰜗 Starting 14s over estimate"),
+        (18_001, 108_000, "󰜗 Starting 1m30s"),
+        (48_000, 108_000, "󰜗 Starting 1m"),
+        (168_001, 108_000, "󰜗 Starting 1m01s over estimate"),
     ] {
         snapshot.startup.insert(
             "review".into(),
             StartupTiming {
                 elapsed_milliseconds: elapsed,
-                estimate_milliseconds: Some(18_000),
+                estimate_milliseconds: Some(estimate),
                 kind: StartupKind::Cold,
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -52,6 +57,7 @@ fn starting_instances_show_a_bounded_countdown_then_an_overrun() {
             elapsed_milliseconds: 6_001,
             estimate_milliseconds: Some(18_000),
             kind: StartupKind::Hot,
+            ..Default::default()
         },
     );
     assert_eq!(

@@ -48,8 +48,8 @@ fn tabs_share_toolbar_controls_and_retain_separate_searches() {
             );
             assert_eq!(app.attached_sessions_only, sessions);
             let text = rendered_lines(&toolbar_terminal(&mut app, width), area).join("\n");
-            assert!(text.contains("Conversation busy"), "{text}");
-            assert_eq!(text.contains("Service"), !sessions, "{text}");
+            assert_eq!(text.contains("Conversation busy"), sessions, "{text}");
+            assert!(!text.contains("Service"), "{text}");
         }
 
         let mut ctx = EventCtx::new(settings);
@@ -203,7 +203,7 @@ fn disabled_opencode_keeps_navigation_on_instances_and_restores_sessions_when_en
             assert_eq!(app.tabs_mut().selected_index(), 0);
             let text = rendered_lines(&toolbar_terminal(&mut app, width), area).join("\n");
             assert!(text.contains("review"), "{text}");
-            assert!(text.contains("Service"), "{text}");
+            assert!(!text.contains("Service"), "{text}");
         }
         runtime
             .block_on(app.service.set_opencode_enabled(true).unwrap())
@@ -587,7 +587,7 @@ fn toolbar_totals_align_with_resource_columns_when_the_scrollbar_appears_and_dis
         cpu_basis_points: Some(25_000),
         sampled_at_unix_seconds: 42,
     });
-    for index in 1..4 {
+    for index in 1..8 {
         let mut instance = inventory.instances[0].clone();
         instance.name = format!("review-{index}");
         inventory.instances.push(instance);

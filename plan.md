@@ -146,7 +146,7 @@ templates/                       # shared repository root
       config/
 ```
 
-These paths are relative to the configured Tandem home. `provider.json` validates schema_version 1, a stable unique name, one of the four profiles, description, protocol `tandem-events-v1`, and optional feedback names. Each package owns its Docker build context. MCP exposes package metadata and runtime state; full supporting-file tree/content inspection remains pending.
+These paths are relative to the configured Tandem home. `provider.json` validates schema_version 2, a stable unique name, description, protocol `tandem-events-v1`, optional `{name, profile}` stream declarations, and optional feedback names. Each stream selects one of the four profiles independently. Each package owns its Docker build context. MCP exposes package metadata and runtime state; full supporting-file tree/content inspection remains pending.
 
 Discovery scans the two catalogs independently. Template identity includes its kind, allowing an instance template and provider template to share a name. A rule's instance-template reference resolves only against `instances/`; a provider installation's definition reference resolves only against `providers/`. The existing instance-template tools retain their domain; provider authoring receives separate service/MCP operations.
 

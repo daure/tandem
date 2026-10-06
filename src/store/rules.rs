@@ -24,6 +24,9 @@ pub(crate) struct Definition {
     pub enabled: bool,
     #[serde(default = "super::environments::Instance::default_start_instance")]
     pub start_instance: bool,
+    /// Whether automatic acceptance launches focus their new OpenCode pane.
+    #[serde(default = "Definition::default_focus_pane")]
+    pub focus_pane: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -86,6 +89,36 @@ pub(crate) struct Snapshot {
 pub(crate) struct AcceptanceWorkspace {
     pub directory: String,
     pub sessions: Vec<super::opencode::Session>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub removed_sessions: std::collections::BTreeSet<(String, String)>,
+}
+
+impl AcceptanceWorkspace {
+    pub(crate) fn edit_sessions(
+        &mut self,
+        edits: &std::collections::BTreeMap<(String, String), Option<String>>,
+    ) {
+        if !self
+            .sessions
+            .iter()
+            .any(|session| edits.contains_key(&(session.server.clone(), session.id.clone())))
+        {
+            return;
+        }
+        self.sessions.retain_mut(|session| {
+            match edits.get(&(session.server.clone(), session.id.clone())) {
+                Some(Some(title)) => session.title.clone_from(title),
+                Some(None) => return false,
+                None => {}
+            }
+            true
+        });
+        self.removed_sessions.extend(
+            edits
+                .iter()
+                .filter_map(|(key, title)| title.is_none().then_some(key.clone())),
+        );
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -168,6 +201,10 @@ pub(crate) fn validate_prompt(source: &str) -> Result<(), String> {
 }
 
 impl Definition {
+    fn default_focus_pane() -> bool {
+        true
+    }
+
     pub(crate) fn session_launch(&self) -> super::opencode::Launch {
         super::opencode::Launch {
             model: Some(self.model.clone()),

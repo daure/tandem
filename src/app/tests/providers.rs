@@ -7,9 +7,8 @@ pub(super) fn provider(name: &str, status: Status) -> Provider {
         name: name.into(),
         directory: format!("/templates/providers/{name}"),
         manifest: Some(Manifest {
-            schema_version: 1,
+            schema_version: 2,
             name: format!("dev-{name}"),
-            profile: name.into(),
             protocol: "tandem-events-v1".into(),
             description: format!("Sample {name} provider"),
             feedback: vec![],
@@ -87,24 +86,23 @@ fn unavailable_provider_shortcuts_warn_before_confirmation_or_execution() {
         .iter()
         .find(|target| target.id.as_str() == crate::app::providers::FOCUS)
         .unwrap();
-    for key in ['o'] {
-        let mut ctx = EventCtx::default();
-        app.dispatch_event(
-            &EventRoute::new(target.path.clone()),
-            &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
-            &mut ctx,
-        );
-        assert_eq!(ctx.messages().len(), 1, "{key}");
-        for message in ctx.drain_messages() {
-            app.handle_message(message, &mut EventCtx::default());
-        }
-        assert!(app.provider_confirmation.is_none(), "{key}");
-        assert!(app.provider_actions.is_empty(), "{key}");
-        let notice = app.notifications.center().history().last().unwrap();
-        assert_eq!(notice.kind(), tuicore::NotificationKind::Warning);
-        assert_eq!(notice.title(), "Provider action unavailable");
-        assert!(notice.body().contains("Start"), "{}", notice.body());
+    app.dispatch_focus(target, true, &mut tuicore::FocusCtx::default());
+    let mut ctx = EventCtx::default();
+    app.dispatch_event(
+        &EventRoute::new(target.path.clone()),
+        &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+        &mut ctx,
+    );
+    assert_eq!(ctx.messages().len(), 1);
+    for message in ctx.drain_messages() {
+        app.handle_message(message, &mut EventCtx::default());
     }
+    assert!(app.provider_confirmation.is_none());
+    assert!(app.provider_actions.is_empty());
+    let notice = app.notifications.center().history().last().unwrap();
+    assert_eq!(notice.kind(), tuicore::NotificationKind::Warning);
+    assert_eq!(notice.title(), "Provider action unavailable");
+    assert!(notice.body().contains("Start"), "{}", notice.body());
 
     app.handle_message(
         Msg::OpenRowMenu(crate::app::row_actions::Target::Provider(Box::new(
@@ -293,17 +291,18 @@ fn provider_shortcuts_choose_start_stop_from_runtime_state() {
             .iter()
             .find(|target| target.id.as_str() == crate::app::providers::FOCUS)
             .unwrap();
-        for (key, expected) in [('s', start_stop), ('o', Action::Logs)] {
+        app.dispatch_focus(target, true, &mut tuicore::FocusCtx::default());
+        for (key, expected) in [(Key::Char('s'), start_stop), (Key::Enter, Action::Logs)] {
             let mut ctx = EventCtx::default();
             app.dispatch_event(
                 &EventRoute::new(target.path.clone()),
-                &TuiEvent::Key(KeyEvent::from(Key::Char(key))),
+                &TuiEvent::Key(KeyEvent::from(key)),
                 &mut ctx,
             );
             assert!(
                 matches!(ctx.messages(), [Msg::ProviderAction(name, action)]
                 if name == "message" && *action == expected),
-                "{status:?}: {key}"
+                "{status:?}: {key:?}"
             );
         }
     }
@@ -338,18 +337,18 @@ fn compact_provider_rows_show_full_history_counts_and_refresh_without_runtime_ch
     let lines: Vec<_> = text.lines().collect();
     let message = lines
         .iter()
-        .position(|line| line.contains(" dev-message ·  0/662 · Healthy"))
+        .position(|line| line.contains("󰑬 dev-message ·  0/662 · Healthy"))
         .unwrap();
     assert!(
-        lines[message + 1].contains(" dev-ticket ·  0/38 · Stopped"),
+        lines[message + 1].contains("󰑬 dev-ticket ·  0/38 · Stopped"),
         "{text}"
     );
     assert!(
-        lines[message + 2].contains(" dev-system_event ·  0/0 · Paused"),
+        lines[message + 2].contains("󰑬 dev-system_event ·  0/0 · Paused"),
         "{text}"
     );
     assert!(
-        lines[message + 3].contains(" dev-generic ·  0/0 · Not started"),
+        lines[message + 3].contains("󰑬 dev-generic ·  0/0 · Not started"),
         "{text}"
     );
     app.pages_mut()
@@ -363,7 +362,7 @@ fn compact_provider_rows_show_full_history_counts_and_refresh_without_runtime_ch
     assert!(
         render(&mut app, 130)
             .1
-            .contains(" dev-message ·  0/663 · Healthy")
+            .contains("󰑬 dev-message ·  0/663 · Healthy")
     );
 }
 
@@ -495,16 +494,13 @@ fn streams_are_the_final_tab_with_owned_lifecycle_controls_and_confirmation() {
         ("Provider details", "d"),
         ("Start provider", "s"),
         ("Stop provider", "s"),
-        ("Logs", "o"),
+        ("Logs", "Enter"),
     ] {
         let line = text
             .lines()
             .find(|line| line.contains(&format!("{label}   ")))
             .unwrap();
         assert!(line.trim_end_matches([' ', '┃']).ends_with(key), "{line}");
-        if label == "Logs" {
-            assert!(line.contains("Enter / o"), "{line}");
-        }
     }
     app.event(
         &TuiEvent::Key(KeyEvent::from(Key::Esc)),

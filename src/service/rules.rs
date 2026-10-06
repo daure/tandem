@@ -438,12 +438,7 @@ impl AppService {
                         &workspace,
                         &acceptance.instance,
                         &acceptance.rule.zellij_session,
-                        &acceptance
-                            .rule
-                            .definition
-                            .session_launch()
-                            .selector()
-                            .unwrap(),
+                        &acceptance.rule.definition,
                         acceptance
                             .resolved_prompt
                             .as_deref()

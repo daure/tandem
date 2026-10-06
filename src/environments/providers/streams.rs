@@ -70,7 +70,12 @@ impl Providers {
                 .manifest
                 .ok_or("provider manifest missing")?,
         };
-        if !manifest.stream_control || !manifest.streams.iter().any(|name| name == stream) {
+        if !manifest.stream_control
+            || !manifest
+                .streams
+                .iter()
+                .any(|declaration| declaration.name == stream)
+        {
             return Err(ActionError::Unavailable(
                 "Provider does not support controls for this stream",
             ));

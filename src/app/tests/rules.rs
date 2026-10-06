@@ -22,6 +22,7 @@ pub(super) fn rule(name: &str) -> Rule {
             initial_prompt: "Inspect {{event.data.text}}".into(),
             enabled: false,
             start_instance: true,
+            focus_pane: true,
         },
         revision: 1,
         zellij_session: "main".into(),
@@ -179,6 +180,7 @@ fn acceptance_instance_navigation_preserves_filters_unless_the_assigned_instance
             .block_on(service.set_opencode_enabled(enabled).unwrap())
             .unwrap()
             .unwrap();
+        service.set_opencode_snapshot_for_tests(Default::default());
         let mut inventory = snapshot();
         let mut assigned = inventory.instances[0].clone();
         assigned.name = "assigned".into();
@@ -233,7 +235,7 @@ fn acceptance_instance_navigation_preserves_filters_unless_the_assigned_instance
 }
 
 #[test]
-fn rule_history_menus_offer_instance_and_conversation_navigation() {
+fn rule_history_menus_offer_instance_navigation_and_routes() {
     use crate::app::row_actions::Command;
 
     init_ui();
@@ -267,29 +269,20 @@ fn rule_history_menus_offer_instance_and_conversation_navigation() {
         .unwrap();
     app.dispatch_focus(target, true, &mut tuicore::FocusCtx::default());
     let route = EventRoute::new(target.path.clone());
-    for key in ['v', 'o'] {
-        let mut ctx = EventCtx::default();
-        app.dispatch_event(&route, &TuiEvent::Key(Key::Char(key).into()), &mut ctx);
-        match key {
-            'v' => assert!(
-                matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Instance)] if target.acceptance == row)
-            ),
-            'o' => assert!(
-                matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Session)] if target.acceptance == row)
-            ),
-            _ => unreachable!(),
-        }
-    }
-    for command in [Command::Instance, Command::Session] {
+    let mut ctx = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Char('v').into()), &mut ctx);
+    assert!(
+        matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Instance)] if target.acceptance == row)
+    );
+    for command in [Command::Instance, Command::Routes] {
         let mut ctx = EventCtx::default();
         app.dispatch_event(&route, &TuiEvent::Key(Key::Char('.').into()), &mut ctx);
         assert!(ctx.messages().is_empty());
         let (menu_layout, text) = render(&mut app, 130);
         for (label, key) in [
             ("Go to rule", "r"),
-            ("Open routes", "Ctrl+Enter"),
+            ("Open routes", "Enter"),
             ("Go to instance", "v"),
-            ("Go to OpenCode session", "o"),
         ] {
             let line = text
                 .lines()
@@ -324,9 +317,9 @@ fn rule_history_menus_offer_instance_and_conversation_navigation() {
             Command::Instance => assert!(
                 matches!(selection.messages(), [Msg::AcceptanceAction(target, Command::Instance)] if target.acceptance == row)
             ),
-            Command::Session => {
+            Command::Routes => {
                 assert!(
-                    matches!(selection.messages(), [Msg::AcceptanceAction(target, Command::Session)] if target.acceptance == row)
+                    matches!(selection.messages(), [Msg::AcceptanceAction(target, Command::Routes)] if target.acceptance == row)
                 )
             }
             _ => unreachable!(),
@@ -680,7 +673,7 @@ fn event_rows_show_each_dispatch_outcome_with_singular_rule_and_launch_labels() 
             })
             .collect(),
     };
-    let text = crate::app::events::row_text(&event).to_string();
+    let text = crate::app::events::row_text(&event, None).to_string();
     assert!(
         text.contains(
             "1 rule · 1 launch · 1 uncertain · 1 queued · 1 provisioning · 1 launching · 1 failed"
@@ -1198,6 +1191,55 @@ fn delay_save(
 }
 
 #[test]
+fn focus_pane_toggle_preserves_activation_and_destination_and_rolls_back_failed_saves() {
+    for enabled in [false, true] {
+        for succeeds in [false, true] {
+            let mut app = editor(enabled);
+            show_settings(&mut app);
+            let draft = app.rule_editor.as_ref().unwrap().clone();
+            let original = draft.borrow().saved.clone();
+            assert_setting(&mut app, "Focus new pane", true);
+            if !succeeds {
+                app.service
+                    .save_rule(
+                        original.definition.clone(),
+                        Some(original.revision),
+                        Some(original.zellij_session.clone()),
+                        true,
+                    )
+                    .blocking_recv()
+                    .unwrap()
+                    .unwrap();
+            }
+            settings_input(&mut app, "focus-pane", &[Key::Char(' ')]);
+            let (send, result) = delay_save(&mut app);
+            assert_eq!(result.is_ok(), succeeds);
+            app.tick(Duration::ZERO, AnimationSettings::default());
+            assert_setting(&mut app, "Focus new pane", false);
+            assert_setting(&mut app, "Active", enabled);
+            if let Ok(saved) = &result {
+                assert!(!saved.definition.focus_pane);
+                assert_eq!(saved.definition.enabled, enabled);
+                assert_eq!(saved.zellij_session, original.zellij_session);
+            }
+            send.send(result).unwrap();
+            assert!(app.poll_rule_save());
+            app.tick(Duration::ZERO, AnimationSettings::default());
+            assert_setting(&mut app, "Focus new pane", !succeeds);
+            assert_eq!(draft.borrow().rule.definition.enabled, enabled);
+            assert!(draft.borrow().pending_toggle.is_none());
+            if succeeds {
+                settings_input(&mut app, "focus-pane", &[Key::Char(' ')]);
+                finish_autosaves(&mut app);
+                assert!(saved_rule(&app).definition.focus_pane);
+            } else {
+                assert_eq!(draft.borrow().rule, original);
+            }
+        }
+    }
+}
+
+#[test]
 fn start_instance_toggle_preserves_active_state_and_pinned_destination() {
     for enabled in [false, true] {
         let mut app = editor(enabled);
@@ -1375,6 +1417,7 @@ fn settings_toggles_reject_dirty_unsaved_and_bulk_pending_fields() {
         for (slot, label, checked) in [
             ("enabled", "Active", false),
             ("start-instance", "Start instance", true),
+            ("focus-pane", "Focus new pane", true),
         ] {
             settings_input(&mut app, slot, &[Key::Char(' ')]);
             app.tick(Duration::ZERO, AnimationSettings::default());
@@ -1387,7 +1430,7 @@ fn settings_toggles_reject_dirty_unsaved_and_bulk_pending_fields() {
 }
 
 fn reopen_pending_toggle(slot: &str, edit: bool) {
-    let mut app = editor(slot == "start-instance");
+    let mut app = editor(slot != "enabled");
     show_settings(&mut app);
     let draft = app.rule_editor.as_ref().unwrap().clone();
     let original = draft.borrow().saved.clone();
@@ -1401,6 +1444,7 @@ fn reopen_pending_toggle(slot: &str, edit: bool) {
     app.tick(Duration::ZERO, AnimationSettings::default());
     assert_setting(&mut app, "Active", true);
     assert_setting(&mut app, "Start instance", slot != "start-instance");
+    assert_setting(&mut app, "Focus new pane", slot != "focus-pane");
     if edit {
         settings_input(
             &mut app,
@@ -1429,6 +1473,7 @@ fn reopen_pending_toggle(slot: &str, edit: bool) {
     assert_eq!(saved.revision, if edit { 4 } else { 2 });
     assert_eq!(saved.definition.enabled, !edit);
     assert_eq!(saved.definition.start_instance, slot != "start-instance");
+    assert_eq!(saved.definition.focus_pane, slot != "focus-pane");
     assert_eq!(
         saved.definition.description,
         if edit {
@@ -1449,6 +1494,7 @@ fn reopen_pending_toggle(slot: &str, edit: bool) {
     assert_eq!(draft.borrow().saved, saved);
     assert_setting(&mut app, "Active", !edit);
     assert_setting(&mut app, "Start instance", slot != "start-instance");
+    assert_setting(&mut app, "Focus new pane", slot != "focus-pane");
 }
 
 #[test]
@@ -1462,6 +1508,13 @@ fn reopening_during_activation_preserves_draft_and_pauses_for_text_edits() {
 fn reopening_during_start_instance_save_preserves_draft_and_selected_setting() {
     for edit in [false, true] {
         reopen_pending_toggle("start-instance", edit);
+    }
+}
+
+#[test]
+fn reopening_during_focus_pane_save_preserves_the_selection_and_text_edits() {
+    for edit in [false, true] {
+        reopen_pending_toggle("focus-pane", edit);
     }
 }
 

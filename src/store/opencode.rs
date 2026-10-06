@@ -90,6 +90,12 @@ pub(crate) struct Pane {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SessionLocation {
+    pub session_id: Option<String>,
+    pub pane: Pane,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CloseScope {
     Instance(String),
     Directory(String),

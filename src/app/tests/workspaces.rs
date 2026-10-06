@@ -332,6 +332,7 @@ fn active_startup_uses_info_for_completed_setup_and_service_groups() {
             elapsed_milliseconds: 1_000,
             estimate_milliseconds: Some(10_000),
             kind: StartupKind::Cold,
+            ..Default::default()
         },
     );
 

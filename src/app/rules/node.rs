@@ -126,6 +126,15 @@ impl TuiNode<Msg> for Rules {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         let changed = self.sync();
         let mut result = <RuleView as TuiNode<Msg>>::tick(&mut self.view, dt, settings);
+        if self.rows.iter().any(|row| {
+            matches!(row, Entry::Acceptance(target) if target.instance.as_ref().is_some_and(|instance| instance.loading || instance.secondary_loading))
+        }) {
+            result = result.merge(Animated::tick(
+                &mut *self.spinner.borrow_mut(),
+                dt,
+                settings,
+            ));
+        }
         if let Some(control) = &mut self.control {
             result = result.merge(control.tick(dt, settings));
         }

@@ -231,6 +231,7 @@ pub(super) fn instance_entry(
                     "start-instance",
                     Toggle::new("Start instance")
                         .checked(creation.start_instance)
+                        .disabled(!creation.can_start_instance)
                         .on_change(Msg::StartInstanceChanged),
                     FlexItem::fit_content(),
                 ),
@@ -257,6 +258,41 @@ pub(super) fn description_entry(value: &str) -> Modal {
                 FlexItem::fit_content().cross_size(CrossSize::Fixed(64)),
             )),
     )
+}
+
+pub(super) fn rename_opencode_session(value: &str) -> Modal {
+    let mut input = TextInput::new()
+        .style(tuicore::InputChrome::plain())
+        .value(value)
+        .max_len(1024)
+        .on_change(Msg::NameChanged);
+    input.set_insert_mode(true);
+    input.move_cursor_to_end();
+    Box::new(
+        dialog("Rename OpenCode session")
+            .actions([confirm(), cancel()])
+            .host(Flex::column().child(
+                "name",
+                input,
+                FlexItem::fit_content().cross_size(CrossSize::Fixed(52)),
+            )),
+    )
+}
+
+pub(super) fn delete_opencode_session(title: &str) -> Modal {
+    Box::new(dialog("Delete OpenCode session")
+        .actions([confirm(), cancel()])
+        .host(Flex::column().child("warning", Paragraph::new(format!(
+            "Delete {title} and its child sessions?\nActive sessions will close and stop. This cannot be undone."
+        )), FlexItem::fit_content())))
+}
+
+pub(super) fn clear_opencode_folder(directory: &str) -> Modal {
+    Box::new(dialog("Clear OpenCode data")
+        .actions([confirm(), cancel()])
+        .host(Flex::column().child("warning", Paragraph::new(format!(
+            "Delete all sessions for {directory}?\nFolder files stay untouched. This cannot be undone."
+        )), FlexItem::fit_content())))
 }
 
 pub(super) fn settings(

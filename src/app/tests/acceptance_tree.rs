@@ -6,6 +6,7 @@ use crate::{
         row_actions::Command,
     },
     store::{
+        environments::UsageSummary,
         opencode::{Activity, Pane, Session},
         rules::AcceptanceWorkspace,
     },
@@ -26,6 +27,112 @@ fn conversation(id: &str, title: &str) -> Session {
         server: "http://127.0.0.1:12345".into(),
         activity: Activity::Idle,
         ..Default::default()
+    }
+}
+
+#[test]
+fn event_session_creation_expands_its_acceptance_and_preserves_selection() {
+    init_ui();
+    for observed_first in [false, true] {
+        let mut app = crate::app::root(AppService::for_tests());
+        let acceptance = acceptance();
+        let pane = Pane {
+            session: "main".into(),
+            id: 7,
+            tab_id: 1,
+            tab_name: "Review".into(),
+        };
+        let mut observation = crate::store::opencode::Snapshot {
+            sessions: ["ses_first", "ses_last"]
+                .map(|id| {
+                    let mut session = conversation(id, id);
+                    session.panes = vec![pane.clone()];
+                    session
+                })
+                .to_vec(),
+            ..Default::default()
+        };
+        app.service
+            .set_opencode_snapshot_for_tests(observation.clone());
+        app.update_snapshot(snapshot());
+        app.pages_mut().update_rules(crate::store::rules::Snapshot {
+            acceptances: vec![acceptance.clone()],
+            ..Default::default()
+        });
+        let events = crate::store::events::Snapshot {
+            records: vec![crate::store::events::Record {
+                sequence: 7,
+                provider: "sample".into(),
+                received_at: "now".into(),
+                event: crate::environments::events::tests::event("task"),
+                attempts: vec![],
+                acceptances: vec![acceptance.clone()],
+            }],
+            total: 1,
+            ..Default::default()
+        };
+        app.pages_mut().update_events(events.clone());
+        app.tabs_mut().select_index(1);
+        app.after_event(&mut EventCtx::default());
+        let inventory_selection = app.selected().map(|row| row.id);
+        let (layout, text) = render(&mut app, 160);
+        assert!(!text.contains("ses_first"), "{text}");
+        let focus = layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.id.as_str() == crate::app::events::FOCUS)
+            .unwrap();
+        app.dispatch_focus(focus, true, &mut tuicore::FocusCtx::default());
+        let route = EventRoute::new(focus.path.clone());
+        for key in [Key::Right, Key::Down] {
+            app.dispatch_event(&route, &TuiEvent::Key(key.into()), &mut EventCtx::default());
+        }
+        let (sender, reply) = tokio::sync::oneshot::channel();
+        app.opencode_action = Some(crate::app::opencode::PendingAction::creation(
+            reply,
+            crate::app::opencode::CreationView::Events {
+                state: app.pages_mut().event_focus(),
+                acceptance: acceptance.id,
+            },
+        ));
+        let mut created = conversation("ses_new", "Created conversation");
+        created.panes = vec![pane.clone()];
+        observation.sessions.insert(1, created);
+        if observed_first {
+            app.service
+                .set_opencode_snapshot_for_tests(observation.clone());
+            app.update_snapshot(snapshot());
+            render(&mut app, 160);
+        }
+        sender
+            .send(Ok(crate::store::opencode::SessionLocation {
+                session_id: Some("ses_new".into()),
+                pane,
+            }))
+            .unwrap();
+        app.poll_opencode_action();
+        render(&mut app, 160);
+        if !observed_first {
+            let mut ctx = EventCtx::default();
+            app.dispatch_event(&route, &TuiEvent::Key(Key::Char('d').into()), &mut ctx);
+            assert!(matches!(ctx.messages(), [Msg::FocusRule(name)] if name == "inspect"));
+            app.service.set_opencode_snapshot_for_tests(observation);
+            app.update_snapshot(snapshot());
+        }
+        let (_, text) = render(&mut app, 160);
+        assert!(text.contains("Created conversation"), "{text}");
+        assert_eq!(app.selected().map(|row| row.id), inventory_selection);
+        let mut updated = events;
+        let mut newest = updated.records[0].clone();
+        newest.sequence = 8;
+        newest.acceptances.clear();
+        updated.records.insert(0, newest);
+        updated.total = 2;
+        app.pages_mut().update_events(updated);
+        render(&mut app, 160);
+        let mut ctx = EventCtx::default();
+        app.dispatch_event(&route, &TuiEvent::Key(Key::Char('d').into()), &mut ctx);
+        assert!(matches!(ctx.messages(), [Msg::FocusRule(name)] if name == "inspect"));
     }
 }
 
@@ -65,7 +172,7 @@ fn confirmed_event_instance_purge_returns_focus_to_the_event_tree() {
 }
 
 #[test]
-fn acceptance_conversation_picker_lists_retained_titles_and_original_identity() {
+fn retained_acceptance_conversations_require_recreation_before_opening() {
     init_ui();
     let mut app = crate::app::root(AppService::for_tests());
     app.pages_mut()
@@ -81,50 +188,13 @@ fn acceptance_conversation_picker_lists_retained_titles_and_original_identity() 
             conversation("ses_original", "Original task"),
             conversation("ses_followup", "Follow-up task"),
         ],
+        ..Default::default()
     };
     app.pages_mut().update_rules(crate::store::rules::Snapshot {
         acceptances: vec![acceptance.clone()],
         workspaces: [(acceptance.id, workspace.clone())].into(),
         ..Default::default()
     });
-    let target = Target::new(&acceptance, Some(&workspace), &Context::default(), false);
-    assert!(target.enabled(Command::Session));
-    assert!(target.conversations.is_empty());
-    app.open_rule(acceptance.rule.clone(), &mut EventCtx::default());
-    let (layout, _) = render(&mut app, 160);
-    let focus = layout
-        .focus_targets()
-        .iter()
-        .find(|target| target.id.as_str() == "acceptance-list")
-        .unwrap();
-    app.dispatch_focus(focus, true, &mut tuicore::FocusCtx::default());
-    let route = EventRoute::new(focus.path.clone());
-    let mut ctx = EventCtx::default();
-    app.dispatch_event(&route, &TuiEvent::Key(Key::Char('.').into()), &mut ctx);
-    let (layout, text) = render(&mut app, 160);
-    assert!(
-        text.lines()
-            .any(|line| line.contains("Go to OpenCode session") && line.contains("Enter / o")),
-        "{text}"
-    );
-    app.dispatch_event(
-        &EventRoute::new(layout.overlays().last().unwrap().route_path.clone()),
-        &TuiEvent::Key(Key::Esc.into()),
-        &mut EventCtx::default(),
-    );
-    app.dispatch_focus(focus, true, &mut tuicore::FocusCtx::default());
-    let mut ctx = EventCtx::default();
-    app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
-    assert!(
-        matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Session)] if target.acceptance.id == acceptance.id)
-    );
-    for message in ctx.drain_messages() {
-        app.handle_message(message, &mut EventCtx::default());
-    }
-    let (_, text) = render(&mut app, 160);
-    assert!(text.contains("Original task · original"), "{text}");
-    assert!(text.contains("Follow-up task"), "{text}");
-    app.handle_message(Msg::Close, &mut EventCtx::default());
     let mut target = Target::new(&acceptance, Some(&workspace), &Context::default(), true);
     target.selected = Some(target.conversations[0].clone());
     app.acceptance_action(target, Command::Session, &mut EventCtx::default());
@@ -164,6 +234,7 @@ fn event_tree_keeps_exact_acceptance_and_conversation_actions_after_inventory_re
             AcceptanceWorkspace {
                 directory: saved.directory.clone(),
                 sessions: vec![saved],
+                ..Default::default()
             },
         )]
         .into(),
@@ -201,7 +272,7 @@ fn event_tree_keeps_exact_acceptance_and_conversation_actions_after_inventory_re
     let route = EventRoute::new(focus.path.clone());
     let mut ctx = EventCtx::default();
     app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
-    assert!(matches!(ctx.messages(), [Msg::OpenEvent(row)] if row.sequence == 7));
+    assert!(matches!(ctx.messages(), [Msg::OpenEventLink(row)] if row.sequence == 7));
     let mut ctx = EventCtx::default();
     app.dispatch_event(&route, &TuiEvent::Key(Key::Char('d').into()), &mut ctx);
     assert!(matches!(ctx.messages(), [Msg::OpenEvent(row)] if row.sequence == 7));
@@ -224,14 +295,13 @@ fn event_tree_keeps_exact_acceptance_and_conversation_actions_after_inventory_re
     let mut ctx = EventCtx::default();
     app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
     assert!(
-        matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Session)] if target.acceptance.id == 71 && target.selected.is_none())
+        matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Routes)] if target.acceptance.id == 71 && target.selected.is_none())
     );
     for (key, command) in [
         ('r', Command::Rule),
         ('v', Command::Instance),
         ('n', Command::NewSession),
         ('p', Command::PurgeInstance),
-        ('o', Command::Session),
     ] {
         let mut ctx = EventCtx::default();
         app.dispatch_event(&route, &TuiEvent::Key(Key::Char(key).into()), &mut ctx);
@@ -239,18 +309,6 @@ fn event_tree_keeps_exact_acceptance_and_conversation_actions_after_inventory_re
             matches!(ctx.messages(), [Msg::AcceptanceAction(target, action)] if target.acceptance.id == 71 && *action == command)
         );
     }
-    let mut ctx = EventCtx::default();
-    app.dispatch_event(
-        &route,
-        &TuiEvent::Key(KeyEvent {
-            code: Key::Enter,
-            modifiers: KeyModifiers::CONTROL,
-        }),
-        &mut ctx,
-    );
-    assert!(
-        matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Routes)] if target.acceptance.id == 71)
-    );
     for key in [Key::Right, Key::Down] {
         app.dispatch_event(
             &route,
@@ -268,9 +326,42 @@ fn event_tree_keeps_exact_acceptance_and_conversation_actions_after_inventory_re
     );
     let mut ctx = EventCtx::default();
     app.dispatch_event(&route, &TuiEvent::Key(Key::Char('o').into()), &mut ctx);
+    assert!(ctx.messages().is_empty());
+    let mut ctx = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Char('c').into()), &mut ctx);
     assert!(
-        matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::Session)] if target.selected.as_ref().unwrap().label.contains("Active task"))
+        matches!(ctx.messages(), [Msg::AcceptanceAction(target, Command::ClosePanel)] if matches!(target.selected.as_ref().unwrap().opencode.as_ref(), Some(crate::app::opencode::Target::Session { pane: Some(pane), .. }) if pane.id == 2))
     );
+    let mut ctx = EventCtx::default();
+    app.dispatch_event(&route, &TuiEvent::Key(Key::Char('.').into()), &mut ctx);
+    for message in ctx.drain_messages() {
+        app.handle_message(message, &mut EventCtx::default());
+    }
+    let (menu_layout, text) = render(&mut app, 160);
+    assert!(
+        text.lines()
+            .any(|line| line.contains("Go to OpenCode session")
+                && line.trim_end().ends_with("Enter")),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.contains("Close OpenCode panel") && line.trim_end().ends_with('c')),
+        "{text}"
+    );
+    app.opencode_action = Some(crate::app::opencode::PendingAction::new(
+        tokio::sync::oneshot::channel().1,
+        "Cannot close OpenCode session",
+        Vec::new(),
+    ));
+    let mut ctx = EventCtx::default();
+    app.dispatch_event(
+        &EventRoute::new(menu_layout.overlays().last().unwrap().route_path.clone()),
+        &TuiEvent::Key(Key::Char('c').into()),
+        &mut ctx,
+    );
+    assert!(!app.menu_layer().layer().is_open());
+    app.opencode_action = None;
     let mut ctx = EventCtx::default();
     app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
     assert!(
@@ -301,6 +392,63 @@ fn event_tree_keeps_exact_acceptance_and_conversation_actions_after_inventory_re
         text.contains("instance deleted") && text.contains("Original task"),
         "{text}"
     );
+}
+
+#[test]
+fn saved_acceptance_conversations_render_compactly_with_cached_client_samples() {
+    init_ui();
+    let mut session = conversation("ses_original", "Original task");
+    session.last_question = Some("Check the gateway".into());
+    session.question_observed = true;
+    session.panes = vec![Pane {
+        session: "main".into(),
+        id: 7,
+        tab_id: 1,
+        tab_name: "Inspect".into(),
+    }];
+    let mut context = Context {
+        inventory: snapshot(),
+        opencode: crate::store::opencode::Snapshot {
+            sessions: vec![session],
+            resources: vec![crate::store::opencode::resources::ProcessResource {
+                pid: 42,
+                session_id: "ses_original".into(),
+                directory: "/tmp/workspaces/review".into(),
+                zellij_session: "main".into(),
+                pane_id: Some(7),
+                usage: UsageSummary {
+                    memory_bytes: Some(200 * 1048576),
+                    cpu_basis_points: Some(200),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    };
+    let attached = Target::new(&acceptance(), None, &context, true);
+    assert_eq!(attached.conversations[0].height(), 2);
+    assert!(
+        attached.conversations[0]
+            .text("", None)
+            .to_string()
+            .contains("Check the gateway")
+    );
+
+    context.opencode.sessions[0].panes.clear();
+    let mut saved = Target::new(&acceptance(), None, &context, true);
+    let row = &saved.conversations[0];
+    assert_eq!(row.height(), 1);
+    assert_eq!(row.text("", None).to_string(), "󰚩 Original task");
+    assert!(row.memory_text_with_spinner("").spans.is_empty());
+    assert!(row.cpu_text_with_spinner("").spans.is_empty());
+    assert!(
+        Target::new(&acceptance(), None, &context, false)
+            .conversations
+            .is_empty()
+    );
+    saved.selected = Some(row.clone());
+    assert!(!saved.enabled(Command::ClosePanel));
 }
 
 #[test]
@@ -383,15 +531,28 @@ fn acceptance_shortcuts_open_its_routes_and_focus_its_rule_from_both_views() {
         } else {
             assert!(matches!(activation.messages(), [Msg::FocusRule(name)] if name == "inspect"));
         }
-        let mut ctx = EventCtx::default();
-        app.dispatch_event(
-            &route,
-            &TuiEvent::Key(KeyEvent {
-                code: Key::Enter,
-                modifiers: KeyModifiers::CONTROL,
+        let mut menu = EventCtx::default();
+        app.dispatch_event(&route, &TuiEvent::Key(Key::Char('.').into()), &mut menu);
+        for message in menu.drain_messages() {
+            app.handle_message(message, &mut EventCtx::default());
+        }
+        let (menu_layout, text) = render(&mut app, 160);
+        assert!(
+            text.lines().any(|line| {
+                line.contains("Open routes")
+                    && line.trim_end_matches([' ', '┃', '│']).ends_with("Enter")
             }),
-            &mut ctx,
+            "{text}"
         );
+        assert!(!text.contains("Go to OpenCode session"), "{text}");
+        app.dispatch_event(
+            &EventRoute::new(menu_layout.overlays().last().unwrap().route_path.clone()),
+            &TuiEvent::Key(Key::Esc.into()),
+            &mut EventCtx::default(),
+        );
+        app.dispatch_focus(focus, true, &mut tuicore::FocusCtx::default());
+        let mut ctx = EventCtx::default();
+        app.dispatch_event(&route, &TuiEvent::Key(Key::Enter.into()), &mut ctx);
         assert!(matches!(
             ctx.messages(),
             [Msg::AcceptanceAction(_, Command::Routes)]

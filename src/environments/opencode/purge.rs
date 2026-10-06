@@ -57,7 +57,7 @@ impl Observer {
         .map_err(|_| "Timed out closing OpenCode clients".to_owned())?
     }
 
-    async fn wait_closed(&self, pane: &Pane) -> Result<(), String> {
+    pub(super) async fn wait_closed(&self, pane: &Pane) -> Result<(), String> {
         loop {
             let names = zellij(
                 &self.zellij,

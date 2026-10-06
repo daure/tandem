@@ -212,6 +212,9 @@ impl Observer {
     }
 
     pub(crate) async fn close(&self, session_id: &str, pane: &Pane) -> Result<(), String> {
+        if self.close_session_tab(session_id, pane).await? {
+            return Ok(());
+        }
         self.close_matching_pane(Some(session_id), None, pane).await
     }
 
@@ -315,6 +318,7 @@ impl Observer {
             current,
             destination,
             &command,
+            true,
         )
         .await
         .map(|_| ())
@@ -432,7 +436,7 @@ impl Observer {
             client.extend(selection);
             client
         });
-        self.launch_panel(directory, name, current, destination, &command)
+        self.launch_panel(directory, name, current, destination, &command, true)
             .await
     }
 
@@ -441,7 +445,7 @@ impl Observer {
         directory: &str,
         name: &str,
         current: &str,
-        model: &str,
+        rule: &crate::store::rules::Definition,
         prompt: &str,
         instructions: Option<&str>,
     ) -> Result<Pane, String> {
@@ -454,6 +458,11 @@ impl Observer {
             );
         }
         self.validate_rule_destination(current).await?;
+        let selector = rule
+            .session_launch()
+            .selector()
+            .ok_or("rule model unavailable")?;
+        let model = selector.as_str();
         let (model, variant) = model
             .split_once('#')
             .map_or((model, None), |(model, variant)| (model, Some(variant)));
@@ -473,7 +482,7 @@ impl Observer {
             "TANDEM_SESSION_VARIANT=".into(),
         ];
         command.extend(rule_client_command(model, variant));
-        self.launch_panel(directory, name, current, None, &command)
+        self.launch_panel(directory, name, current, None, &command, rule.focus_pane)
             .await
     }
 
@@ -533,6 +542,7 @@ impl Observer {
         current: &str,
         destination: Option<&Pane>,
         command: &[String],
+        focus: bool,
     ) -> Result<Pane, String> {
         let destination = match destination {
             Some(pane) => self.live_destination(pane).await?,
@@ -558,6 +568,9 @@ impl Observer {
             args.extend(["new-tab".into(), "--name".into(), name.into()]);
             None
         };
+        if !focus {
+            args.push("--no-focus".into());
+        }
         args.extend(["--cwd".into(), directory.into(), "--".into()]);
         args.extend_from_slice(&command);
         let created = zellij(&self.zellij, &args).await?;
@@ -573,7 +586,9 @@ impl Observer {
                 tab_id,
                 tab_name: name.into(),
             };
-            self.focus_pane(current, &pane, false).await?;
+            if focus {
+                self.focus_pane(current, &pane, false).await?;
+            }
             Ok(pane)
         } else {
             let tab_id = created
@@ -620,7 +635,9 @@ impl Observer {
                 ],
             )
             .await?;
-            self.focus_pane(current, &pane, actual.is_floating).await?;
+            if focus {
+                self.focus_pane(current, &pane, actual.is_floating).await?;
+            }
             Ok(pane)
         }
     }

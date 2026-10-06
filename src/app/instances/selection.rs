@@ -1,6 +1,6 @@
 use crate::{
     app::{opencode::Target, rows::Row},
-    store::opencode::Pane,
+    store::opencode::{Pane, SessionLocation},
 };
 
 pub(super) fn pane_replacement(
@@ -20,9 +20,11 @@ pub(super) fn pane_replacement(
         .map(|row| row.id.clone())
 }
 
-pub(super) fn pane_row<'a>(rows: &'a [Row], pane: &Pane) -> Option<&'a Row> {
+pub(super) fn session_row<'a>(rows: &'a [Row], location: &SessionLocation) -> Option<&'a Row> {
     rows.iter().rev().find(|row| {
-        row_pane(row).is_some_and(|other| other.session == pane.session && other.id == pane.id)
+        row.opencode
+            .as_ref()
+            .is_some_and(|target| target.matches_location(location))
     })
 }
 

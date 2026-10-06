@@ -119,6 +119,7 @@ Event JSON:
                 ),
                 enabled: false,
                 start_instance: true,
+                focus_pane: true,
             };
             rules.push(
                 self.save_rule(definition, None, None, false)

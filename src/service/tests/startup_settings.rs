@@ -49,6 +49,12 @@ fn startup_recording_returns_database_errors_without_caching_failed_samples() {
 
 #[test]
 fn detached_workspace_startups_update_an_open_observers_cold_and_hot_timings() {
+    for start_instance in [false, true] {
+        assert_workspace_timings(start_instance);
+    }
+}
+
+fn assert_workspace_timings(start_instance: bool) {
     let writer = AppService::for_tests();
     writer
         .runtime
@@ -64,7 +70,7 @@ fn detached_workspace_startups_update_an_open_observers_cold_and_hot_timings() {
 
     for kind in [StartupKind::Cold, StartupKind::Hot] {
         let operation = writer
-            .submit_operation("create_instance", "scratch", Some("blank".into()), 60, true)
+            .submit_instance_creation("scratch", "blank".into(), 60, true, start_instance, None)
             .unwrap();
         let operation = writer
             .runtime
@@ -92,4 +98,47 @@ fn detached_workspace_startups_update_an_open_observers_cold_and_hot_timings() {
             .hot_startup_averages_milliseconds
             .contains_key("blank")
     );
+}
+
+#[test]
+fn startup_countdowns_follow_template_readiness_and_service_start_intent() {
+    let service = AppService::for_tests();
+    service.environments.create_template("blank").unwrap();
+    service.environments.refresh_templates();
+    for template in ["blank", "website"] {
+        for kind in [StartupKind::Cold, StartupKind::Hot] {
+            service
+                .settings
+                .record_startup(template.into(), kind, 12_000)
+                .unwrap();
+        }
+        for start_instance in [false, true] {
+            let name = format!("{template}-{start_instance}");
+            let mut operation = service.queue_instance_for_tests(&name, template);
+            for kind in [StartupKind::Cold, StartupKind::Hot] {
+                if kind == StartupKind::Hot {
+                    let snapshot = service.environment_snapshot();
+                    let instance = snapshot
+                        .instances
+                        .iter()
+                        .find(|instance| instance.name == name)
+                        .unwrap()
+                        .clone();
+                    service.complete_instance_for_tests(&operation.id, instance);
+                    operation = service.queue_instance_for_tests(&name, template);
+                }
+                service
+                    .environments
+                    .set_start_instance(&operation.id, start_instance);
+                let snapshot = service.environment_snapshot();
+                let startup = &snapshot.startup[&name];
+                assert_eq!(startup.kind, kind);
+                assert_eq!(
+                    startup.estimate_milliseconds,
+                    (start_instance || template == "blank").then_some(12_000),
+                    "{template}, {start_instance}, {kind:?}"
+                );
+            }
+        }
+    }
 }

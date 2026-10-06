@@ -11,6 +11,7 @@ use crate::{
 mod actions;
 mod guidance;
 mod observation;
+mod sessions;
 
 pub(super) use actions::launch_workspace_opencode;
 pub(super) use guidance::instance_guidance;
@@ -24,6 +25,7 @@ pub(super) struct Integration {
 struct State {
     // Quarantined evidence supports bounded verification independently of visible rows.
     snapshot: Snapshot,
+    initial_observation_complete: bool,
     retention: Retention,
     task: Option<tokio::task::JoinHandle<()>>,
     navigation: Option<tokio::task::JoinHandle<()>>,
@@ -32,6 +34,9 @@ struct State {
     changes: Option<Arc<opencode::events::Signal>>,
     roots: Vec<String>,
     generation: u64,
+    session_edits: std::collections::BTreeMap<(String, String), Option<String>>,
+    forgotten_directories: std::collections::BTreeSet<String>,
+    clearing_directories: std::collections::BTreeSet<String>,
 }
 
 #[derive(Debug)]
@@ -47,6 +52,7 @@ impl Integration {
             current_zellij: std::env::var("ZELLIJ_SESSION_NAME").unwrap_or_default(),
             state: Mutex::new(State {
                 snapshot: Snapshot::default(),
+                initial_observation_complete: false,
                 retention: Retention::default(),
                 task: None,
                 navigation: None,
@@ -55,6 +61,9 @@ impl Integration {
                 changes: None,
                 roots: Vec::new(),
                 generation: 0,
+                session_edits: Default::default(),
+                forgotten_directories: Default::default(),
+                clearing_directories: Default::default(),
             }),
         }
     }
@@ -72,10 +81,13 @@ impl Integration {
         }
         state.generation += 1;
         state.snapshot = Snapshot::default();
+        state.initial_observation_complete = false;
         state.retention = Retention::default();
         state.next = Instant::now();
         state.changes = None;
         state.roots.clear();
+        state.session_edits.clear();
+        state.forgotten_directories.clear();
     }
 }
 
@@ -147,6 +159,16 @@ impl super::AppService {
         Ok(receiver)
     }
 
+    pub(crate) fn opencode_loading(&self) -> bool {
+        self.opencode_enabled()
+            && !self
+                .opencode
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .initial_observation_complete
+    }
+
     pub(crate) fn opencode_snapshot(&self) -> Snapshot {
         if !self.opencode_enabled() {
             return Snapshot::default();
@@ -156,7 +178,11 @@ impl super::AppService {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        state.retention.visible_snapshot(&state.snapshot)
+        let mut snapshot = state.retention.visible_snapshot(&state.snapshot);
+        sessions::apply_edits(&mut snapshot, &state.session_edits);
+        sessions::apply_forgotten(&mut snapshot, &state.forgotten_directories);
+        sessions::apply_forgotten(&mut snapshot, &state.clearing_directories);
+        snapshot
     }
 
     pub(crate) fn poll_opencode(&self) {
@@ -446,8 +472,15 @@ impl super::AppService {
     }
 
     #[cfg(test)]
+    pub(crate) fn reset_opencode_for_tests(&self) {
+        self.opencode.reset();
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_opencode_snapshot_for_tests(&self, snapshot: Snapshot) {
-        self.opencode.state.lock().unwrap().snapshot = snapshot;
+        let mut state = self.opencode.state.lock().unwrap();
+        state.snapshot = snapshot;
+        state.initial_observation_complete = true;
     }
 }
 

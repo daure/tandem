@@ -5,7 +5,10 @@
       "voice-call": {
         "type": "local",
         "command": ["/home/marlo/.local/bin/voice-call", "mcp"],
-        "environment": { "OPENAI_API_KEY": "{env:OPENAI_API_KEY}" },
+        "environment": {
+          "OPENAI_API_KEY": "{env:OPENAI_API_KEY}",
+          "OPENAI_REALTIME_VOICE": "shimmer"
+        },
         "timeout": { "execution": 1800000 }
       }
     },

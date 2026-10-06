@@ -17,7 +17,7 @@ use tuicore::{
     TuiEvent, TuiNode, line_width,
 };
 
-use super::{Msg, open_panel_key, open_route_key};
+use super::{Msg, open_route_key};
 
 const MENU_FIELD_WIDTH: u16 = 42;
 const MENU_CONTENT_WIDTH: u16 = MENU_FIELD_WIDTH;
@@ -34,9 +34,13 @@ pub(super) enum Action {
     UpdateDescription,
     OpenBrowser,
     OpenRoutes,
+    GotoInstance,
     OpenPanel,
     GotoPanel,
     CloseSession,
+    RenameSession,
+    DeleteSession,
+    ClearFolder,
     NewSession,
     CloseSessions,
     Details,
@@ -67,9 +71,13 @@ impl Action {
             Self::OpenBrowser | Self::OpenRoutes => {
                 unreachable!("route actions have a fixed hotkey")
             }
+            Self::GotoInstance => unreachable!("instance navigation uses Enter"),
             Self::OpenPanel
             | Self::GotoPanel
             | Self::CloseSession
+            | Self::RenameSession
+            | Self::DeleteSession
+            | Self::ClearFolder
             | Self::NewSession
             | Self::CloseSessions => {
                 unreachable!("OpenCode panel actions have a fixed hotkey")
@@ -98,9 +106,13 @@ impl Action {
             Self::UpdateDescription => "Update description",
             Self::OpenBrowser => "Open in browser",
             Self::OpenRoutes => "Open routes",
+            Self::GotoInstance => "Goto instance",
             Self::OpenPanel => "Open panel",
             Self::GotoPanel => "Goto panel",
             Self::CloseSession => "Close session",
+            Self::RenameSession => "Rename OpenCode session",
+            Self::DeleteSession => "Delete OpenCode session",
+            Self::ClearFolder => "Clear OpenCode data",
             Self::NewSession => "New OpenCode session",
             Self::CloseSessions => "Close all OpenCode sessions",
             Self::Details => "View details",
@@ -127,6 +139,8 @@ pub(super) struct ActionMenu {
     enabled: Rc<RefCell<Vec<Action>>>,
     field_area: Rect,
     row_target: Option<super::row_actions::Target>,
+    session_id: Option<String>,
+    clear_folder: Option<String>,
     enter_action: Rc<Cell<Option<Action>>>,
 }
 
@@ -140,6 +154,8 @@ pub(super) struct Target {
     pub repository: bool,
     pub cleanup: bool,
     pub opencode_session: Option<(bool, bool)>,
+    pub session_id: Option<String>,
+    pub clear_folder: Option<String>,
     pub close_opencode: bool,
     pub external_opencode: bool,
     pub new_opencode: bool,
@@ -187,12 +203,16 @@ impl ActionMenu {
             enabled,
             field_area: Rect::default(),
             row_target: None,
+            session_id: None,
+            clear_folder: None,
             enter_action,
         }
     }
 
     pub(super) fn open(&mut self, target: Target, ctx: &mut EventCtx<Msg>) {
         self.row_target = None;
+        self.session_id = target.session_id.clone();
+        self.clear_folder = target.clear_folder.clone();
         self.enter_action.set(target.enter_action);
         self.actions = if let Some((attached, _)) = target.opencode_session {
             if attached {
@@ -268,11 +288,21 @@ impl ActionMenu {
                 self.actions.insert(0, Action::NewSession);
             }
         }
+        if target.opencode_session.is_some() {
+            self.actions
+                .extend([Action::RenameSession, Action::DeleteSession]);
+        }
+        if target.clear_folder.is_some() {
+            self.actions.push(Action::ClearFolder);
+        }
         if target.close_opencode_group {
             self.actions.push(Action::CloseSessions);
         }
         if target.enter_action == Some(Action::OpenRoutes) {
             self.actions.insert(0, Action::OpenRoutes);
+        }
+        if target.enter_action == Some(Action::GotoInstance) {
+            self.actions.insert(0, Action::GotoInstance);
         }
         *self.enabled.borrow_mut() = self
             .actions
@@ -295,6 +325,8 @@ impl ActionMenu {
     }
 
     pub(super) fn open_row(&mut self, target: super::row_actions::Target, ctx: &mut EventCtx<Msg>) {
+        self.session_id = None;
+        self.clear_folder = None;
         self.enter_action
             .set(Some(Action::Row(target.enter_command())));
         self.actions = target.commands().into_iter().map(Action::Row).collect();
@@ -310,6 +342,18 @@ impl ActionMenu {
 
     pub(super) fn take_row_message(&mut self, command: super::row_actions::Command) -> Option<Msg> {
         self.row_target.take()?.message(command)
+    }
+
+    pub(super) fn session_edit_message(&mut self, action: Action) -> Option<Msg> {
+        if action == Action::ClearFolder {
+            return Some(Msg::ClearOpencodeFolder(self.clear_folder.take()?));
+        }
+        let edit = match action {
+            Action::RenameSession => super::opencode::SessionAction::Rename,
+            Action::DeleteSession => super::opencode::SessionAction::Delete,
+            _ => return None,
+        };
+        Some(Msg::OpencodeSessionAction(self.session_id.take()?, edit))
     }
 
     fn open_dropdown(&mut self, ctx: &mut EventCtx<Msg>) {
@@ -338,6 +382,47 @@ impl ActionMenu {
     }
 
     fn delete_hotkey(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> bool {
+        if self.dropdown.search_query().is_empty()
+            && matches!(event, TuiEvent::Key(key) if KeySpec::plain('c').matches(*key))
+            && self
+                .enabled
+                .borrow()
+                .contains(&Action::Row(super::row_actions::Command::ClosePanel))
+        {
+            *self.selected.borrow_mut() =
+                Some(Action::Row(super::row_actions::Command::ClosePanel));
+            self.dropdown.cancel();
+            ctx.stop_propagation();
+            return true;
+        }
+        if self.dropdown.search_query().is_empty()
+            && let Some(edit) = super::opencode::SessionAction::from_event(event)
+        {
+            let action = match edit {
+                super::opencode::SessionAction::Rename => Action::RenameSession,
+                super::opencode::SessionAction::Delete => Action::DeleteSession,
+            };
+            let row_command = match edit {
+                super::opencode::SessionAction::Rename => {
+                    super::row_actions::Command::RenameSession
+                }
+                super::opencode::SessionAction::Delete => {
+                    super::row_actions::Command::DeleteSession
+                }
+            };
+            let folder_action =
+                (edit == super::opencode::SessionAction::Delete).then_some(Action::ClearFolder);
+            let action = [Some(action), Some(Action::Row(row_command)), folder_action]
+                .into_iter()
+                .flatten()
+                .find(|action| self.enabled.borrow().contains(action));
+            if let Some(action) = action {
+                *self.selected.borrow_mut() = Some(action);
+                self.dropdown.cancel();
+                ctx.stop_propagation();
+                return true;
+            }
+        }
         if self.row_target.as_ref().is_some_and(|target| {
             target
                 .commands()
@@ -365,8 +450,10 @@ fn action_text(action: Action, keys: &[KeySpec; 10], enabled: bool, enter: bool)
         Action::Yank => "y".into(),
         Action::UpdateDescription => "e".into(),
         Action::OpenBrowser | Action::OpenRoutes => open_route_key().label(),
-        Action::OpenPanel | Action::GotoPanel => open_panel_key().label(),
+        Action::GotoInstance | Action::OpenPanel | Action::GotoPanel => "Enter".into(),
         Action::CloseSession | Action::CloseSessions => "c".into(),
+        Action::RenameSession => "r".into(),
+        Action::DeleteSession | Action::ClearFolder => "x".into(),
         Action::NewSession => "n".into(),
         _ => keys
             .get(action.index())
@@ -374,7 +461,7 @@ fn action_text(action: Action, keys: &[KeySpec; 10], enabled: bool, enter: bool)
             .map(KeySpec::label)
             .unwrap_or_default(),
     };
-    let hotkey = if enter {
+    let hotkey = if enter && hotkey != "Enter" {
         format!("Enter / {hotkey}")
     } else {
         hotkey
@@ -513,6 +600,8 @@ mod tests {
             repository: false,
             cleanup: false,
             opencode_session: Some(opencode_session),
+            session_id: Some("ses_external".into()),
+            clear_folder: None,
             close_opencode: opencode_session.0,
             external_opencode: true,
             new_opencode: true,
@@ -526,10 +615,27 @@ mod tests {
         };
 
         menu.open(target((true, false)), &mut ctx);
-        assert!(menu.actions == [Action::NewSession, Action::GotoPanel, Action::CloseSession]);
+        assert!(
+            menu.actions
+                == [
+                    Action::NewSession,
+                    Action::GotoPanel,
+                    Action::CloseSession,
+                    Action::RenameSession,
+                    Action::DeleteSession
+                ]
+        );
 
         menu.open(target((false, false)), &mut ctx);
-        assert!(menu.actions == [Action::NewSession, Action::OpenPanel]);
+        assert!(
+            menu.actions
+                == [
+                    Action::NewSession,
+                    Action::OpenPanel,
+                    Action::RenameSession,
+                    Action::DeleteSession
+                ]
+        );
 
         let mut client = target((false, false));
         client.opencode_session = None;

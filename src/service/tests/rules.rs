@@ -33,6 +33,7 @@ fn definition(name: &str) -> Definition {
         initial_prompt: "Inspect {{event.data.text}}".into(),
         enabled: true,
         start_instance: true,
+        focus_pane: true,
     }
 }
 

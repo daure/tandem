@@ -31,6 +31,7 @@ fn fixture() -> (
                     initial_prompt: "Inspect {{event.summary}}".into(),
                     enabled: true,
                     start_instance: false,
+                    focus_pane: true,
                 },
                 None,
                 "main".into(),
@@ -57,6 +58,37 @@ fn input(title: &str) -> ReportInput {
         summary: "Fixed deployment".into(),
         markdown: "# Evidence\nÜberprüfung found 100%_literal and a retry issue.\n".into(),
     }
+}
+
+#[test]
+fn acceptance_lookup_allows_unlinked_instances_and_rejects_mismatched_or_ambiguous_links() {
+    let (_home, _config, rules, _events, acceptances) = fixture();
+    let mut instance = Instance {
+        name: "manual".into(),
+        template: "blank".into(),
+        ..Default::default()
+    };
+    assert_eq!(rules.instance_acceptance(&instance).unwrap(), None);
+    instance.name = acceptances[0].instance.clone();
+    instance.template = "other".into();
+    assert!(matches!(
+        rules.instance_acceptance(&instance),
+        Err(Error::Conflict(_))
+    ));
+    instance.template = "blank".into();
+    rules
+        .events
+        .connection()
+        .unwrap()
+        .execute(
+            "UPDATE rule_acceptances SET payload = json_set(payload, '$.instance', ?2) WHERE id = ?1",
+            rusqlite::params![acceptances[1].id, instance.name],
+        )
+        .unwrap();
+    assert!(matches!(
+        rules.instance_acceptance(&instance),
+        Err(Error::Conflict(_))
+    ));
 }
 
 #[test]

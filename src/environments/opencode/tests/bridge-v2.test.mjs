@@ -286,6 +286,47 @@ test("navigation focuses an open background tab and rejects a closed tab", async
   assert.deepEqual(client.calls, [["focus", "ses_background"]])
 })
 
+test("closing one native tab preserves its siblings and saved sessions", async (t) => {
+  for (const selected of ["ses_active", "ses_background", "ses_last", "ses_deferred"]) {
+    await t.test(selected, async (t) => {
+      const client = await tabClient(t)
+      let ids = ["ses_last", "ses_deferred"].includes(selected) ? [selected] : ["ses_active", "ses_background", "ses_other"]
+      client.context.ui.tabs.list = () => ids.map((sessionID) => ({ sessionID }))
+      client.context.ui.tabs.close = (id) => {
+        client.calls.push(["close", id])
+        if (selected === "ses_deferred") setTimeout(() => { ids = ids.filter((other) => other !== id) }, 50)
+        else ids = ids.filter((other) => other !== id)
+      }
+      client.context.ui.tabs.focus("ses_active")
+      client.calls.length = 0
+      const siblings = ids.filter((id) => id !== selected)
+      assert.equal((await client.request({ sessionID: selected }, "Bearer invalid", "/tabs/close")).status, 401)
+      assert.deepEqual(client.calls, [])
+      const response = await client.request({ sessionID: selected }, undefined, "/tabs/close")
+      assert.equal(response.status, 200)
+      assert.deepEqual(await response.json(), { id: selected })
+      assert.deepEqual(ids, siblings)
+      assert.deepEqual(client.calls, [["close", selected]])
+      assert.equal((await client.request({ sessionID: selected }, undefined, "/tabs/close")).status, 409)
+      assert.deepEqual(client.calls, [["close", selected]])
+    })
+  }
+})
+
+test("refused or unavailable tab closure preserves the client", async (t) => {
+  const client = await tabClient(t)
+  const ids = ["ses_active", "ses_background"]
+  client.context.ui.tabs.list = () => ids.map((sessionID) => ({ sessionID }))
+  client.context.ui.tabs.close = () => false
+  const refused = await client.request({ sessionID: "ses_background" }, undefined, "/tabs/close")
+  assert.equal(refused.status, 409)
+  assert.match((await refused.json()).error, /refused tab closure/)
+  client.disable()
+  assert.equal((await client.request({ sessionID: "ses_background" }, undefined, "/tabs/close")).status, 409)
+  assert.deepEqual(ids, ["ses_active", "ses_background"])
+  assert.deepEqual(client.calls, [])
+})
+
 test("new-session requests reuse a verified empty idle tab in the requested workspace", async (t) => {
   const client = await tabClient(t)
   const messages = new Map([["ses_used", [{ type: "user", text: "Existing question" }]]])

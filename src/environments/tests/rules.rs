@@ -12,6 +12,7 @@ fn definition(name: &str, script: &str) -> Definition {
         initial_prompt: "Inspect {{event.data.text}}".into(),
         enabled: true,
         start_instance: true,
+        focus_pane: true,
     }
 }
 
@@ -52,9 +53,9 @@ fn definition_upgrade_preserves_pinned_work_history_and_provider_metadata() {
     let history = events.snapshot().unwrap();
     let snapshot = store.snapshot().unwrap();
     events.connection().unwrap().execute_batch(
-        "UPDATE event_rules SET definition = json_set(json_remove(definition, '$.start_instance'), '$.metadata', json('{\"owner\":\"fixture\"}'));
-         UPDATE rule_evaluations SET rule_snapshot = json_set(json_remove(rule_snapshot, '$.definition.start_instance'), '$.definition.metadata', json('{\"owner\":\"fixture\"}'));
-         UPDATE rule_acceptances SET payload = json_set(json_remove(payload, '$.rule.definition.start_instance'), '$.rule.definition.metadata', json('{\"owner\":\"fixture\"}'));"
+        "UPDATE event_rules SET definition = json_set(json_remove(definition, '$.start_instance', '$.focus_pane'), '$.metadata', json('{\"owner\":\"fixture\"}'));
+         UPDATE rule_evaluations SET rule_snapshot = json_set(json_remove(rule_snapshot, '$.definition.start_instance', '$.definition.focus_pane'), '$.definition.metadata', json('{\"owner\":\"fixture\"}'));
+         UPDATE rule_acceptances SET payload = json_set(json_remove(payload, '$.rule.definition.start_instance', '$.rule.definition.focus_pane'), '$.rule.definition.metadata', json('{\"owner\":\"fixture\"}'));"
     ).unwrap();
 
     let migrated = RuleStore::open(&config).unwrap();
@@ -448,6 +449,7 @@ fn receipt_pins_rule_revisions_and_enablement_is_prospective() {
         .unwrap();
     let mut changed = rule.definition.clone();
     changed.initial_prompt = "An edited prompt".into();
+    changed.focus_pane = false;
     changed.enabled = false;
     store
         .save(changed.clone(), Some(rule.revision), "terminal".into())
@@ -460,6 +462,8 @@ fn receipt_pins_rule_revisions_and_enablement_is_prospective() {
     let snapshot = store.snapshot().unwrap();
     assert_eq!(snapshot.acceptances.len(), 1);
     assert_eq!(snapshot.acceptances[0].rule_revision, 1);
+    assert!(snapshot.acceptances[0].rule.definition.focus_pane);
+    assert!(!snapshot.rules[0].definition.focus_pane);
     assert_eq!(
         snapshot.acceptances[0].resolved_prompt.as_deref(),
         Some("Inspect Please inspect this event")

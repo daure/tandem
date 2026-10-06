@@ -46,7 +46,10 @@ impl RuleStore {
             .map_err(Error::from)
     }
 
-    pub(crate) fn instance_acceptance(&self, instance: &Instance) -> Result<Acceptance, Error> {
+    pub(crate) fn instance_acceptance(
+        &self,
+        instance: &Instance,
+    ) -> Result<Option<Acceptance>, Error> {
         let connection = self.events.connection()?;
         let mut statement = connection.prepare(
             "SELECT a.payload FROM rule_acceptances a
@@ -59,6 +62,9 @@ impl RuleStore {
             })?
             .map(|row| decode::<Acceptance>(&row?))
             .collect::<Result<Vec<_>, Error>>()?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
         if rows.len() != 1 || rows[0].rule.definition.template != instance.template {
             return Err(Error::Conflict(
                 "workspace must belong to exactly one retained event acceptance".into(),
@@ -81,7 +87,7 @@ impl RuleStore {
                 "acceptance belongs to an incomplete provider deletion".into(),
             ));
         }
-        Ok(rows.into_iter().next().unwrap())
+        Ok(rows.into_iter().next())
     }
 
     pub(crate) fn save_report(&self, id: i64, input: &ReportInput) -> Result<Report, Error> {

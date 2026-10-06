@@ -66,8 +66,12 @@ pub(super) fn stream_text(stream: &Stream) -> Text<'static> {
         _ => ("Unverified", theme.warning_fg()),
     };
     Text::from(Line::from(vec![
+        Span::styled(
+            crate::app::events::profile_icon(stream.profile.as_deref().unwrap_or("generic")),
+            Style::default().fg(color),
+        ),
         Span::raw(format!(
-            "󰑬 {} ·  {}/{} · ",
+            " {} ·  {}/{} · ",
             super::clean(&stream.name),
             stream.handovers,
             stream.total

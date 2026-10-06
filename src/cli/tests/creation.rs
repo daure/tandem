@@ -21,6 +21,7 @@ mod lifecycle;
 mod opencode;
 mod preparation;
 mod providers;
+mod repository_updates;
 mod rules;
 mod startup;
 mod workspaces;

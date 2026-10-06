@@ -142,7 +142,7 @@ fn overview_places_other_opencode_workspaces_before_templates() {
 }
 
 #[test]
-fn overview_keeps_other_opencode_workspaces_collapsed_on_startup_and_shift_h() {
+fn overview_expands_other_opencode_root_one_level_on_startup_and_shift_h() {
     use crate::app::instances::{self, Instances};
 
     init_ui();
@@ -166,20 +166,21 @@ fn overview_keeps_other_opencode_workspaces_collapsed_on_startup_and_shift_h() {
 
     let startup = render(&mut tree, &mut terminal);
     assert!(startup.contains("Other OpenCode workspaces"), "{startup}");
-    assert!(!startup.contains("/work/ledger"), "{startup}");
+    assert!(startup.contains("/work/ledger"), "{startup}");
     assert!(!startup.contains("Add CSV export"), "{startup}");
 
     tree.focus(None, true, &mut tuicore::FocusCtx::default());
     let mut ctx = EventCtx::new(AnimationSettings::default());
-    tree.expand_for_tests("opencode-workspaces");
-    assert!(render(&mut tree, &mut terminal).contains("/work/ledger"));
+    tree.expand_for_tests("opencode-workspace:/work/ledger");
+    assert!(render(&mut tree, &mut terminal).contains("Add CSV export"));
     tree.event(
         &TuiEvent::Hotkey(HotkeyEvent::Commit("shift+h".into())),
         &mut ctx,
     );
     let home = render(&mut tree, &mut terminal);
     assert!(home.contains("Other OpenCode workspaces"), "{home}");
-    assert!(!home.contains("/work/ledger"), "{home}");
+    assert!(home.contains("/work/ledger"), "{home}");
+    assert!(!home.contains("Add CSV export"), "{home}");
 }
 
 #[test]
@@ -1211,7 +1212,7 @@ fn session_menu_and_shortcut_open_or_goto_the_panel() {
         let expected = if attached { "Goto panel" } else { "Open panel" };
         assert!(
             text.lines()
-                .any(|line| line.contains(expected) && line.contains("Enter / o")),
+                .any(|line| line.contains(expected) && line.trim_end().ends_with("Enter")),
             "{text}"
         );
         assert_eq!(
@@ -1228,6 +1229,11 @@ fn session_menu_and_shortcut_open_or_goto_the_panel() {
             Some("opencode:review:ses_review".into()),
         );
         let mut shortcut_ctx = EventCtx::new(AnimationSettings::default());
+        app.event(
+            &TuiEvent::Key(KeyEvent::from(Key::Char('o'))),
+            &mut shortcut_ctx,
+        );
+        assert!(app.opencode_action.is_none());
         app.event(
             &TuiEvent::Key(KeyEvent::from(Key::Enter)),
             &mut shortcut_ctx,
@@ -1307,7 +1313,7 @@ fn external_client_menu_and_c_hotkey_close_its_observed_pane() {
     let text = rendered_lines(&terminal, area).join("\n");
     assert!(
         text.lines()
-            .any(|line| line.contains("Goto panel") && line.trim_end().ends_with('o')),
+            .any(|line| line.contains("Goto panel") && line.trim_end().ends_with("Enter")),
         "{text}"
     );
     assert!(
@@ -1327,7 +1333,7 @@ fn external_client_menu_and_c_hotkey_close_its_observed_pane() {
 }
 
 #[test]
-fn external_client_o_navigates_from_overview_and_attached_views() {
+fn external_client_enter_navigates_from_overview_and_attached_views() {
     init_ui();
     for attached_only in [false, true] {
         let mut app = root(AppService::for_tests());
@@ -1349,6 +1355,8 @@ fn external_client_o_navigates_from_overview_and_attached_views() {
             &TuiEvent::Key(KeyEvent::from(Key::Char('o'))),
             &mut shortcut,
         );
+        assert!(app.opencode_action.is_none());
+        app.event(&TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut shortcut);
 
         assert!(app.opencode_action.is_some());
         assert!(shortcut.notifications().is_empty());

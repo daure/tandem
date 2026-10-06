@@ -73,6 +73,28 @@ fn reconnect_exposes_startup_before_containers_exist() {
 }
 
 #[test]
+fn startup_snapshots_preserve_service_start_intent_across_reconnection() {
+    let (_directory, config, mut record) = fixture();
+    let _lease = gateway::lock(&config, &lease(&record.operation.id)).unwrap();
+    for start_instance in [false, true] {
+        record.start_instance = start_instance;
+        write(&config, &record).unwrap();
+        let reconnected = Environments::new(config.clone());
+        reconnected.refresh_startups().unwrap();
+        assert_eq!(
+            reconnected.snapshot().startup["Review"].prepare_only,
+            !start_instance
+        );
+        let worker = Environments::new(config.clone());
+        worker.adopt_startup(&record);
+        assert_eq!(
+            worker.snapshot().startup["Review"].prepare_only,
+            !start_instance
+        );
+    }
+}
+
+#[test]
 fn startup_admission_rejects_a_conflicting_origin_without_replacing_ownership() {
     let (_directory, config, record) = fixture();
     write(&config, &record).unwrap();

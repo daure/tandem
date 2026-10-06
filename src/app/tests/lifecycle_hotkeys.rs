@@ -65,6 +65,9 @@ fn nested_lifecycle_hotkeys_confirm_the_instance_or_selected_service() {
         let rows = tree(running);
         for row in rows.iter().filter(|row| row.parent.is_some()) {
             for (index, key) in [(6, 'p'), (3, 's'), (7, 'r')] {
+                if index == 7 && matches!(row.opencode, Some(opencode::Target::Session { .. })) {
+                    continue;
+                }
                 let mut app = root(AppService::for_tests());
                 app.set_rows_for_tests(rows.clone());
                 instances::set_highlighted(&app.instances, Some(row.id.clone()));

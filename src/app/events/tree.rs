@@ -57,7 +57,7 @@ impl Entry {
     }
     pub(super) fn text(&self, spinner: &str, width: Option<u16>) -> Text<'static> {
         match self {
-            Self::Event(row) => super::row_text(row),
+            Self::Event(row) => super::row_text(row, width),
             Self::Acceptance(target) => target.text(spinner, width),
             Self::Conversation { row, .. } => row.text(spinner, width),
         }

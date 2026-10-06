@@ -467,9 +467,8 @@ fn overview_resets_search_and_selection_on_all_tabs_and_returns_to_sessions() {
                                 name: name.into(),
                                 directory: format!("/templates/providers/{name}"),
                                 manifest: Some(crate::store::providers::Manifest {
-                                    schema_version: 1,
+                                    schema_version: 2,
                                     name: name.into(),
-                                    profile: "message".into(),
                                     description: name.into(),
                                     protocol: "tandem-events-v1".into(),
                                     feedback: vec![],

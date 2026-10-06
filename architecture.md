@@ -40,7 +40,7 @@ Presentation layers adapt input and output. `AppService` is the sole application
 
 ## State ownership
 
-`tandem mcp-instance` is a separate stdio adapter exposing instance-local Start, Stop and Conclude through
+`tandem mcp-instance` is a separate stdio adapter exposing instance-local Start, Stop, repository updates and Conclude through
 `AppService`. Binding resolves its working directory against namespace-owned journal and ownership
 records and holds an open workspace-directory descriptor. Each action compares the live directory's
 device/inode with that pinned descriptor under the instance lock; lock ownership transfers through
@@ -54,18 +54,31 @@ seeds workspace configuration in syntax supported by OpenCode V1 and V2, with ex
 preserving existing root and `.opencode` JSON/JSONC configuration. Configuring the surface grants
 these lifecycle capabilities; guidance treats Conclude as instruction-only, independently of task
 completion or cleanup needs. Stopping services remains independent of event-task completion. Conclude
-requires one retained acceptance matching the owned instance, template and originating startup lineage. It commits an immutable
-acceptance-owned report before transferring the instance lock, rule-worker lease and conclusion lease
-to a detached worker. The worker closes associated clients regardless of the observation setting and
+controls any owned bound instance. A retained acceptance must uniquely match its template and originating
+startup lineage; mismatched or ambiguous records fail closed. Linked conclusions commit an immutable
+acceptance-owned report; unlinked conclusions skip report persistence. Both transfer the instance lock,
+rule-worker lease and conclusion lease to a detached worker. Reportless workers use acceptance ID zero
+internally and an instance-keyed conclusion lease; they verify the instance remains unlinked before purge.
+The worker closes associated clients regardless of the observation setting and
 purges owned resources through the existing deletion contract. Client closure may interrupt the MCP
-reply; the report retains cleanup state and failure details, and a lost conclusion lease projects an
-interrupted outcome. Identical reports allow cleanup retry; different report contents conflict.
+reply; linked reports retain cleanup state and failure details, and a lost conclusion lease projects an
+interrupted outcome. Unlinked outcomes use instance inspection and retained lifecycle activities.
+Identical saved reports allow cleanup retry; different report contents conflict.
 Reported acceptances retain dispatch history and are excluded from dispatch admission and retries.
 Namespace-scoped report search matches any case-insensitive literal substring in title, summary or
 Markdown and returns acceptance summaries; report retrieval uses the acceptance ID. Report storage
 is independent of instance state and cascades only with acceptance/event/provider history deletion.
 Management MCP exposes report search and retrieval through the same service contract. Rule snapshots
 include report summaries and observed cleanup outcomes; Events and rule histories expose full-report reads.
+
+Instance repository updates run on a blocking service worker under the pinned workspace's instance
+lock. The current owned template supplies declared targets; each checkout requires a real contained
+path and its exact declared origin. Explicit origin-upstream fetches and fast-forward-only merges
+preserve local commits and report updated, current, skipped or failed outcomes with observed revisions.
+Dirty, diverged, detached, untracked branches and active Git operations are skipped; failures remain
+per repository. Git hooks, automatic stashing and submodule recursion are disabled, and merges protect
+ignored local files. A ten-minute batch budget bounds one-minute repository operations; final revision
+reads have separate five-second verification budgets. Shell sessions remain outside Tandem's lock.
 
 - Docker labels and inspected containers are authoritative for container-backed runtime inventory.
 - Successfully prepared service instances with no containers retain their service execution kind and
@@ -146,8 +159,10 @@ The bundled OpenCode TUI companion runs in each client and publishes its current
 session tabs with PID, heartbeat, server, and Zellij identity. Native reactive computations track
 routes, tab order, and cached session metadata; server-event listeners cover cache changes. All open
 tabs attach to the same client pane and retain their native positions; navigation selects the requested
-OpenCode tab before focusing that pane. Server processes are shared
-across directories and do not own client attachment identity. Fresh receipts and live panes
+OpenCode tab before focusing that pane. Conversation closure uses authenticated companion tab control
+for the selected V2 tab, preserving its client and sibling tabs. V1 conversation closure targets its
+client pane. Server processes are shared across directories and do not own client attachment identity.
+Fresh receipts and live panes
 establish attachment and authorize navigation or closure of that exact pane. Observed conversations
 can be resumed in their recorded directory on their loopback server, including external workspaces.
 New clients target an instance workspace or an observed directory. Prepared instance workspaces receive
@@ -181,8 +196,23 @@ fresh receipts authorize exact-pane closure and live pane inventory verifies com
 failures preserve that instance's resources. Version-specific server status and directory-scoped forms/questions
 establish activity. Awaiting an answer pauses busy timing and triggers completion feedback once on
 the transition from busy. Titles are presentation data.
+Session rename and confirmed deletion run through the service on authenticated local server APIs.
+Deletion verifies exact session/directory identity and descendants, closes their verified client panes,
+and interrupts execution before removing the selected conversation tree and checking its absence.
+External-directory cleanup requires detached, idle history. Admission immediately suppresses the folder
+in service snapshots and launches a detached worker independently of navigation. The worker validates
+exact-directory ancestry and activity, deletes verified top-level conversation trees, removes matching
+daemon directory receipts, and persists removed conversation links, including partial results. A private
+inherited result file and an independent reaper thread let cleanup survive TUI and runtime shutdown.
+Failures release pending suppression and restore remaining history; successful suppression lasts until
+a fresh client reopens the directory. Workspace files and shared servers
+remain independently owned. Service snapshots reconcile
+completed edits across in-flight reads. Retained acceptance metadata reflects edits, and deletion
+markers prevent stale observations from restoring removed conversation links; event and report
+history remain independently owned.
 Unknown observations stay explicit, and disabling the integration discards its cache and cancels
-its work without changing externally owned servers or panes. Companion installation is an
+observation and navigation without changing externally owned servers or panes. Accepted detached
+folder cleanup continues through its result. Companion installation is an
 explicit CLI operation; user-owned OpenCode configuration is preserved.
 
 The observer samples known client PIDs through Linux `/proc` on its blocking worker. CPU deltas
@@ -285,7 +315,9 @@ A private namespace file lease serializes background cycles across TUI and owned
 processes. Admission permits four
 active actions and ten starts per minute, counting retries. Each action provisions a fresh instance
 through the existing detached startup contract. Successful preparation and requested service readiness
-gate model/prompt launch; each pinned rule revision owns its default-on service-start flag.
+gate model/prompt launch; each pinned rule revision owns its default-on service-start and pane-focus
+flags. Background launches use Zellij's no-focus creation and skip navigation, preserving all clients'
+focus while recording the exact created pane. Manual navigation focuses its requested destination.
 The launch marker is durable before contacting Zellij; an interrupted or uncertain launch is surfaced
 without automatic resend. Observed exact workspace/pane linkage records the session and `launched`
 outcome, which does not certify prompt delivery or task completion. Confirmed pre-launch retries keep
@@ -324,7 +356,11 @@ Lifecycle completion publishes the targeted collector's verified state and clear
 before any full-inventory refresh. Observation revisions prevent an older in-flight snapshot from
 overwriting a completed action. The background observer owns full provider discovery and refresh.
 
-Provider manifests optionally declare streams and cooperative stream-control capability. Namespace/source/
+Schema-version-2 provider manifests optionally declare named streams with individual profiles and
+cooperative stream-control capability. Schema-version-1 packages and saved launches normalize their
+provider profile into each declared stream when read. Event envelopes retain their own concrete profile;
+ingestion validates their payload independently of the manifest. Undeclared streams project a profile
+only when their retained events agree. Namespace/source/
 stream-scoped SQLite records own desired collection state and monotonic control revisions. The authenticated
 sidecar exposes only the credential's controls and accepts acknowledgments of the current exact revision
 and desired state. Collectors acknowledge after applying collection changes and refresh that evidence;

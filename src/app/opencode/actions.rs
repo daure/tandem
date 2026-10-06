@@ -1,6 +1,6 @@
 use tuicore::{EventCtx, Notification};
 
-use super::{App, Msg, PendingAction, Row, Target};
+use super::{App, CreationView, Msg, PendingAction, Row, Target};
 use crate::{
     app::{Intent, dialogs},
     store::opencode::CloseScope,
@@ -45,6 +45,15 @@ impl App {
         row: &Row,
         ctx: &mut EventCtx<Msg>,
     ) -> bool {
+        self.create_opencode_session_at(row, CreationView::Instances(self.instances.clone()), ctx)
+    }
+
+    pub(in crate::app) fn create_opencode_session_at(
+        &mut self,
+        row: &Row,
+        view: CreationView,
+        ctx: &mut EventCtx<Msg>,
+    ) -> bool {
         if !self.service.opencode_enabled() {
             return false;
         }
@@ -68,7 +77,7 @@ impl App {
         };
         match self.service.new_opencode_session(directory, pane) {
             Ok(reply) => {
-                self.opencode_action = Some(PendingAction::creation(reply, self.instances.clone()));
+                self.opencode_action = Some(PendingAction::creation(reply, view));
             }
             Err(error) => ctx.notify(Notification::error("Cannot create OpenCode session", error)),
         }

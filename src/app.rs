@@ -128,10 +128,6 @@ pub(super) fn open_route_key() -> KeySpec {
     KeySpec::key_with_modifiers(tuicore::Key::Enter, tuicore::KeyModifiers::CONTROL)
 }
 
-pub(super) fn open_panel_key() -> KeySpec {
-    KeySpec::plain('o')
-}
-
 #[derive(Debug)]
 pub(crate) enum Msg {
     Close,
@@ -159,6 +155,7 @@ pub(crate) enum Msg {
     CopyGatewayUrl,
     Submit,
     OpenEvent(Box<crate::store::events::Record>),
+    OpenEventLink(Box<crate::store::events::Record>),
     ReplayEvent(i64),
     ReplayEventConfirmed(i64),
     DeleteEvents(crate::store::events::Deletion),
@@ -170,6 +167,7 @@ pub(crate) enum Msg {
     RuleDraftChanged(Rc<RefCell<rules::Draft>>),
     RuleDraftEnabled(Rc<RefCell<rules::Draft>>, bool),
     RuleDraftStartInstance(Rc<RefCell<rules::Draft>>, bool),
+    RuleDraftFocusPane(Rc<RefCell<rules::Draft>>, bool),
     FocusEvent(i64),
     FocusRule(String),
     AcceptanceInstance(String),
@@ -183,6 +181,8 @@ pub(crate) enum Msg {
     ProviderDetails(Box<crate::store::providers::Provider>),
     ShowProvider(String),
     OpenRowMenu(row_actions::Target),
+    OpencodeSessionAction(String, opencode::SessionAction),
+    ClearOpencodeFolder(String),
 }
 
 enum Intent {
@@ -203,6 +203,9 @@ enum Intent {
         service: Option<String>,
     },
     CloseOpencodeSessions(crate::store::opencode::CloseScope),
+    RenameOpencodeSession(String),
+    DeleteOpencodeSession(String),
+    ClearOpencodeFolder(String),
     UpdateDescription(String),
     Purge(String),
     StopTemplate(String),
@@ -246,6 +249,7 @@ type View = DialogLayer<RouteLayer, Modal>;
 pub(crate) struct App {
     service: AppService,
     snapshot: EnvironmentSnapshot,
+    overview_loading: bool,
     view: View,
     // Action handlers address the active page; both pages retain their own state.
     instances: SharedState,
@@ -276,8 +280,8 @@ pub(crate) struct App {
     completion_sound: bool,
     event_acceptance_count: Option<u64>,
     opencode_action: Option<opencode::PendingAction>,
+    opencode_cleanups: Vec<tokio::sync::oneshot::Receiver<Result<(), String>>>,
     acceptance_recreation: Option<tokio::sync::oneshot::Receiver<Result<(), String>>>,
-    acceptance_selection: Rc<RefCell<Option<acceptances::Target>>>,
     events_active: bool,
     providers_active: bool,
     rules_active: bool,
@@ -311,17 +315,15 @@ pub(crate) fn root(service: AppService) -> App {
     let keys = service.environment_keys();
     let snapshot = service.environment_snapshot();
     let opencode_enabled = service.opencode_enabled();
+    let overview_loading = snapshot.loading || service.opencode_loading();
     let opencode_snapshot = service.opencode_snapshot();
     let event_acceptance_count = service.event_snapshot().accepted_attempts;
     let states = [false, true].map(|sessions| {
-        let state = instances::state(opencode::project_rows(
-            &snapshot,
-            &[],
-            &opencode_snapshot,
-            true,
-            false,
-            sessions,
-        ));
+        let state = instances::state(if overview_loading {
+            Vec::new()
+        } else {
+            opencode::project_rows(&snapshot, &[], &opencode_snapshot, true, false, sessions)
+        });
         instances::set_completion_fade(&state, service.completion_fade_seconds());
         instances::set_attached_sessions_only(&state, sessions);
         state
@@ -381,6 +383,7 @@ pub(crate) fn root(service: AppService) -> App {
     App {
         service,
         snapshot,
+        overview_loading,
         view,
         instances,
         toolbar_state,
@@ -410,8 +413,8 @@ pub(crate) fn root(service: AppService) -> App {
         completion_sound: false,
         event_acceptance_count,
         opencode_action: None,
+        opencode_cleanups: Vec::new(),
         acceptance_recreation: None,
-        acceptance_selection: Rc::new(RefCell::new(None)),
         events_active: false,
         providers_active: false,
         rules_active: false,
@@ -464,11 +467,12 @@ impl App {
             }
             self.toolbar_state.borrow_mut().opencode_enabled = opencode_enabled;
         }
-        if snapshot.loading {
+        if snapshot.loading || self.overview_loading && self.service.opencode_loading() {
             self.snapshot = snapshot;
             return tabs_changed;
         }
-        let initial_load_completed = self.snapshot.loading;
+        let initial_load_completed = self.overview_loading || self.snapshot.loading;
+        self.overview_loading = false;
         let operations = self.service.operations();
         let snapshot_changed = snapshot != self.snapshot;
         if snapshot.templates != self.snapshot.templates {
@@ -576,6 +580,9 @@ impl App {
         operations: &[Operation],
         select_first: bool,
     ) -> bool {
+        if self.overview_loading && (snapshot.loading || self.service.opencode_loading()) {
+            return false;
+        }
         let mut changed = false;
         let opencode = self.opencode_snapshot.clone();
         self.pages_mut()
@@ -709,6 +716,14 @@ impl App {
             Msg::ProviderBulkAction(action) => self.request_provider_bulk_action(action, ctx),
             Msg::ProviderDetails(provider) => self.open_provider_details(&provider, ctx),
             Msg::OpenEvent(row) => self.open_event(&row, ctx),
+            Msg::OpenEventLink(row) => match self.service.open_event_link(&row.event) {
+                Ok(true) => {}
+                Ok(false) => ctx.notify(Notification::warning(
+                    "No link set",
+                    "This event has no link to open.",
+                )),
+                Err(error) => ctx.notify(Notification::error("Cannot open link", error)),
+            },
             Msg::DeleteEvents(target) => self.confirm_delete_events(target, ctx),
             Msg::DeleteEventsConfirmed(target) => {
                 if self.event_action.is_none() {
@@ -746,6 +761,9 @@ impl App {
             }
             Msg::RuleDraftStartInstance(draft, start) => {
                 self.set_rule_draft_start_instance(draft, start, ctx);
+            }
+            Msg::RuleDraftFocusPane(draft, focus) => {
+                self.set_rule_draft_focus_pane(draft, focus, ctx);
             }
             Msg::FocusEvent(sequence) => {
                 self.event_focus_action = Some(self.service.retained_event(sequence));
@@ -810,7 +828,6 @@ impl App {
                 }
             }
             Msg::SetOpencodeIntegration(enabled) => {
-                self.acceptance_selection.borrow_mut().take();
                 match self.service.set_opencode_enabled(enabled) {
                     Ok(reply) => self.settings_save = Some(reply),
                     Err(error) => ctx.notify(Notification::error("Cannot save settings", error)),
@@ -847,7 +864,6 @@ impl App {
                 ctx.request_redraw();
             }
             Msg::Close => {
-                self.acceptance_selection.borrow_mut().take();
                 self.rule_editor = None;
                 self.provider_confirmation = None;
                 self.provider_stream_confirmation = None;
@@ -869,9 +885,17 @@ impl App {
                 self.template_details = None;
             }
             Msg::NameChanged(name) => self.name = name,
+            Msg::OpencodeSessionAction(id, action) => {
+                self.request_opencode_session_action(id, action, ctx);
+            }
+            Msg::ClearOpencodeFolder(directory) => {
+                self.request_clear_opencode_folder(directory, ctx);
+            }
             Msg::DescriptionChanged(description) => self.description = description,
             Msg::InitialPromptChanged(prompt) => self.creation.prompt = prompt,
-            Msg::StartInstanceChanged(start) => self.creation.start_instance = start,
+            Msg::StartInstanceChanged(start) => {
+                self.creation.start_instance = start && self.creation.can_start_instance;
+            }
             Msg::OpenSettings => self.open_settings(ctx),
             Msg::CompletionFadeChanged(value) => {
                 match self.service.set_completion_fade_seconds(value) {
@@ -919,6 +943,9 @@ impl App {
                 self.copy_gateway_url(ctx);
             }
             Msg::Submit => {
+                if self.submit_opencode_session_edit(ctx) {
+                    return;
+                }
                 if let Some((name, stream, action)) = self.provider_stream_confirmation.take() {
                     self.start_provider_stream_action(name, stream, action);
                     self.handle_message(Msg::Close, ctx);
@@ -1057,6 +1084,13 @@ impl App {
                     Some(Intent::CloseOpencodeSessions(_)) => {
                         unreachable!("OpenCode sessions are handled before operations")
                     }
+                    Some(
+                        Intent::RenameOpencodeSession(_)
+                        | Intent::DeleteOpencodeSession(_)
+                        | Intent::ClearOpencodeFolder(_),
+                    ) => {
+                        unreachable!("OpenCode session edits are handled before operations")
+                    }
                     Some(Intent::UpdateDescription(_)) => {
                         unreachable!("description updates are handled before operations")
                     }
@@ -1094,7 +1128,9 @@ impl App {
         self.view.set_active_with_context(true, ctx);
         if matches!(
             self.intent,
-            Some(Intent::CreateInstance(_) | Intent::NewTemplate)
+            Some(
+                Intent::CreateInstance(_) | Intent::NewTemplate | Intent::RenameOpencodeSession(_)
+            )
         ) {
             ctx.focus(tuicore::FocusRequest::Path(tuicore::TreePath::from_keys([
                 tuicore::ChildKey::second(),
@@ -1142,6 +1178,9 @@ impl App {
             | Intent::ServiceState { name, .. }
             | Intent::Restart { name, .. } => Some(name),
             Intent::UpdateDescription(_)
+            | Intent::RenameOpencodeSession(_)
+            | Intent::DeleteOpencodeSession(_)
+            | Intent::ClearOpencodeFolder(_)
             | Intent::CloseOpencodeSessions(_)
             | Intent::NewTemplate
             | Intent::StopTemplate(_)
@@ -1267,6 +1306,9 @@ impl App {
                 opencode::Target::Workspace => None,
             };
         }
+        if self.attached_sessions_only && row.instance.is_some() {
+            return Some(Action::GotoInstance);
+        }
         if row.cleanup_target.is_some() {
             return Some(Action::Details);
         }
@@ -1296,6 +1338,9 @@ impl App {
             return false;
         };
         match action {
+            action_menu::Action::GotoInstance => {
+                self.handle_message(Msg::AcceptanceInstance(row.instance.unwrap()), ctx);
+            }
             action_menu::Action::OpenPanel | action_menu::Action::GotoPanel => {
                 self.activate_opencode(&row, ctx);
             }
@@ -1319,6 +1364,7 @@ impl App {
         let close_opencode_group =
             self.service.opencode_enabled() && opencode::close_scope(&row).is_some();
         let enter_action = self.row_enter_action(&row);
+        let clear_folder = opencode::clearable_folder(&row).map(str::to_owned);
         let menu = self.menu_layer_mut();
         menu.layer_mut().open(
             action_menu::Target {
@@ -1332,12 +1378,17 @@ impl App {
                 cleanup: row.cleanup_target.is_some(),
                 new_opencode,
                 close_opencode_group,
+                clear_folder,
                 workspace_missing: row.workspace_missing,
                 enter_action,
                 opencode_session: row
                     .opencode
                     .as_ref()
                     .and_then(opencode::Target::session_action),
+                session_id: match &row.opencode {
+                    Some(opencode::Target::Session { id, .. }) => Some(id.clone()),
+                    _ => None,
+                },
                 close_opencode: row
                     .opencode
                     .as_ref()
@@ -1391,6 +1442,12 @@ impl App {
                     self.open_selected_route(ctx);
                     return;
                 }
+                action_menu::Action::GotoInstance => {
+                    if let Some(name) = self.selected().and_then(|row| row.instance) {
+                        self.handle_message(Msg::AcceptanceInstance(name), ctx);
+                    }
+                    return;
+                }
                 action_menu::Action::OpenPanel | action_menu::Action::GotoPanel => {
                     if let Some(row) = self.selected() {
                         self.activate_opencode(&row, ctx);
@@ -1400,6 +1457,18 @@ impl App {
                 action_menu::Action::CloseSession => {
                     if let Some(row) = self.selected() {
                         self.close_opencode(&row, ctx);
+                    }
+                    return;
+                }
+                action_menu::Action::RenameSession
+                | action_menu::Action::DeleteSession
+                | action_menu::Action::ClearFolder => {
+                    if let Some(message) = self
+                        .menu_layer_mut()
+                        .layer_mut()
+                        .session_edit_message(action)
+                    {
+                        self.handle_message(message, ctx);
                     }
                     return;
                 }
@@ -1581,7 +1650,8 @@ impl App {
             .filter(|row| index == 0 || row.opencode.is_none());
         self.name.clear();
         self.description.clear();
-        self.creation.reset_form();
+        self.creation
+            .reset_form(row.as_ref().is_some_and(|row| !row.compose_file.is_empty()));
         match index {
             0 => {
                 if let Some(row) = row.filter(|row| !row.informational) {
@@ -1823,7 +1893,10 @@ impl App {
             && matches!(
                 self.intent,
                 Some(
-                    Intent::CreateInstance(_) | Intent::NewTemplate | Intent::UpdateDescription(_)
+                    Intent::CreateInstance(_)
+                        | Intent::NewTemplate
+                        | Intent::UpdateDescription(_)
+                        | Intent::RenameOpencodeSession(_)
                 )
             )
             && let TuiEvent::Key(key) = event
@@ -1844,6 +1917,22 @@ impl App {
         }
         if instances::is_searching(&self.instances) {
             return false;
+        }
+        if let Some(action) = opencode::SessionAction::from_event(event)
+            && let Some(row) = self.selected()
+            && let Some(opencode::Target::Session { id, .. }) = row.opencode
+        {
+            self.request_opencode_session_action(id, action, ctx);
+            ctx.stop_propagation();
+            return true;
+        }
+        if matches!(event, TuiEvent::Key(key) if KeySpec::plain('x').matches(*key))
+            && let Some(row) = self.selected()
+            && let Some(directory) = opencode::clearable_folder(&row)
+        {
+            self.request_clear_opencode_folder(directory.to_owned(), ctx);
+            ctx.stop_propagation();
+            return true;
         }
         if matches!(event, TuiEvent::Key(key) if KeySpec::key(tuicore::Key::Enter).matches(*key))
             && self.activate_row(ctx)
@@ -1905,14 +1994,6 @@ impl App {
             ctx.stop_propagation();
             return true;
         }
-        if let TuiEvent::Key(key) = event
-            && open_panel_key().matches(*key)
-            && let Some(row) = self.selected()
-            && self.activate_opencode(&row, ctx)
-        {
-            ctx.stop_propagation();
-            return true;
-        }
         if Self::yank_requested(event) && self.open_yank_menu(ctx) {
             ctx.stop_propagation();
             return true;
@@ -1939,10 +2020,6 @@ impl App {
     }
 
     fn after_event(&mut self, ctx: &mut EventCtx<Msg>) {
-        let selection = self.acceptance_selection.borrow_mut().take();
-        if let Some(target) = selection {
-            self.acceptance_action(target, row_actions::Command::Session, ctx);
-        }
         let sound = self.settings_sound_choice.borrow_mut().take();
         if let Some(sound) = sound {
             self.handle_message(sound, ctx);
@@ -2099,6 +2176,7 @@ impl TuiNode<Msg> for App {
         }
         self.service.poll_opencode();
         self.poll_opencode_action();
+        self.poll_opencode_cleanups();
         if self.refresh_schedule.tick(Instant::now()) {
             self.service.poll_environments();
         }

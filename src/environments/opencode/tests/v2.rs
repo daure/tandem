@@ -33,8 +33,11 @@ fn native_history_cleanup_checks_children_approvals_queued_work_and_no_content_d
         let data = server.data.lock().unwrap();
         if guard == "idle" {
             result.unwrap();
-            assert_eq!(data.deleted, ["ses_child", "ses_old"]);
-            assert!(data.sessions.contains_key("ses_elsewhere"));
+            assert_eq!(data.deleted, ["ses_old"]);
+            assert_eq!(
+                data.sessions.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["ses_elsewhere"]
+            );
         } else {
             assert!(result.is_err(), "{guard}");
             assert!(data.deleted.is_empty(), "{guard}");

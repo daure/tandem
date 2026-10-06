@@ -9,8 +9,17 @@ pub(super) fn lease(id: i64) -> String {
     format!("conclusion-{id}")
 }
 
-pub(crate) fn reserve(config: &Config, id: i64) -> Result<gateway::Lock, String> {
-    gateway::lock(config, &lease(id))
+fn worker_lease(id: i64, name: &str) -> String {
+    // Zero identifies cleanup without an acceptance-owned report.
+    if id == 0 {
+        format!("conclusion-instance-{name}")
+    } else {
+        lease(id)
+    }
+}
+
+pub(crate) fn reserve(config: &Config, id: i64, name: &str) -> Result<gateway::Lock, String> {
+    gateway::lock(config, &worker_lease(id, name))
 }
 
 pub(crate) fn launch(
@@ -99,7 +108,7 @@ pub(crate) fn claim(
     name: &str,
     descriptors: [i32; 3],
 ) -> Result<Claimed, String> {
-    if id <= 0
+    if id < 0
         || descriptors[0] == descriptors[1]
         || descriptors[0] == descriptors[2]
         || descriptors[1] == descriptors[2]
@@ -114,6 +123,6 @@ pub(crate) fn claim(
             &format!("rules-{}", config.namespace),
             descriptors[1],
         )?,
-        _completion: startup::inherit(config, &lease(id), descriptors[2])?,
+        _completion: startup::inherit(config, &worker_lease(id, name), descriptors[2])?,
     })
 }

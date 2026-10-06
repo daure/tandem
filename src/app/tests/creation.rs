@@ -75,6 +75,99 @@ fn creation_preserves_literal_prompts_and_resets_fields_between_dialogs() {
 }
 
 #[test]
+fn creation_start_toggle_requires_a_template_compose_file() {
+    init_ui();
+    let mut app = root(AppService::for_tests());
+    let mut ctx = EventCtx::new(AnimationSettings::default());
+    for has_compose in [true, false, true] {
+        let mut inventory = snapshot();
+        if !has_compose {
+            inventory.templates[0].compose_file.clear();
+            inventory.templates[0].compose_source.clear();
+            inventory.instances[0].services.clear();
+            inventory.instances[0].workspace_only = true;
+        }
+        app.set_rows_for_tests(rows::from_snapshot(&inventory));
+        for selected in ["template:/tmp/templates/website", "instance:review"] {
+            crate::app::instances::set_highlighted(&app.instances, Some(selected.into()));
+            app.action(1, &mut ctx);
+            assert_eq!(app.creation.start_instance, has_compose);
+
+            let area = Rect::new(0, 0, 100, 40);
+            let mut layout = LayoutEngine::new();
+            layout.layout(&mut app, area);
+            let target = layout
+                .focus_targets()
+                .iter()
+                .find(|target| {
+                    target
+                        .path
+                        .keys()
+                        .iter()
+                        .any(|key| key.as_str() == "start-instance")
+                })
+                .unwrap()
+                .clone();
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let mut render = RenderCtx::new();
+                    app.render(frame, area, &mut render);
+                    render.flush(frame);
+                })
+                .unwrap();
+            let lines = rendered_lines(&terminal, area);
+            let line = lines
+                .iter()
+                .find(|line| line.contains("Start instance"))
+                .unwrap();
+            assert!(line.contains(if has_compose {
+                "──●"
+            } else {
+                "○──"
+            }));
+            if !has_compose {
+                let label_x = line.find('S').unwrap();
+                let label_x = line[..label_x].chars().count() as u16;
+                let label_y = lines
+                    .iter()
+                    .position(|candidate| candidate == line)
+                    .unwrap() as u16;
+                assert_eq!(
+                    terminal
+                        .backend()
+                        .buffer()
+                        .cell((label_x, label_y))
+                        .unwrap()
+                        .fg,
+                    tuicore::theme().muted_fg(),
+                );
+            }
+
+            app.dispatch_focus(&target, true, &mut tuicore::FocusCtx::default());
+            let mut input = EventCtx::new(AnimationSettings::default());
+            app.dispatch_event(
+                &EventRoute::new(target.path),
+                &TuiEvent::Key(KeyEvent::from(Key::Char(' '))),
+                &mut input,
+            );
+            if has_compose {
+                assert!(matches!(
+                    input.messages(),
+                    [Msg::StartInstanceChanged(false)]
+                ));
+            } else {
+                assert!(input.messages().is_empty());
+                app.handle_message(Msg::StartInstanceChanged(true), &mut ctx);
+                assert!(!app.creation.start_instance);
+            }
+            app.handle_message(Msg::StartInstanceChanged(false), &mut ctx);
+            app.handle_message(Msg::Close, &mut ctx);
+        }
+    }
+}
+
+#[test]
 fn creation_launch_errors_are_reported_for_each_instance() {
     let mut app = root(AppService::for_tests());
     let (pending, reply) = tokio::sync::oneshot::channel();

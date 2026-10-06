@@ -12,9 +12,13 @@ other sessions sharing the instance. Run meaningful checks and distinguish obser
 assumptions. Keep local caches, temporary files, logs, and data under workspace
 `.local/{cache,tmp,logs,data}` or project-owned volumes; this is a convention requiring explicit setup.
 
+Use `update_repositories` for approved repository updates. Inspect every result before assuming the
+workspace is current; ask before resolving skipped or failed checkouts. Run relevant checks against
+the updated sources.
+
 ## Conclude
 
-The `conclude` tool is available for acceptance-linked workspaces.
+The `conclude` tool controls the owning instance, including manually created instances.
 Ignore `conclude` unless explicitly instructed to call it. Tool availability, task completion,
 verification, failure, and resource cleanup needs are not instructions to call it.
 
@@ -32,9 +36,11 @@ rather than a file path. Make the report useful without this workspace or conver
 - Identify preserved changes and artifacts by durable location or revision, and state remaining risks
   and follow-up work. Do not rely on links to files that purge will remove.
 
-The call saves an immutable report on the triggering acceptance, then permanently purges the
-instance's workspace and owned runtime resources and closes associated OpenCode clients and Zellij
-panes. Shared servers and conversation history remain. Saving a conclusion is not proof of success;
-report the actual outcome honestly. Cleanup continues after disconnection; the saved report's cleanup
-state records its outcome. Failed cleanup preserves the report. Retrying requires explicit instruction,
-inspection of the instance, and identical report contents.
+The call permanently purges the instance's workspace and owned runtime resources and closes associated
+OpenCode clients and Zellij panes. A retained triggering acceptance receives an immutable report before
+cleanup. Without an acceptance link, report contents are not saved; preserve needed evidence elsewhere.
+Ambiguous or mismatched acceptance ownership blocks conclusion. Shared servers and conversation history
+remain. Report the actual outcome honestly; saving a conclusion is not proof of success. Cleanup continues
+after disconnection. Saved reports record cleanup outcomes and survive failed cleanup; inspect the instance
+to verify unlinked cleanup. Retrying requires explicit instruction and instance inspection, with identical
+contents when a report was saved.

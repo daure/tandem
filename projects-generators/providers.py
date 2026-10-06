@@ -40,6 +40,8 @@ def sample(profile):
         "context": {"complete": False, "items": [{"summary": context}]},
         "metadata": {"fixture": True, "custom": {"team": "platform", "application": "gateway"}},
     }
+    if profile == "ticket":
+        event["url"] = "https://jira.example.com/browse/PLAT-142"
     if profile != "message":
         return [event]
     support = {
@@ -81,10 +83,12 @@ def create_providers(root):
         asset("providers/provider.py", package / "src/provider.py")
         write_json(package / "sample.json", sample(profile))
         write_json(package / "provider.json", {
-            "schema_version": 1, "name": name, "profile": profile,
+            "schema_version": 2, "name": name,
             "description": f"Synthetic {name.title()} events with durable delivery and feedback",
             "protocol": "tandem-events-v1", "feedback": ["received", "replayed", "acknowledged"],
-            "streams": sorted({event["stream"] for event in sample(profile)}), "stream_control": True,
+            "streams": [{"name": stream, "profile": profile}
+                        for stream in sorted({event["stream"] for event in sample(profile)})],
+            "stream_control": True,
         })
         write(package / "Dockerfile", f"FROM {PYTHON_IMAGE}\n"
               "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\nWORKDIR /app\n"
@@ -93,9 +97,11 @@ def create_providers(root):
         write(package / "README.md", f"# {name.title()} provider\n\n"
               "Synthetic events; no external account or API connection is required. "
               "Edit the ordered event samples in `sample.json` to change payloads and streams. "
-               "The runtime cycles through the samples and adds a one-based `metadata.stream_sequence` per stream. "
-               "It polls authenticated stream controls, stops generating disabled streams before acknowledgment, "
-               "and resumes with new events only. "
+              "Declare each stream's name and profile in the schema-version-2 `provider.json`; "
+              "one collector can expose streams with different profiles. "
+              "The runtime cycles through the samples and adds a one-based `metadata.stream_sequence` per stream. "
+              "It polls authenticated stream controls, stops generating disabled streams before acknowledgment, "
+              "and resumes with new events only. "
               "The runtime assigns stable event IDs and stores retry/checkpoint state under `/state`. "
               "`src/provider.py` consumes and acknowledges provider-scoped feedback.\n")
         services[name] = {

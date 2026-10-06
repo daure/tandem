@@ -7,6 +7,10 @@ use super::clean;
 use crate::store::events::{Payload, ProcessingStatus, Record, SeverityColor};
 use crate::store::rules::DispatchStatus;
 
+#[cfg(test)]
+#[path = "tests/rows.rs"]
+mod tests;
+
 pub(crate) fn profile_icon(profile: &str) -> &'static str {
     match profile {
         "message" => "",
@@ -16,7 +20,7 @@ pub(crate) fn profile_icon(profile: &str) -> &'static str {
     }
 }
 
-pub(crate) fn row_text(row: &Record) -> Text<'static> {
+pub(crate) fn row_text(row: &Record, available_width: Option<u16>) -> Text<'static> {
     let theme = tuicore::theme();
     let normal = Style::default().fg(theme.text_fg());
     let muted = Style::default().fg(theme.muted_fg());
@@ -134,10 +138,65 @@ pub(crate) fn row_text(row: &Record) -> Text<'static> {
             }
         }
     }
+    if let Ok(date) = chrono::DateTime::parse_from_rfc3339(&row.received_at) {
+        let timestamp = date
+            .with_timezone(&chrono::Local)
+            .format("%d %b %Y %H:%M")
+            .to_string();
+        right_suffix(&mut header, &timestamp, available_width, normal);
+    }
     Text::from(vec![
         Line::from(header),
         Line::from(Span::styled(clean(body), normal)),
     ])
+}
+
+pub(super) fn right_suffix(
+    spans: &mut Vec<Span<'static>>,
+    suffix: &str,
+    available_width: Option<u16>,
+    style: Style,
+) {
+    let muted = Style::default().fg(tuicore::theme().muted_fg());
+    let suffix_width = Line::from(suffix).width();
+    let padding = if let Some(width) = available_width.map(usize::from) {
+        if width <= suffix_width + 2 {
+            return;
+        }
+        truncate_line(spans, width - suffix_width - 2, muted);
+        width - suffix_width - spans.iter().map(Span::width).sum::<usize>()
+    } else {
+        2
+    };
+    spans.push(Span::styled(" ".repeat(padding), muted));
+    spans.push(Span::styled(suffix.to_owned(), style));
+}
+
+fn truncate_line(header: &mut Vec<Span<'static>>, width: usize, muted: Style) {
+    if header.iter().map(Span::width).sum::<usize>() <= width {
+        return;
+    }
+    let ellipsis = ".".repeat(width.min(3));
+    let mut remaining = width - ellipsis.len();
+    let mut truncated = Vec::new();
+    for span in std::mem::take(header) {
+        let mut content = String::new();
+        for grapheme in span.styled_graphemes(Style::default()) {
+            let grapheme_width = Line::from(grapheme.symbol).width();
+            if grapheme_width > remaining {
+                break;
+            }
+            content.push_str(grapheme.symbol);
+            remaining -= grapheme_width;
+        }
+        let complete = content == span.content;
+        truncated.push(Span::styled(content, span.style));
+        if !complete || remaining == 0 {
+            break;
+        }
+    }
+    truncated.push(Span::styled(ellipsis, muted));
+    *header = truncated;
 }
 
 fn field(header: &mut Vec<Span<'static>>, value: &str, style: Style, separator: Style) {

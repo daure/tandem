@@ -5,6 +5,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "repository_updates.rs"]
+mod updates;
+
 fn git_test(path: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .current_dir(path)

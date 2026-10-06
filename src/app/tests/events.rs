@@ -94,7 +94,7 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     show_all_events(&mut app);
     let theme = tuicore::theme();
     for row in service.event_snapshot().records {
-        let text = crate::app::events::row_text(&row);
+        let text = crate::app::events::row_text(&row, None);
         assert_eq!(text.lines.len(), 2);
         assert_eq!(text.lines[0].spans[0].style.fg, Some(theme.text_fg()));
         assert_eq!(text.lines[0].spans[2].style.fg, Some(theme.text_fg()));
@@ -106,8 +106,15 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
         );
         assert_eq!(text.lines[1].spans[0].style.fg, Some(theme.text_fg()));
         assert_eq!(text.lines[0].spans[4].content, format!("#{}", row.sequence));
+        let timestamp = chrono::DateTime::parse_from_rfc3339(&row.received_at)
+            .unwrap()
+            .with_timezone(&chrono::Local)
+            .format("%d %b %Y %H:%M")
+            .to_string();
+        assert_eq!(text.lines[0].spans.last().unwrap().content, timestamp);
         for span in &text.lines[0].spans {
             let color = match span.content.as_ref() {
+                "  " => theme.muted_fg(),
                 value if value == format!("#{}", row.sequence) => theme.muted_fg(),
                 " · " | "󱡠" | "Sam" | "production" | "sample.generic.observed" => {
                     theme.muted_fg()
@@ -119,7 +126,7 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
         }
         let mut accepted = row.clone();
         accepted.attempts[0].status = crate::store::events::ProcessingStatus::Accepted;
-        let accepted_text = crate::app::events::row_text(&accepted);
+        let accepted_text = crate::app::events::row_text(&accepted, None);
         assert_eq!(accepted_text.lines.len(), 2);
         assert_eq!(
             accepted_text.lines[0].spans[0].style.fg,
@@ -128,9 +135,9 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
         assert_eq!(accepted_text.lines[0].spans[1..], text.lines[0].spans[1..]);
         assert_eq!(accepted_text.lines[1], text.lines[1]);
         accepted.attempts.insert(0, row.attempts[0].clone());
-        assert_eq!(crate::app::events::row_text(&accepted), text);
+        assert_eq!(crate::app::events::row_text(&accepted, None), text);
         accepted.attempts.clear();
-        assert_eq!(crate::app::events::row_text(&accepted), text);
+        assert_eq!(crate::app::events::row_text(&accepted, None), text);
     }
     for width in [40, 130] {
         let (layout, text) = render(&mut app, width);
@@ -152,8 +159,33 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
                 ),
                 (" sample · #4 · sample.generic.observed", "A sensor sample"),
             ] {
-                let index = lines.iter().position(|line| *line == header).unwrap();
-                assert_eq!(lines[index + 1], body);
+                let index = lines
+                    .iter()
+                    .position(|line| line.starts_with(header))
+                    .unwrap();
+                let row = service
+                    .event_snapshot()
+                    .records
+                    .into_iter()
+                    .find(|row| {
+                        crate::app::events::row_text(row, None).lines[1].to_string() == body
+                    })
+                    .unwrap();
+                let timestamp = chrono::DateTime::parse_from_rfc3339(&row.received_at)
+                    .unwrap()
+                    .with_timezone(&chrono::Local)
+                    .format("%d %b %Y %H:%M")
+                    .to_string();
+                assert!(lines[index].ends_with(&timestamp), "{}", lines[index]);
+                assert!(lines[index + 1].starts_with(body), "{}", lines[index + 1]);
+                let target = chrono::DateTime::parse_from_rfc3339(&row.received_at).unwrap();
+                let target = time::OffsetDateTime::from_unix_timestamp(target.timestamp()).unwrap();
+                let relative = tuicore::RelativeDate::new(target);
+                assert!(
+                    lines[index + 1].ends_with(relative.text()),
+                    "{}",
+                    lines[index + 1]
+                );
             }
         }
         assert!(
@@ -188,6 +220,7 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
     assert!(app.menu_layer().is_active());
     let text = render(&mut app, 130).1;
     for (label, key) in [
+        ("Open link", "Enter"),
         ("View details", "d"),
         ("Replay", "r"),
         ("Go to provider", "p"),
@@ -198,9 +231,6 @@ fn events_are_the_second_tab_and_render_all_four_profiles_with_inspectable_metad
             .find(|line| line.contains(&format!("{label}   ")))
             .unwrap();
         assert!(line.trim_end_matches([' ', '┃']).ends_with(key), "{line}");
-        if label == "View details" {
-            assert!(line.contains("Enter / d"), "{line}");
-        }
     }
     app.event(
         &TuiEvent::Key(KeyEvent::from(Key::Esc)),
@@ -448,7 +478,7 @@ fn optional_event_fields_omit_blank_values_and_environment_aliases_are_display_o
             json!({"profile":"message","data":{"author":"Alex","channel":"development","text":"Hello","thread":optional}}),
         );
         assert_eq!(
-            crate::app::events::row_text(&message).lines[0].to_string(),
+            crate::app::events::row_text(&message, None).lines[0].to_string(),
             " slack-work · #1 · Alex · development"
         );
         let ticket = record(
@@ -456,7 +486,7 @@ fn optional_event_fields_omit_blank_values_and_environment_aliases_are_display_o
             json!({"profile":"ticket","data":{"key":"DEV-42","status":"Open","title":"Fix","assignee":optional}}),
         );
         assert_eq!(
-            crate::app::events::row_text(&ticket).lines[0].to_string(),
+            crate::app::events::row_text(&ticket, None).lines[0].to_string(),
             " jira-work · #1 · DEV-42 · Open"
         );
         let system = record(
@@ -464,11 +494,11 @@ fn optional_event_fields_omit_blank_values_and_environment_aliases_are_display_o
             json!({"profile":"system_event","data":{"resource":"api-server","signal":"health.failed","severity":"odd label","description":"Check","environment":optional}}),
         );
         assert_eq!(
-            crate::app::events::row_text(&system).lines[0].to_string(),
+            crate::app::events::row_text(&system, None).lines[0].to_string(),
             " build-monitor · #1 · api-server · health.failed · odd label"
         );
         assert_eq!(
-            crate::app::events::row_text(&system).lines[0]
+            crate::app::events::row_text(&system, None).lines[0]
                 .spans
                 .last()
                 .unwrap()
@@ -482,7 +512,7 @@ fn optional_event_fields_omit_blank_values_and_environment_aliases_are_display_o
         json!({"profile":"ticket","data":{"key":"DEV-42","status":"Open","title":"Fix","assignee":" Unknown "}}),
     );
     assert_eq!(
-        crate::app::events::row_text(&unknown).lines[0].to_string(),
+        crate::app::events::row_text(&unknown, None).lines[0].to_string(),
         " jira-work · #1 · DEV-42 · Open · Unknown"
     );
     for (value, label) in [
@@ -502,7 +532,7 @@ fn optional_event_fields_omit_blank_values_and_environment_aliases_are_display_o
         );
         let original = system.clone();
         assert_eq!(
-            crate::app::events::row_text(&system).lines[0].to_string(),
+            crate::app::events::row_text(&system, None).lines[0].to_string(),
             format!(" build-monitor · #1 · api-server · {label} · health.failed · Info")
         );
         assert_eq!(system, original);
@@ -526,7 +556,7 @@ fn severity_override_colors_only_the_supplied_label_and_event_text_is_sanitized(
             "monitor\u{202e}\n",
             json!({"profile":"system_event","data":{"resource":"api\tserver","environment":" qa\u{2066} ","signal":"health\u{202a}.failed","severity":" cUsToM\u{2069}label ","severity_color":color,"description":"Check\nnow\u{001b}"}}),
         );
-        let text = crate::app::events::row_text(&row);
+        let text = crate::app::events::row_text(&row, None);
         assert_eq!(text.lines.len(), 2);
         assert_eq!(
             text.lines[0].to_string(),
@@ -542,7 +572,7 @@ fn severity_override_colors_only_the_supplied_label_and_event_text_is_sanitized(
         "slack\u{202e}",
         json!({"profile":"message","data":{"author":"Alex\u{2066}","channel":"dev\nroom","text":"Hi\tthere","thread":"\u{202e}reply"}}),
     );
-    let text = crate::app::events::row_text(&message);
+    let text = crate::app::events::row_text(&message, None);
     assert_eq!(
         text.lines[0].to_string(),
         " slack  · #1 · Alex  · dev room · 󱡠"
@@ -552,7 +582,7 @@ fn severity_override_colors_only_the_supplied_label_and_event_text_is_sanitized(
         "jira",
         json!({"profile":"ticket","data":{"key":"DEV\u{2069}-42","status":"In\rprogress","title":"Fix\nnow","assignee":" Sa\u{202e}m "}}),
     );
-    let text = crate::app::events::row_text(&ticket);
+    let text = crate::app::events::row_text(&ticket, None);
     assert_eq!(
         text.lines[0].to_string(),
         " jira · #1 · DEV -42 · In progress · Sa m"
@@ -561,7 +591,7 @@ fn severity_override_colors_only_the_supplied_label_and_event_text_is_sanitized(
     let mut generic = record("sensor", json!({"profile":"generic","data":{}}));
     generic.event.event_type = "sample\u{202a}.observed".into();
     generic.event.summary = "A\nsummary".into();
-    let text = crate::app::events::row_text(&generic);
+    let text = crate::app::events::row_text(&generic, None);
     assert_eq!(
         text.lines[0].to_string(),
         " sensor · #1 · sample .observed"

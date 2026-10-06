@@ -115,6 +115,7 @@ impl AppService {
         .unwrap();
         let mut service = Self::from_config(config).unwrap();
         Arc::get_mut(&mut service.state).unwrap()._test_home = Some(directory);
+        service.set_opencode_snapshot_for_tests(Default::default());
         service
     }
 

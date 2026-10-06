@@ -38,7 +38,7 @@ pub(super) struct State {
     center_highlighted: bool,
     select_first: bool,
     select_created: Option<(bool, String)>,
-    select_pane: Option<(crate::store::opencode::Pane, Instant)>,
+    expand_session: Option<(crate::store::opencode::SessionLocation, Instant)>,
     attached_sessions_only: bool,
     mode_changed: bool,
     pub(super) resource_right_gutter: u16,
@@ -149,9 +149,12 @@ pub(super) fn select_instance(state: &SharedState, name: &str) {
     select_item(state, true, name);
 }
 
-pub(super) fn select_opencode_pane(state: &SharedState, pane: crate::store::opencode::Pane) {
+pub(super) fn expand_opencode_session(
+    state: &SharedState,
+    location: crate::store::opencode::SessionLocation,
+) {
     let mut state = state.borrow_mut();
-    state.select_pane = Some((pane, Instant::now() + Duration::from_secs(30)));
+    state.expand_session = Some((location, Instant::now() + Duration::from_secs(30)));
     state.select_created = None;
     state.rows_changed = true;
 }
@@ -159,7 +162,7 @@ pub(super) fn select_opencode_pane(state: &SharedState, pane: crate::store::open
 fn select_item(state: &SharedState, instance: bool, name: &str) {
     let mut state = state.borrow_mut();
     state.select_created = Some((instance, name.into()));
-    state.select_pane = None;
+    state.expand_session = None;
     state.rows_changed = true;
 }
 
@@ -198,7 +201,7 @@ impl Instances {
             (state.rows.clone(), state.attached_sessions_only)
         };
         let initial_expansion_pending = !rows.iter().any(|row| row.instance.is_some());
-        let expanded = Self::fully_expanded_ids(&rows, agent_view);
+        let expanded = Self::default_expanded_ids(&rows, agent_view);
         let spinner = Rc::new(RefCell::new(Spinner::new()));
         let cell_spinner = Rc::clone(&spinner);
         let memory_spinner = Rc::clone(&spinner);
@@ -320,22 +323,22 @@ impl Instances {
                 mode_changed,
             )
         };
-        let select_pane = {
+        let expand_session = {
             let mut state = self.state.borrow_mut();
             if state
-                .select_pane
+                .expand_session
                 .as_ref()
                 .is_some_and(|(_, deadline)| Instant::now() >= *deadline)
             {
-                state.select_pane = None;
+                state.expand_session = None;
             }
             state
-                .select_pane
+                .expand_session
                 .as_ref()
-                .and_then(|(pane, _)| selection::pane_row(&rows, pane))
+                .and_then(|(location, _)| selection::session_row(&rows, location))
                 .map(|row| (row.id.clone(), row.parent.clone()))
         };
-        let select_created = select_pane.or_else(|| {
+        let select_created = {
             self.state
                 .borrow()
                 .select_created
@@ -351,7 +354,7 @@ impl Instances {
                         })
                         .map(|row| (row.id.clone(), row.parent.clone()))
                 })
-        });
+        };
         let query = if select_created.is_some() {
             String::new()
         } else {
@@ -362,8 +365,7 @@ impl Instances {
             .iter()
             .filter(|row| {
                 row.parent.is_none()
-                    && (agent_view || !Self::external_workspace(row))
-                    && !Self::external_workspaces_group(row)
+                    && (!agent_view || !Self::external_workspaces_group(row))
                     && !self
                         .tree
                         .rows()
@@ -375,7 +377,8 @@ impl Instances {
         let instances_with_new_children = rows
             .iter()
             .filter(|row| {
-                row.instance.is_some()
+                agent_view
+                    && row.instance.is_some()
                     && !self
                         .tree
                         .rows()
@@ -440,7 +443,7 @@ impl Instances {
         self.stripe_query = query;
         if mode_changed && !agent_view {
             self.tree.collapse_all();
-            for id in Self::overview_expanded_ids(self.tree.rows()) {
+            for id in Self::default_expanded_ids(self.tree.rows(), agent_view) {
                 self.tree.expand(&id);
             }
         }
@@ -474,7 +477,7 @@ impl Instances {
             self.tree.highlight_id(&id);
         }
         if select_first {
-            self.highlight_first_template();
+            self.highlight_first_row();
             self.tree.reveal_highlighted();
         }
         if let Some((id, parent)) = select_created {
@@ -493,7 +496,19 @@ impl Instances {
             self.tree.highlight_id(&id);
             self.tree.reveal_highlighted();
             self.state.borrow_mut().select_created = None;
-            self.state.borrow_mut().select_pane = None;
+        }
+        if let Some((_, parent)) = expand_session {
+            let mut ancestor = parent;
+            while let Some(parent) = ancestor {
+                self.tree.expand(&parent);
+                ancestor = self
+                    .tree
+                    .rows()
+                    .iter()
+                    .find(|row| row.id == parent)
+                    .and_then(|row| row.parent.clone());
+            }
+            self.state.borrow_mut().expand_session = None;
         }
         self.record_highlighted();
         true
@@ -611,7 +626,7 @@ impl Instances {
         false
     }
 
-    fn fully_expanded_ids(rows: &[Row], include_external: bool) -> Vec<String> {
+    fn default_expanded_ids(rows: &[Row], agent_view: bool) -> Vec<String> {
         let parent_ids = rows
             .iter()
             .filter_map(|row| row.parent.clone())
@@ -619,20 +634,18 @@ impl Instances {
         rows.iter()
             .filter(|row| {
                 parent_ids.contains(&row.id)
-                    && !Self::external_workspaces_group(row)
-                    && (include_external || !Self::external_workspace(row))
+                    && if agent_view {
+                        !Self::external_workspaces_group(row)
+                    } else {
+                        row.parent.is_none()
+                    }
             })
             .map(|row| row.id.clone())
             .collect()
     }
 
-    fn highlight_first_template(&mut self) {
-        let first = self
-            .tree
-            .rows()
-            .iter()
-            .find(|row| row.is_template())
-            .map(|row| row.id.clone());
+    fn highlight_first_row(&mut self) {
+        let first = self.tree.rows().first().map(|row| row.id.clone());
         if let Some(id) = first {
             self.tree.highlight_id(&id);
         }
@@ -662,8 +675,10 @@ impl Instances {
     fn expand_overview(&mut self) {
         let highlighted = self.tree.highlighted_id();
         self.tree.collapse_all();
-        let expanded_ids =
-            Self::fully_expanded_ids(self.tree.rows(), self.state.borrow().attached_sessions_only);
+        let expanded_ids = Self::default_expanded_ids(
+            self.tree.rows(),
+            self.state.borrow().attached_sessions_only,
+        );
         for id in expanded_ids {
             self.tree.expand(&id);
         }

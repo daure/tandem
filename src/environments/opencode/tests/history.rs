@@ -26,7 +26,7 @@ fn cleanup_deletes_exact_directory_history_and_children_without_touching_neighbo
     server.session("ses_subfolder", "/work/review/repo", None);
     clear(&observer).unwrap();
     let data = server.data.lock().unwrap();
-    assert_eq!(data.deleted, ["ses_child", "ses_old"]);
+    assert_eq!(data.deleted, ["ses_old"]);
     assert_eq!(
         data.sessions.keys().cloned().collect::<Vec<_>>(),
         ["ses_neighbour", "ses_subfolder"]

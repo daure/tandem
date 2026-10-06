@@ -380,6 +380,7 @@ fn service_group_icon_summarizes_runtime_service_health() {
                         elapsed_milliseconds: 0,
                         estimate_milliseconds: None,
                         kind: crate::store::environments::StartupKind::Cold,
+                        ..Default::default()
                     },
                 );
             }
@@ -811,7 +812,7 @@ fn pending_instance_rows_are_visible_and_animate_before_container_discovery() {
 }
 
 #[test]
-fn new_instance_expands_when_it_appears_without_expanding_its_services() {
+fn new_instance_stays_collapsed_when_its_services_arrive() {
     init_ui();
     let mut empty = snapshot();
     empty.instances.clear();
@@ -832,7 +833,7 @@ fn new_instance_expands_when_it_appears_without_expanding_its_services() {
     let terminal = render(&mut tree, 110);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
     assert!(lines.iter().any(|line| line.contains("review")));
-    assert!(lines.iter().any(|line| line.contains("Service")));
+    assert!(!lines.iter().any(|line| line.contains("Service")));
     assert!(!lines.iter().any(|line| line.contains(" web")));
     expand_first_instance(&mut tree);
     let terminal = render(&mut tree, 110);
@@ -844,7 +845,7 @@ fn new_instance_expands_when_it_appears_without_expanding_its_services() {
 }
 
 #[test]
-fn startup_expands_instances_when_they_arrive_after_the_template_listing() {
+fn startup_expands_roots_one_level_when_instances_arrive_after_the_template_listing() {
     init_ui();
     let mut inventory = snapshot();
     let mut second_template = inventory.templates[0].clone();
@@ -867,8 +868,8 @@ fn startup_expands_instances_when_they_arrive_after_the_template_listing() {
     let text = rendered_lines(&terminal, Rect::new(0, 0, 110, 18)).join("\n");
     assert!(text.contains("review · Running"));
     assert!(text.contains("second · Running"));
-    assert!(text.contains("Service"));
-    assert!(text.contains(" web"));
+    assert!(!text.contains("Service"));
+    assert!(!text.contains(" web"));
     tree.focus(None, true, &mut tuicore::FocusCtx::default());
     tree.event(
         &TuiEvent::Key(KeyEvent::from(Key::Left)),

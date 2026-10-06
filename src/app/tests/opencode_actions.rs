@@ -100,6 +100,11 @@ fn close_all_hides_busy_saved_and_empty_clients_immediately_and_restores_failure
     init_ui();
     let mut observation = observation();
     observation.sessions[1].activity = Activity::Busy;
+    observation.sessions.push(Session {
+        id: "ses_shared_tab".into(),
+        panes: vec![observation.sessions[1].panes[0].clone()],
+        ..observation.sessions[1].clone()
+    });
     let mut app = root(AppService::for_tests());
     app.opencode_history = true;
     app.service

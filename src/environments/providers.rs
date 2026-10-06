@@ -354,7 +354,11 @@ impl Providers {
             .as_ref()
             .ok_or("provider manifest missing")?;
         if let Some(stream) = only_stream
-            && (!manifest.stream_control || !manifest.streams.iter().any(|name| name == stream))
+            && (!manifest.stream_control
+                || !manifest
+                    .streams
+                    .iter()
+                    .any(|declaration| declaration.name == stream))
         {
             return Err("Provider does not support controls for this stream".into());
         }

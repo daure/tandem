@@ -79,15 +79,19 @@ image tags are not content-addressed locks.
 ## Event providers
 
 The developer catalog includes synthetic `slack`, `jira`, `datadog`, and `github` packages.
-They require no external accounts or API connections. Slack uses the `message` profile for
-`messages` and `reactions`; Jira uses `ticket` for `backlog`; Datadog uses `system_event` for
-`production-gateway-issue`; GitHub uses `generic` for `releases`.
+They require no external accounts or API connections. Slack's `messages` and `reactions` streams use
+the `message` profile; Jira's `backlog` uses `ticket`; Datadog's `production-gateway-issue` uses
+`system_event`; GitHub's `releases` uses `generic`.
 Each owns a Dockerfile, `src/provider.py`, normalized `sample.json`, and a validated `provider.json`.
-The manifest declares `schema_version: 1`, a unique `name`, supported `profile`, `description`,
-`protocol: "tandem-events-v1"`, `streams`, `stream_control: true`, and optional `feedback` names. Tandem manages one installation per
+The manifest declares `schema_version: 2`, a unique `name`, `description`,
+`protocol: "tandem-events-v1"`, `streams: [{"name": "messages", "profile": "message"}]`,
+`stream_control: true`, and optional `feedback` names. Each stream owns its profile; one collector can
+expose streams with different profiles. Events carry their own concrete `profile` and normalized `data`.
+Tandem manages one installation per
 package and namespace. `sample.json` contains an ordered list of normalized event envelopes;
 the runtime also accepts a single envelope. Edit the samples, then Stop and Start to rebuild.
 Slack cycles through PR requests, support queries, and reactions to those messages.
+Jira events link to `https://jira.example.com/browse/PLAT-142`, a synthetic page for testing browser opening.
 Each emitted event has a one-based `metadata.stream_sequence` counting only its own stream,
 and a zero-based `metadata.sample_sequence` counting all events from that provider.
 Checkpoint state preserves the sequence across retries and restarts.
@@ -110,18 +114,20 @@ After generating or appending providers, open Tandem from the checkout:
 cargo run -- dev
 ```
 
-Open **Providers**, select each package, and choose **Start provider**. Confirm trusted Docker
+Open **Streams**, select each package, and choose **Start provider**. Confirm trusted Docker
 execution; Tandem provisions credentials, starts its own sidecar, builds the image, and runs the
 collector. Use the same tab to Stop, inspect details, or read Logs. No manual Compose,
 credential setup, or sidecar command is required.
 Expand a provider to inspect its stream children. Stream menus and details act on that child;
 provider Start enables all its streams and provider Stop halts the collector.
+Provider rows use `󰑬`; each stream uses its profile's icon in its collection-state color.
 
 Open the second tab, **Events**. Four row styles arrive every three seconds, with source-specific
 data, shared people/attachments/relations, bounded supporting context, and custom metadata.
-`d` opens event details; expanding an event reveals its acceptances. Enabled predicates accept matching events
+Enter opens an event's optional `url` with its system handler; `d` opens event details.
+Expanding an event reveals its acceptances. Enabled predicates accept matching events
 automatically; `r` requests confirmed replay of any retained event using current enabled rules.
-`p` selects the originating provider; Providers' **Events** action shows only that source.
+`p` selects the originating provider; the provider's **Events** action shows only that source.
 The provider multiselect filters sources; an empty selection shows all providers.
 
 ### Developer rules
@@ -176,7 +182,7 @@ independently of MCP. Tandem supplies its verified address. Collection persists 
 the TUI supervises the sidecar when reopened, and Start repairs an interrupted sidecar.
 A disconnected provider retains its pending batch and
 retries it with identical IDs. It polls, persists, and acknowledges `received`, `replayed`, and
-`acknowledged` feedback. Read its output through **Logs** in Providers.
+`acknowledged` feedback. Read its output through **Logs** in Streams.
 
 Stop preserves checkpoints and event history. Stop immediately discards incoming batches
 before Docker work. The sample runtime advances its checkpoint on explicit discarded IDs so those

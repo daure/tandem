@@ -1,4 +1,5 @@
 mod conversation;
+pub(crate) mod cleanup;
 mod discovery;
 pub(crate) mod events;
 mod history;
@@ -7,12 +8,14 @@ mod order;
 mod purge;
 mod resources;
 mod server;
+mod sessions;
 mod tabs;
 mod transport;
 mod v2;
 
 pub(crate) use conversation::load as conversation;
 pub(crate) use history::clear as clear_history;
+pub(crate) use sessions::rename;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -528,6 +531,20 @@ impl Observer {
         })
         .await
         .map_err(|error| error.to_string())?;
+        resources.retain_mut(|process| {
+            let Some(presence) = presences
+                .iter()
+                .filter(|presence| presence.active && presence.pid == process.pid)
+                .max_by_key(|presence| presence.observed_at)
+            else {
+                return false;
+            };
+            process.session_id = presence.id.clone();
+            process.directory = presence.directory.clone();
+            process.zellij_session = presence.zellij_session.clone();
+            process.pane_id = presence.pane_id;
+            true
+        });
         let mut tracked = BTreeSet::new();
         let mut verified_panes = BTreeSet::new();
         let mut clients = BTreeMap::new();
@@ -770,7 +787,14 @@ impl Observer {
                     clients.contains_key(&(process.zellij_session.clone(), pane))
                 })
             } else {
-                sessions.contains_key(&process.session_id)
+                sessions.get(&process.session_id).is_some_and(|session| {
+                    process.pane_id.is_none_or(|id| {
+                        session
+                            .panes
+                            .iter()
+                            .any(|pane| pane.id == id && pane.session == process.zellij_session)
+                    })
+                })
             }
         });
         directories.extend(sessions.values().map(|session| session.directory.clone()));

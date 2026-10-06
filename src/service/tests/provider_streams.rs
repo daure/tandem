@@ -8,15 +8,190 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 #[test]
+fn one_provider_projects_independent_declared_and_observed_stream_profiles() {
+    let service = AppService::for_tests();
+    let token = service.register_provider_for_tests("sample");
+    let store = EventStore::open(&service.environments.config).unwrap();
+    let profiles = ["message", "ticket", "system_event", "generic"];
+    let manifest: Manifest = serde_json::from_value(json!({
+        "schema_version": 2, "name": "sample", "description": "Fixture",
+        "protocol": "tandem-events-v1", "streams": profiles.map(|profile| json!({
+            "name": profile, "profile": profile
+        }))
+    }))
+    .unwrap();
+    let streams = store
+        .provider_streams(&manifest, Status::NotStarted)
+        .unwrap();
+    for stream in &streams {
+        assert_eq!(stream.profile.as_deref(), Some(stream.name.as_str()));
+        assert_eq!(stream.total, 0);
+    }
+    let data = [
+        json!({"author": "Alex", "channel": "support", "text": "Inspect"}),
+        json!({"key": "DEV-1", "title": "Inspect", "status": "Open"}),
+        json!({"resource": "api", "signal": "health", "severity": "error", "description": "Inspect"}),
+        json!({"release": "v1"}),
+    ];
+    let events: Vec<crate::store::events::Event> = profiles
+        .into_iter()
+        .zip(data)
+        .map(|(profile, data)| {
+            serde_json::from_value(json!({
+                "schema_version": 1, "event_id": profile, "stream": profile,
+                "type": "fixture.observed", "summary": "Inspect", "profile": profile, "data": data
+            }))
+            .unwrap()
+        })
+        .collect();
+    store
+        .ingest(
+            &token,
+            Batch {
+                events: events.clone(),
+            },
+        )
+        .unwrap();
+    assert!(
+        store
+            .provider_streams(&manifest, Status::Running)
+            .unwrap()
+            .iter()
+            .all(|stream| stream.total == 1)
+    );
+    let mut observed = manifest.clone();
+    observed.streams.clear();
+    for stream in store.provider_streams(&observed, Status::Running).unwrap() {
+        assert_eq!(stream.profile.as_deref(), Some(stream.name.as_str()));
+        assert!(!stream.controllable);
+    }
+    let mut mixed = events[0].clone();
+    mixed.event_id = "mixed".into();
+    mixed.stream = "ticket".into();
+    store
+        .ingest(
+            &token,
+            Batch {
+                events: vec![mixed],
+            },
+        )
+        .unwrap();
+    let streams = store.provider_streams(&observed, Status::Running).unwrap();
+    assert_eq!(
+        streams
+            .iter()
+            .find(|stream| stream.name == "ticket")
+            .unwrap()
+            .profile,
+        None
+    );
+    assert_eq!(store.snapshot().unwrap().total, 5);
+    let duplicate = store.ingest(&token, Batch { events }).unwrap();
+    assert!(duplicate.receipts.iter().all(|receipt| receipt.duplicate));
+}
+
+#[test]
+fn stream_acknowledgments_wait_for_other_writers_and_recheck_current_controls() {
+    let service = AppService::for_tests();
+    let store = EventStore::open(&service.environments.config).unwrap();
+    let mut controls = Vec::new();
+    for index in 0..6 {
+        let provider = format!("provider-{index}");
+        let token = service.register_provider_for_tests(&provider);
+        let streams: Vec<_> = (0..if index < 4 { 2 } else { 1 })
+            .map(|stream| json!({"name": format!("stream-{stream}"), "profile": "message"}))
+            .collect();
+        let manifest: Manifest = serde_json::from_value(json!({
+            "schema_version": 2, "name": provider, "description": "Fixture",
+            "protocol": "tandem-events-v1", "streams": streams, "stream_control": true,
+        }))
+        .unwrap();
+        store.prepare_streams(&manifest).unwrap();
+        for control in store.stream_controls(&token).unwrap() {
+            controls.push((provider.clone(), token.clone(), control));
+        }
+    }
+    assert_eq!(controls.len(), 10);
+    let mut connection =
+        rusqlite::Connection::open(service.environments.config.home.join("settings.sqlite3"))
+            .unwrap();
+    connection
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(axum::serve(listener, router(service.clone())).into_future());
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap();
+        for superseded in [false, true] {
+            let transaction = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .unwrap();
+            transaction
+                .execute("UPDATE event_providers SET name = name", [])
+                .unwrap();
+            if superseded {
+                transaction
+                    .execute("UPDATE provider_streams SET revision = revision + 1", [])
+                    .unwrap();
+            }
+            let mut requests = tokio::task::JoinSet::new();
+            for (_, token, control) in &controls {
+                let request = client
+                    .post(format!("{origin}/v1/streams/ack"))
+                    .bearer_auth(token)
+                    .header("Content-Type", "application/json")
+                    .body(serde_json::to_string(control).unwrap());
+                requests.spawn(async move { request.send().await.unwrap().status() });
+            }
+            let completed = tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                requests.join_next(),
+            )
+            .await;
+            assert!(
+                completed.is_err(),
+                "stream acknowledgments must wait while another transaction owns the writer lock: {completed:?}"
+            );
+            transaction.commit().unwrap();
+            while let Some(result) = requests.join_next().await {
+                assert_eq!(
+                    result.unwrap(),
+                    if superseded {
+                        StatusCode::CONFLICT
+                    } else {
+                        StatusCode::NO_CONTENT
+                    }
+                );
+            }
+            for (provider, _, control) in &controls {
+                assert_eq!(
+                    store
+                        .stream_applied(provider, &control.stream, control.revision)
+                        .unwrap(),
+                    !superseded
+                );
+            }
+        }
+        server.abort();
+        let _ = server.await;
+    });
+}
+
+#[test]
 fn stream_controls_require_current_provider_acknowledgments_and_isolate_sibling_ingestion() {
     let service = AppService::for_tests();
     let token = service.register_provider_for_tests("sample");
     let other = service.register_provider_for_tests("other");
     let store = EventStore::open(&service.environments.config).unwrap();
     let manifest: Manifest = serde_json::from_value(json!({
-        "schema_version": 1, "name": "sample", "profile": "message",
+        "schema_version": 2, "name": "sample",
         "description": "Fixture", "protocol": "tandem-events-v1",
-        "streams": ["samples", "sibling"], "stream_control": true,
+        "streams": [{"name": "samples", "profile": "message"}, {"name": "sibling", "profile": "message"}], "stream_control": true,
     }))
     .unwrap();
     store.prepare_streams(&manifest).unwrap();
@@ -174,7 +349,7 @@ fn stream_controls_require_current_provider_acknowledgments_and_isolate_sibling_
             StatusCode::CONFLICT
         );
         let mut reduced = manifest.clone();
-        reduced.streams = vec!["sibling".into()];
+        reduced.streams.retain(|stream| stream.name == "sibling");
         store.prepare_streams(&reduced).unwrap();
         assert_eq!(store.stream_controls(&token).unwrap().len(), 1);
         assert_eq!(
@@ -198,9 +373,9 @@ fn stream_handovers_count_distinct_dispatched_events_across_rules_and_replays() 
     let events = EventStore::open(config).unwrap();
     let rules = RuleStore::open(config).unwrap();
     let manifest: Manifest = serde_json::from_value(json!({
-        "schema_version": 1, "name": "sample", "profile": "message",
+        "schema_version": 2, "name": "sample",
         "description": "Fixture", "protocol": "tandem-events-v1",
-        "streams": ["samples", "sibling"], "stream_control": true,
+        "streams": [{"name": "samples", "profile": "message"}, {"name": "sibling", "profile": "message"}], "stream_control": true,
     }))
     .unwrap();
     for name in ["first", "second"] {
@@ -216,6 +391,7 @@ fn stream_handovers_count_distinct_dispatched_events_across_rules_and_replays() 
                     initial_prompt: "Inspect {{event.data.text}}".into(),
                     enabled: true,
                     start_instance: true,
+                    focus_pane: true,
                 },
                 None,
                 "main".into(),

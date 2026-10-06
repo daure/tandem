@@ -12,12 +12,12 @@ mod server;
 
 const SESSION_LIMIT: usize = 10_000;
 
-#[derive(Deserialize)]
-struct SavedSession {
-    id: String,
-    directory: String,
+#[derive(Clone, Deserialize)]
+pub(super) struct SavedSession {
+    pub(super) id: String,
+    pub(super) directory: String,
     #[serde(rename = "parentID")]
-    parent_id: Option<String>,
+    pub(super) parent_id: Option<String>,
 }
 
 pub(crate) async fn clear(directory: &str, deadline: Instant) -> Result<(), String> {
@@ -31,6 +31,15 @@ pub(crate) async fn clear(directory: &str, deadline: Instant) -> Result<(), Stri
 }
 
 pub(super) async fn clear_with(observer: &Observer, directory: &str) -> Result<(), String> {
+    clear_known(observer, directory, Vec::new(), &mut Vec::new()).await
+}
+
+pub(super) async fn clear_known(
+    observer: &Observer,
+    directory: &str,
+    known_servers: Vec<String>,
+    removed: &mut Vec<(String, String)>,
+) -> Result<(), String> {
     if !Path::new(directory).is_absolute() {
         return Err("workspace path must be absolute".into());
     }
@@ -40,6 +49,15 @@ pub(super) async fn clear_with(observer: &Observer, directory: &str) -> Result<(
         .into_iter()
         .filter_map(|(server, directories)| directories.contains(directory).then_some(server))
         .collect::<Vec<_>>();
+    let listening = super::discovery::listening_ports();
+    servers.extend(known_servers.into_iter().filter(|server| {
+        transport::local_server(server)
+            .and_then(|server| reqwest::Url::parse(&server).ok())
+            .and_then(|url| url.port())
+            .is_some_and(|port| listening.contains(&port))
+    }));
+    servers.sort();
+    servers.dedup();
     let mut temporary = if servers.is_empty() {
         let (child, url, root, receipt) = server::start(directory).await?;
         servers.push(url);
@@ -47,7 +65,7 @@ pub(super) async fn clear_with(observer: &Observer, directory: &str) -> Result<(
     } else {
         None
     };
-    let result = clear_servers(observer, directory, &servers).await;
+    let result = clear_servers(observer, directory, &servers, removed).await;
     if let Some((child, _, _)) = &mut temporary {
         child
             .kill()
@@ -57,7 +75,7 @@ pub(super) async fn clear_with(observer: &Observer, directory: &str) -> Result<(
     result
 }
 
-fn target(path: &str, directory: &str) -> Result<String, String> {
+pub(super) fn target(path: &str, directory: &str) -> Result<String, String> {
     let mut url = reqwest::Url::parse(&format!("http://localhost{path}"))
         .map_err(|error| error.to_string())?;
     url.query_pairs_mut().append_pair("directory", directory);
@@ -93,7 +111,7 @@ async fn sessions(
     Ok(found)
 }
 
-fn deletion_order(
+pub(super) fn deletion_order(
     mut pending: BTreeMap<String, SavedSession>,
 ) -> Result<Vec<SavedSession>, String> {
     let mut children: BTreeMap<_, usize> = pending.keys().map(|id| (id.clone(), 0)).collect();
@@ -134,6 +152,7 @@ async fn clear_servers(
     observer: &Observer,
     directory: &str,
     servers: &[String],
+    removed: &mut Vec<(String, String)>,
 ) -> Result<(), String> {
     let client = transport::client()?;
     let mut plans = Vec::new();
@@ -143,62 +162,94 @@ async fn clear_servers(
             .into_iter()
             .map(|session| (session.id.clone(), session))
             .collect();
-        for session in pending.values() {
-            let children: Vec<SavedSession> = transport::get(
-                &client,
-                server,
-                &target(&format!("/session/{}/children", session.id), directory)?,
-            )
-            .await?;
-            if children
-                .iter()
-                .any(|child| child.directory != directory || !pending.contains_key(&child.id))
-            {
-                return Err("session deletion would include unverified child conversations".into());
-            }
-        }
         let ordered = deletion_order(pending)?;
+        verify_tree(&client, server, directory, &ordered).await?;
         ensure_idle(&client, server, directory, &ordered).await?;
         plans.push((server, ordered));
     }
     ensure_detached(observer, directory)?;
-    for (server, ordered) in &plans {
-        ensure_idle(&client, server, directory, ordered).await?;
-    }
     for (server, ordered) in plans {
-        for session in &ordered {
+        for tree in deletion_trees(&ordered) {
             ensure_detached(observer, directory)?;
-            ensure_idle(&client, server, directory, &ordered).await?;
-            let path = target(&format!("/session/{}", session.id), directory)?;
-            let Some(current) =
-                transport::get_optional::<SavedSession>(&client, server, &path).await?
-            else {
-                continue;
-            };
-            if current.id != session.id || current.directory != directory {
-                return Err("session ownership changed during cleanup".into());
-            }
-            // A parent delete cascades. Recheck children after deleting leaves to protect
-            // conversations created while the cleanup plan was being inspected.
-            let children: Vec<SavedSession> = transport::get(
-                &client,
-                server,
-                &target(&format!("/session/{}/children", session.id), directory)?,
-            )
-            .await?;
-            if !children.is_empty() {
-                return Err("session children changed during cleanup; retry".into());
-            }
+            verify_tree(&client, server, directory, &tree).await?;
+            ensure_idle(&client, server, directory, &tree).await?;
+            ensure_detached(observer, directory)?;
+            let path = target(&format!("/session/{}", tree[0].id), directory)?;
             transport::delete(&client, server, &path).await?;
-            if transport::get_optional::<SavedSession>(&client, server, &path)
-                .await?
-                .is_some()
-            {
-                return Err("OpenCode did not delete the session".into());
+            for session in tree {
+                let path = target(&format!("/session/{}", session.id), directory)?;
+                if transport::get_optional::<SavedSession>(&client, server, &path)
+                    .await?
+                    .is_some()
+                {
+                    return Err("OpenCode did not delete the session".into());
+                }
+                removed.push((server.clone(), session.id));
             }
         }
         if !sessions(&client, server, directory).await?.is_empty() {
             return Err("workspace history changed during cleanup; retry".into());
+        }
+    }
+    Ok(())
+}
+
+fn deletion_trees(ordered: &[SavedSession]) -> Vec<Vec<SavedSession>> {
+    let mut roots = BTreeMap::<&str, &str>::new();
+    let mut trees = BTreeMap::<&str, Vec<SavedSession>>::new();
+    for session in ordered.iter().rev() {
+        let root = session
+            .parent_id
+            .as_deref()
+            .and_then(|parent| roots.get(parent).copied())
+            .unwrap_or(&session.id);
+        roots.insert(&session.id, root);
+        trees.entry(root).or_default().push(session.clone());
+    }
+    trees.into_values().collect()
+}
+
+async fn verify_tree(
+    client: &reqwest::Client,
+    server: &str,
+    directory: &str,
+    tree: &[SavedSession],
+) -> Result<(), String> {
+    let mut expected = BTreeMap::<&str, BTreeSet<&str>>::new();
+    for session in tree {
+        if let Some(parent) = session.parent_id.as_deref() {
+            expected.entry(parent).or_default().insert(&session.id);
+        }
+    }
+    for session in tree {
+        let path = target(&format!("/session/{}", session.id), directory)?;
+        let current: SavedSession = transport::get(client, server, &path).await?;
+        if current.id != session.id
+            || current.directory != directory
+            || current.parent_id != session.parent_id
+        {
+            return Err("session ownership changed during cleanup".into());
+        }
+        let children: Vec<SavedSession> = transport::get(
+            client,
+            server,
+            &target(&format!("/session/{}/children", session.id), directory)?,
+        )
+        .await?;
+        let found = children
+            .iter()
+            .map(|child| child.id.as_str())
+            .collect::<BTreeSet<_>>();
+        if found
+            != expected
+                .get(session.id.as_str())
+                .cloned()
+                .unwrap_or_default()
+            || children.iter().any(|child| {
+                child.directory != directory || child.parent_id.as_deref() != Some(&session.id)
+            })
+        {
+            return Err("session deletion would include unverified child conversations".into());
         }
     }
     Ok(())
@@ -215,7 +266,7 @@ fn ensure_detached(observer: &Observer, directory: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn ensure_idle(
+pub(super) async fn ensure_idle(
     client: &reqwest::Client,
     server: &str,
     directory: &str,

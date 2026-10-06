@@ -1,5 +1,13 @@
 use super::*;
 
+fn rule_definition(model: &str, focus_pane: bool) -> crate::store::rules::Definition {
+    serde_json::from_value(json!({
+        "name": "inspect", "script": "fn matches(event) { true }", "template": "blank",
+        "model": model, "initial_prompt": "Inspect the event", "focus_pane": focus_pane,
+    }))
+    .unwrap()
+}
+
 #[test]
 fn new_sessions_attach_without_resuming_and_stack_in_the_observed_tab() {
     let root = tempfile::tempdir().unwrap();
@@ -124,7 +132,7 @@ fn rule_sessions_reject_closed_destinations_without_creating_a_tab() {
             root.path().to_str().unwrap(),
             "event-1",
             "closed-session",
-            "openai/test",
+            &rule_definition("openai/test", true),
             "Inspect the event",
             None,
         ))
@@ -194,7 +202,7 @@ fn rule_sessions_pass_the_model_variant_and_untrusted_prompt_as_literal_argument
             root.path().to_str().unwrap(),
             "event-1",
             "main",
-            "openai/test#fast",
+            &rule_definition("openai/test#fast", true),
             prompt,
             Some("Services won't start automatically"),
         ))
@@ -218,7 +226,44 @@ fn rule_sessions_pass_the_model_variant_and_untrusted_prompt_as_literal_argument
         "{calls}"
     );
     assert_eq!(calls.matches("action new-tab").count(), 1, "{calls}");
+    assert!(calls.contains("focus-pane-id terminal_100"), "{calls}");
+    assert!(!calls.contains("--no-focus"), "{calls}");
     assert!(!root.path().join("injected").exists());
+}
+
+#[test]
+fn background_rule_sessions_create_and_identify_the_pane_without_switching_focus() {
+    let root = tempfile::tempdir().unwrap();
+    let observer = observer(root.path());
+    let pane = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(observer.new_rule_session(
+            root.path().to_str().unwrap(),
+            "event-1",
+            "main",
+            &rule_definition("openai/test", false),
+            "Inspect the event",
+            None,
+        ))
+        .unwrap();
+    assert_eq!((pane.id, pane.tab_id), (100, 9));
+    let calls = fs::read_to_string(root.path().join("calls")).unwrap();
+    assert!(
+        calls.contains("new-tab --name event-1 --no-focus --cwd"),
+        "{calls}"
+    );
+    assert!(
+        calls.contains("rename-pane --pane-id terminal_100"),
+        "{calls}"
+    );
+    for action in [
+        "focus-pane-id",
+        "go-to-tab",
+        "switch-session",
+        "hide-floating-panes",
+    ] {
+        assert!(!calls.contains(action), "{action}: {calls}");
+    }
 }
 
 #[test]

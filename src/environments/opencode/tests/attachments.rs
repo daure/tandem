@@ -161,3 +161,46 @@ fn expired_receipts_cannot_keep_cached_attachments_during_inventory_failure() {
     assert!(snapshot.sessions.iter().all(|session| !session.attached()));
     assert!(snapshot.clients.is_empty());
 }
+
+#[test]
+fn local_client_closure_retires_its_sample_and_preserves_conversation_history() {
+    for fresh_receipt in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let server = Server::start();
+        server.busy.store(false, Ordering::Relaxed);
+        let observer = observer(root.path());
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let roots = ["/work/review".into()];
+        presence(&observer, "one.json", "ses_idle", 7, &server.url);
+        let snapshot = runtime
+            .block_on(observer.observe(&roots, Snapshot::default()))
+            .unwrap();
+        assert_eq!(snapshot.resources.len(), 1);
+        let attached = snapshot
+            .sessions
+            .iter()
+            .find(|session| session.id == "ses_idle")
+            .unwrap();
+        assert!(attached.attached());
+        let last_question = attached.last_question.clone();
+        assert!(last_question.is_some());
+        server.requests.lock().unwrap().clear();
+        fs::write(root.path().join("panes.json"), "[]").unwrap();
+        if !fresh_receipt {
+            fs::remove_file(observer.presence.join("one.json")).unwrap();
+        }
+
+        let snapshot = runtime
+            .block_on(observer.observe_changes(&roots, snapshot, false))
+            .unwrap();
+        let saved = snapshot
+            .sessions
+            .iter()
+            .find(|session| session.id == "ses_idle")
+            .unwrap();
+        assert!(saved.saved());
+        assert_eq!(saved.last_question, last_question);
+        assert!(snapshot.resources.is_empty());
+        assert!(server.requests.lock().unwrap().is_empty());
+    }
+}

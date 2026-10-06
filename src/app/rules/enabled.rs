@@ -48,6 +48,22 @@ impl SettingsToggle {
             value,
         }
     }
+
+    pub(super) fn focus_pane(draft: Rc<RefCell<Draft>>) -> Self {
+        let changed = draft.clone();
+        let value: fn(&Draft) -> bool = |draft| match draft.pending_toggle {
+            Some(PendingToggle::FocusPane(focus)) => focus,
+            _ => draft.rule.definition.focus_pane,
+        };
+        let toggle = Toggle::new("Focus new pane")
+            .checked(value(&draft.borrow()))
+            .on_change(move |focus| Msg::RuleDraftFocusPane(changed.clone(), focus));
+        Self {
+            toggle,
+            draft,
+            value,
+        }
+    }
 }
 
 impl TuiNode<Msg> for SettingsToggle {

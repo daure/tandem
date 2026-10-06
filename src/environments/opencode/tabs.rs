@@ -61,13 +61,55 @@ impl Control {
 }
 
 impl Observer {
+    pub(super) async fn close_session_tab(&self, id: &str, pane: &Pane) -> Result<bool, String> {
+        let observer = self.clone();
+        let target = pane.clone();
+        let session_id = id.to_owned();
+        let control = tokio::task::spawn_blocking(move || {
+            let presences = observer.presences();
+            let attached = |presence: &&super::Presence| {
+                presence.zellij_session == target.session && presence.pane_id == Some(target.id)
+            };
+            let presence = presences
+                .iter()
+                .filter(attached)
+                .find(|presence| presence.id == session_id)
+                .ok_or("The OpenCode tab closed or changed; refresh and try again")?;
+            if presence.tab_control.is_none()
+                && presences.iter().filter(attached).any(|other| other.id != session_id)
+            {
+                return Err("Cannot close one tab without companion tab control; run tandem opencode-setup and reopen the client".to_owned());
+            }
+            Ok(presence.tab_control.clone())
+        })
+        .await
+        .map_err(|error| error.to_string())??;
+        let Some(control) = control else {
+            return Ok(false);
+        };
+        let panes = self.list_panes(&pane.session).await?;
+        if !panes
+            .iter()
+            .any(|actual| actual.id == pane.id && !actual.is_plugin && !actual.exited)
+        {
+            return Err("OpenCode pane has closed; refresh and try again".into());
+        }
+        let closed = control
+            .request("/tabs/close", serde_json::json!({"sessionID": id}))
+            .await?;
+        if closed != id {
+            return Err("OpenCode returned a different conversation; refresh and try again".into());
+        }
+        Ok(true)
+    }
+
     pub(crate) async fn new_session_tab(
         &self,
         directory: &str,
         current: &str,
         destination: Option<&Pane>,
         instructions: Option<&str>,
-    ) -> Result<Option<Pane>, String> {
+    ) -> Result<Option<crate::store::opencode::SessionLocation>, String> {
         let Some(destination) = destination else {
             return Ok(None);
         };
@@ -99,7 +141,7 @@ impl Observer {
             .iter()
             .find(|pane| pane.id == destination.id && !pane.is_plugin && !pane.exited)
             .ok_or("OpenCode pane has closed; refresh and try again")?;
-        control
+        let session_id = control
             .request(
                 "/tabs",
                 serde_json::json!({"directory": directory, "instructions": instructions}),
@@ -111,6 +153,9 @@ impl Observer {
             ..destination.clone()
         };
         self.focus_pane(current, &pane, actual.is_floating).await?;
-        Ok(Some(pane))
+        Ok(Some(crate::store::opencode::SessionLocation {
+            session_id: Some(session_id),
+            pane,
+        }))
     }
 }

@@ -33,7 +33,6 @@ pub(crate) struct Target {
     pub(super) missing: &'static str,
     pub(super) available: bool,
     relative_date: String,
-    has_conversations: bool,
 }
 
 impl std::fmt::Debug for Target {
@@ -70,6 +69,11 @@ impl Target {
             .or_else(|| history.map(|row| row.directory.clone()));
         let mut observed = context.opencode.clone();
         if let Some(history) = history {
+            observed.sessions.retain(|session| {
+                !history
+                    .removed_sessions
+                    .contains(&(session.server.clone(), session.id.clone()))
+            });
             for saved in &history.sessions {
                 if !observed
                     .sessions
@@ -82,22 +86,6 @@ impl Target {
         }
         let conversations = workspace.as_deref().map_or_else(Vec::new, |directory| {
             super::opencode::acceptance_rows(acceptance.id, directory, &observed, show_saved)
-        });
-        let has_conversations = workspace.as_deref().is_some_and(|directory| {
-            observed
-                .sessions
-                .iter()
-                .map(|session| session.directory.as_str())
-                .chain(
-                    observed
-                        .clients
-                        .iter()
-                        .map(|client| client.directory.as_str()),
-                )
-                .any(|path| {
-                    opencode::workspace_owner(path, std::iter::once((directory, directory)))
-                        .is_some()
-                })
         });
         let available = !context.inventory.loading
             && context.inventory.observed_at_unix_seconds.is_some()
@@ -130,7 +118,6 @@ impl Target {
             missing,
             available,
             relative_date,
-            has_conversations,
         }
     }
 
@@ -168,7 +155,15 @@ impl Target {
                         ))
             }
             Command::NewSession => self.instance.is_some() && self.workspace.is_some(),
-            Command::Session => self.has_conversations,
+            Command::Session => self
+                .selected
+                .as_ref()
+                .is_some_and(|row| row.opencode.is_some()),
+            Command::ClosePanel => self
+                .selected
+                .as_ref()
+                .and_then(|row| row.opencode.as_ref())
+                .is_some_and(super::opencode::Target::closeable),
             Command::Delete => {
                 self.selected.is_none()
                     && self.report.as_ref().is_none_or(|report| {
@@ -265,11 +260,16 @@ impl Target {
         let TuiEvent::Key(key) = event else {
             return false;
         };
+        if let Some(row) = &self.selected
+            && super::opencode::session_hotkey(row, event, ctx)
+        {
+            return true;
+        }
         if KeySpec::plain('.').matches(*key) {
             ctx.emit(Msg::OpenRowMenu(
                 super::row_actions::Target::AcceptanceContext(Box::new(self.clone())),
             ));
-        } else if super::open_route_key().matches(*key) {
+        } else if self.selected.is_none() && KeySpec::key(tuicore::Key::Enter).matches(*key) {
             if self.enabled(Command::Routes) {
                 ctx.emit(Msg::AcceptanceAction(
                     Box::new(self.clone()),
@@ -288,13 +288,18 @@ impl Target {
             Command::Instance,
             Command::NewSession,
             Command::Session,
+            Command::ClosePanel,
             Command::PurgeInstance,
             Command::Delete,
         ]
         .into_iter()
         .find(|command| {
-            KeySpec::plain(command.hotkey().chars().next().unwrap()).matches(*key)
-                || *command == Command::Session && KeySpec::key(tuicore::Key::Enter).matches(*key)
+            if *command == Command::Session {
+                self.selected.is_some() && KeySpec::key(tuicore::Key::Enter).matches(*key)
+            } else {
+                (*command != Command::ClosePanel || self.selected.is_some())
+                    && KeySpec::plain(command.hotkey().chars().next().unwrap()).matches(*key)
+            }
         }) {
             if self.enabled(command) {
                 ctx.emit(Msg::AcceptanceAction(Box::new(self.clone()), command));
@@ -302,6 +307,7 @@ impl Target {
                 ctx.notify(Notification::warning("Action unavailable", match command {
                     Command::CreateInstance => "The instance exists, inventory is unverified, or dispatch is still active",
                     Command::Session => "No conversations are known for this acceptance",
+                    Command::ClosePanel => "There is no attached client pane to close",
                     _ => "This acceptance has no available instance workspace",
                 }));
             }

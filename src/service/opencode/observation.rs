@@ -9,7 +9,7 @@ use crate::{
         Observer,
         events::{Changes, LOCAL, REMOTE, Signal},
     },
-    store::opencode::{Snapshot, observation::Failure},
+    store::opencode::{Activity, Snapshot, observation::Failure},
 };
 
 pub(super) async fn run(
@@ -46,7 +46,7 @@ pub(super) async fn run(
             .retention
             .next_retry();
         drop(owner);
-        let flags = tokio::select! {
+        let mut flags = tokio::select! {
             flags = signal.wait() => flags,
             _ = async {
                 if let Some(deadline) = deadline {
@@ -91,8 +91,13 @@ pub(super) async fn run(
             if state.generation != generation {
                 return;
             }
+            if !state.initial_observation_complete {
+                flags |= REMOTE;
+            }
             observer.excluded = state.retention.exclusions();
-            (state.roots.clone(), state.snapshot.clone())
+            let mut previous = state.snapshot.clone();
+            super::sessions::apply_forgotten(&mut previous, &state.forgotten_directories);
+            (state.roots.clone(), previous)
         };
         drop(owner);
         let local = match changes.sync(&observer, &previous).await {
@@ -155,7 +160,11 @@ pub(super) async fn run(
 #[path = "tests/observation.rs"]
 mod tests;
 
-fn publish(integration: &Weak<Integration>, generation: u64, result: Result<Snapshot, String>) {
+pub(super) fn publish(
+    integration: &Weak<Integration>,
+    generation: u64,
+    result: Result<Snapshot, String>,
+) {
     let Some(owner) = integration.upgrade() else {
         return;
     };
@@ -166,8 +175,38 @@ fn publish(integration: &Weak<Integration>, generation: u64, result: Result<Snap
     if state.generation != generation {
         return;
     }
+    state.initial_observation_complete = true;
     match result {
-        Ok(snapshot) => state.snapshot = snapshot,
+        Ok(mut snapshot) => {
+            state.forgotten_directories.retain(|directory| {
+                !snapshot
+                    .clients
+                    .iter()
+                    .any(|client| client.directory == *directory && !client.stale)
+                    && !snapshot.sessions.iter().any(|session| {
+                        session.directory == *directory
+                            && !session.stale
+                            && (session.attached()
+                                || matches!(
+                                    session.activity,
+                                    Activity::Busy | Activity::AwaitingAnswer
+                                ))
+                    })
+            });
+            super::sessions::apply_forgotten(&mut snapshot, &state.forgotten_directories);
+            state.session_edits.retain(|(server, id), title| {
+                title.as_ref().is_none_or(|title| {
+                    !snapshot.sessions.iter().any(|session| {
+                        session.server == *server
+                            && session.id == *id
+                            && session.title == *title
+                            && !session.stale
+                    })
+                })
+            });
+            super::sessions::apply_edits(&mut snapshot, &state.session_edits);
+            state.snapshot = snapshot;
+        }
         Err(error) => {
             state.snapshot.observation.verified_panes.clear();
             for resource in &mut state.snapshot.resources {

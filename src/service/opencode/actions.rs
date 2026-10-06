@@ -2,7 +2,7 @@ use std::{future::Future, path::Path, sync::Arc, time::Duration};
 
 use crate::{
     service::AppService,
-    store::opencode::{Pane, Snapshot, workspace_owner},
+    store::opencode::{Pane, SessionLocation, Snapshot, workspace_owner},
 };
 
 pub(super) fn directory_name(directory: &str) -> String {
@@ -79,7 +79,7 @@ impl AppService {
         &self,
         directory: &str,
         preferred: Option<Pane>,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<Pane, String>>, String> {
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<SessionLocation, String>>, String> {
         if !self.opencode_enabled() {
             return Err("OpenCode integration is disabled".into());
         }
@@ -142,11 +142,11 @@ impl AppService {
                     .await
                     .map_err(|error| error.to_string())??;
                 }
-                if let Some(pane) = observer
+                if let Some(location) = observer
                     .new_session_tab(&directory, &current, destination.as_ref(), instructions)
                     .await?
                 {
-                    return Ok(pane);
+                    return Ok(location);
                 }
                 observer
                     .new_session(
@@ -158,6 +158,10 @@ impl AppService {
                         instructions,
                     )
                     .await
+                    .map(|pane| SessionLocation {
+                        session_id: None,
+                        pane,
+                    })
             },
         )
     }

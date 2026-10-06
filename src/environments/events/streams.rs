@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::EventStore;
 use crate::store::{
@@ -36,7 +36,7 @@ impl EventStore {
                  ON CONFLICT(namespace, provider, stream) DO UPDATE SET
                  active = 1, enabled = excluded.enabled, revision = revision + 1,
                  applied_revision = NULL, applied_at = NULL, requested_at = unixepoch(), error = NULL",
-                params![self.namespace, manifest.name, stream, only_stream.is_none_or(|name| name == stream)],
+                params![self.namespace, manifest.name, stream.name, only_stream.is_none_or(|name| name == stream.name)],
             )?;
         }
         transaction.commit()?;
@@ -78,7 +78,8 @@ impl EventStore {
     ) -> Result<(), Error> {
         validate_stream(&control.stream).map_err(Error::Invalid)?;
         let mut connection = self.connection()?;
-        let transaction = connection.transaction()?;
+        // Acquire the writer before reading credentials so WAL snapshot upgrades cannot bypass the busy timeout.
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let provider = self.provider(&transaction, token)?;
         let updated = transaction.execute(
             "UPDATE provider_streams SET applied_revision = revision, applied_at = unixepoch(), error = NULL
@@ -155,11 +156,12 @@ impl EventStore {
     ) -> Result<Vec<Stream>, Error> {
         let connection = self.connection()?;
         let mut streams = BTreeMap::new();
-        for name in &manifest.streams {
+        for declaration in &manifest.streams {
             streams.insert(
-                name.clone(),
+                declaration.name.clone(),
                 Stream {
-                    name: name.clone(),
+                    name: declaration.name.clone(),
+                    profile: Some(declaration.profile.clone()),
                     controllable: manifest.stream_control,
                     enabled: true,
                     status: Status::Unknown,
@@ -172,7 +174,9 @@ impl EventStore {
         }
         let mut statement = connection.prepare(
             "SELECT json_extract(e.payload, '$.stream'), count(DISTINCT e.sequence),
-             count(DISTINCT CASE WHEN json_extract(a.payload, '$.operation_id') IS NOT NULL THEN e.sequence END)
+              count(DISTINCT CASE WHEN json_extract(a.payload, '$.operation_id') IS NOT NULL THEN e.sequence END),
+              CASE WHEN count(DISTINCT json_extract(e.payload, '$.profile')) = 1
+                   THEN min(json_extract(e.payload, '$.profile')) END
              FROM events e LEFT JOIN event_attempts p ON p.event_sequence = e.sequence
              LEFT JOIN rule_acceptances a ON a.attempt_id = p.id
              WHERE e.namespace = ?1 AND e.provider = ?2 GROUP BY json_extract(e.payload, '$.stream')",
@@ -182,11 +186,13 @@ impl EventStore {
                 row.get::<_, String>(0)?,
                 row.get::<_, u64>(1)?,
                 row.get::<_, u64>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })? {
-            let (name, total, handovers) = result?;
+            let (name, total, handovers, profile) = result?;
             let stream = streams.entry(name.clone()).or_insert(Stream {
                 name,
+                profile,
                 controllable: false,
                 enabled: true,
                 status: Status::Unknown,

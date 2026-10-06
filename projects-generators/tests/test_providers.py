@@ -37,6 +37,11 @@ class ProviderTests(unittest.TestCase):
             self.assertTrue((package / "Dockerfile").is_file())
             self.assertEqual((package / "src/provider.py").read_bytes(), SOURCE.read_bytes())
             events = json.loads((package / "sample.json").read_text())
+            manifest = json.loads((package / "provider.json").read_text())
+            self.assertEqual(manifest["schema_version"], 2)
+            self.assertEqual(manifest["streams"], [
+                {"name": stream, "profile": profile} for stream in sorted({event["stream"] for event in events})
+            ])
             for event in events:
                 self.assertEqual(event["profile"], profile)
                 self.assertTrue(event["attachments"] and event["people"] and event["relations"])

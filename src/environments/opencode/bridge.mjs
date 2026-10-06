@@ -293,9 +293,10 @@ async function serveTabs(api, disposed) {
     }
     if (request.headers.authorization !== `Bearer ${token}`) return reply(401, { error: "Unauthorized" })
     const focusing = request.url === "/tabs/focus"
-    if (request.method !== "POST" || (!focusing && request.url !== "/tabs")) return reply(404, { error: "Unknown action" })
-    if (busy) return reply(409, { error: "OpenCode tab creation is already in progress" })
-    if (!focusing && !api.tabs.enabled()) return reply(409, { error: "Enable OpenCode session tabs before creating a tab" })
+    const closing = request.url === "/tabs/close"
+    if (request.method !== "POST" || (!focusing && !closing && request.url !== "/tabs")) return reply(404, { error: "Unknown action" })
+    if (busy) return reply(409, { error: "OpenCode tab action is already in progress" })
+    if (!focusing && !api.tabs.enabled()) return reply(409, { error: "Enable OpenCode session tabs before changing tabs" })
     busy = true
     const cancelled = new AbortController()
     response.on("close", () => cancelled.abort())
@@ -309,6 +310,20 @@ async function serveTabs(api, disposed) {
       }
       const { directory, sessionID, instructions } = JSON.parse(body)
       if (instructions != null && typeof instructions !== "string") return reply(400, { error: "Invalid session instructions" })
+      if (closing) {
+        if (!api.tabs.list().some((tab) => tab.sessionID === sessionID)) {
+          return reply(409, { error: "The OpenCode tab closed; refresh and try again" })
+        }
+        signal.throwIfAborted()
+        if (await api.tabs.close(sessionID) === false) {
+          return reply(409, { error: "OpenCode refused tab closure" })
+        }
+        while (api.tabs.list().some((tab) => tab.sessionID === sessionID)) {
+          signal.throwIfAborted()
+          await new Promise((resolve) => setTimeout(resolve, 25))
+        }
+        return reply(200, { id: sessionID })
+      }
       if (focusing) {
         const current = api.route.current
         const selected = current.name === "session" && current.params?.sessionID === sessionID
@@ -355,9 +370,11 @@ async function serveTabs(api, disposed) {
       api.tabs.focus(result.data.id)
       reply(200, { id: result.data.id })
     } catch {
-      if (!response.destroyed) reply(502, { error: focusing
-        ? "Could not select the OpenCode tab; refresh and try again"
-        : "Could not create an OpenCode tab; check the client before retrying because creation may be uncertain" })
+      if (!response.destroyed) reply(502, { error: closing
+        ? "Could not close the OpenCode tab; refresh and try again"
+        : focusing
+          ? "Could not select the OpenCode tab; refresh and try again"
+          : "Could not create an OpenCode tab; check the client before retrying because creation may be uncertain" })
     } finally {
       busy = false
     }

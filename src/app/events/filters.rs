@@ -42,6 +42,7 @@ pub(super) fn inventory(
             for name in manifest
                 .streams
                 .iter()
+                .map(|stream| &stream.name)
                 .chain(provider.streams.iter().map(|stream| &stream.name))
             {
                 sources.insert(StreamKey::new(manifest.name.clone(), name.clone()));

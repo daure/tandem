@@ -298,8 +298,11 @@ Message headers mark nonblank thread references with `󱡠`; ticket headers omit
 assignees. System headers show resource, optional environment, signal, and severity in that order.
 Environment aliases `prod`, `dev`, and `stage` display as `production`, `development`, and `staging`;
 custom labels remain intact. Separators and secondary fields are muted; severity colors only its label.
-Press `d` to inspect the normalized payload, metadata, supporting context, and the latest 50
-processing attempts. The feed lists newest events first and starts with top-following enabled. Selecting
+Press Enter to open the event's `url` with its system handler: web links use the browser and desktop
+links such as `slack://` use the registered app. Missing or blank links show a **No link set**
+warning: **This event has no link to open.** Press `d` to inspect the normalized payload, metadata,
+supporting context, and the latest 50 processing attempts.
+The feed lists newest events first and starts with top-following enabled. Selecting
 the first row enables following; moving to an older row pauses it and retains that event during updates.
 The `gg` toggle controls following. `gg` in the DataView selects the newest matching event and
 resumes following. `Shift+H` opens the Sessions overview from any main tab, including during search.
@@ -348,12 +351,13 @@ Its tab count shows the number of collecting streams across providers and is hid
 Provider rows show identity, handed-over/total event count, collector status, and collecting-stream count. Counts cover
 distinct events across full retained history for the manifest's
 provider identity. Select a provider and press `.` for its action menu: **Start provider**/**Stop provider** (`s`),
-and **Logs** (`o`). The hotkeys choose
+and **Logs** (`Enter`). The hotkeys choose
 the action for the observed state and also work directly on the row; unavailable menu actions are muted.
 `d` inspects its configuration and runtime state. Lifecycle actions ask for approval because they
 execute trusted Docker code.
 
-Stream children show their own handed-over/total counts and collection state. `d` opens **Stream details**;
+Providers use the `󰑬` icon. Stream children show their declared profile's icon in the collection-state
+color, along with their own handed-over/total counts and collection state. `d` opens **Stream details**;
 `.` offers **Start stream**/**Stop stream** (`s`) and **Stream events** (`e`). Provider actions target the
 collector and all its declared streams. On a running compatible provider, stream actions preserve siblings.
 Starting an individual stream on a stopped or uninstalled provider starts its collector with only that stream
@@ -424,8 +428,14 @@ protocol-testing server, independent of the owned lifecycle.
 | `GET /v1/streams` | Returns a `streams` array of the authenticated provider's `{stream, enabled, revision}` controls. |
 | `POST /v1/streams/ack` | Acknowledges one exact current control after the collector applies it; returns 204, or 409 for unavailable/superseded controls. Repeat applied acknowledgments at least once per second; freshness expires after five seconds. |
 
-Provider manifests declare `streams: ["messages", "reactions"]` and `stream_control: true` when the
-collector supports the control contract. Poll controls at least once per second, even when every stream is
+Provider manifests use `schema_version: 2`, a unique `name`, `description`, and
+`protocol: "tandem-events-v1"`. Each optional `streams` entry declares a name and profile:
+`{"name": "messages", "profile": "message"}`. One provider can expose streams with different profiles.
+Schema-version-1 manifests and saved launches are read with their provider profile applied to each declared stream.
+Events retain their own profile and normalized payload; ingestion validates event payloads independently of stream declarations.
+Undeclared streams derive their profile from retained events; mixed-profile or unknown streams use the generic icon.
+Set `stream_control: true` when the collector supports the control contract.
+Poll controls at least once per second, even when every stream is
 stopped. Cancel and join a stopped stream's collection work before acknowledgment; filtering emitted events
 alone is insufficient. Sibling streams continue. Start uses the current source position and skips buffered
 history. Manifest stream names are unique, nonempty strings up to 80 bytes without control characters.
@@ -435,6 +445,8 @@ discarded IDs, each in input order. This ingestion guard does not certify collec
 Each event has `schema_version: 1`, a stable `event_id`, `stream`, namespaced `type`, `summary`,
 `profile`, and normalized `data`. Optional fields are `occurred_at` (RFC 3339), `subject`, `body`,
 `url`, `people`, `attachments`, `relations`, `context`, and object-valued `metadata`.
+Streams can set the envelope's `url` to an absolute web or desktop-app link for each published event.
+Desktop-app links require a registered system handler for their scheme.
 
 | Profile | Required normalized data | Optional normalized data |
 | --- | --- | --- |
@@ -488,23 +500,27 @@ pinned destination; an explicit replay after reactivation uses the newly authori
 **Script**, and **Settings** tabs. Valid field edits save automatically while the dialog stays open;
 invalid input stays editable with a save error. Script uses Rust highlighting for Rhai syntax;
 Initial prompt uses Glimmer highlighting for Handlebars syntax.
+Settings includes **Focus new pane**, enabled by default. Turn it off to launch accepted work in
+the background while preserving every Zellij client's focus. This toggle saves without pausing
+the rule and applies to future acceptances; retained acceptances keep their pinned choice on retry.
 Editing an enabled rule pauses it before saving the draft; `a` in Rules authorizes its updated
 revision. Already accepted work retains its pinned definition. Predicates inspect provider-supplied
 custom fields through `event.metadata`.
 In a rule's acceptance list, `d` switches to Events and selects that exact retained event, clearing
 conflicting filters even outside the latest-200 feed. In the Events tree, `d` on an acceptance selects
 its rule; `d` on a conversation child opens its conversation details.
-Acceptance rows offer **Go to rule** (`r`), **Go to instance** (`v`), and **Go to OpenCode session** (`o`)
-through the `.` menu or directly from the row. `Ctrl+Enter` opens the instance's only service route or
-shows a route chooser when several are available. Routes require an available instance.
-Session navigation is available once a conversation or assigned pane is recorded.
+Acceptance rows offer **Go to rule** (`r`) and **Go to instance** (`v`) through the `.` menu or directly
+from the row. Enter or `Ctrl+Enter` opens the instance's only service route or shows a route chooser
+when several are available. Routes require an available instance.
+Conversation children use Enter to open or focus their OpenCode session or pane.
 
 Create rules through MCP with `save_rule`. Use `list_rules`/`get_rule` to read revisions and acceptance
 history, `list_events`/`get_event` to inspect input, and `preview_rule` to check matches and resolved
 prompts without contacting an agent or creating an instance. Updates require the saved revision.
 Shared definitions live in `$TANDEM_HOME/templates/rules/<name>/rule.json`, alongside the instance
 and provider catalogs in the template Git repository. Each file contains `name`, `script`, `template`,
-`model`, and `initial_prompt`, with optional `variant`, `description`, and `start_instance` (default true).
+`model`, and `initial_prompt`, with optional `variant`, `description`, `start_instance`, and
+`focus_pane` (both booleans default true).
 The name must match its directory. Activation (`enabled`), Zellij targets, revisions, and execution
 history live locally in `settings.sqlite3`; omit `enabled` from the file and set it through `save_rule`
 or the TUI. File additions are discovered automatically as inactive rules. Direct edits pause the rule
@@ -613,7 +629,7 @@ with the same template/name after correcting the cause. Docker failures do not m
 ### Instance-local control
 
 `tandem mcp-instance` is a stdio MCP entry point in the released Tandem binary. It exposes
-`get_instructions()`, `start_self()` and `stop_self()` with empty arguments, plus `conclude`, `search_events`, and
+`get_instructions()`, `start_self()`, `stop_self()` and `update_repositories()` with empty arguments, plus `conclude`, `search_events`, and
 `get_event_report`. Its startup directory must be an owned instance
 workspace or a subdirectory. The connection pins that workspace's directory identity and namespace;
 each action rechecks ownership under the instance lock. Deleted or replaced workspaces require a new
@@ -633,19 +649,35 @@ Configuring the server grants these actions; coordinate with other sessions befo
 Stopping does not mark an event task complete. Shell access and the full management MCP remain separate
 capabilities, so this tool surface is not a security sandbox.
 
+`update_repositories({})` updates the current template's declared repositories inside the bound
+workspace after user approval. Clean branches fast-forward to their configured origin upstreams;
+local commits are preserved. Dirty, diverged, detached, untracked branches and active Git operations
+are skipped. Missing checkouts, unsafe paths, origin mismatches and Git failures produce individual
+failed results without provisioning repositories. The response contains `instance` and a
+`repositories` array with `target`, `branch`, `upstream`, `before`, `after`, `status`
+(`updated`, `current`, `skipped`, `failed`) and `reason`. Revisions are null when they cannot be
+observed. Inspect every result: the batch can partly succeed. Git uses noninteractive host credentials
+with a ten-minute batch budget and one minute per repository, plus up to five seconds per final
+revision read. Coordinate with other sessions before updating; source changes can affect running
+services. Rebuild, restart and verify them separately when needed.
+
 Agents ignore `conclude` unless explicitly instructed to call it; task completion and cleanup needs
-do not trigger it. An instructed `conclude({title, summary, markdown})` call saves full Markdown contents on the workspace's triggering
-acceptance, then permanently purges that instance's workspace, containers, volumes and networks.
+do not trigger it. An instructed `conclude({title, summary, markdown})` call permanently purges the owning
+instance's workspace, containers, volumes and networks, including manually created instances. A retained
+triggering acceptance receives the full Markdown report before cleanup. Without an acceptance link, report
+contents are not saved; preserve needed evidence elsewhere. Ambiguous or mismatched acceptance ownership
+blocks conclusion.
 Before an instructed call, preserve needed edits and artifacts elsewhere and coordinate with other workspace sessions.
-A retained acceptance link is required. Each acceptance owns one immutable report, so several rules
-accepting one event retain independent reports. SQLite retains reports after instance purge.
+Each acceptance owns one immutable report, so several rules accepting one event retain independent
+reports. SQLite retains reports after instance purge.
 Associated OpenCode clients and their Zellij panes close before resource deletion, including when
 OpenCode observation is disabled; empty Zellij tabs close with their last pane. Shared servers and
 conversation history are preserved. Cleanup runs detached and may interrupt the MCP reply; a reply
-confirms report storage and cleanup admission, not completion. Reports expose `cleanup_state`
+confirms cleanup admission, not completion. Unlinked replies contain `instance` and a pending `cleanup_state`;
+inspect the instance to verify cleanup. Linked replies contain the saved report metadata. Reports expose `cleanup_state`
 (`pending`, `purging`, `purged`, `failed`) and `cleanup_error`. Failed or interrupted cleanup preserves
-the report; retries require explicit instruction, instance inspection, and identical contents. Titles allow 500 bytes,
-summaries 8 KiB, and Markdown 1 MiB; all three must be nonempty.
+the report. Retries require explicit instruction and instance inspection, with identical contents when a report
+was saved. Titles allow 500 bytes, summaries 8 KiB, and Markdown 1 MiB; all three must be nonempty.
 
 `search_events({search_strings: ["timeout", "deployment"]})` searches titles, summaries, and full
 Markdown of retained acceptance reports in the current namespace. Any case-insensitive literal
@@ -678,6 +710,7 @@ add this native V2 entry to it when needed:
     {"action": "tandem-instance_get_instructions", "resource": "*", "effect": "allow"},
     {"action": "tandem-instance_start_self", "resource": "*", "effect": "allow"},
     {"action": "tandem-instance_stop_self", "resource": "*", "effect": "allow"},
+    {"action": "tandem-instance_update_repositories", "resource": "*", "effect": "allow"},
     {"action": "tandem-instance_conclude", "resource": "*", "effect": "allow"},
     {"action": "tandem-instance_search_events", "resource": "*", "effect": "allow"},
     {"action": "tandem-instance_get_event_report", "resource": "*", "effect": "allow"}
@@ -888,7 +921,7 @@ in its `.` menu:
 | Routed service | Open in browser |
 | OpenCode conversation, pane, or client | Open or goto its panel |
 | Event | View details |
-| Acceptance in Events or rule history | Go to OpenCode session; multiple conversations show a picker |
+| Acceptance in Events or rule history | Open routes: one opens directly, several show the picker |
 | Rule | Open details on Accepted events |
 | Provider | Logs |
 | Stream | Stream events |
@@ -1022,10 +1055,33 @@ the **`.`** menu exposes the same row actions:
 | Key | Action | Selected row |
 | --- | --- | --- |
 | `n` | New OpenCode session | Instance, Sessions group, external-directory group, conversation, or client/pane |
-| `o` | Open or jump to the selected conversation/pane | Owned or external conversation, or client/pane |
-| `c` | Close the selected Zellij pane | Attached conversation or client/pane |
+| Enter | Open or jump to the selected conversation/pane | Owned or external conversation, or client/pane |
+| `c` | Close the selected session tab in V2, or its client pane in V1 | Attached conversation or its pane child |
+| `c` | Close the selected Zellij client pane and its open tabs | Client/pane |
+| `r` | Rename the selected OpenCode conversation | Conversation or its pane child |
+| `x` | Confirm permanently deleting the selected conversation and its children | Conversation or its pane child |
+| `x` | Clear the exact folder's OpenCode history and tracking; preserve folder files | Grey external folder in Instances or Sessions |
 | `c` | Confirm closing all observed OpenCode panes in the group | Instance, Sessions group, external-directory group, or Other OpenCode workspaces |
 | `i` | New Tandem instance | Template, instance, or service |
+
+Conversation `r` and `x` actions also work on conversation children in Events.
+Attached conversation and client rows there expose **Close OpenCode panel** (`c`) in the row and **`.`** menu.
+Closing a V2 conversation preserves its saved history and the other tabs in that client.
+Rename uses a single borderless text field inside a bordered dialog with **Ok** (`o`) and **Cancel** (`c`).
+`Ctrl+Enter` submits the edited title; letters remain text while editing or while a picker search has a query.
+Deletion closes attached panes and stops the conversation and its descendants before removing their history.
+Fresh server checks verify ownership and stopped execution. Workspace files are preserved.
+The server must be available; deletion removes saved acceptance conversation links while preserving
+event, acceptance and report history. Acceptance parents retain **Go to rule** (`r`) and **Delete** (`x`).
+Grey external folders offer **Clear OpenCode data** with confirmation in Instances and Sessions.
+Confirmation shows **Background cleanup task started** and hides the folder immediately.
+A detached worker verifies idle, detached history, deletes verified top-level conversation trees,
+and clears the exact directory's receipts. Cleanup
+continues after Tandem closes and has a ten-minute deadline. Other OpenCode actions remain available.
+The start notification is the cleanup's only notification. Failures restore the folder's remaining
+history and record errors in diagnostic logs; completed deletions cannot be undone.
+Successful cleanup forgets the folder until OpenCode opens there again. Neighbouring directories,
+shared servers and folder files are preserved.
 
 `n` uses the instance workspace from an instance or Sessions group, and the exact directory from an
 external group or OpenCode child. The top-level **Other OpenCode workspaces** group has no creation
@@ -1038,14 +1094,15 @@ retrying because creation may be uncertain. Without a tab-capable client, creati
 client without sending a prompt: it attaches to a healthy known local server, or starts OpenCode in
 the directory when no server is known. A live destination supplies a stacked pane; a closed or absent
 destination creates a named tab in the current Zellij session. Creation immediately focuses the client.
-The DataView selects that client's row when observation arrives and reveals its parent groups;
-conversation titles in the DataView remain independent of the pane title.
+Once observed, the originating tree expands the session's parent groups and preserves the current
+selection. Instances expands its Sessions group; Events expands the acceptance node.
+Conversation titles remain independent of the pane title.
 
 Use **d → Actions** to jump to a specific pane or resume a conversation. **Goto panel** and
-**Open panel** use `o`; navigation works across tabs and Zellij sessions. Closing a pane preserves
+**Open panel** use Enter; navigation works across tabs and Zellij sessions. Closing a pane preserves
 saved conversation history and closes every OpenCode tab in that pane. With the V2 companion,
 all open session tabs appear as attached conversations, including background tabs when history is
-hidden. `o` selects the matching OpenCode tab before focusing its Zellij pane.
+hidden. Enter selects the matching OpenCode tab before focusing its Zellij pane.
 Group closure includes observed panes hidden by filters or display
 limits; external-directory groups match their exact directory, and instance groups use workspace
 ownership. The external aggregate closes only outside-Tandem panes.
@@ -1061,7 +1118,8 @@ subdirectories and selects the closest owning workspace.
 
 The top **Sessions** tab groups conversations beneath instance rows and outside-Tandem
 directory groups. The tabs are **Sessions**, **Events**, **Instances**, **Rules**, and **Streams**.
-**Instances** shows the template and instance tree. With OpenCode disabled, the tabs are
+**Instances** shows the template and instance tree. At startup and on `Shift+H`, every root
+expands one level while its children stay collapsed. With OpenCode disabled, the tabs are
 **Instances**, **Events**, **Rules**, and **Streams**. Click a tab or
 press `[` / `]` from any main-view control to switch left / right. Instance/session switches retain
 control focus; entering Events or Streams focuses its DataView.

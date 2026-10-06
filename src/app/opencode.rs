@@ -10,11 +10,15 @@ use super::{
     },
 };
 use crate::store::opencode::resources::Owner;
-use crate::store::opencode::{Activity, Client, Counts, Pane, Session, Snapshot, workspace_owner};
+use crate::store::opencode::{
+    Activity, Client, Counts, Pane, Session, SessionLocation, Snapshot, workspace_owner,
+};
 
 mod actions;
 mod folders;
 mod resources;
+mod sessions;
+pub(super) use sessions::{SessionAction, clearable_folder, session_hotkey};
 
 pub(super) use actions::{close_scope, new_session_directory};
 
@@ -58,8 +62,17 @@ pub(super) struct PendingAction {
 enum PendingReply {
     Existing(tokio::sync::oneshot::Receiver<Result<(), String>>),
     Created {
-        reply: tokio::sync::oneshot::Receiver<Result<Pane, String>>,
-        state: super::instances::SharedState,
+        reply: tokio::sync::oneshot::Receiver<Result<SessionLocation, String>>,
+        view: CreationView,
+    },
+}
+
+#[derive(Clone)]
+pub(super) enum CreationView {
+    Instances(super::instances::SharedState),
+    Events {
+        state: super::events::FocusState,
+        acceptance: i64,
     },
 }
 
@@ -77,11 +90,11 @@ impl PendingAction {
     }
 
     pub(super) fn creation(
-        reply: tokio::sync::oneshot::Receiver<Result<Pane, String>>,
-        state: super::instances::SharedState,
+        reply: tokio::sync::oneshot::Receiver<Result<SessionLocation, String>>,
+        view: CreationView,
     ) -> Self {
         Self {
-            reply: PendingReply::Created { reply, state },
+            reply: PendingReply::Created { reply, view },
             error_title: "Cannot create OpenCode session",
             closing: Vec::new(),
         }
@@ -97,15 +110,38 @@ impl ClosingPane {
     }
 
     fn matches_session(&self, session_id: &str, pane: &Pane) -> bool {
-        self.session_id.as_deref().is_none_or(|id| id == session_id) && self.matches_client(pane)
+        self.session_id.as_deref().is_none_or(|id| id == session_id) && self.matches_pane(pane)
     }
 
     fn matches_client(&self, pane: &Pane) -> bool {
+        self.session_id.is_none() && self.matches_pane(pane)
+    }
+
+    fn matches_pane(&self, pane: &Pane) -> bool {
         pane.session == self.pane.session && pane.id == self.pane.id
     }
 }
 
 impl Target {
+    pub(super) fn matches_location(&self, location: &SessionLocation) -> bool {
+        let pane = match self {
+            Self::Session {
+                id,
+                pane: Some(pane),
+                ..
+            } if location
+                .session_id
+                .as_ref()
+                .is_none_or(|expected| expected == id) =>
+            {
+                pane
+            }
+            Self::Client { pane } if location.session_id.is_none() => pane,
+            _ => return false,
+        };
+        pane.session == location.pane.session && pane.id == location.pane.id
+    }
+
     pub(super) fn attached(&self) -> bool {
         match self {
             Self::Session { pane, .. } => pane.is_some(),
@@ -1242,7 +1278,11 @@ impl App {
                     "Cannot close OpenCode session",
                     vec![closing],
                 ));
-                ctx.focus(initial_focus());
+                ctx.focus(if self.events_active {
+                    tuicore::FocusRequest::Target(tuicore::FocusId::new(super::events::FOCUS))
+                } else {
+                    initial_focus()
+                });
                 ctx.request_layout();
                 ctx.request_redraw();
             }
@@ -1267,15 +1307,7 @@ impl App {
     fn optimistically_close_opencode_panes(&mut self, panes: &[Pane]) -> Vec<ClosingPane> {
         let closing = panes
             .iter()
-            .map(|pane| {
-                let session_id = self
-                    .opencode_snapshot
-                    .sessions
-                    .iter()
-                    .find(|session| session.panes.contains(pane))
-                    .map(|session| session.id.as_str());
-                ClosingPane::new(session_id, pane)
-            })
+            .map(|pane| ClosingPane::new(None, pane))
             .collect::<Vec<_>>();
         for target in &closing {
             if !self.closing_opencode_panes.contains(target) {
@@ -1324,9 +1356,9 @@ impl App {
         let closing = action.closing.clone();
         let reply = match &mut action.reply {
             PendingReply::Existing(reply) => reply.try_recv().map(|result| result.map(|()| None)),
-            PendingReply::Created { reply, state } => reply
+            PendingReply::Created { reply, view } => reply
                 .try_recv()
-                .map(|result| result.map(|pane| Some((pane, state.clone())))),
+                .map(|result| result.map(|location| Some((location, view.clone())))),
         };
         let result = match reply {
             Ok(result) => result,
@@ -1336,10 +1368,17 @@ impl App {
             }
         };
         self.opencode_action = None;
-        if let Ok(Some((pane, state))) = &result
+        if let Ok(Some((location, view))) = &result
             && self.service.opencode_enabled()
         {
-            super::instances::select_opencode_pane(state, pane.clone());
+            match view {
+                CreationView::Instances(state) => {
+                    super::instances::expand_opencode_session(state, location.clone());
+                }
+                CreationView::Events { state, acceptance } => {
+                    super::events::expand_opencode_session(state, *acceptance, location.clone());
+                }
+            }
         }
         if let Err(error) = result {
             if !closing.is_empty() {

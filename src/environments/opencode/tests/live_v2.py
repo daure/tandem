@@ -154,8 +154,11 @@ export default { id: "test.route", setup(ctx) {
                     request = urllib.request.Request(control_receipt['server'] + path,
                         data=json.dumps(body).encode(),
                         headers={'Authorization': 'Bearer ' + control_receipt['token'], 'Content-Type': 'application/json'})
-                    with urllib.request.urlopen(request, timeout=15) as response:
-                        return json.load(response)['id']
+                    try:
+                        with urllib.request.urlopen(request, timeout=15) as response:
+                            return json.load(response)['id']
+                    except urllib.error.HTTPError as error:
+                        raise AssertionError(f'{path}: {error.code}: {error.read().decode()}') from error
 
                 instructions = 'Services are starting automatically; explore available code.'
                 assert tab_action('/tabs', {'directory': str(workspace), 'instructions': instructions}) == first
@@ -236,10 +239,21 @@ export default { id: "test.route", setup(ctx) {
                 home = wait_for(lambda: receipt(''))
                 assert {tab['id'] for tab in home['tabs']} >= {first, second, new_id}
                 print('PASS: the home route keeps every open session tab attached')
-                route_file.write_text(json.dumps({'close': first}))
+                assert tab_action('/tabs/close', {'sessionID': first}) == first
                 wait_for(lambda: not any(tab['id'] == first for record in records() for tab in record.get('tabs', [])))
                 assert receipt('')
-                print('PASS: closing a background tab removes only its attachment')
+                assert {tab['id'] for tab in receipt('')['tabs']} >= {second, new_id}
+                assert target()['id'] == pane_id
+                assert api(f'/api/session/{first}')['data']['id'] == first
+                assert tab_action('/tabs/focus', {'sessionID': second}) == second
+                wait_for(lambda: receipt(second))
+                assert tab_action('/tabs/close', {'sessionID': second}) == second
+                wait_for(lambda: receipt(new_id) and not any(tab['id'] == second for tab in receipt(new_id).get('tabs', [])))
+                assert target()['id'] == pane_id
+                assert tab_action('/tabs/close', {'sessionID': new_id}) == new_id
+                wait_for(lambda: receipt('') and not receipt('').get('tabs'))
+                assert target()['id'] == pane_id
+                print('PASS: companion closes background, active and last tabs while preserving siblings, history and the client pane')
                 zj('action', 'close-pane', '--pane-id', floating)
                 zj('action', 'close-pane', '--pane-id', sibling)
                 zj('action', 'close-pane', '--pane-id', pane)

@@ -17,7 +17,9 @@ use tuicore::{
 use super::Msg;
 use crate::store::events::{Deletion, Record, Snapshot};
 
+mod expansion;
 mod filters;
+mod relative_times;
 mod rows;
 mod tree;
 pub(super) use filters::StreamKey;
@@ -32,7 +34,9 @@ pub(super) struct FocusRequest {
     pub(super) record: Option<Record>,
     pub(super) deletion: Option<Deletion>,
     pub(super) reset_filters: bool,
+    created_session: Option<expansion::CreatedSession>,
 }
+pub(super) use expansion::expand_opencode_session;
 pub(super) type FocusState = Rc<RefCell<FocusRequest>>;
 type EventToggles = Split<Toggle<Msg>, Split<Toggle<Msg>, Split<Toggle<Msg>, Toggle<Msg>>>>;
 type EventStatus = Split<Split<Button<Msg>, Button<Msg>>, Paragraph>;
@@ -61,6 +65,7 @@ pub(super) struct Events {
     projected: Vec<Entry>,
     initial_roots_expanded: bool,
     spinner: Rc<RefCell<Spinner>>,
+    relative_times: Rc<RefCell<relative_times::RelativeTimes>>,
 }
 
 impl Events {
@@ -91,6 +96,8 @@ impl Events {
         let cell_spinner = spinner.clone();
         let memory_spinner = spinner.clone();
         let cpu_spinner = spinner.clone();
+        let relative_times = Rc::new(RefCell::new(relative_times::RelativeTimes::default()));
+        let cell_times = relative_times.clone();
         let data = DataView::new(Vec::new(), Entry::id)
             .focus_id(FOCUS)
             .hotkey("shift+h")
@@ -100,7 +107,18 @@ impl Events {
                     "Events",
                     Constraint::Fill(1),
                     move |row: &Entry, ctx| {
-                        row.text(cell_spinner.borrow().glyph(), ctx.available_width)
+                        let mut text = row.text(cell_spinner.borrow().glyph(), ctx.available_width);
+                        if let Entry::Event(record) = row
+                            && let Some(relative) = cell_times.borrow().text(record.sequence)
+                        {
+                            rows::right_suffix(
+                                &mut text.lines[1].spans,
+                                relative,
+                                ctx.available_width,
+                                Style::default().fg(tuicore::theme().muted_fg()),
+                            );
+                        }
+                        text
                     },
                 )
                 .search_key(Entry::search)
@@ -207,6 +225,7 @@ impl Events {
             projected: Vec::new(),
             initial_roots_expanded: false,
             spinner,
+            relative_times,
         }
     }
 
@@ -330,8 +349,9 @@ impl Events {
             && !reset_filters
             && deletion.is_none()
         {
-            return sound_changed || history_changed;
+            return self.expand_created_session() || sound_changed || history_changed;
         }
+        self.relative_times.borrow_mut().sync(&records);
         let status = snapshot
             .error
             .as_deref()
@@ -362,6 +382,7 @@ impl Events {
             self.set_following(false);
             self.focus_feed = true;
         }
+        self.expand_created_session();
         self.view.second_mut().take_events();
         self.view
             .second_mut()
@@ -573,6 +594,8 @@ impl Events {
             {
                 ctx.emit(message);
             }
+        } else if KeySpec::plain('d').matches(*key) {
+            ctx.emit(Msg::OpenEvent(record.clone()));
         } else if KeySpec::plain('p').matches(*key) {
             if let Some(row) = self.row(id) {
                 ctx.emit(Msg::ShowProvider(row.provider.clone()));
@@ -603,7 +626,7 @@ impl Events {
                 DataViewTypedEvent::Activated { row_id } => {
                     if let Some(row) = self.projected.iter().find(|row| row.id() == row_id) {
                         match row {
-                            Entry::Event(row) => ctx.emit(Msg::OpenEvent(row.clone())),
+                            Entry::Event(row) => ctx.emit(Msg::OpenEventLink(row.clone())),
                             Entry::Acceptance(target) => {
                                 ctx.emit(Msg::FocusRule(target.acceptance.rule_name.clone()))
                             }
@@ -900,6 +923,7 @@ impl TuiNode<Msg> for Events {
         let result = <EventView as TuiNode<Msg>>::tick(&mut self.view, dt, settings).merge(
             Animated::tick(&mut *self.spinner.borrow_mut(), dt, settings),
         );
+        let result = result.merge(self.relative_times.borrow_mut().tick(dt, settings));
         result.merge(if changed {
             TickResult {
                 layout: true,
@@ -935,6 +959,7 @@ impl TuiNode<Msg> for Events {
     }
     fn mount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.view.mount(ctx);
+        ctx.request_tick();
     }
     fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.view.unmount(ctx);

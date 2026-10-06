@@ -192,6 +192,9 @@ impl Pages {
     pub(super) fn focus_event(&mut self, record: crate::store::events::Record) {
         self.event_focus.borrow_mut().record = Some(record);
     }
+    pub(super) fn event_focus(&self) -> super::events::FocusState {
+        self.event_focus.clone()
+    }
     pub(super) fn forget_event(&mut self, deletion: crate::store::events::Deletion) {
         let mut request = self.event_focus.borrow_mut();
         request.deletion = Some(deletion);

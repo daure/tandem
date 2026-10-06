@@ -31,6 +31,7 @@ fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_own
                 initial_prompt: "Inspect {{event.summary}}".into(),
                 enabled: true,
                 start_instance: false,
+                focus_pane: true,
             },
             None,
             "main".into(),
@@ -114,6 +115,39 @@ fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_own
     assert_eq!(session.server, "http://127.0.0.1:12345");
     assert_eq!(session.activity, Activity::Idle);
     assert!(session.panes.is_empty());
+    let mut recent = observed.clone();
+    let mut removed = recent.sessions[0].clone();
+    removed.id = "ses_removed".into();
+    recent.sessions.push(removed);
+    restarted.remember_workspaces(&inventory, &recent).unwrap();
+    restarted
+        .update_opencode_history(
+            &[
+                (
+                    ("http://127.0.0.1:12345".into(), "ses_retained".into()),
+                    Some("Reviewed task".into()),
+                ),
+                (
+                    ("http://127.0.0.1:12345".into(), "ses_removed".into()),
+                    None,
+                ),
+            ]
+            .into(),
+        )
+        .unwrap();
+    let edited = RuleStore::open(&config).unwrap().snapshot().unwrap();
+    assert_eq!(
+        edited.workspaces[&acceptance.id].sessions[0].title,
+        "Reviewed task"
+    );
+    assert_eq!(edited.workspaces[&acceptance.id].sessions.len(), 1);
+    restarted.remember_workspaces(&inventory, &recent).unwrap();
+    assert_eq!(
+        restarted.snapshot().unwrap().workspaces[&acceptance.id]
+            .sessions
+            .len(),
+        1
+    );
     crate::environments::lifecycle::delete(
         &config,
         &acceptance.instance,

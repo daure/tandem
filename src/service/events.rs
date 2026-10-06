@@ -41,6 +41,24 @@ impl Drop for PollGuard {
 }
 
 impl AppService {
+    pub(crate) fn open_event_link(
+        &self,
+        event: &crate::store::events::Event,
+    ) -> Result<bool, String> {
+        let Some(url) = event
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+        else {
+            return Ok(false);
+        };
+        reqwest::Url::parse(url)
+            .map_err(|_| "Event link must be a valid absolute URL".to_string())?;
+        self.open_system_target(url)?;
+        Ok(true)
+    }
+
     pub(crate) fn event_snapshot(&self) -> Snapshot {
         self.events
             .snapshot

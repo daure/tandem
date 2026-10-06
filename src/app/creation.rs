@@ -5,6 +5,7 @@ use super::App;
 
 pub(super) struct Creation {
     pub prompt: String,
+    pub can_start_instance: bool,
     pub start_instance: bool,
     pub launches: Vec<(String, Receiver<Result<(), String>>)>,
 }
@@ -13,6 +14,7 @@ impl Default for Creation {
     fn default() -> Self {
         Self {
             prompt: String::new(),
+            can_start_instance: true,
             start_instance: true,
             launches: Vec::new(),
         }
@@ -24,9 +26,10 @@ impl Creation {
         (!self.prompt.trim().is_empty()).then(|| Some(self.prompt.clone()))
     }
 
-    pub fn reset_form(&mut self) {
+    pub fn reset_form(&mut self, can_start_instance: bool) {
         self.prompt.clear();
-        self.start_instance = true;
+        self.can_start_instance = can_start_instance;
+        self.start_instance = can_start_instance;
     }
 }
 

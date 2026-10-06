@@ -44,14 +44,16 @@ fn provider_launches_preserve_identity_and_reject_reuse_by_another_package() {
         name: "package".into(),
         directory: "/templates/providers/package".into(),
         manifest: Some(Manifest {
-            schema_version: 1,
+            schema_version: 2,
             name: "source".into(),
-            profile: "generic".into(),
             description: "Source".into(),
             protocol: "tandem-events-v1".into(),
             feedback: vec![],
-            streams: vec![],
-            stream_control: false,
+            streams: vec![crate::store::providers::StreamDeclaration {
+                name: "releases".into(),
+                profile: "generic".into(),
+            }],
+            stream_control: true,
         }),
         available: true,
         status: Status::NotStarted,
@@ -60,7 +62,37 @@ fn provider_launches_preserve_identity_and_reject_reuse_by_another_package() {
         operation: None,
         streams: vec![],
     };
+    let legacy = json!({
+        "schema_version": 1, "name": "source", "profile": "generic",
+        "description": "Source", "protocol": "tandem-events-v1",
+        "streams": ["releases"], "stream_control": true
+    });
+    manager
+        .database()
+        .unwrap()
+        .execute(
+            "INSERT INTO provider_launches(namespace, name, directory, manifest, compose) VALUES (?1, 'package', ?2, ?3, '{}')",
+            params![config.namespace, provider.directory, legacy.to_string()],
+        )
+        .unwrap();
+    let store = EventStore::open(&config).unwrap();
+    let token = store.register_provider("source").unwrap();
+    manager.prepare_stream_controls("package", None).unwrap();
+    assert_eq!(store.stream_controls(&token).unwrap()[0].stream, "releases");
     manager.save_launch(&provider, "{}").unwrap();
+    let saved: String = manager
+        .database()
+        .unwrap()
+        .query_row(
+            "SELECT manifest FROM provider_launches WHERE name = 'package'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Manifest>(&saved).unwrap(),
+        *provider.manifest.as_ref().unwrap()
+    );
     manager.save_launch(&provider, "{}").unwrap();
     provider.name = "other-package".into();
     assert!(
@@ -90,7 +122,7 @@ fn ingestion_setup() -> (tempfile::TempDir, Config, Providers, EventStore, Strin
         directory: "/templates/providers/package".into(),
         manifest: Some(
             serde_json::from_value(json!({
-                "schema_version": 1, "name": "source", "profile": "message",
+                "schema_version": 2, "name": "source",
                 "description": "Source", "protocol": "tandem-events-v1"
             }))
             .unwrap(),

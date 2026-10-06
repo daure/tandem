@@ -6,8 +6,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{Environments, config::Config, gateway, journal, ownership, removal, templates};
-use crate::store::environments::{Instance, InstanceInstructions};
+use super::{
+    Environments, config::Config, gateway, journal, ownership, removal, repositories, templates,
+};
+use crate::store::environments::{Instance, InstanceInstructions, RepositoryUpdates};
 
 #[derive(Debug)]
 pub(crate) struct InstanceScope {
@@ -19,6 +21,26 @@ pub(crate) struct InstanceScope {
 }
 
 impl Environments {
+    pub(crate) fn update_instance_repositories(
+        &self,
+        scope: &InstanceScope,
+    ) -> Result<RepositoryUpdates, String> {
+        let _lock = gateway::lock(&self.config, &format!("instance-{}", scope.name))?;
+        let instance = self.verify_instance_scope(scope)?;
+        let template = templates::get(&self.config, &instance.template)?;
+        if instance.template_directory != template.directory {
+            return Err("instance belongs to a different template directory".into());
+        }
+        Ok(RepositoryUpdates {
+            instance: instance.name,
+            repositories: repositories::update(
+                Path::new(&instance.workspace),
+                &template.manifest.repositories,
+                Instant::now() + Duration::from_secs(600),
+            )?,
+        })
+    }
+
     pub(crate) fn instance_instructions(
         &self,
         scope: &InstanceScope,
@@ -192,6 +214,7 @@ pub(super) fn prepare_config(config: &Config, workspace: &Path) -> Result<(), St
             "tandem-instance_get_instructions": "allow",
             "tandem-instance_start_self": "allow",
             "tandem-instance_stop_self": "allow",
+            "tandem-instance_update_repositories": "allow",
             "tandem-instance_conclude": "allow",
             "tandem-instance_search_events": "allow",
             "tandem-instance_get_event_report": "allow"

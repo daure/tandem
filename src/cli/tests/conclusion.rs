@@ -101,7 +101,8 @@ fn scoped_conclusion_survives_mcp_kill_and_retains_searchable_reports_after_reso
             "get_instructions",
             "search_events",
             "start_self",
-            "stop_self"
+            "stop_self",
+            "update_repositories"
         ]
     );
     let injection = agent.request_raw("tools/call", json!({"name": "conclude", "arguments": {"title": "Other", "summary": "Other", "markdown": "Other", "name": "reader"}}));
@@ -160,12 +161,95 @@ fn scoped_conclusion_survives_mcp_kill_and_retains_searchable_reports_after_reso
             .unwrap()
             .contains("close-pane --pane-id terminal_100")
     );
-    let unlinked = reader.request(
-        "tools/call",
-        json!({"name": "conclude", "arguments": input()}),
+    let unlinked = reader.tool("conclude", input());
+    assert_eq!(
+        unlinked,
+        json!({"instance": "reader", "cleanup_state": "pending"})
     );
-    assert_eq!(unlinked["isError"], true);
+    reader.close(Some(libc::SIGKILL));
+    wait_for(|| !fixture.home.join("workspaces/reader").exists());
+    assert!(fixture.runtime_record("reader", "journal").is_none());
+    assert!(fixture.runtime_record("reader", "startup").is_none());
+    assert_eq!(
+        management.tool(
+            "search_event_reports",
+            json!({"search_strings": ["incident"]})
+        )["reports"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn unlinked_conclusion_preserves_resources_on_close_failure_and_survives_retry_disconnection() {
+    let fixture = fixture();
+    let connection = rusqlite::Connection::open(fixture.home.join("settings.sqlite3")).unwrap();
+    connection
+        .execute("DELETE FROM rule_acceptances", [])
+        .unwrap();
+    fs::write(fixture.home.join("fail-close"), "").unwrap();
+    fs::write(fixture.home.join("release-close"), "").unwrap();
+    let mut agent = client(&fixture, "review");
+    let mut reader = client(&fixture, "reader");
+    assert_eq!(
+        agent.tool("conclude", input()),
+        json!({"instance": "review", "cleanup_state": "pending"})
+    );
+    wait_for(|| {
+        String::from_utf8_lossy(
+            &fixture
+                .run(&["inspect-instance", "review", "--json"])
+                .stdout,
+        )
+        .contains("fixture closure failed")
+    });
+    assert!(
+        fixture
+            .home
+            .join("workspaces/review/app/file.txt")
+            .is_file()
+    );
+    assert!(
+        reader.tool("search_events", json!({"search_strings": ["incident"]}))["reports"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !fs::read_to_string(fixture.home.join("docker-calls"))
+            .unwrap()
+            .contains("rm --force")
+    );
+    fs::remove_file(fixture.home.join("fail-close")).unwrap();
+    fs::remove_file(fixture.home.join("release-close")).unwrap();
+    fs::remove_file(fixture.home.join("closing")).unwrap();
+    agent.tool("conclude", input());
+    wait_for(|| fixture.home.join("closing").exists());
+    agent.close(Some(libc::SIGKILL));
+    fs::write(fixture.home.join("release-close"), "").unwrap();
+    wait_for(|| !fixture.home.join("workspaces/review").exists());
     assert!(fixture.home.join("workspaces/reader").is_dir());
+    assert!(fixture.runtime_record("review", "journal").is_none());
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM rule_acceptance_reports", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0
+    );
+    assert!(
+        fs::read_to_string(fixture.home.join("docker-calls"))
+            .unwrap()
+            .contains("rm --force --volumes fixture-container")
+    );
+    assert!(
+        fs::read_to_string(fixture.home.join("zellij-calls"))
+            .unwrap()
+            .contains("close-pane --pane-id terminal_100")
+    );
 }
 
 #[test]

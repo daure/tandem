@@ -77,8 +77,13 @@ Read `core_guidance` together with this editable guidance for placement and clea
   installations and unverifiable or reused instance ownership. Partial failures retain identity/history
   for retry and block collection restarts and queued dispatch. Shared rules, sidecars, namespace rate
   limits and Docker images/build caches remain; external source-system effects cannot be undone.
-- Declare stream names in `provider.json`'s `streams` array; set `stream_control: true` only when the
-  collector implements authenticated stream controls. Poll `GET /v1/streams` at least once per second
+- Use `schema_version: 2` in `provider.json` and declare `streams` as `{name, profile}` entries.
+  Profiles are `message`, `ticket`, `system_event`, or `generic`, independently per stream.
+  Events retain their own profile and normalized payload; manifest declarations do not constrain ingestion.
+  Set each event's optional envelope `url` to an absolute source link when available; desktop-app
+  schemes such as `slack://` require a registered system handler.
+  Set `stream_control: true` only when the collector implements authenticated stream controls.
+  Poll `GET /v1/streams` at least once per second
   with the provider credential. Apply each `{stream, enabled, revision}` control, then POST that exact
   object to `/v1/streams/ack`; repeat acknowledgments while it remains applied. Revisions reject stale
   acknowledgments, and acknowledgment freshness expires after five seconds.
@@ -108,16 +113,17 @@ Read `core_guidance` together with this editable guidance for placement and clea
 ## Event rules
 
 - Store shared definitions as `<rule_templates_root>/<name>/rule.json`; the name must match its
-  directory. Files contain the rule's predicate, template, model, prompt, description, and service-start
-  flag. Activation, Zellij targets, revisions, and history are namespace-local SQLite state; omit
-  `enabled` from files. New files are discovered inactive. Direct edits pause the rule in each namespace
+  directory. Files contain the rule's predicate, template, model, prompt, description, service-start
+  and pane-focus flags. Activation, Zellij targets, revisions, and history are namespace-local SQLite
+  state; omit `enabled` from files. New files are discovered inactive. Direct edits pause the rule in each namespace
   and require authorization of the updated revision. Removal stops future matches while preserving
   pinned work and history. Invalid files block new attempts until corrected. `save_rule` writes the
   shared file and local state with an expected revision.
 - Before writing predicates or prompts, use `list_providers` to locate each provider's package directory.
   Read its event-building source and nonsecret configuration to discover streams, event types, profiles,
    and extra `metadata` fields: their meanings, types, and when they are populated. Provider manifests
-   declare a profile and optional stream inventory; verify stream meanings and metadata schemas in the package.
+   declare an optional stream inventory with per-stream profiles; verify stream meanings and metadata
+   schemas in the package.
   Compare with `list_events` and `get_event` samples; code describes possible output, while retained
   events show observed output. Account for runtime configuration and conditional or missing fields;
   an absent sample does not prove a stream or field is unavailable. Scope predicates to the intended
@@ -147,6 +153,8 @@ Read `core_guidance` together with this editable guidance for placement and clea
 - Rules default to starting configured services. Disable `start_instance` to prepare the workspace and
   Compose configuration without starting containers. Dispatch waits for successful preparation and,
   when startup is requested, service readiness before launching the configured conversation.
+  Automatic launches focus their new OpenCode pane by default. Set `focus_pane=false` to preserve
+  all Zellij clients' focus; each acceptance retains its pinned choice through retries.
   The owned sidecar continues automation after clients close; a namespace lease prevents concurrent
   dispatchers. Limits are four active actions and ten starts per minute, including retries; rate limits
   bound bursts but do not prevent feedback loops.
@@ -176,7 +184,11 @@ Read `core_guidance` together with this editable guidance for placement and clea
   Restore history on demand with `git fetch --unshallow` if the checkout is shallow;
   fetch other branches explicitly.
 - Existing checkout roots and exact origin URLs must match; their branches and work are preserved.
-  Git updates require explicit user approval. Failed provisioning stops startup; completed checkouts
+  Git updates require explicit user approval. Use the instance-local `update_repositories` tool for
+  batch updates and inspect every repository's result before assuming the workspace is current.
+  It fast-forwards clean current branches to their configured origin upstreams; resolving skipped or
+  failed checkouts requires separate approval. Coordinate with other workspace sessions and verify
+  application behavior after updating. Failed provisioning stops startup; completed checkouts
   survive retries. Resolve mismatches explicitly; never delete or reset user work to make a retry pass.
 - Provisioning requires Linux, host Git with `switch` support, and noninteractive credentials;
   SSH requires known hosts with strict host-key checking. For service templates, configure workspace mounts/build
@@ -199,18 +211,20 @@ Read `core_guidance` together with this editable guidance for placement and clea
   `core_guidance` and editable `markdown`; ask the user before acting if they conflict.
   Preparation creates `.opencode/opencode.json` in syntax accepted by OpenCode V1 and V2 when the
   workspace has no root or `.opencode` JSON/JSONC configuration. Existing configuration is preserved.
-  `conclude` saves a title, summary, and full Markdown report on the triggering acceptance before
-  permanently purging the instance and closing associated OpenCode clients and Zellij panes; empty
-  tabs close with their last pane. Preserve needed changes and artifacts elsewhere and coordinate with
-  other workspace sessions before an instructed call. Ignore `conclude` unless explicitly instructed
-  to call it; tool availability and task completion are not instructions to call it. A retained acceptance
-   ownership link is required. Start and approved recreation preserve it; unrelated reuse of the
-   instance name does not establish it. Cleanup runs detached, so client closure can interrupt its reply. The report's
-  `cleanup_state` records completion or failure; failed cleanup preserves the report and accepts an
-  identical-content retry after inspection and explicit instruction. Reports are immutable and survive instance purge.
+  `conclude` permanently purges the owning instance, including manually created instances, and closes
+  associated OpenCode clients and Zellij panes; empty tabs close with their last pane. A retained triggering
+  acceptance receives an immutable title, summary, and full Markdown report before cleanup. Without an
+  acceptance link, report contents are not saved; preserve needed evidence elsewhere. Ambiguous or
+  mismatched acceptance ownership blocks conclusion. Preserve needed changes and artifacts outside the
+  workspace and coordinate with other sessions before an instructed call. Ignore `conclude` unless explicitly instructed
+  to call it; tool availability and task completion are not instructions to call it. Start and approved
+  recreation preserve acceptance ownership; unrelated reuse of the instance name does not establish it.
+  Cleanup runs detached, so client closure can interrupt its reply. Reports survive instance purge and
+  record cleanup outcomes, including failure. Inspect the instance to verify unlinked cleanup. Retries require
+  inspection and explicit instruction, with identical contents when a report was saved.
   A reported acceptance is excluded from automatic dispatch and dispatch retry; use its cleanup status.
-   Instance-local `search_events` searches report titles, summaries, and full Markdown across the namespace;
-   `get_event_report` retrieves one acceptance's report.
+  Instance-local `search_events` searches report titles, summaries, and full Markdown across the namespace;
+  `get_event_report` retrieves one acceptance's report.
   Use the full management MCP only for separately approved cross-instance operations or manual deletion.
   Scope is a tool boundary, not a sandbox against shell access.
 - With OpenCode integration and creation-history cleanup enabled (both default on), creating a new

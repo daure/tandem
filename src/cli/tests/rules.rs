@@ -47,11 +47,14 @@ fn dispatch(start_instance: bool) {
         ("inspect", "Inspect {{event.data.text}}"),
         ("missing", "{{event.metadata.missing}}"),
     ] {
-        let definition = json!({
+        let mut definition = json!({
             "name": name, "description": "Event fixture", "script": "fn matches(event) { true }",
             "template": "website", "model": "openai/test", "variant": "fast", "initial_prompt": prompt,
             "enabled": true, "start_instance": start_instance
         });
+        if !start_instance {
+            definition["focus_pane"] = json!(false);
+        }
         let mut recipe = definition.clone();
         recipe.as_object_mut().unwrap().remove("enabled");
         let directory = fixture.home.join("templates/rules").join(name);
@@ -199,6 +202,19 @@ fn dispatch(start_instance: bool) {
         thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(ingest()["receipts"][0]["duplicate"], true);
+    assert_eq!(success["rule"]["definition"]["focus_pane"], start_instance);
+    let calls = fs::read_to_string(fixture.home.join("zellij-calls")).unwrap();
+    assert_eq!(calls.contains("--no-focus"), !start_instance, "{calls}");
+    assert_eq!(
+        calls.contains("focus-pane-id terminal_100"),
+        start_instance,
+        "{calls}"
+    );
+    assert_eq!(
+        calls.contains("go-to-tab-by-id 9"),
+        start_instance,
+        "{calls}"
+    );
     assert_eq!(acceptances(&fixture).len(), 2);
     assert_eq!(
         fs::read_to_string(fixture.home.join("opened"))

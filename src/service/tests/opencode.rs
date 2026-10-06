@@ -88,6 +88,8 @@ fn integration_defaults_on_persists_and_rejects_actions_when_disabled() {
             .unwrap_err()
             .contains("disabled")
     );
+    assert!(service.rename_opencode_session("ses_one", "Updated".into()).unwrap_err().contains("disabled"));
+    assert!(service.delete_opencode_session("ses_one").unwrap_err().contains("disabled"));
     let reader = AppService::from_config(service.environments.config.clone()).unwrap();
     assert!(!reader.opencode_enabled());
     service

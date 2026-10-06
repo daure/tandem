@@ -23,6 +23,7 @@ fn accepted_events(service: &AppService) -> (String, Vec<Acceptance>) {
                 initial_prompt: "Inspect {{event.summary}}".into(),
                 enabled: true,
                 start_instance: false,
+                focus_pane: true,
             },
             None,
             "main".into(),
@@ -149,8 +150,12 @@ fn event_deletion_preserves_acceptance_history_during_conclusion_cleanup() {
     let service = AppService::for_tests();
     let (_token, acceptances) = accepted_events(&service);
     let busy = &acceptances[0];
-    let _conclusion =
-        crate::environments::conclusion::reserve(&service.environments.config, busy.id).unwrap();
+    let _conclusion = crate::environments::conclusion::reserve(
+        &service.environments.config,
+        busy.id,
+        &busy.instance,
+    )
+    .unwrap();
     service
         .rules
         .store

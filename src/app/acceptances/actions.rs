@@ -1,11 +1,7 @@
-use ratatui::text::Text;
-use tuicore::{
-    Dropdown, DropdownCommitMode, DropdownSearchMode, DropdownVariant, EventCtx, Flex, FlexItem,
-    Notification, Paragraph, TextInput, TextareaInput,
-};
+use tuicore::{EventCtx, Flex, FlexItem, Notification, Paragraph, TextInput, TextareaInput};
 
 use super::{Command, Msg, Target};
-use crate::app::{App, Intent, dialogs, rows::Row};
+use crate::app::{App, Intent, dialogs};
 
 impl App {
     pub(in crate::app) fn acceptance_action(
@@ -50,6 +46,20 @@ impl App {
             return;
         }
         match command {
+            Command::RenameSession | Command::DeleteSession => {
+                if let Some(crate::app::opencode::Target::Session { id, .. }) = target
+                    .selected
+                    .as_ref()
+                    .and_then(|row| row.opencode.as_ref())
+                {
+                    let action = if command == Command::RenameSession {
+                        crate::app::opencode::SessionAction::Rename
+                    } else {
+                        crate::app::opencode::SessionAction::Delete
+                    };
+                    self.request_opencode_session_action(id.clone(), action, ctx);
+                }
+            }
             Command::Report => {
                 let report = super::super::markdown::Markdown::readonly(
                     "report",
@@ -144,7 +154,15 @@ impl App {
             }
             Command::NewSession => {
                 if let Some(row) = &target.instance {
-                    self.create_opencode_session(row, ctx);
+                    let view = if self.events_active {
+                        crate::app::opencode::CreationView::Events {
+                            state: self.pages_mut().event_focus(),
+                            acceptance: target.acceptance.id,
+                        }
+                    } else {
+                        crate::app::opencode::CreationView::Instances(self.instances.clone())
+                    };
+                    self.create_opencode_session_at(row, view, ctx);
                 }
             }
             Command::Details => {
@@ -152,23 +170,12 @@ impl App {
                     self.open_opencode_dialog(row, ctx);
                 }
             }
-            Command::Session => {
-                if target.selected.is_none() {
-                    let parent = format!("acceptance:{}", target.acceptance.id);
-                    let mut choices: Vec<_> = target
-                        .conversations
-                        .iter()
-                        .filter(|row| {
-                            row.opencode.is_some() && row.parent.as_deref() == Some(&parent)
-                        })
-                        .cloned()
-                        .collect();
-                    if choices.len() > 1 {
-                        self.open_acceptance_picker(target, choices, ctx);
-                        return;
-                    }
-                    target.selected = choices.pop();
+            Command::ClosePanel => {
+                if let Some(row) = &target.selected {
+                    self.close_opencode(row, ctx);
                 }
+            }
+            Command::Session => {
                 let Some(row) = &target.selected else {
                     return;
                 };
@@ -217,43 +224,6 @@ impl App {
             target.acceptance.instance, target.acceptance.rule.definition.template)), FlexItem::fit_content()));
         self.intent = None;
         self.open_compact(Box::new(modal), ctx);
-    }
-
-    fn open_acceptance_picker(
-        &mut self,
-        target: Target,
-        choices: Vec<Row>,
-        ctx: &mut EventCtx<Msg>,
-    ) {
-        let original = target.acceptance.session_id.clone();
-        let selected = self.acceptance_selection.clone();
-        let mut dropdown = Dropdown::single_rich(choices, |row: &Row| row.id.clone(),
-            |row: &Row| row.label.lines().next().unwrap_or_default().to_owned(),
-            move |row, _, _| {
-                let original = matches!(&row.opencode, Some(crate::app::opencode::Target::Session { id, .. }) if Some(id) == original.as_ref());
-                Text::raw(format!("{}{}", row.label.lines().next().unwrap_or_default(), if original { " · original" } else { "" }))
-            })
-            .variant(DropdownVariant::Filled).search_mode(DropdownSearchMode::Fuzzy)
-            .commit_mode(DropdownCommitMode::Explicit).centered(true).show_field_when_open(false)
-            .max_popup_width(u16::MAX).max_popup_height(12)
-            .on_select(move |ids| {
-                if let Some(row) = target.conversations.iter().find(|row| ids.contains(&row.id)) {
-                    let mut target = target.clone(); target.selected = Some(row.clone());
-                    *selected.borrow_mut() = Some(target);
-                }
-            });
-        dropdown.open_with_context(ctx);
-        self.intent = None;
-        self.open_compact(
-            Box::new(
-                dialogs::dialog("OpenCode conversations").host(Flex::column().child(
-                    "conversation-picker",
-                    dropdown,
-                    FlexItem::fill(1),
-                )),
-            ),
-            ctx,
-        );
     }
 
     pub(in crate::app) fn poll_acceptance_recreation(&mut self) -> bool {

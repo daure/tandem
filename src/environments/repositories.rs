@@ -16,6 +16,9 @@ use crate::store::environments::{Repository, RepositoryCheckout, Template};
 
 const MAX_CONCURRENT_REPOSITORIES: usize = 4;
 
+mod update;
+pub(super) use update::update;
+
 pub(super) fn validate(repositories: &[Repository]) -> Result<(), String> {
     for (index, repository) in repositories.iter().enumerate() {
         let target = &repository.target;

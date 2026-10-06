@@ -2,8 +2,13 @@ use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[test]
-fn tab_creation_and_navigation_use_the_exact_client_and_preserve_the_zellij_pane() {
-    for (focus, succeeds) in [(false, true), (false, false), (true, true), (true, false)] {
+fn tab_actions_use_the_exact_client_and_preserve_the_zellij_pane() {
+    for (action, succeeds) in ["create", "focus", "close"]
+        .into_iter()
+        .flat_map(|action| [(action, true), (action, false)])
+    {
+        let focus = action == "focus";
+        let close = action == "close";
         let root = tempfile::tempdir().unwrap();
         let observer = observer(root.path());
         let directory = root.path().to_str().unwrap();
@@ -14,13 +19,13 @@ fn tab_creation_and_navigation_use_the_exact_client_and_preserve_the_zellij_pane
             let receipt = observer.presence.join("client.json");
             let mut value: serde_json::Value = serde_json::from_str(&fs::read_to_string(&receipt).unwrap()).unwrap();
             value["tab_control"] = json!({"server":format!("http://{}", listener.local_addr().unwrap()), "token":"client-secret"});
-            if focus {
+            if focus || close {
                 let mut background = value.clone();
                 background["id"] = json!("ses_background");
                 value["tabs"] = json!([background]);
             }
             fs::write(receipt, value.to_string()).unwrap();
-            let expected_body = if focus { json!({"sessionID":"ses_background"}) } else { json!({"directory":directory, "instructions":"Services won't start automatically"}) }.to_string();
+            let expected_body = if focus || close { json!({"sessionID":"ses_background"}) } else { json!({"directory":directory, "instructions":"Services won't start automatically"}) }.to_string();
             let controller = tokio::spawn(async move {
                 let (mut stream, _) = tokio::time::timeout(std::time::Duration::from_secs(2), listener.accept()).await.expect("client control request").unwrap();
                 let mut bytes = Vec::new();
@@ -35,11 +40,11 @@ fn tab_creation_and_navigation_use_the_exact_client_and_preserve_the_zellij_pane
                     }
                 }
                 let request = String::from_utf8(bytes).unwrap();
-                let path = if focus { "/tabs/focus" } else { "/tabs" };
+                let path = if focus { "/tabs/focus" } else if close { "/tabs/close" } else { "/tabs" };
                 assert!(request.starts_with(&format!("POST {path} HTTP/1.1\r\n")), "{request}");
                 assert!(request.contains("authorization: Bearer client-secret\r\n"), "{request}");
                 let (status, body) = if succeeds {
-                    ("200 OK", json!({"id":if focus {"ses_background"} else {"ses_new"}}))
+                    ("200 OK", json!({"id":if focus || close {"ses_background"} else {"ses_new"}}))
                 } else {
                     ("409 Conflict", json!({"error":"Enable OpenCode session tabs before creating a tab"}))
                 };
@@ -49,24 +54,57 @@ fn tab_creation_and_navigation_use_the_exact_client_and_preserve_the_zellij_pane
             let target = Pane { session: "main".into(), id: 7, tab_id: 99, tab_name: "stale".into() };
             let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 if focus { observer.jump("ses_background", &target, "other").await.map(|_| None) }
+                else if close { observer.close("ses_background", &target).await.map(|_| None) }
                 else { observer.new_session_tab(directory, "other", Some(&target), Some("Services won't start automatically")).await }
             }).await.unwrap();
             controller.await.unwrap();
             let calls = fs::read_to_string(root.path().join("calls")).unwrap();
             assert!(!calls.contains("new-pane") && !calls.contains("new-tab"), "{calls}");
+            assert!(!calls.contains("close-pane"), "{calls}");
             if succeeds {
                 let pane = result.unwrap();
-                if !focus {
-                    let pane = pane.unwrap();
-                    assert_eq!((pane.id, pane.tab_id), (7, 4));
+                if !focus && !close {
+                    let location = pane.unwrap();
+                    assert_eq!((location.pane.id, location.pane.tab_id), (7, 4));
+                    assert_eq!(location.session_id.as_deref(), Some("ses_new"));
                 }
-                assert!(calls.contains("--session other action switch-session main --pane-id terminal_7"), "{calls}");
+                if close {
+                    assert!(!calls.contains("switch-session"), "{calls}");
+                } else {
+                    assert!(calls.contains("--session other action switch-session main --pane-id terminal_7"), "{calls}");
+                }
             } else {
                 assert!(result.unwrap_err().contains("Enable OpenCode session tabs"));
                 assert!(!calls.contains("switch-session"), "{calls}");
             }
         });
     }
+}
+
+#[test]
+fn shared_session_tabs_require_tab_control_before_closing() {
+    let root = tempfile::tempdir().unwrap();
+    let observer = observer(root.path());
+    presence(&observer, "client.json", "ses_one", 7, "http://127.0.0.1:1");
+    let path = observer.presence.join("client.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let mut background = value.clone();
+    background["id"] = json!("ses_background");
+    value["tabs"] = json!([background]);
+    fs::write(path, value.to_string()).unwrap();
+    let target = Pane {
+        session: "main".into(),
+        id: 7,
+        tab_id: 4,
+        tab_name: "Review".into(),
+    };
+    let error = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(observer.close("ses_background", &target))
+        .unwrap_err();
+    assert!(error.contains("without companion tab control"), "{error}");
+    assert!(!root.path().join("calls").exists());
 }
 
 #[test]

@@ -35,7 +35,16 @@ fn instance_control_binds_nested_workspaces_and_holds_the_lifecycle_lock() {
     assert!(gateway::lock(&config, "instance-review").is_err());
     assert!(environment.admit_instance_conclusion(&scope).is_err());
     assert!(environment.instance_instructions(&scope).is_err());
+    assert!(
+        environment
+            .update_instance_repositories(&scope)
+            .unwrap_err()
+            .contains("busy")
+    );
     drop(lock);
+    let updated = environment.update_instance_repositories(&scope).unwrap();
+    assert_eq!(updated.instance, "review");
+    assert!(updated.repositories.is_empty());
     assert!(environment.bind_instance_directory(&config.home).is_err());
     assert!(
         environment
@@ -65,6 +74,7 @@ fn instance_control_rejects_deleted_recreated_and_symlinked_workspaces() {
     journal::forget(&config, "review").unwrap();
     assert!(environment.admit_instance_self(&scope, false).is_err());
     assert!(environment.admit_instance_conclusion(&scope).is_err());
+    assert!(environment.update_instance_repositories(&scope).is_err());
     owned_workspace(&config, "review");
     for start in [false, true] {
         let error = environment.admit_instance_self(&scope, start).unwrap_err();
@@ -72,6 +82,12 @@ fn instance_control_rejects_deleted_recreated_and_symlinked_workspaces() {
     }
     let error = environment.admit_instance_conclusion(&scope).unwrap_err();
     assert!(error.contains("replaced"));
+    assert!(
+        environment
+            .update_instance_repositories(&scope)
+            .unwrap_err()
+            .contains("replaced")
+    );
     assert!(
         environment
             .instance_instructions(&scope)
@@ -86,6 +102,7 @@ fn instance_control_rejects_deleted_recreated_and_symlinked_workspaces() {
     assert!(environment.bind_instance_directory(&path).is_err());
     assert!(environment.admit_instance_self(&fresh, false).is_err());
     assert!(environment.admit_instance_conclusion(&fresh).is_err());
+    assert!(environment.update_instance_repositories(&fresh).is_err());
 }
 
 #[test]
@@ -120,6 +137,10 @@ fn workspace_mcp_configuration_pins_environment_and_preserves_user_configuration
         "allow"
     );
     assert_eq!(value["permission"]["tandem-instance_stop_self"], "allow");
+    assert_eq!(
+        value["permission"]["tandem-instance_update_repositories"],
+        "allow"
+    );
     assert_eq!(value["permission"]["tandem-instance_conclude"], "allow");
     assert_eq!(
         value["permission"]["tandem-instance_search_events"],
