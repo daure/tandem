@@ -17,6 +17,84 @@ pub(super) fn list_instances(service: &AppService, json: bool) -> Result<(), Box
     Ok(())
 }
 
+pub(super) fn list_sessions(
+    service: &AppService,
+    instance: Option<String>,
+    include_closed: bool,
+    json: bool,
+) -> Result<(), Box<dyn Error>> {
+    let listing = query(service.list_sessions(instance, include_closed))?;
+    print_output(&listing, json, || {
+        let mut output = if listing.sessions.is_empty() {
+            if include_closed {
+                "No known sessions found.\n".into()
+            } else {
+                "No active sessions found.\n".into()
+            }
+        } else {
+            table(
+                &[
+                    "SESSION ID",
+                    "INSTANCE",
+                    "ACTIVITY",
+                    "ATTACHED",
+                    "AVAILABILITY",
+                    "TITLE",
+                    "SERVER",
+                ],
+                listing.sessions.iter().map(|session| {
+                    vec![
+                        session.session_id.clone(),
+                        session.instance.clone().unwrap_or_else(|| "—".into()),
+                        format!("{:?}", session.activity),
+                        session.attached.to_string(),
+                        format!("{:?}", session.availability),
+                        session.title.clone(),
+                        session.server.clone(),
+                    ]
+                }),
+            )
+        };
+        if include_closed {
+            writeln!(output, "History window: {} recent root sessions per directory; known active and retained sessions may also appear.", listing.history_window_per_directory).unwrap();
+        }
+        output
+    })?;
+    let errors = listing
+        .observation_error
+        .iter()
+        .chain(&listing.inventory_error)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        return Err(format!("session inventory incomplete: {}", errors.join("\n")).into());
+    }
+    Ok(())
+}
+
+pub(super) fn print_prompt_outcome(
+    outcome: crate::store::opencode::PromptedSession,
+    json: bool,
+) -> Result<(), Box<dyn Error>> {
+    print_output(&outcome, json, || {
+        format!(
+            "Session: {}\nServer: {}\nPrompt: {:?}\n",
+            outcome.session_id.as_deref().unwrap_or("unconfirmed"),
+            outcome.server.as_deref().unwrap_or("unconfirmed"),
+            outcome.prompt_outcome,
+        )
+    })?;
+    if let Some(error) = outcome.error {
+        return Err(error.into());
+    }
+    if !outcome.prompt_outcome.accepted() {
+        return Err(
+            "Prompt submission is unconfirmed; inspect the conversation before retrying".into(),
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn inspect_instance(
     service: &AppService,
     name: String,

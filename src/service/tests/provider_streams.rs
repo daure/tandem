@@ -392,6 +392,8 @@ fn stream_handovers_count_distinct_dispatched_events_across_rules_and_replays() 
                     enabled: true,
                     start_instance: true,
                     focus_pane: true,
+                    throttle_seconds: 0,
+                    trigger_at_end: false,
                 },
                 None,
                 "main".into(),

@@ -13,7 +13,9 @@ use crate::store::environments::{
 };
 
 mod launch;
+mod pings;
 mod workspaces;
+pub(super) use pings::{record_ping, session_pings};
 pub(super) use workspaces::{
     checkout, forget, prepare, prepared_ready, recorded, workspace_instance, workspace_ready,
     workspaces,
@@ -28,6 +30,7 @@ struct Record {
     activity: Option<Activity>,
     whole_stop: Vec<(String, Option<String>)>,
     readiness: BTreeMap<String, (Option<String>, u64)>,
+    pings: BTreeMap<String, u64>,
 }
 
 #[derive(Deserialize, Serialize)]

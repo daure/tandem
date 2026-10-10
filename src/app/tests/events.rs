@@ -468,6 +468,44 @@ fn record(provider: &str, payload: serde_json::Value) -> crate::store::events::R
 }
 
 #[test]
+fn processing_failures_without_acceptances_are_visible_and_marked_in_the_handover_feed() {
+    init_ui();
+    let mut app = root(AppService::for_tests());
+    let mut event = record(
+        "broken-source",
+        serde_json::json!({"profile":"generic","data":{}}),
+    );
+    event.event.summary = "An evaluation failed".into();
+    app.pages_mut()
+        .update_events(crate::store::events::Snapshot {
+            records: vec![event],
+            total: 1,
+            diagnostic_counts: [(
+                1,
+                crate::store::events::diagnostics::Counts {
+                    errors: 1,
+                    warnings: 0,
+                },
+            )]
+            .into(),
+            ..Default::default()
+        });
+    app.tabs_mut().select_index(1);
+    app.sync_overview_tab(&mut EventCtx::default());
+    let (_, text) = render(&mut app, 130);
+    assert!(app.toolbar_state.borrow().running_only);
+    assert!(text.contains("  broken-source"), "{text}");
+    assert!(text.contains("An evaluation failed"), "{text}");
+    app.pages_mut()
+        .update_events(crate::store::events::Snapshot {
+            total: 0,
+            ..Default::default()
+        });
+    let (_, text) = render(&mut app, 130);
+    assert!(!text.contains("broken-source"), "{text}");
+}
+
+#[test]
 fn optional_event_fields_omit_blank_values_and_environment_aliases_are_display_only() {
     use serde_json::json;
 
@@ -705,6 +743,7 @@ fn stream_multiselect_filters_exact_sources_preserves_refresh_and_accepts_stream
     app.pages_mut()
         .update_events(crate::store::events::Snapshot {
             records: records.clone(),
+            diagnostic_counts: Default::default(),
             total: 4,
             accepted_attempts: None,
             provider_totals: Default::default(),
@@ -793,6 +832,7 @@ fn stream_multiselect_filters_exact_sources_preserves_refresh_and_accepts_stream
     app.pages_mut()
         .update_events(crate::store::events::Snapshot {
             records: refreshed,
+            diagnostic_counts: Default::default(),
             total: 5,
             accepted_attempts: None,
             provider_totals: Default::default(),

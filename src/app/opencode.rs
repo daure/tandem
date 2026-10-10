@@ -329,6 +329,9 @@ fn append_rows_for_owners(
         let live_session = owned_sessions
             .clone()
             .any(|session| session.live() && !session.stale);
+        let attached_session = owned_sessions
+            .clone()
+            .any(|session| session.attached() && !session.stale);
         let (mut sessions, sessions_truncated) =
             recent_sessions_per_directory(owned_sessions.filter(|session| {
                 (!session.saved() || show_saved)
@@ -350,7 +353,12 @@ fn append_rows_for_owners(
             })
             .collect();
         if matches!(row.icon, WORKSPACE_ICON | STOPPED_ICON) && !row.loading {
-            row.tone = if live_session || clients.iter().any(|client| !client.stale) {
+            let session_present = if row.workspace_only {
+                attached_session
+            } else {
+                live_session
+            } || clients.iter().any(|client| !client.stale);
+            row.tone = if session_present {
                 Tone::Success
             } else {
                 row.tone
@@ -435,7 +443,7 @@ fn append_rows_for_owners(
             .unwrap_or(rows.len());
         rows.splice(insertion..insertion, children);
     }
-    folders::active_templates_first(rows, snapshot, owners);
+    folders::active_templates_first(rows);
     if include_external {
         append_external_rows(rows, snapshot, show_saved, group_sessions, owners, false);
         resources::apply(rows, snapshot, owners);
@@ -1118,6 +1126,7 @@ pub(super) fn project_rows(
             .as_deref()
             .is_some_and(|directory| opencode.missing_directory(directory));
     }
+    folders::apply_session_pings(&mut projected, snapshot, &owners);
     projected
 }
 

@@ -12,7 +12,9 @@ use super::{Config, Kind, launch};
 use crate::{
     environments::{
         config::{private_file, read_text},
-        gateway, journal, ownership, startup,
+        gateway, journal, ownership,
+        rules::names,
+        startup,
     },
     store::environments::{Instance, validate_instance_name, validate_name},
 };
@@ -207,6 +209,11 @@ pub(crate) fn prepare(config: &Config) -> Result<(), String> {
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
+    transaction
+        .execute_batch(include_str!(
+            "../../../migrations/0017_rule_instance_names.sql"
+        ))
+        .map_err(|error| error.to_string())?;
     for import in &imports {
         transaction
             .execute(
@@ -240,6 +247,8 @@ pub(crate) fn prepare(config: &Config) -> Result<(), String> {
                 params![config.namespace, import.name.to_ascii_lowercase(), import.kind.key(), import.payload]
             ).map_err(|error| error.to_string())?;
         }
+        names::backfill_name(&transaction, &import.name, &config.namespace, None)
+            .map_err(|error| error.to_string())?;
     }
     transaction
         .execute(

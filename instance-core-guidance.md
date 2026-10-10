@@ -5,8 +5,17 @@ Read this baseline together with editable guidance. Ask the user before acting i
 - Lifecycle and repository actions control only the instance owning this connection's startup workspace. They
   accept no target name. Reconnect if that workspace is deleted or replaced. Shell access and other
   MCP servers remain separate capabilities; this scope is not a security sandbox.
+- `get_instructions` remains available during startup while ownership and workspace identity are
+  valid. Its status snapshot includes the aggregate instance and individual service/replica statuses.
+  Check observation time, stale/error metadata and topology completeness before relying on it;
+  an incomplete or unavailable observation does not prove services are stopped. Running containers
+  do not prove application readiness. Lifecycle and repository actions remain serialized; retry busy
+  actions after the current operation finishes.
 - Start applies the trusted template and may build services or rerun setup. Stop preserves instance
   data and the conversation. Neither action certifies that the assigned task succeeded.
+- Use `ping` when ready or when user attention is needed. It schedules the configured instance-ping
+  sound when enabled; it leaves services, reports and instance lifecycle unchanged. Scheduling does
+  not prove audible delivery.
 - Repository updates require user approval and coordination with other workspace sessions. They
   fast-forward clean current branches to their configured origin upstreams and preserve local commits.
   Dirty, diverged, detached, untracked branches and in-progress Git operations are skipped. Results

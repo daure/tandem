@@ -96,6 +96,49 @@ fn event_acceptance_sound_persists_independently_and_falls_back_for_unavailable_
 }
 
 #[test]
+fn instance_ping_sound_and_toggle_persist_independently() {
+    let mut service = AppService::for_tests();
+    let choice = SoundChoice {
+        id: "/sounds/ping.oga".into(),
+        label: "Ping".into(),
+    };
+    service.set_sound_choices_for_tests(vec![choice.clone()]);
+    assert!(!service.instance_ping_enabled());
+    assert_eq!(service.instance_ping_sound_choice(), "");
+    service
+        .set_instance_ping_sound_choice(choice.id.clone())
+        .unwrap()
+        .blocking_recv()
+        .unwrap()
+        .unwrap();
+    service
+        .set_instance_ping_enabled(true)
+        .unwrap()
+        .blocking_recv()
+        .unwrap()
+        .unwrap();
+    assert_eq!(service.completion_sound_choice(), "");
+    assert_eq!(service.event_acceptance_sound_choice(), "");
+    assert_eq!(service.completion_sound_count_for_tests(), 1);
+    assert!(
+        service
+            .set_instance_ping_sound_choice("/missing.oga".into())
+            .is_err()
+    );
+    let restarted = AppService::from_config(service.environments.config.clone()).unwrap();
+    assert!(restarted.instance_ping_enabled());
+    assert_eq!(restarted.instance_ping_sound_choice(), choice.id);
+    service
+        .set_instance_ping_enabled(false)
+        .unwrap()
+        .blocking_recv()
+        .unwrap()
+        .unwrap();
+    restarted.refresh_instance_ping_settings().unwrap();
+    assert!(!restarted.instance_ping_enabled());
+}
+
+#[test]
 fn failed_completion_setting_writes_retain_the_last_persisted_values() {
     let service = AppService::for_tests();
     service

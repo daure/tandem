@@ -126,6 +126,23 @@ root, and configured gateway URL. The URL is configuration, not a health check; 
 provision repositories or start services. Missing or invalid templates fail with a nonzero exit code.
 Source output may contain secrets from template files; handle it accordingly.
 
+Discover OpenCode session IDs with `tandem list-sessions --instance review --json` or management
+MCP `list_sessions` with `instance: "review"`. Default results include active conversations: open in a
+client or freshly observed running/awaiting an answer. Add CLI `--include-closed` or MCP
+`include_closed: true` to include saved and unverified detached history; the boolean defaults to false.
+Omit the instance filter to include external workspaces, which have `instance: null`.
+Listings include session ID, owning instance,
+title, directory, server, activity, attachment and pane identities. The OpenCode integration must be enabled.
+Listing performs fresh read-only observation without launching clients, starting servers or sending input.
+History discovery uses a bounded window of recent root sessions per known directory, plus known active
+and retained conversations. `history_window_per_directory` states that window; this is not exhaustive history.
+`availability` is `observed`, `unverified`, or `workspace_missing`. Unverified records have `stale: true`
+and unknown activity; a missing workspace prevents reopening a client there.
+`observation_error` and `inventory_error` preserve incomplete discovery. CLI prints partial results and
+exits nonzero on those errors; an empty partial result does not prove there are no conversations.
+Use an owned V2 session's `session_id` with `prompt-session`/`prompt_session`, which verifies the target
+again before submitting input.
+
 ## CLI instance lifecycle
 
 ```bash
@@ -177,7 +194,8 @@ Quote multiline or multiword prompts; use `--opencode="--text"` for text beginni
 Without the flag, creation opens no client. `--description` (also `-d`) sets the new instance description.
 OpenCode launches require Tandem to run inside Zellij with the OpenCode integration enabled.
 `--model provider/model` and `--variant high` require `--opencode`; both are optional and leave
-OpenCode's defaults intact when omitted. A variant-only selection uses OpenCode's default model.
+the V2 client's selected model and variant intact when omitted. A variant-only selection uses the
+client's selected model. An explicit model without a variant uses that model's default variant.
 MCP `create_instance` accepts the same selection through `opencode=true`, `model`, `variant`, and
 optional `initial_prompt`. Its default prepares an instance without launching OpenCode.
 CLI client launches use an observed instance pane's tab for a stacked pane, otherwise Tandem creates
@@ -204,11 +222,56 @@ Ensure the printed entry is in the plugin array. Each new client receives
 `TANDEM_INITIAL_PROMPT` and instance-state instructions; the companion consumes and clears them,
 waits for client readiness, creates a conversation and attaches instructions before any initial prompt.
 Without prompt text, instructed instance sessions open without requesting a model reply.
-Sessions use OpenCode's configured defaults unless an explicit selection is supplied;
+V2 companion-created sessions inherit the client's selected model and variant unless overridden;
 rule sessions use their pinned model and optional variant.
 The prompt travels as a literal environment value; avoid including secrets.
 CLI success confirms requested preparation/readiness and pane launch, not prompt delivery or model completion.
 The companion reports submission failures in the new client and does not retry uncertain requests.
+
+Open a prompted conversation in an existing instance with:
+
+```bash
+tandem new-instance-session review "Inspect the current changes" --agent tracer --model openai/example --variant high --json
+```
+
+Model and variant are optional. V2 inherits the client's selected model and variant when omitted;
+an explicit model without a variant uses that model's default variant.
+`--agent` selects an OpenCode agent ID; omission uses OpenCode's default agent.
+This operation requires enabled OpenCode integration and Zellij.
+It creates a fresh conversation in an available tab-capable client, or launches a client when none
+is available. Services, repository work and conversation history are preserved. A current Tandem
+companion is required; run `tandem opencode-setup` and restart clients after upgrading it.
+The JSON receipt includes session/server identity, pane identity and `prompt_outcome`:
+`submitted` confirms server acceptance, `not_submitted` confirms no task input was sent, and
+`uncertain` requires inspection before a deliberate retry. Session setup errors retain known identity.
+Requests are not idempotent; each invocation creates independent work. CLI failures return a nonzero
+status after printing any available receipt. Management MCP exposes the same operation as
+`new_instance_session` with task/model-cost approval and `confirmed=true`.
+
+Send follow-up input to an existing owned V2 conversation by session ID:
+
+```bash
+tandem prompt-session ses_example "Check the tests next" --agent tracer --json
+```
+
+Management MCP exposes `prompt_session` with `session_id`, literal `prompt`, optional `model`,
+`variant`, `agent`, `when_busy`, and approved `confirmed=true`. The session must resolve uniquely on a
+known reachable server and belong to the current Tandem home's owned instance. Missing, ambiguous,
+external and unowned targets are rejected. An available client reopens the exact conversation;
+otherwise a Zellij client attaches to its server and session. History and workspace state are preserved.
+
+`--when-busy queue` is the default: input enters OpenCode's durable queue, including while running or
+awaiting an answer. It does not answer forms or grant permissions. `interrupt` stops current work
+before submitting steering input; `abort` rejects a session observed running or awaiting an answer.
+Abort rechecks activity before submission, but cannot exclude activity started concurrently by another
+OpenCode client. Idle sessions accept input in any mode.
+Omitted settings preserve the session's choices; explicit overrides persist immediately and may affect
+later turns of current work even when input is queued. An explicit model without a variant uses its
+default variant. A variant-only override retains the session's model.
+`queued` confirms queue admission, not model completion. Session setup failures can retain applied
+settings or interruption while reporting `not_submitted`. Lost responses return `uncertain` with the
+known target identity; inspect the client before retrying. Tandem never automatically resends input
+or launches a fallback after an uncertain request.
 
 Every new instance session opened through `n` or creation receives current service-state guidance.
 Starting services allow code exploration during preparation and require readiness only when the work
@@ -302,6 +365,12 @@ Press Enter to open the event's `url` with its system handler: web links use the
 links such as `slack://` use the registered app. Missing or blank links show a **No link set**
 warning: **This event has no link to open.** Press `d` to inspect the normalized payload, metadata,
 supporting context, and the latest 50 processing attempts.
+The bottom-docked details dialog has a **Diagnostics** tab with recorded rule outcomes grouped by
+attempt and pinned rule revision, dispatch failures, and lineage-verified retained startup warnings
+and progress. Reopen it to refresh; search and scrolling use a stable snapshot. Error rows carry a red ``;
+uncertain dispatches carry an amber marker. Events with these issues remain visible in the handover
+view even without an acceptance. Rows with known issues open Diagnostics first; raw JSON remains in
+**Event details**. Missing log details and truncated history are explicit.
 The feed lists newest events first and starts with top-following enabled. Selecting
 the first row enables following; moving to an older row pauses it and retains that event during updates.
 The `gg` toggle controls following. `gg` in the DataView selects the newest matching event and
@@ -325,16 +394,16 @@ Ctrl+J/Ctrl+K moves through options, and Ctrl+Enter applies the selection. An em
 all streams. A stream row's **Stream events** action selects only that stream and clears event search.
 `Shift+Enter` clears the stream selection. The **󰈈 show-all toggle** (`Shift+A`) shares its value
 with Sessions and Instances. It is off at startup, showing only events handed over to Tandem
-instances; acceptance alone does not establish assignment. The count
+instances or carrying evaluation/dispatch issues; acceptance alone does not establish assignment. The count
 at the right shows displayed events out of the full retained history. Changing a stream or handover filter selects the newest matching
 event and focuses the DataView. Escape or Ctrl+[ from the filters or toggles returns to the DataView.
 
-Events orders its toggles as **󰈈 show all**, **󰋚 history**, **󰕾 sound**, then **󰞖 following**.
+Events orders its toggles as **󰈈 show all**, **󰋚 history**, then **󰞖 following**.
 The Streams filter precedes **Delete all events** and **Delete ignored events**.
-The sound toggle (`Shift+N`) shares its value with Sessions and is off at startup. It plays for newly
+Rule acceptance sound is enabled in the notification menu (`Shift+N`) and is off at startup. It plays for newly
 accepted processing attempts across all providers, independently of filters and the active tab.
 Startup history is silent; replay can produce a new notification. Acceptances in the same refresh
-share one sound. `Shift+H` turns this toggle off.
+share one sound.
 
 Events start **pending**. **Accepted** means a rule matched the event and triggered its action;
 instance startup, prompt delivery, and task completion have separate outcomes. Acceptance belongs
@@ -492,10 +561,10 @@ also toggles it. `.` opens its action menu with hotkey labels. The top-right `A`
 Single-rule activation and deactivation save immediately and report success or failure in a notification.
 Activation authorizes automatic execution. Bulk actions confirm eligible saved revisions with **Ok (o)**
 and **Cancel (c)**. A white pause icon marks inactive rules; a green play icon marks active rules.
-TUI activation binds the rule to that Tandem process's current Zellij session. Activation and dispatch
-require a live target; dispatch checks before preparation and again before launching. If the session
-closes, deactivate and reactivate the rule in the desired Tandem TUI. Existing acceptances keep their
-pinned destination; an explicit replay after reactivation uses the newly authorized revision.
+Activation and dispatch require a live Zellij session. Dispatch selects the newest running session
+by creation time before preparation and again before launching, including on confirmed retries.
+Exited, resurrectable sessions are excluded. With no live session, the acceptance records a destination
+error before launch; start a session and retry the acceptance. Automatic-execution approval remains required.
 `d` opens a bottom-docked dialog with **Accepted events**,
 **Script**, and **Settings** tabs. Valid field edits save automatically while the dialog stays open;
 invalid input stays editable with a save error. Script uses Rust highlighting for Rhai syntax;
@@ -503,6 +572,13 @@ Initial prompt uses Glimmer highlighting for Handlebars syntax.
 Settings includes **Focus new pane**, enabled by default. Turn it off to launch accepted work in
 the background while preserving every Zellij client's focus. This toggle saves without pausing
 the rule and applies to future acceptances; retained acceptances keep their pinned choice on retry.
+**Throttle seconds (0 = off)** accepts whole seconds and defaults to `0`.
+The **Trigger at end** toggle below it defaults off. With a positive duration, the first matching live evaluation
+starts a fixed window using the time of evaluation. It triggers immediately when the toggle is off,
+or on the first worker cycle at or after expiry when the toggle is on.
+Later matches within that window are rejected with retained warnings; they do not
+extend it. Timers survive restarts and history deletion. Deleting the waiting event cancels its action.
+Explicit replay triggers immediately without changing the live timer. Dispatch limits still apply.
 Editing an enabled rule pauses it before saving the draft; `a` in Rules authorizes its updated
 revision. Already accepted work retains its pinned definition. Predicates inspect provider-supplied
 custom fields through `event.metadata`.
@@ -515,13 +591,22 @@ when several are available. Routes require an available instance.
 Conversation children use Enter to open or focus their OpenCode session or pane.
 
 Create rules through MCP with `save_rule`. Use `list_rules`/`get_rule` to read revisions and acceptance
-history, `list_events`/`get_event` to inspect input, and `preview_rule` to check matches and resolved
-prompts without contacting an agent or creating an instance. Updates require the saved revision.
+history, `list_events`/`get_event` to inspect input, and `preview_rule` to check matches, resolved
+prompts, instance names and descriptions without contacting an agent or creating an instance.
+Preview names are advisory: previews reserve nothing, and intervening work can change the assigned
+name. Updates require the saved revision.
+`get_event_diagnostics` reads the same diagnostics for an exact retained event, including events
+outside the feed. It returns the latest 50 attempts with total/truncation metadata and historical
+rule definitions, including pending, deferred, throttled, matched, non-matching and failed evaluations.
+Throttled matches carry warnings rather than evaluation errors. Startup log tails
+are limited to 100 lines per list and 16 KiB combined per acceptance. Reads execute no rules, retries,
+external commands or model prompts; launched status proves session linkage, not task completion.
 Shared definitions live in `$TANDEM_HOME/templates/rules/<name>/rule.json`, alongside the instance
 and provider catalogs in the template Git repository. Each file contains `name`, `script`, `template`,
 `model`, and `initial_prompt`, with optional `variant`, `description`, `start_instance`, and
-`focus_pane` (both booleans default true).
-The name must match its directory. Activation (`enabled`), Zellij targets, revisions, and execution
+`focus_pane` (both booleans default true), plus `throttle_seconds` (default `0`) and
+`trigger_at_end` (default `false`).
+The name must match its directory. Activation (`enabled`), saved session metadata, revisions, and execution
 history live locally in `settings.sqlite3`; omit `enabled` from the file and set it through `save_rule`
 or the TUI. File additions are discovered automatically as inactive rules. Direct edits pause the rule
 in each namespace and require activation of the updated revision. Removing a file stops future
@@ -536,13 +621,32 @@ fn matches(event) {
 
 The predicate receives the normalized envelope plus authenticated `provider`, local `sequence`, and
 `received_at`. All four profiles expose `data`, shared context, and arbitrary event metadata. Rhai
-returns only a boolean; Tandem owns side effects. Evaluation limits include 50,000 operations,
+requires a boolean from `matches`; Tandem owns side effects. Evaluation limits include 50,000 operations,
 32 call levels, bounded expressions and collections, and no exposed host filesystem, network, or
 process capabilities. Script errors remain visible and do not stop sibling predicates.
 Use `sample(event.event_id, 0.8)` for an approximately 80% deterministic sample. The same nonempty
 key always produces the same draw across previews, retries, and restarts. Keys are limited to 1024
 bytes; the probability must be a finite decimal between `0.0` and `1.0`. Sampling is not a security
 or rate-control mechanism. Prefix the key with a rule name to give different rules independent draws.
+
+Scripts can also define `instance_name(event)` and `instance_description(event)`, each returning a
+string. Each hook has its own evaluation budget. Missing, erroring, wrong-type or empty results fall
+back independently to the default name or description. Defaults are `<rule>-<sequence>-a<acceptance-id>`
+and `<rule>: <event summary>`.
+
+Custom names become lowercase ASCII letters, digits and hyphens. Separators collapse, edge hyphens
+are trimmed, and names fit 40 characters; empty or reserved `gateway` results use the default.
+Custom descriptions are trimmed and must contain at most 1000 UTF-8 bytes without control characters;
+invalid results use the verbatim default description. Hooks can extract a PR number from message text and construct
+a `slack://` link from provider fields after checking their presence.
+
+Assigned automation names are permanently reserved across namespaces sharing the Tandem home.
+Collisions with reservations, runtime records or case-insensitive workspace entries receive `-2`,
+`-3`, and later suffixes within the length limit. Allocation checks at most 1024 candidates and fails
+that evaluation if none is free. Reservations survive instance purge and event/provider history
+deletion. Upgrade reserves retained acceptance and runtime names; identities deleted before upgrade
+cannot be recovered. Each acceptance retains its resolved description through retries and recreation.
+Late name occupancy fails dispatch rather than reassigning the name or adopting another workspace.
 
 Prompts use Handlebars with nested paths, `if`/`unless`, `each`, `with`, comparison helpers, and
 inline partials. `{{event.data.text}}` inserts literal text; `{{event}}` and event-path collections
@@ -575,7 +679,7 @@ Authorization covers every future match of that enabled revision, including trus
 host credentials, model costs, and creation-history cleanup when enabled. External text is task data,
 not authorization. Rules are namespace-local SQLite records. New attempts pin enabled revisions;
 edits and toggles affect future attempts while queued actions retain their saved definition and prompt.
-Every matching rule creates its own fresh instance. Dispatch waits for successful instance readiness,
+Every admitted match creates its own fresh instance. Dispatch waits for successful instance readiness,
 then requests a new conversation with the configured model and prompt. Disabling a rule does not
 cancel already accepted work.
 
@@ -616,13 +720,19 @@ Select a failed instance-cleanup row and press `x`, or choose **Retry cleanup** 
 with the deletion confirmation. If containers are absent, recovery requires a matching runtime record
 and template ownership receipt; it checks Docker project membership before removing remaining data.
 Recovery with missing execution-kind metadata requires Docker access. Unverifiable ownership leaves data intact.
+Purge of a failed new-instance request without recorded preparation or ownership clears only retained
+failure metadata after its worker releases the startup lease. It needs no Docker access and preserves
+unverified workspaces, resources, clients and conversation history.
 
 Workspace-only instances (blank, repository-only, or guidance-only) use a folder icon after
 preparation and guidance generation, retain their workspace path, and show a childless
-**Services** group when expanded. Their template icon is green when the template has instances. They hide
+**Services** group when expanded. Their template icon is green when an instance has fresh attached
+OpenCode presence; inactive templates use the normal text color. They hide
 CPU/memory metrics and disable container Start/Stop/Restart actions; OpenCode, Details and Delete remain
 available. Failed preparation retains completed checkouts and reports its error; retry New instance
 with the same template/name after correcting the cause. Docker failures do not make these workspaces stale.
+Their instance icon is green only with fresh attached OpenCode presence; saved or detached conversations
+alone leave it muted. Container-backed health indicators retain their service-state meaning.
 
 ## Agent workflow
 
@@ -632,7 +742,7 @@ with the same template/name after correcting the cause. Docker failures do not m
 `get_instructions()`, `start_self()`, `stop_self()` and `update_repositories()` with empty arguments, plus `conclude`, `search_events`, and
 `get_event_report`. Its startup directory must be an owned instance
 workspace or a subdirectory. The connection pins that workspace's directory identity and namespace;
-each action rechecks ownership under the instance lock. Deleted or replaced workspaces require a new
+mutating actions recheck ownership under the instance lock. Deleted or replaced workspaces require a new
 connection. All conversations in the workspace control the same instance.
 
 Initialization instructs agents to call `get_instructions` before other tools and to read both
@@ -640,6 +750,11 @@ Initialization instructs agents to call `get_instructions` before other tools an
 identifies the bound instance, template, workspace and namespace. The baseline is bundled in Tandem;
 editable guidance lives at `$TANDEM_HOME/instance-instructions.md`, seeded from
 `instance-agent-instructions.md`. Existing runtime copies are preserved and reread on every call.
+`get_instructions` reads during startup and verifies ownership and the pinned workspace before and
+after reading. Lifecycle and repository actions remain serialized.
+The response includes aggregate instance and service/replica statuses with topology completeness,
+observation time and stale/error metadata. Docker observation has a two-second budget; failures
+preserve guidance. Running containers do not prove application readiness.
 
 Start applies the trusted template, builds configured services, and waits for readiness; setup jobs
 may rerun. Stop verifies that instance's containers have stopped, preserving containers, workspace,
@@ -935,6 +1050,8 @@ While editing text or searching, letters belong to the active input.
 ### Workspace actions
 
 Press `e` on an instance to edit its description, or choose **Update description** from its `.` menu.
+The editor uses a single-line field. `Ctrl+Enter` saves from insert or focus mode;
+Cancel preserves the stored description.
 
 The **New instance** dialog accepts a name, a multiline description, and an optional initial prompt.
 Description and prompt content grow from 2 to 8 rows, then scroll. A nonblank prompt opens OpenCode
@@ -957,10 +1074,11 @@ each chooser option is shown as `<service> - <url>`.
 gutter marker's final fade; the two short pulses and 150 ms rise keep their fixed timing.
 Valid edits save immediately in `$TANDEM_HOME/settings.sqlite3` and apply to active markers.
 
-**Completion sound** and **Event acceptance sound** independently select installed `.oga`, `.ogg`,
+**Completion sound**, **Event acceptance sound**, and **Instance ping sound** independently select installed `.oga`, `.ogg`,
 and `.wav` files from the user and system
-XDG sound directories. Confirming a dropdown selection saves it and plays a preview, even when
-its toolbar sound toggle is off. Moving the highlight is silent. Playback is
+XDG sound directories. Opening or closing a sound dropdown previews its selected sound, even when
+its notification sound is disabled. Confirming a changed selection saves it; cancel preserves it.
+Moving the highlight is silent. Playback is
 asynchronous; a new preview replaces the previous sound. System default uses the desktop's
 `complete` event; an unavailable saved choice falls back to it. Restart Tandem to discover
 newly installed sounds. Playback failures are recorded in diagnostic logs.
@@ -988,7 +1106,13 @@ and navigation tasks. Existing OpenCode servers, conversations, panes, and works
 remain under their current owners. Re-enable it to request a fresh observation.
 
 The release shell installer installs the companion after placing the Tandem binary and prints the
-OpenCode plugin directory. For source builds or manual refreshes, install it with:
+OpenCode plugin directory. It then restarts the installing user's active `tandem-mcp.service` with
+`systemctl --user try-restart`. The user-owned unit must launch the installed Tandem binary;
+installation preserves its configuration and enablement. Absent or stopped services are skipped.
+An unavailable user service manager produces a manual-restart warning; restart failure fails the installer.
+Restart interrupts existing global MCP connections. Clients must reconnect; inspect interrupted tool
+calls before retrying them. Instance-scoped stdio servers and open TUIs retain their own lifetimes.
+Reopen OpenCode clients to load the refreshed companion. For source builds or manual refreshes, install it with:
 
 ```bash
 tandem opencode-setup
@@ -1056,7 +1180,7 @@ the **`.`** menu exposes the same row actions:
 | --- | --- | --- |
 | `n` | New OpenCode session | Instance, Sessions group, external-directory group, conversation, or client/pane |
 | Enter | Open or jump to the selected conversation/pane | Owned or external conversation, or client/pane |
-| `c` | Close the selected session tab in V2, or its client pane in V1 | Attached conversation or its pane child |
+| `c` | Close the selected tab; close its client pane when it is the last tab or uses V1 | Attached conversation or its pane child |
 | `c` | Close the selected Zellij client pane and its open tabs | Client/pane |
 | `r` | Rename the selected OpenCode conversation | Conversation or its pane child |
 | `x` | Confirm permanently deleting the selected conversation and its children | Conversation or its pane child |
@@ -1067,6 +1191,7 @@ the **`.`** menu exposes the same row actions:
 Conversation `r` and `x` actions also work on conversation children in Events.
 Attached conversation and client rows there expose **Close OpenCode panel** (`c`) in the row and **`.`** menu.
 Closing a V2 conversation preserves its saved history and the other tabs in that client.
+Closing its last tab updates OpenCode's saved tab strip before closing the terminal client in one action.
 Rename uses a single borderless text field inside a bordered dialog with **Ok** (`o`) and **Cancel** (`c`).
 `Ctrl+Enter` submits the edited title; letters remain text while editing or while a picker search has a query.
 Deletion closes attached panes and stops the conversation and its descendants before removing their history.
@@ -1094,8 +1219,8 @@ retrying because creation may be uncertain. Without a tab-capable client, creati
 client without sending a prompt: it attaches to a healthy known local server, or starts OpenCode in
 the directory when no server is known. A live destination supplies a stacked pane; a closed or absent
 destination creates a named tab in the current Zellij session. Creation immediately focuses the client.
-Once observed, the originating tree expands the session's parent groups and preserves the current
-selection. Instances expands its Sessions group; Events expands the acceptance node.
+Once observed, Sessions and Instances select the created session or client and expand its parent
+groups. Events expands the acceptance node and preserves its current selection.
 Conversation titles remain independent of the pane title.
 
 Use **d → Actions** to jump to a specific pane or resume a conversation. **Goto panel** and
@@ -1123,6 +1248,8 @@ expands one level while its children stay collapsed. With OpenCode disabled, the
 **Instances**, **Events**, **Rules**, and **Streams**. Click a tab or
 press `[` / `]` from any main-view control to switch left / right. Instance/session switches retain
 control focus; entering Events or Streams focuses its DataView.
+The configured expand-all toggle (`z` by default) alternates between collapsed roots and the same
+view-aware expansion depth used at startup and by `Shift+H`.
 The tab header stays visually active; dialogs and action menus own their keyboard input.
 The **󰈈 show-all toggle** (`Shift+A`) reveals inactive instances, empty templates, and known
 OpenCode folders without open clients. It is off at startup and resets to off with `Shift+H`.
@@ -1143,15 +1270,26 @@ and filter values are shared across both tabs. Each tab retains its own
 expansion, selection, scroll position, and search. Inventory changes update both tabs; a removed
 selection moves to a surviving row in that tab when one is available.
 Clients without a conversation appear beneath their instance or external directory.
-Sessions orders its toggles as **󰈈 show all**, **󰋚 history**, then **󰕾 sound**; Instances shows show all and history.
-The Sessions sound toggle (`Shift+N`) shares its value with Events and enables both completion and
-acceptance sounds. A freshly observed conversation changing from busy to idle or awaiting an answer
-plays the configured completion sound. Sound is off at startup and resets to off with `Shift+H`.
+Sessions and Instances show **󰈈 show all** and **󰋚 history** toolbar toggles.
+`Shift+N` or **󰕾 Notifications** in the `;` menu opens a centered notification menu.
+Its checkboxes independently enable **Session completion**, **Rule acceptance**, and **Instance ping** sounds,
+in that order. Enter toggles the highlighted option;
+`Ctrl+Enter` applies the selection, and Escape cancels. Closing the menu restores the previous focus.
+All three notifications start disabled when the TUI launches. Selected sounds remain saved.
+`Shift+H` preserves notification settings.
+A freshly observed conversation changing from busy to idle or awaiting an answer
+plays the configured completion sound when enabled.
+Instance ping enablement is shared across processes using the same Tandem home.
+The instance-scoped MCP `ping` tool schedules its selected sound only when enabled, without changing
+services or report state. Its receipt confirms scheduling, not audible delivery.
 The desktop audio service controls playback. All toolbar toggles support mouse and keyboard activation.
 
 A freshly observed conversation changing from busy to idle or awaiting an answer shows a `┃`
-marker spanning its lines in the far-left gutter. The marker and row background pulse twice
-over 600 ms. The marker then rises to full success color over 150 ms and fades into the
+marker spanning its lines in the far-left gutter. Completion uses the theme's success color.
+Enabled instance pings use the theme's primary accent for the calling session when OpenCode supplies
+its session ID in MCP metadata. While a ping marker is active, new work and completion keep its
+original color and fade timing; completion sound remains independent.
+The marker and row background pulse twice over 600 ms. The marker then rises to full color over 150 ms and fades into the
 background over the configured fade duration (20 seconds by default) before disappearing.
 Text positions, selection, and text colors stay intact. Initial, stale, and filter-only observations do not trigger these effects;
 disabling animations suppresses them.

@@ -130,8 +130,16 @@ fn open_lock(config: &Config, resource: &str) -> Result<File, String> {
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
     options
-        .open(config.home.join("locks").join(resource))
+        .open(resource_path(config, resource))
         .map_err(|error| error.to_string())
+}
+
+pub(super) fn resource_path(config: &Config, resource: &str) -> std::path::PathBuf {
+    let key = resource
+        .strip_prefix("instance-")
+        .map(|name| format!("instance-{}", name.to_ascii_lowercase()))
+        .unwrap_or_else(|| resource.to_owned());
+    config.home.join("locks").join(key)
 }
 
 pub(crate) fn ensure(config: &Config, progress: Progress, timeout: Duration) -> Result<(), String> {

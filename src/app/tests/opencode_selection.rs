@@ -253,7 +253,7 @@ fn a_closed_client_does_not_follow_a_pane_with_the_same_number_in_another_zellij
 }
 
 #[test]
-fn creation_expands_the_observed_clients_parents_and_preserves_selection() {
+fn creation_selects_the_observed_client_and_follows_its_first_conversation() {
     init_ui();
     for agents in [false, true] {
         for observed_first in [false, true] {
@@ -266,7 +266,6 @@ fn creation_expands_the_observed_clients_parents_and_preserves_selection() {
             let area = Rect::new(0, 0, 120, 40);
             app.update_snapshot(snapshot());
             app.layout(area, &mut tuicore::LayoutCtx::new());
-            let selected = app.selected().unwrap().id;
             let (sender, reply) = tokio::sync::oneshot::channel();
             app.opencode_action = Some(projection::PendingAction::creation(
                 reply,
@@ -299,11 +298,11 @@ fn creation_expands_the_observed_clients_parents_and_preserves_selection() {
                 app.update_snapshot(snapshot());
                 app.layout(area, &mut tuicore::LayoutCtx::new());
             }
-            assert_eq!(app.selected().unwrap().id, selected);
+            assert_eq!(app.selected().unwrap().id, "opencode-client:review:main:7");
             app.service.set_opencode_snapshot_for_tests(conversation());
             app.update_snapshot(snapshot());
             app.layout(area, &mut tuicore::LayoutCtx::new());
-            assert_eq!(app.selected().unwrap().id, selected);
+            assert_eq!(app.selected().unwrap().id, "opencode:review:ses_new");
             let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
             terminal
                 .draw(|frame| {
@@ -322,7 +321,7 @@ fn creation_expands_the_observed_clients_parents_and_preserves_selection() {
 }
 
 #[test]
-fn creation_expands_sessions_sharing_a_client_and_preserves_selection() {
+fn creation_selects_the_exact_session_in_a_shared_client() {
     init_ui();
     for agents in [false, true] {
         for observed_first in [false, true] {
@@ -372,7 +371,7 @@ fn creation_expands_sessions_sharing_a_client_and_preserves_selection() {
                 app.update_snapshot(snapshot());
                 app.layout(area, &mut tuicore::LayoutCtx::new());
             }
-            assert_eq!(app.selected().unwrap().id, selected);
+            assert_eq!(app.selected().unwrap().id, "opencode:review:ses_new");
             let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
             terminal
                 .draw(|frame| {
@@ -391,11 +390,10 @@ fn creation_expands_sessions_sharing_a_client_and_preserves_selection() {
 }
 
 #[test]
-fn created_sessions_expand_their_pane_parent_and_preserve_selection() {
+fn created_sessions_select_the_exact_pane_and_expand_its_parents() {
     init_ui();
     let state = instances::state(project(&home(), false));
     let mut tree = Instances::new(state.clone());
-    let selected = instances::selected(&state).unwrap().id;
     let mut observation = conversation();
     observation.sessions[0].panes.push(pane(8));
     instances::expand_opencode_session(
@@ -407,7 +405,10 @@ fn created_sessions_expand_their_pane_parent_and_preserve_selection() {
     );
     instances::replace_rows(&state, project(&observation, false));
     tree.layout(Rect::new(0, 0, 120, 40), &mut tuicore::LayoutCtx::new());
-    assert_eq!(instances::selected(&state).unwrap().id, selected);
+    assert_eq!(
+        instances::selected(&state).unwrap().id,
+        "opencode:review:ses_new:main:7"
+    );
     let area = Rect::new(0, 0, 120, 40);
     let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
     terminal
@@ -425,13 +426,12 @@ fn created_sessions_expand_their_pane_parent_and_preserve_selection() {
 }
 
 #[test]
-fn created_external_clients_expand_their_workspace_group_and_preserve_selection() {
+fn created_external_clients_select_their_row_and_expand_their_workspace_group() {
     init_ui();
     for agents in [false, true] {
         let state = instances::state(project(&home(), agents));
         instances::set_attached_sessions_only(&state, agents);
         let mut tree = Instances::new(state.clone());
-        let selected = instances::selected(&state).unwrap().id;
         let mut observation = home();
         observation.clients[0].directory = "/work/external".into();
         instances::expand_opencode_session(
@@ -444,7 +444,10 @@ fn created_external_clients_expand_their_workspace_group_and_preserve_selection(
         instances::replace_rows(&state, project(&observation, agents));
         let area = Rect::new(0, 0, 120, 40);
         tree.layout(area, &mut tuicore::LayoutCtx::new());
-        assert_eq!(instances::selected(&state).unwrap().id, selected);
+        assert_eq!(
+            instances::selected(&state).unwrap().id,
+            "opencode-client:external:/work/external:main:7"
+        );
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
             .draw(|frame| {

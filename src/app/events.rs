@@ -17,10 +17,14 @@ use tuicore::{
 use super::Msg;
 use crate::store::events::{Deletion, Record, Snapshot};
 
+mod diagnostics;
 mod expansion;
 mod filters;
 mod relative_times;
 mod rows;
+#[cfg(test)]
+#[path = "events/tests/tick.rs"]
+mod tick_tests;
 mod tree;
 pub(super) use filters::StreamKey;
 pub(super) use rows::{profile_icon, row_text};
@@ -38,7 +42,7 @@ pub(super) struct FocusRequest {
 }
 pub(super) use expansion::expand_opencode_session;
 pub(super) type FocusState = Rc<RefCell<FocusRequest>>;
-type EventToggles = Split<Toggle<Msg>, Split<Toggle<Msg>, Split<Toggle<Msg>, Toggle<Msg>>>>;
+type EventToggles = Split<Toggle<Msg>, Split<Toggle<Msg>, Toggle<Msg>>>;
 type EventStatus = Split<Split<Button<Msg>, Button<Msg>>, Paragraph>;
 type EventControls = Split<Dropdown<StreamKey, StreamKey>, EventStatus>;
 type HeaderRow = Split<EventToggles, EventControls>;
@@ -98,6 +102,7 @@ impl Events {
         let cpu_spinner = spinner.clone();
         let relative_times = Rc::new(RefCell::new(relative_times::RelativeTimes::default()));
         let cell_times = relative_times.clone();
+        let cell_diagnostics = shared.clone();
         let data = DataView::new(Vec::new(), Entry::id)
             .focus_id(FOCUS)
             .hotkey("shift+h")
@@ -107,7 +112,30 @@ impl Events {
                     "Events",
                     Constraint::Fill(1),
                     move |row: &Entry, ctx| {
-                        let mut text = row.text(cell_spinner.borrow().glyph(), ctx.available_width);
+                        let counts = match row {
+                            Entry::Event(record) => cell_diagnostics
+                                .borrow()
+                                .diagnostic_counts
+                                .get(&record.sequence)
+                                .cloned(),
+                            _ => None,
+                        };
+                        let issue = counts.filter(|counts| counts.has_issues());
+                        let width = ctx
+                            .available_width
+                            .map(|width| width.saturating_sub(if issue.is_some() { 2 } else { 0 }));
+                        let mut text = row.text(cell_spinner.borrow().glyph(), width);
+                        if let Some(counts) = issue {
+                            let color = if counts.errors > 0 {
+                                tuicore::theme().error_fg()
+                            } else {
+                                tuicore::theme().warning_fg()
+                            };
+                            text.lines[0].spans.insert(
+                                0,
+                                ratatui::text::Span::styled(" ", Style::default().fg(color)),
+                            );
+                        }
                         if let Entry::Event(record) = row
                             && let Some(relative) = cell_times.borrow().text(record.sequence)
                         {
@@ -160,17 +188,10 @@ impl Events {
                         .hotkey("shift+o")
                         .preserve_focus_on_hotkey(true)
                         .on_change(Msg::SetOpencodeHistory),
-                    Split::horizontal(
-                        Toggle::new("󰕾")
-                            .hotkey("shift+n")
-                            .preserve_focus_on_hotkey(true)
-                            .on_change(Msg::SetCompletionSound),
-                        Toggle::new("󰞖")
-                            .checked(true)
-                            .hotkey("gg")
-                            .preserve_focus_on_hotkey(true),
-                    )
-                    .gap(1),
+                    Toggle::new("󰞖")
+                        .checked(true)
+                        .hotkey("gg")
+                        .preserve_focus_on_hotkey(true),
                 )
                 .gap(1),
             )
@@ -254,16 +275,12 @@ impl Events {
     }
 
     fn sync(&mut self) -> bool {
-        let sound = self.toolbar.borrow().completion_sound;
         let show_saved = self.toolbar.borrow().show_saved;
         let handovers_only = self.toolbar.borrow().running_only;
         self.toggles_mut().first_mut().set_value(!handovers_only);
         let history = self.toggles_mut().second_mut().first_mut();
         let history_changed = history.is_checked() != show_saved;
         history.set_value(show_saved);
-        let sound_toggle = self.toggles_mut().second_mut().second_mut().first_mut();
-        let sound_changed = sound_toggle.is_checked() != sound;
-        sound_toggle.set_value(sound);
         let deletion = self.requested.borrow_mut().deletion.take();
         if let Some(deletion) = deletion {
             deletion.forget_record(&mut self.pinned);
@@ -314,6 +331,10 @@ impl Events {
             })
             .filter(|row| {
                 !handovers_only
+                    || snapshot
+                        .diagnostic_counts
+                        .get(&row.sequence)
+                        .is_some_and(|counts| counts.has_issues())
                     || row
                         .acceptances
                         .iter()
@@ -327,6 +348,10 @@ impl Events {
                 .any(|record| record.sequence == pinned.sequence)
             && (self.sources.is_empty() || self.sources.iter().any(|source| source.matches(pinned)))
             && (!handovers_only
+                || snapshot
+                    .diagnostic_counts
+                    .get(&pinned.sequence)
+                    .is_some_and(|counts| counts.has_issues())
                 || pinned
                     .acceptances
                     .iter()
@@ -349,7 +374,7 @@ impl Events {
             && !reset_filters
             && deletion.is_none()
         {
-            return self.expand_created_session() || sound_changed || history_changed;
+            return self.expand_created_session() || history_changed;
         }
         self.relative_times.borrow_mut().sync(&records);
         let status = snapshot
@@ -410,7 +435,6 @@ impl Events {
         self.toggles_mut()
             .second_mut()
             .second_mut()
-            .second_mut()
             .set_value(following);
     }
 
@@ -445,8 +469,6 @@ impl Events {
     }
 
     fn reset(&mut self, ctx: &mut EventCtx<Msg>) {
-        self.toolbar.borrow_mut().completion_sound = false;
-        ctx.emit(Msg::SetCompletionSound(false));
         self.pinned = None;
         self.streams_mut().cancel();
         *self.filter.borrow_mut() = Some(Vec::new());
@@ -531,19 +553,6 @@ impl Events {
             ctx.stop_propagation();
             return true;
         }
-        if KeySpec::shifted('n').matches(*key) {
-            self.toggles_mut()
-                .second_mut()
-                .second_mut()
-                .first_mut()
-                .event(
-                    &TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit("shift+n".into())),
-                    ctx,
-                );
-            self.drain(ctx);
-            ctx.stop_propagation();
-            return true;
-        }
         if KeySpec::shifted('o').matches(*key) {
             self.toggles_mut().second_mut().first_mut().event(
                 &TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit("shift+o".into())),
@@ -612,7 +621,7 @@ impl Events {
     }
 
     fn drain(&mut self, ctx: &mut EventCtx<Msg>) {
-        let following = self.toggles().second().second().second().is_checked();
+        let following = self.toggles().second().second().is_checked();
         if following != self.following {
             self.following = following;
             if following {
@@ -725,13 +734,7 @@ impl TuiNode<Msg> for Events {
         .preferred
         .width;
         let follow_width = <Toggle<Msg> as TuiNode<Msg>>::measure(
-            self.toggles().second().second().second(),
-            LayoutProposal::unbounded(),
-        )
-        .preferred
-        .width;
-        let sound_width = <Toggle<Msg> as TuiNode<Msg>>::measure(
-            self.toggles().second().second().first(),
+            self.toggles().second().second(),
             LayoutProposal::unbounded(),
         )
         .preferred
@@ -745,14 +748,10 @@ impl TuiNode<Msg> for Events {
         let compact = area.width < 60;
         let toggle_width = toggle_width.saturating_sub(if compact { 4 } else { 0 });
         let follow_width = follow_width.saturating_sub(if compact { 5 } else { 0 });
-        let sound_width = sound_width.saturating_sub(if compact { 4 } else { 0 });
         let history_width = history_width.saturating_sub(if compact { 4 } else { 0 });
-        let sound_follow_width = sound_width.saturating_add(follow_width).saturating_add(1);
-        let history_sound_width = history_width
-            .saturating_add(sound_follow_width)
-            .saturating_add(1);
+        let history_follow_width = history_width.saturating_add(follow_width).saturating_add(1);
         let controls_width = toggle_width
-            .saturating_add(history_sound_width)
+            .saturating_add(history_follow_width)
             .saturating_add(1);
         let status_width =
             line_width(&Line::from(self.status.as_str())).min(u16::MAX as usize) as u16;
@@ -830,19 +829,12 @@ impl TuiNode<Msg> for Events {
             .set_constraints(Constraint::Length(stream_width), Constraint::Fill(1));
         self.toggles_mut().set_constraints(
             Constraint::Length(toggle_width),
-            Constraint::Length(history_sound_width),
+            Constraint::Length(history_follow_width),
         );
         self.toggles_mut().second_mut().set_constraints(
             Constraint::Length(history_width),
-            Constraint::Length(sound_follow_width),
+            Constraint::Length(follow_width),
         );
-        self.toggles_mut()
-            .second_mut()
-            .second_mut()
-            .set_constraints(
-                Constraint::Length(sound_width),
-                Constraint::Length(follow_width),
-            );
         let status = self.header_mut().second_mut().second_mut();
         status.set_constraints(Constraint::Length(delete_width), Constraint::Fill(1));
         status.first_mut().set_constraints(
@@ -920,9 +912,14 @@ impl TuiNode<Msg> for Events {
     }
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         let changed = self.sync();
-        let result = <EventView as TuiNode<Msg>>::tick(&mut self.view, dt, settings).merge(
-            Animated::tick(&mut *self.spinner.borrow_mut(), dt, settings),
-        );
+        let mut result = <EventView as TuiNode<Msg>>::tick(&mut self.view, dt, settings);
+        if self.projected.iter().any(Entry::needs_spinner) {
+            result = result.merge(Animated::tick(
+                &mut *self.spinner.borrow_mut(),
+                dt,
+                settings,
+            ));
+        }
         let result = result.merge(self.relative_times.borrow_mut().tick(dt, settings));
         result.merge(if changed {
             TickResult {
@@ -1005,7 +1002,7 @@ impl super::App {
         if snapshot.error.is_none()
             && let Some(count) = snapshot.accepted_attempts
         {
-            if self.completion_sound
+            if self.event_acceptance_sound
                 && self
                     .event_acceptance_count
                     .is_some_and(|previous| count > previous)
@@ -1064,17 +1061,40 @@ impl super::App {
                 |character| !matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'),
             )
             .collect();
-        let modal = tuicore::Tabs::dialog(vec![tuicore::Tab::new(
-            "Event details",
-            tuicore::SyntaxHighlighter::new(
-                content,
-                tuicore::Language::guess(Some("event.json"), ""),
-            )
-            .wrap(true),
-        )])
+        let mut modal = tuicore::Tabs::dialog(vec![
+            tuicore::Tab::new(
+                "Event details",
+                tuicore::SyntaxHighlighter::new(
+                    content,
+                    tuicore::Language::guess(Some("event.json"), ""),
+                )
+                .wrap(true),
+            ),
+            tuicore::Tab::new(
+                "Diagnostics",
+                diagnostics::Pane::new(self.service.clone(), row.sequence),
+            ),
+        ])
         .variant(tuicore::TabsVariant::OneRow)
         .edge_borders(ratatui::widgets::Borders::TOP)
         .on_close(|_| Msg::Close);
+        if self
+            .service
+            .event_snapshot()
+            .diagnostic_counts
+            .get(&row.sequence)
+            .is_some_and(|counts| counts.has_issues())
+            || row.acceptances.iter().any(|acceptance| {
+                acceptance.error.is_some()
+                    || matches!(
+                        acceptance.status,
+                        crate::store::rules::DispatchStatus::Failed
+                            | crate::store::rules::DispatchStatus::Uncertain
+                    )
+            })
+        {
+            modal.select_index(1);
+        }
         self.intent = None;
         self.open(Box::new(modal), ctx);
         self.details_open = true;

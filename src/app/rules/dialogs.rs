@@ -20,10 +20,13 @@ impl App {
             .iter()
             .chain(self.rule_autosave.iter())
             .chain(self.rule_autosaves.iter())
+            .chain(self.rule_invalid_drafts.values())
             .find(|draft| draft.borrow().saved.definition.name == rule.definition.name)
             .cloned()
             .unwrap_or_else(|| {
                 Rc::new(RefCell::new(Draft {
+                    throttle_input: rule.definition.throttle_seconds.to_string(),
+                    throttle_error: None,
                     rule: rule.clone(),
                     saved: rule,
                     dirty: false,
@@ -101,6 +104,21 @@ impl App {
                     FlexItem::fit_content(),
                 )
                 .child(
+                    "throttle-settings",
+                    Flex::column()
+                        .child(
+                            "throttle-seconds",
+                            super::throttle::ThrottleField::new(draft.clone()),
+                            FlexItem::fit_content(),
+                        )
+                        .child(
+                            "trigger-at-end",
+                            super::enabled::SettingsToggle::trigger_at_end(draft.clone()),
+                            FlexItem::fit_content(),
+                        ),
+                    FlexItem::fit_content(),
+                )
+                .child(
                     "description",
                     FormField::new("Description", description),
                     FlexItem::fit_content(),
@@ -141,11 +159,20 @@ impl App {
         ])
         .variant(TabsVariant::OneRow)
         .edge_borders(Borders::TOP);
-        let modal = dialogs::dialog("Rule details").host(Flex::column().child(
-            "rule-tabs",
-            tabs,
-            FlexItem::fill(1),
-        ));
+        let discard = draft.clone();
+        let modal = dialogs::dialog("Rule details").host(
+            Flex::column()
+                .child("rule-tabs", tabs, FlexItem::fill(1))
+                .child(
+                    "discard-rule-draft",
+                    tuicore::Button::new("Discard unsaved edits (input and content lost)")
+                        .hotkey("ctrl+shift+d")
+                        .hotkey_focus_enabled(false)
+                        .hotkey_label_mode(tuicore::HotkeyLabelMode::Inline)
+                        .on_press(move || Msg::DiscardRuleDraft(discard.clone())),
+                    FlexItem::fit_content(),
+                ),
+        );
         self.intent = None;
         self.open(Box::new(modal), ctx);
         self.rule_editor = Some(draft);
@@ -163,6 +190,10 @@ impl App {
                 .validate_rule_prompt(&draft.rule.definition.initial_prompt)
                 .err();
         }
+        if draft.borrow().throttle_error.is_some() {
+            self.rule_invalid_drafts
+                .insert(draft.borrow().saved.definition.name.clone(), draft.clone());
+        }
         if !self
             .rule_autosaves
             .iter()
@@ -171,6 +202,21 @@ impl App {
             self.rule_autosaves.push(draft);
         }
         self.start_rule_autosave();
+    }
+
+    pub(in crate::app) fn discard_rule_draft(
+        &mut self,
+        draft: Rc<RefCell<Draft>>,
+        ctx: &mut EventCtx<Msg>,
+    ) {
+        if !self.rule_action_available(ctx) {
+            return;
+        }
+        let name = draft.borrow().saved.definition.name.clone();
+        self.rule_invalid_drafts.remove(&name);
+        self.rule_autosaves
+            .retain(|queued| queued.borrow().saved.definition.name != name);
+        self.handle_message(Msg::Close, ctx);
     }
 
     pub(in crate::app) fn set_rule_draft_enabled(
@@ -200,6 +246,15 @@ impl App {
         self.set_rule_draft_toggle(draft, PendingToggle::FocusPane(focus), ctx);
     }
 
+    pub(in crate::app) fn set_rule_draft_trigger_at_end(
+        &mut self,
+        draft: Rc<RefCell<Draft>>,
+        trigger: bool,
+        ctx: &mut EventCtx<Msg>,
+    ) {
+        self.set_rule_draft_toggle(draft, PendingToggle::TriggerAtEnd(trigger), ctx);
+    }
+
     fn set_rule_draft_toggle(
         &mut self,
         draft: Rc<RefCell<Draft>>,
@@ -213,6 +268,7 @@ impl App {
             let draft = draft.borrow();
             if draft.pending_toggle.is_some()
                 || draft.dirty
+                || draft.throttle_error.is_some()
                 || draft.rule.definition != draft.saved.definition
                 || !self.rule_autosaves.is_empty()
             {
@@ -237,6 +293,10 @@ impl App {
                 target.definition.focus_pane = focus;
                 Some(target.zellij_session)
             }
+            PendingToggle::TriggerAtEnd(trigger) => {
+                target.definition.trigger_at_end = trigger;
+                Some(target.zellij_session)
+            }
         };
         self.rule_save = Some(self.service.save_rule(
             target.definition,
@@ -250,6 +310,18 @@ impl App {
 
     fn rule_save_error(&mut self, error: String) {
         self.notify(tuicore::Notification::error("Cannot save rule", error));
+    }
+
+    fn clear_saved_rule_draft(&mut self, draft: &Rc<RefCell<Draft>>) {
+        let draft = draft.borrow();
+        if !draft.dirty
+            && draft.throttle_error.is_none()
+            && draft.prompt_error.is_none()
+            && draft.rule == draft.saved
+        {
+            self.rule_invalid_drafts
+                .remove(&draft.saved.definition.name);
+        }
     }
 
     fn start_rule_autosave(&mut self) {
@@ -278,7 +350,7 @@ impl App {
                     let mut paused = draft.saved.clone();
                     paused.definition.enabled = false;
                     paused
-                } else if draft.prompt_error.is_some() {
+                } else if draft.prompt_error.is_some() || draft.throttle_error.is_some() {
                     draft.dirty = false;
                     continue;
                 } else {
@@ -400,11 +472,15 @@ impl App {
                         if matches!(toggle, Some(PendingToggle::FocusPane(_))) {
                             draft.rule.definition.focus_pane = rule.definition.focus_pane;
                         }
+                        if matches!(toggle, Some(PendingToggle::TriggerAtEnd(_))) {
+                            draft.rule.definition.trigger_at_end = rule.definition.trigger_at_end;
+                        }
                         if !draft.dirty {
                             draft.rule = rule.clone();
                         }
                         draft.saved = rule.clone();
                     }
+                    self.clear_saved_rule_draft(&draft);
                     self.service.poll_rules();
                     if matches!(toggle, Some(PendingToggle::Enabled(_))) {
                         self.notify(tuicore::Notification::success(
@@ -430,6 +506,7 @@ impl App {
                         draft.rule.revision = rule.revision;
                         draft.saved = rule;
                     }
+                    self.clear_saved_rule_draft(&draft);
                     self.service.poll_rules();
                     if draft.borrow().dirty
                         && !self
@@ -447,12 +524,17 @@ impl App {
         }
         match result {
             Ok(rule) => {
-                if let Some(editor) = &self.rule_editor {
+                if let Some(editor) = self
+                    .rule_editor
+                    .iter()
+                    .chain(self.rule_invalid_drafts.values())
+                    .find(|draft| draft.borrow().saved.definition.name == rule.definition.name)
+                {
                     let mut draft = editor.borrow_mut();
                     if draft.saved.definition.name == rule.definition.name {
                         draft.rule.revision = rule.revision;
                         draft.rule.zellij_session = rule.zellij_session.clone();
-                        if !draft.dirty {
+                        if !draft.dirty && draft.throttle_error.is_none() {
                             draft.rule = rule.clone();
                         }
                         draft.saved = rule.clone();

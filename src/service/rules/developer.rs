@@ -120,6 +120,8 @@ Event JSON:
                 enabled: false,
                 start_instance: true,
                 focus_pane: true,
+                throttle_seconds: 0,
+                trigger_at_end: false,
             };
             rules.push(
                 self.save_rule(definition, None, None, false)

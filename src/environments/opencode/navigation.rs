@@ -212,10 +212,13 @@ impl Observer {
     }
 
     pub(crate) async fn close(&self, session_id: &str, pane: &Pane) -> Result<(), String> {
-        if self.close_session_tab(session_id, pane).await? {
-            return Ok(());
+        match self.close_session_tab(session_id, pane).await? {
+            tabs::CloseOutcome::LegacyPane => {
+                self.close_matching_pane(Some(session_id), None, pane).await
+            }
+            tabs::CloseOutcome::SiblingsRemain => Ok(()),
+            tabs::CloseOutcome::ClientEmpty => self.close_matching_pane(Some(""), None, pane).await,
         }
-        self.close_matching_pane(Some(session_id), None, pane).await
     }
 
     pub(crate) async fn close_pane(&self, pane: &Pane) -> Result<(), String> {
@@ -241,17 +244,28 @@ impl Observer {
         let directory = directory.map(str::to_owned);
         let target = pane.clone();
         let still_attached = tokio::task::spawn_blocking(move || {
-            observer.presences().iter().any(|presence| {
+            let presences = observer.presences();
+            if let Some(id) = &id
+                && presences.iter().any(|presence| {
+                    presence.zellij_session == target.session
+                        && presence.pane_id == Some(target.id)
+                        && !presence.id.is_empty()
+                        && presence.id != *id
+                })
+            {
+                return Err("The OpenCode pane has other tabs; refresh and try again".to_owned());
+            }
+            Ok(presences.iter().any(|presence| {
                 id.as_ref().is_none_or(|id| presence.id == *id)
                     && directory
                         .as_ref()
                         .is_none_or(|directory| presence.directory == *directory)
                     && presence.zellij_session == target.session
                     && presence.pane_id == Some(target.id)
-            })
+            }))
         })
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())??;
         if !still_attached {
             return Err("The OpenCode pane closed or changed; refresh and try again".into());
         }
@@ -282,6 +296,18 @@ impl Observer {
         current: &str,
         destination: Option<&Pane>,
     ) -> Result<(), String> {
+        self.attach_location(session, instance_name, current, destination)
+            .await
+            .map(|_| ())
+    }
+
+    pub(super) async fn attach_location(
+        &self,
+        session: &Session,
+        instance_name: &str,
+        current: &str,
+        destination: Option<&Pane>,
+    ) -> Result<Pane, String> {
         if current.is_empty() {
             return Err("Run Tandem inside Zellij to attach a conversation".into());
         }
@@ -321,7 +347,6 @@ impl Observer {
             true,
         )
         .await
-        .map(|_| ())
     }
 
     pub(crate) async fn new_session(
@@ -484,25 +509,6 @@ impl Observer {
         command.extend(rule_client_command(model, variant));
         self.launch_panel(directory, name, current, None, &command, rule.focus_pane)
             .await
-    }
-
-    pub(crate) async fn validate_rule_destination(&self, name: &str) -> Result<(), String> {
-        let sessions = zellij(
-            &self.zellij,
-            &[
-                "list-sessions".into(),
-                "--short".into(),
-                "--no-formatting".into(),
-            ],
-        )
-        .await?;
-        if sessions.lines().any(|session| session == name) {
-            Ok(())
-        } else {
-            Err(format!(
-                "Zellij session {name:?} is unavailable; deactivate and reactivate the rule in the current Tandem TUI"
-            ))
-        }
     }
 
     async fn live_destination(&self, destination: &Pane) -> Result<Option<Pane>, String> {

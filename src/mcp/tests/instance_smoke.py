@@ -58,6 +58,7 @@ def smoke(binary):
         fields = {
             "start_self": set(), "stop_self": set(), "get_instructions": set(),
             "update_repositories": set(),
+            "ping": set(),
             "conclude": {"title", "summary", "markdown"},
             "search_events": {"search_strings"}, "get_event_report": {"acceptance_id"},
         }

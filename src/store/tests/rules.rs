@@ -13,6 +13,30 @@ pub(crate) fn definition(name: &str, script: &str) -> Definition {
         enabled: true,
         start_instance: true,
         focus_pane: true,
+        throttle_seconds: 0,
+        trigger_at_end: false,
+    }
+}
+
+#[test]
+fn rule_throttling_defaults_off_and_preserves_bounded_explicit_settings() {
+    let mut value =
+        serde_json::to_value(definition("inspect", "fn matches(event) { true }")).unwrap();
+    value.as_object_mut().unwrap().remove("throttle_seconds");
+    value.as_object_mut().unwrap().remove("trigger_at_end");
+    let rule: Definition = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(rule.throttle_seconds, 0);
+    assert!(!rule.trigger_at_end);
+    value["throttle_seconds"] = json!(u32::MAX);
+    value["trigger_at_end"] = json!(true);
+    let rule: Definition = serde_json::from_value(value.clone()).unwrap();
+    validate(&rule).unwrap();
+    assert_eq!(rule.throttle_seconds, u32::MAX);
+    assert!(rule.trigger_at_end);
+    assert_eq!(serde_json::to_value(rule).unwrap(), value);
+    for seconds in [json!(-1), json!(u64::from(u32::MAX) + 1), json!(0.5)] {
+        value["throttle_seconds"] = seconds;
+        assert!(serde_json::from_value::<Definition>(value.clone()).is_err());
     }
 }
 
@@ -78,6 +102,105 @@ fn instance_names_preserve_acceptance_identity_within_length_limits() {
         assert_eq!(name.len(), 40);
         super::super::environments::validate_instance_name(&name).unwrap();
         assert!(name.ends_with(&format!("-a{id}")), "{name}");
+    }
+}
+
+#[test]
+fn instance_hooks_extract_pr_identity_and_keep_slack_links_literal() {
+    let rule = definition(
+        "review",
+        r##"
+        fn matches(event) { true }
+        fn instance_name(event) { "Review PR " + event.data.text.split("#")[1].split(" ")[0] }
+        fn instance_description(event) { " PR review " + event.event_id + " slack://channel?team=" + event.metadata.team + "&id=" + event.metadata.channel + "&message=" + event.metadata.timestamp + " " }
+    "##,
+    );
+    let input = json!({
+        "event_id": "Ev82",
+        "data": {"text": "Review #82 please"},
+        "metadata": {"team": "T1", "channel": "C2", "timestamp": "1760097600.123456"}
+    });
+    let overrides = resolve_instance_hooks(&rule, &input).unwrap();
+    assert_eq!(overrides.custom_name.as_deref(), Some("review-pr-82"));
+    assert_eq!(
+        overrides.custom_description.as_deref(),
+        Some("PR review Ev82 slack://channel?team=T1&id=C2&message=1760097600.123456")
+    );
+}
+
+#[test]
+fn instance_hooks_fall_back_independently_with_fresh_budgets() {
+    for body in ["42", "\" \"", "throw \"bad\"", "loop {} \"never\""] {
+        for broken_name in [true, false] {
+            let name = if broken_name {
+                body
+            } else {
+                "\" Custom / Name \""
+            };
+            let description = if broken_name {
+                "\"custom description\""
+            } else {
+                body
+            };
+            let rule = definition(
+                "review",
+                &format!(
+                    "fn matches(event) {{ true }} fn instance_name(event) {{ {name} }} fn instance_description(event) {{ {description} }}"
+                ),
+            );
+            let overrides = resolve_instance_hooks(&rule, &json!({})).unwrap();
+            assert_eq!(
+                overrides.custom_name.as_deref(),
+                (!broken_name).then_some("custom-name")
+            );
+            assert_eq!(
+                overrides.custom_description.as_deref(),
+                broken_name.then_some("custom description")
+            );
+        }
+    }
+    let rule = definition(
+        "review",
+        "fn matches(event) { true } fn instance_name() { \"name\" } fn instance_description(a,b) { \"desc\" }",
+    );
+    assert_eq!(
+        resolve_instance_hooks(&rule, &json!({})).unwrap(),
+        InstanceOverrides::default()
+    );
+    let rule = definition("review", "not valid syntax");
+    assert!(resolve_instance_hooks(&rule, &json!({})).is_err());
+}
+
+#[test]
+fn custom_identity_sanitizes_ascii_names_and_validates_utf8_description_bytes() {
+    let rule = definition(
+        "review",
+        "fn matches(event) { true } fn instance_name(event) { event.name } fn instance_description(event) { event.description }",
+    );
+    for (source, expected) in [
+        (" É A__B / 9 ", Some("a-b-9")),
+        ("gateway", None),
+        ("---", None),
+        ("🚀", None),
+    ] {
+        let overrides =
+            resolve_instance_hooks(&rule, &json!({"name":source,"description":"text"})).unwrap();
+        assert_eq!(overrides.custom_name.as_deref(), expected);
+    }
+    let overrides = resolve_instance_hooks(
+        &rule,
+        &json!({"name":format!("{}--x", "A".repeat(39)),"description":"é".repeat(500)}),
+    )
+    .unwrap();
+    assert_eq!(overrides.custom_name, Some("a".repeat(39)));
+    assert_eq!(overrides.custom_description, Some("é".repeat(500)));
+    for description in ["é".repeat(501), "a\nb".into()] {
+        assert!(
+            resolve_instance_hooks(&rule, &json!({"name":"ok","description":description}))
+                .unwrap()
+                .custom_description
+                .is_none()
+        );
     }
 }
 

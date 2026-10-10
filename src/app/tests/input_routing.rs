@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use tuicore::{EventRoute, LayoutEngine, TreeDispatcher};
 
 use super::*;
@@ -173,6 +175,67 @@ fn status_bar_menu_opens_branch_instance_settings() {
 }
 
 #[test]
+fn status_menu_opens_notification_sounds_with_a_right_aligned_shortcut() {
+    init_ui();
+    for width in [40, 130] {
+        let mut app = root(AppService::for_tests());
+        let area = Rect::new(0, 0, width, 30);
+        let mut layout = LayoutEngine::new();
+        layout.layout(&mut app, area);
+        let trigger = layout
+            .focus_targets()
+            .iter()
+            .find(|target| target.hotkey_sequences.iter().any(|key| key == ";"))
+            .unwrap();
+        app.dispatch_event(
+            &EventRoute::new(trigger.path.clone()),
+            &TuiEvent::Hotkey(HotkeyEvent::Commit(";".into())),
+            &mut EventCtx::default(),
+        );
+        layout.layout(&mut app, area);
+        let popup = layout.overlays().last().unwrap().clone();
+        let mut terminal = Terminal::new(TestBackend::new(width, area.height)).unwrap();
+        terminal
+            .draw(|frame| {
+                let mut render = RenderCtx::new();
+                app.render(frame, area, &mut render);
+                render.flush(frame);
+            })
+            .unwrap();
+        let lines = rendered_lines(&terminal, area);
+        let y = lines
+            .iter()
+            .position(|line| line.contains("󰕾 Notifications"))
+            .unwrap() as u16;
+        let hint = terminal
+            .backend()
+            .buffer()
+            .cell((popup.area.right() - 1, y))
+            .unwrap();
+        assert_eq!(hint.symbol(), "N");
+        assert_eq!(hint.fg, tuicore::theme().muted_fg());
+        let route = EventRoute::new(popup.route_path);
+        app.dispatch_event(
+            &route,
+            &TuiEvent::Key(KeyEvent {
+                code: Key::Char('j'),
+                modifiers: KeyModifiers::CONTROL,
+            }),
+            &mut EventCtx::default(),
+        );
+        let mut ctx = EventCtx::default();
+        app.dispatch_event(&route, &TuiEvent::Key(KeyEvent::from(Key::Enter)), &mut ctx);
+        assert!(matches!(ctx.messages(), [Msg::OpenSoundMenu]));
+        app.handle_message(Msg::OpenSoundMenu, &mut ctx);
+        let text = rendered_app(&mut app, area);
+        let session = text.find("Session completion").unwrap();
+        let rule = text.find("Rule acceptance").unwrap();
+        let instance = text.find("Instance ping").unwrap();
+        assert!(session < rule && rule < instance, "{text}");
+    }
+}
+
+#[test]
 fn settings_duration_input_accepts_digits_and_persists_the_value() {
     init_ui();
     let mut app = root(AppService::for_tests());
@@ -251,9 +314,13 @@ fn settings_duration_input_accepts_digits_and_persists_the_value() {
 }
 
 #[test]
-fn sound_dropdown_previews_and_saves_only_when_a_choice_is_confirmed() {
+fn sound_dropdown_previews_open_and_close_and_saves_only_confirmed_changes() {
     init_ui();
-    for field_key in ["completion-sound", "event-acceptance-sound"] {
+    for field_key in [
+        "completion-sound",
+        "event-acceptance-sound",
+        "instance-ping-sound",
+    ] {
         let mut service = AppService::for_tests();
         service.set_sound_choices_for_tests(vec![
             crate::store::completion::SoundChoice {
@@ -291,6 +358,7 @@ fn sound_dropdown_previews_and_saves_only_when_a_choice_is_confirmed() {
             &TuiEvent::Key(KeyEvent::from(Key::Enter)),
             &mut EventCtx::new(settings),
         );
+        assert_eq!(app.service.completion_sound_count_for_tests(), 1);
         let route = popup_route(&mut app, area);
         app.dispatch_event(
             &route,
@@ -300,28 +368,86 @@ fn sound_dropdown_previews_and_saves_only_when_a_choice_is_confirmed() {
             }),
             &mut EventCtx::new(settings),
         );
-        assert_eq!(app.service.completion_sound_count_for_tests(), 0);
+        assert_eq!(app.service.completion_sound_count_for_tests(), 1);
         assert_eq!(app.service.completion_sound_choice(), "");
         assert_eq!(app.service.event_acceptance_sound_choice(), "");
+        assert_eq!(app.service.instance_ping_sound_choice(), "");
         app.dispatch_event(
             &route,
             &TuiEvent::Key(KeyEvent::from(Key::Enter)),
             &mut EventCtx::new(settings),
         );
-        app.settings_save
-            .take()
-            .expect("confirming a new sound saves it")
-            .blocking_recv()
-            .unwrap()
-            .unwrap();
-        let (completion, acceptance) = if field_key == "completion-sound" {
-            ("/sounds/bell.oga", "")
+        assert!(app.settings_save.is_some());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.settings_save.is_some() {
+            assert!(Instant::now() < deadline, "sound setting was not saved");
+            app.tick(Duration::from_millis(10), settings);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let completion = if field_key == "completion-sound" {
+            "/sounds/bell.oga"
         } else {
-            ("", "/sounds/bell.oga")
+            ""
+        };
+        let acceptance = if field_key == "event-acceptance-sound" {
+            "/sounds/bell.oga"
+        } else {
+            ""
+        };
+        let ping = if field_key == "instance-ping-sound" {
+            "/sounds/bell.oga"
+        } else {
+            ""
         };
         assert_eq!(app.service.completion_sound_choice(), completion);
         assert_eq!(app.service.event_acceptance_sound_choice(), acceptance);
-        assert_eq!(app.service.completion_sound_count_for_tests(), 1);
+        assert_eq!(app.service.instance_ping_sound_choice(), ping);
+        assert_eq!(app.service.completion_sound_count_for_tests(), 2);
         assert!(!app.completion_sound);
+        let text = rendered_app(&mut app, area);
+        let bottom = text
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix('╰')?
+                    .split_once('╯')
+                    .map(|(border, _)| border)
+            })
+            .expect("settings has a bottom border");
+        assert!(bottom.chars().all(|character| character == '─'), "{text}");
+
+        let field_route = EventRoute::new(field.path.clone());
+        for close in [Key::Enter, Key::Esc] {
+            app.dispatch_event(
+                &field_route,
+                &TuiEvent::Key(KeyEvent::from(Key::Enter)),
+                &mut EventCtx::new(settings),
+            );
+            let route = popup_route(&mut app, area);
+            assert_eq!(
+                app.service.completion_sound_count_for_tests(),
+                if close == Key::Enter { 3 } else { 5 }
+            );
+            if close == Key::Esc {
+                app.dispatch_event(
+                    &route,
+                    &TuiEvent::Key(KeyEvent {
+                        code: Key::Char('k'),
+                        modifiers: KeyModifiers::CONTROL,
+                    }),
+                    &mut EventCtx::new(settings),
+                );
+            }
+            app.dispatch_event(
+                &route,
+                &TuiEvent::Key(KeyEvent::from(close)),
+                &mut EventCtx::new(settings),
+            );
+            assert!(app.settings_save.is_none());
+        }
+        assert_eq!(app.service.completion_sound_count_for_tests(), 6);
+        assert_eq!(app.service.completion_sound_choice(), completion);
+        assert_eq!(app.service.event_acceptance_sound_choice(), acceptance);
+        assert_eq!(app.service.instance_ping_sound_choice(), ping);
     }
 }

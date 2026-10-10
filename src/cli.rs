@@ -65,6 +65,23 @@ enum Commands {
         #[arg(long, help = "Print structured JSON")]
         json: bool,
     },
+    #[command(
+        about = "List known OpenCode conversations with instance ownership and fresh observation"
+    )]
+    ListSessions {
+        #[arg(
+            long,
+            help = "Filter by an existing instance name; omitted includes external sessions"
+        )]
+        instance: Option<String>,
+        #[arg(
+            long,
+            help = "Include saved and unverified detached conversations; default lists open or running sessions"
+        )]
+        include_closed: bool,
+        #[arg(long, help = "Print structured JSON")]
+        json: bool,
+    },
     #[command(about = "Show an instance's runtime details and retained startup result")]
     InspectInstance {
         name: String,
@@ -111,6 +128,53 @@ enum Commands {
         description: Option<String>,
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set, help = "Start configured services; false prepares the instance without Compose startup")]
         start_instance: bool,
+    },
+    #[command(
+        about = "Create and prompt a fresh OpenCode conversation in an existing owned instance"
+    )]
+    NewInstanceSession {
+        name: String,
+        initial_prompt: String,
+        #[arg(
+            long,
+            help = "OpenCode provider/model; omitted inherits the client's selection"
+        )]
+        model: Option<String>,
+        #[arg(
+            long,
+            help = "Thinking variant; inherits the client's variant with an inherited model, otherwise uses the model default"
+        )]
+        variant: Option<String>,
+        #[arg(
+            long,
+            help = "OpenCode agent ID; omitted uses OpenCode's default agent"
+        )]
+        agent: Option<String>,
+        #[arg(
+            long,
+            help = "Print session identity and prompt-submission outcome as JSON"
+        )]
+        json: bool,
+    },
+    #[command(
+        about = "Reopen an existing owned OpenCode conversation and submit literal task input"
+    )]
+    PromptSession {
+        session_id: String,
+        prompt: String,
+        #[arg(
+            long,
+            help = "Persist a provider/model override; omitted keeps the session's model"
+        )]
+        model: Option<String>,
+        #[arg(long, help = "Persist a thinking variant override")]
+        variant: Option<String>,
+        #[arg(long, help = "Persist an OpenCode agent ID override")]
+        agent: Option<String>,
+        #[arg(long, default_value = "queue", value_parser = ["queue", "interrupt", "abort"], help = "Queue input, interrupt current work, or reject a busy session. Overrides apply immediately")]
+        when_busy: String,
+        #[arg(long)]
+        json: bool,
     },
     #[command(
         about = "Start an existing instance by reapplying its trusted template; wait for readiness"
@@ -263,6 +327,14 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             let service = crate::service::AppService::initialize()?;
             inspection::list_instances(&service, json)
         }
+        Some(Commands::ListSessions {
+            instance,
+            include_closed,
+            json,
+        }) => {
+            let service = crate::service::AppService::initialize()?;
+            inspection::list_sessions(&service, instance, include_closed, json)
+        }
         Some(Commands::InspectInstance { name, json }) => {
             let service = crate::service::AppService::initialize()?;
             inspection::inspect_instance(&service, name, json)
@@ -343,6 +415,52 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 }
             }
             Ok(())
+        }
+        Some(Commands::NewInstanceSession {
+            name,
+            initial_prompt,
+            model,
+            variant,
+            agent,
+            json,
+        }) => {
+            let service = crate::service::AppService::initialize()?;
+            let outcome = service.prompt_instance_session_wait(
+                name,
+                crate::store::opencode::SessionPrompt {
+                    launch: crate::store::opencode::Launch {
+                        prompt: Some(initial_prompt),
+                        model,
+                        variant,
+                    },
+                    agent,
+                },
+            )?;
+            inspection::print_prompt_outcome(outcome, json)
+        }
+        Some(Commands::PromptSession {
+            session_id,
+            prompt,
+            model,
+            variant,
+            agent,
+            when_busy,
+            json,
+        }) => {
+            let service = crate::service::AppService::initialize()?;
+            let outcome = service.prompt_session_wait(
+                session_id,
+                crate::store::opencode::SessionPrompt {
+                    launch: crate::store::opencode::Launch {
+                        prompt: Some(prompt),
+                        model,
+                        variant,
+                    },
+                    agent,
+                },
+                when_busy.parse()?,
+            )?;
+            inspection::print_prompt_outcome(outcome, json)
         }
         Some(Commands::StartInstance { name }) => {
             let service = crate::service::AppService::initialize()?;

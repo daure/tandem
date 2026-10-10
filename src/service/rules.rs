@@ -169,14 +169,8 @@ impl AppService {
                     if !service.opencode_enabled() {
                         return Err("OpenCode integration is disabled".into());
                     }
-                    if destination.is_empty()
-                        || destination.len() > 200
-                        || destination.chars().any(char::is_control)
-                    {
-                        return Err("an enabled rule requires a valid target Zellij session".into());
-                    }
                     service.runtime.handle().block_on(
-                        service.opencode.observer.validate_rule_destination(&destination),
+                        service.opencode.observer.resolve_rule_destination(),
                     )?;
                     #[cfg(not(test))]
                     crate::environments::provider_sidecar::ensure(&service.environments.config)?;
@@ -220,6 +214,17 @@ impl AppService {
                     &record.received_at,
                 );
                 let matched = rules::matches(&definition, &input)?;
+                let identity = matched
+                    .then(|| {
+                        store.preview_instance_identity(
+                            &definition,
+                            &input,
+                            sequence,
+                            &record.event.summary,
+                        )
+                    })
+                    .transpose()
+                    .map_err(|error| error.to_string())?;
                 Ok(Preview {
                     matched,
                     resolved_prompt: matched
@@ -228,6 +233,9 @@ impl AppService {
                     template: definition.template,
                     model: definition.model,
                     variant: definition.variant,
+                    instance_name: identity.as_ref().map(|(name, _)| name.clone()),
+                    instance_description: identity.map(|(_, description)| description),
+                    name_is_advisory: matched,
                 })
             })
             .await
@@ -287,12 +295,9 @@ impl AppService {
             return Ok(());
         };
         store.evaluate()?;
-        let snapshot = store.snapshot()?;
-        let reported = store.reported_acceptances()?;
-        let active = snapshot
-            .acceptances
+        let acceptances = store.dispatch_acceptances()?;
+        let active = acceptances
             .iter()
-            .filter(|row| !reported.contains(&row.id))
             .filter(|row| {
                 matches!(
                     row.status,
@@ -302,10 +307,7 @@ impl AppService {
             .count();
         let mut available = 4usize.saturating_sub(active);
         // Oldest accepted work gets the first available dispatch slot.
-        for acceptance in snapshot.acceptances.into_iter().rev() {
-            if reported.contains(&acceptance.id) {
-                continue;
-            }
+        for acceptance in acceptances {
             self.advance_retained_acceptance(&acceptance, &mut available)?;
         }
         Ok(())
@@ -360,16 +362,9 @@ impl AppService {
                 if !self.opencode_enabled() {
                     return Err("OpenCode integration is disabled".into());
                 }
-                self.runtime.handle().block_on(
-                    self.opencode
-                        .observer
-                        .validate_rule_destination(&acceptance.rule.zellij_session),
-                )?;
-                if let Some(record) = startup::read(config, &acceptance.instance)?
-                    && acceptance.operation_id.as_deref() != Some(record.origin_operation_id())
-                {
-                    return Err("assigned instance has a different startup operation; inspect before retrying".into());
-                }
+                self.runtime
+                    .handle()
+                    .block_on(self.opencode.observer.resolve_rule_destination())?;
                 let (existing, lock) = self.environments.admit_new_instance(
                     &acceptance.instance,
                     &acceptance.rule.definition.template,
@@ -377,7 +372,19 @@ impl AppService {
                 if existing.is_some() && acceptance.operation_id.is_none() {
                     return Err("assigned instance name is already owned; dispatch requires a fresh instance".into());
                 }
-                let description = format!("{}: {}", acceptance.rule_name, acceptance.event_summary);
+                if existing.is_some() && startup::read(config, &acceptance.instance)?.is_none() {
+                    return Err("assigned instance has no verifiable startup lineage; inspect before retrying".into());
+                }
+                match acceptance.operation_id.as_deref() {
+                    None => store.ensure_fresh_instance_name(&acceptance.instance),
+                    Some(origin) => store.ensure_retry_instance_name(
+                        &acceptance.instance,
+                        &acceptance.rule.definition.template,
+                        origin,
+                    ),
+                }
+                .map_err(|error| error.to_string())?;
+                let description = acceptance.instance_description();
                 let operation = self.environments.begin_instance(
                     &acceptance.instance,
                     acceptance.rule.definition.template.clone(),
@@ -406,7 +413,10 @@ impl AppService {
                 let record = startup::read(config, &acceptance.instance)?
                     .ok_or("startup admission was interrupted; inspect the assigned instance before retrying")?
                     .observe(config)?;
-                if acceptance.operation_id.as_deref() != Some(record.origin_operation_id()) {
+                if acceptance.operation_id.as_deref() != Some(record.origin_operation_id())
+                    || record.operation.template.as_deref()
+                        != Some(&acceptance.rule.definition.template)
+                {
                     return Err("assigned instance has a different startup operation; inspect before retrying".into());
                 }
                 match record.operation.state {
@@ -422,11 +432,10 @@ impl AppService {
                 if !self.opencode_enabled() {
                     return Err("OpenCode integration is disabled".into());
                 }
-                self.runtime.handle().block_on(
-                    self.opencode
-                        .observer
-                        .validate_rule_destination(&acceptance.rule.zellij_session),
-                )?;
+                let destination = self
+                    .runtime
+                    .handle()
+                    .block_on(self.opencode.observer.resolve_rule_destination())?;
                 let workspace = self.environments.workspace(&acceptance.instance)?;
                 acceptance.status = DispatchStatus::Launching;
                 acceptance.launch_started_at = Some(chrono::Utc::now().to_rfc3339());
@@ -437,7 +446,7 @@ impl AppService {
                     self.opencode.observer.new_rule_session(
                         &workspace,
                         &acceptance.instance,
-                        &acceptance.rule.zellij_session,
+                        &destination,
                         &acceptance.rule.definition,
                         acceptance
                             .resolved_prompt

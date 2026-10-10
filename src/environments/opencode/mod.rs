@@ -5,8 +5,10 @@ pub(crate) mod events;
 mod history;
 mod navigation;
 mod order;
+mod prompted;
 mod purge;
 mod resources;
+mod rule_destination;
 mod server;
 mod sessions;
 mod tabs;
@@ -31,7 +33,7 @@ use serde::Deserialize;
 use transport::{get, local_server, zellij};
 
 const QUESTION_REFRESH_LIMIT: usize = 16;
-const SESSION_DIRECTORY_WINDOW: usize = 21;
+pub(crate) const SESSION_DIRECTORY_WINDOW: usize = 21;
 const CLIENT_STARTUP_GRACE_MILLISECONDS: u64 = 10_000;
 
 #[derive(Clone)]
@@ -965,6 +967,9 @@ pub(crate) fn install(home: &Path) -> Result<String, String> {
     {
         return Err("OpenCode companion directory escapes TANDEM_HOME".into());
     }
+    super::config::private_file(&directory.join("session-input.mjs"), false)
+        .and_then(|mut file| file.write_all(include_bytes!("session-input.mjs")))
+        .map_err(|error| error.to_string())?;
     super::config::private_file(&directory.join("bridge.mjs"), false)
         .and_then(|mut file| file.write_all(include_bytes!("bridge.mjs")))
         .map_err(|error| error.to_string())?;

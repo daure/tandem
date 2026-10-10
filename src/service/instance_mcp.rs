@@ -4,12 +4,47 @@ use super::AppService;
 use crate::{
     environments::{InstanceScope, Startup, conclusion, config::Config},
     store::{
-        environments::{InstanceInstructions, Operation, OperationState, RepositoryUpdates},
+        environments::{
+            InstanceInstructions, InstancePing, Operation, OperationState, RepositoryUpdates,
+        },
         rules::reports::{CleanupState, ConclusionReceipt, Report, ReportInput, ReportSummary},
     },
 };
 
 impl AppService {
+    pub(crate) async fn ping_instance(
+        &self,
+        scope: Arc<InstanceScope>,
+        session_id: Option<String>,
+    ) -> Result<InstancePing, String> {
+        let service = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let (instance, _lock) = service.environments.admit_instance_conclusion(&scope)?;
+            service.refresh_instance_ping_settings()?;
+            let enabled = service.instance_ping_enabled();
+            if enabled {
+                if let Some(session_id) = session_id.filter(|id| {
+                    !id.is_empty()
+                        && id.len() < 128
+                        && id
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                }) {
+                    service
+                        .environments
+                        .record_instance_ping(&instance.name, &session_id)?;
+                }
+                service.play_selected_sound(service.instance_ping_sound_choice());
+            }
+            Ok(InstancePing {
+                instance: instance.name,
+                sound_scheduled: enabled,
+            })
+        })
+        .await
+        .map_err(|error| format!("instance ping worker failed: {error}"))?
+    }
+
     pub(crate) async fn update_instance_repositories(
         &self,
         scope: Arc<InstanceScope>,

@@ -64,6 +64,22 @@ impl SettingsToggle {
             value,
         }
     }
+
+    pub(super) fn trigger_at_end(draft: Rc<RefCell<Draft>>) -> Self {
+        let changed = draft.clone();
+        let value: fn(&Draft) -> bool = |draft| match draft.pending_toggle {
+            Some(PendingToggle::TriggerAtEnd(trigger)) => trigger,
+            _ => draft.rule.definition.trigger_at_end,
+        };
+        let toggle = Toggle::new("Trigger at end")
+            .checked(value(&draft.borrow()))
+            .on_change(move |trigger| Msg::RuleDraftTriggerAtEnd(changed.clone(), trigger));
+        Self {
+            toggle,
+            draft,
+            value,
+        }
+    }
 }
 
 impl TuiNode<Msg> for SettingsToggle {

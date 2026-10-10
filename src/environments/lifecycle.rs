@@ -430,8 +430,8 @@ fn delete_with_provenance(
     }
     let activity = journal::ActivityGuard::begin(config, name, "delete_instance", None, 60)?;
     let result = (|| {
-        if cleanup::unclaimed_startup(config, name)? {
-            // An unclaimed request proves no resource ownership; only its journals may be removed.
+        if cleanup::failed_pre_ownership_startup(config, name)? {
+            // A failed pre-ownership startup authorizes metadata cleanup only.
             progress("Removing failed startup request; preserving any unverified resources".into());
             return Ok(());
         }

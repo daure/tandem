@@ -15,7 +15,11 @@ impl AppService {
         )
         .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
-        std::fs::write(home.join("rule-sessions"), format!("main\n{current}\n")).unwrap();
+        std::fs::write(
+            home.join("rule-sessions"),
+            format!("{current} [Created 1s ago]\nmain [Created 2s ago]\n"),
+        )
+        .unwrap();
         let integration = Arc::get_mut(&mut self.opencode).unwrap();
         integration.observer.zellij = program;
         integration.current_zellij = current.into();
@@ -34,6 +38,8 @@ fn definition(name: &str) -> Definition {
         enabled: true,
         start_instance: true,
         focus_pane: true,
+        throttle_seconds: 0,
+        trigger_at_end: false,
     }
 }
 
@@ -87,6 +93,76 @@ fn dispatch_skips_busy_events_without_blocking_unrelated_work() {
         DispatchStatus::Failed
     );
     assert!(service.operations().is_empty());
+}
+
+#[test]
+fn late_name_occupancy_fails_before_dispatch_prepares_or_reassigns() {
+    for occupancy in [
+        "file",
+        "symlink",
+        "case-directory",
+        "foreign-runtime",
+        "unowned-retry",
+    ] {
+        let mut service = AppService::for_tests();
+        service.set_rule_session_for_tests("main");
+        service
+            .runtime
+            .block_on(service.create_template("blank".into()))
+            .unwrap();
+        let mut rule = definition("inspect");
+        rule.script = "fn matches(event) { true } fn instance_name(event) { \"review\" }".into();
+        service.rules.store.save(rule, None, "main".into()).unwrap();
+        let config = &service.environments.config;
+        let events = crate::environments::events::EventStore::open(config).unwrap();
+        let token = events.register_provider("sample").unwrap();
+        events
+            .ingest(
+                &token,
+                Batch {
+                    events: vec![crate::environments::events::tests::event("one")],
+                },
+            )
+            .unwrap();
+        service.rules.store.evaluate().unwrap();
+        let mut acceptance = service
+            .rules
+            .store
+            .snapshot()
+            .unwrap()
+            .acceptances
+            .remove(0);
+        let connection = rusqlite::Connection::open(config.home.join("settings.sqlite3")).unwrap();
+        match occupancy {
+            "file" => std::fs::write(config.workspaces.join("review"), "keep").unwrap(),
+            "symlink" => {
+                std::os::unix::fs::symlink("missing", config.workspaces.join("review")).unwrap()
+            }
+            "case-directory" => std::fs::create_dir(config.workspaces.join("Review")).unwrap(),
+            "foreign-runtime" => {
+                connection.execute("INSERT INTO runtime_records VALUES ('foreign', 'review', 'ownership', '{}')", []).unwrap();
+            }
+            "unowned-retry" => {
+                std::fs::create_dir(config.workspaces.join("review")).unwrap();
+                acceptance.operation_id = Some("1-2-3".into());
+                service.rules.store.update(&acceptance, false).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        service.rule_cycle().unwrap();
+        let failed = service.rules.store.acceptance(acceptance.id).unwrap();
+        assert_eq!(failed.status, DispatchStatus::Failed, "{occupancy}");
+        assert_eq!(failed.instance, "review");
+        assert_eq!(failed.operation_id, acceptance.operation_id);
+        assert!(service.operations().is_empty(), "{occupancy}");
+        assert!(startup::read(config, "review").unwrap().is_none());
+        let count: i64 = connection
+            .query_row("SELECT count(*) FROM rule_instance_names", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+    }
 }
 
 #[test]
@@ -155,7 +231,8 @@ fn acceptance_recreation_requires_confirmation_and_preserves_the_original_dispat
         .unwrap();
     let mut rule = definition("inspect");
     rule.start_instance = false;
-    service.rules.store.save(rule, None, "main".into()).unwrap();
+    rule.script = "fn matches(event) { true } fn instance_name(event) { \" PR 82! \" } fn instance_description(event) { \"slack://channel?team=T1&id=C2\" }".into();
+    let saved = service.rules.store.save(rule, None, "main".into()).unwrap();
     let token = service.register_provider_for_tests("sample");
     crate::environments::events::EventStore::open(&service.environments.config)
         .unwrap()
@@ -174,6 +251,18 @@ fn acceptance_recreation_requires_confirmation_and_preserves_the_original_dispat
         .unwrap()
         .acceptances
         .remove(0);
+    assert_eq!(acceptance.instance, "pr-82");
+    assert_eq!(
+        acceptance.instance_description(),
+        "slack://channel?team=T1&id=C2"
+    );
+    let mut edited = saved.definition;
+    edited.script = "fn matches(event) { true } fn instance_name(event) { \"edited-name\" } fn instance_description(event) { \"Edited description\" }".into();
+    service
+        .rules
+        .store
+        .save(edited, Some(saved.revision), "main".into())
+        .unwrap();
     let error = service
         .recreate_acceptance(acceptance.id, None, false)
         .blocking_recv()
@@ -199,6 +288,18 @@ fn acceptance_recreation_requires_confirmation_and_preserves_the_original_dispat
     let record = startup::read(&service.environments.config, &acceptance.instance)
         .unwrap()
         .unwrap();
+    assert_eq!(record.operation.name, "pr-82");
+    assert_eq!(
+        record.description.as_deref(),
+        Some("slack://channel?team=T1&id=C2")
+    );
+    let prepared = service
+        .environments
+        .recorded_instance(&acceptance.instance)
+        .unwrap()
+        .unwrap();
+    assert_eq!(prepared.name, "pr-82");
+    assert_eq!(prepared.description, "slack://channel?team=T1&id=C2");
     assert!(record.preserve_opencode_history);
     assert_eq!(
         Some(record.origin_operation_id()),
@@ -282,6 +383,15 @@ fn rule_authorization_and_preview_keep_external_actions_explicit() {
         .block_on(service.preview_rule(rule.clone(), receipt.receipts[0].sequence))
         .unwrap();
     assert!(preview.matched);
+    assert!(preview.name_is_advisory);
+    assert_eq!(
+        preview.instance_name,
+        Some(format!("match-{}-a1", receipt.receipts[0].sequence))
+    );
+    assert_eq!(
+        preview.instance_description.as_deref(),
+        Some("match: A sample message")
+    );
     assert_eq!(preview.model, "openai/test");
     assert_eq!(preview.variant.as_deref(), Some("high"));
     assert_eq!(
@@ -289,6 +399,15 @@ fn rule_authorization_and_preview_keep_external_actions_explicit() {
         Some("Inspect Please inspect this event")
     );
     assert!(service.operations().is_empty());
+    let mut unmatched = rule.clone();
+    unmatched.script = "fn matches(event) { false } fn instance_name(event) { loop {} }".into();
+    let unmatched = service
+        .runtime
+        .block_on(service.preview_rule(unmatched, receipt.receipts[0].sequence))
+        .unwrap();
+    assert!(!unmatched.name_is_advisory);
+    assert!(unmatched.instance_name.is_none());
+    assert!(unmatched.instance_description.is_none());
     assert!(
         service
             .runtime
@@ -568,7 +687,7 @@ fn saved_rule_states_survive_delayed_observations_and_out_of_order_completions()
 }
 
 #[test]
-fn closed_rule_destinations_require_reactivation_before_provisioning() {
+fn missing_live_rule_destinations_fail_before_provisioning() {
     let mut service = AppService::for_tests();
     service.set_rule_session_for_tests("today");
     service
@@ -593,14 +712,20 @@ fn closed_rule_destinations_require_reactivation_before_provisioning() {
         .unwrap();
     std::fs::write(
         service.environments.config.home.join("rule-sessions"),
-        "tomorrow\n",
+        "today [Created 1s ago] (EXITED - attach to resurrect)\n",
     )
     .unwrap();
     service.rule_cycle().unwrap();
     let snapshot = service.rules.store.snapshot().unwrap();
     let acceptance = &snapshot.acceptances[0];
     assert_eq!(acceptance.status, DispatchStatus::Failed);
-    assert!(acceptance.error.as_ref().unwrap().contains("reactivate"));
+    assert!(
+        acceptance
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("no live Zellij session")
+    );
     assert!(acceptance.operation_id.is_none());
     assert!(acceptance.launch_started_at.is_none());
     assert!(
@@ -617,7 +742,7 @@ fn closed_rule_destinations_require_reactivation_before_provisioning() {
         .blocking_recv()
         .unwrap()
         .unwrap_err();
-    assert!(error.contains("reactivate"), "{error}");
+    assert!(error.contains("no live Zellij session"), "{error}");
 }
 
 #[test]

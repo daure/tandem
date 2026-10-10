@@ -10,6 +10,80 @@ mod providers;
 mod rules;
 
 #[test]
+fn session_listing_mcp_validates_filters_and_requires_enabled_observation() {
+    use rmcp::handler::server::wrapper::Parameters;
+    let service = AppService::for_tests();
+    let server = McpServer::new(service.clone());
+    let input: super::ListSessionsInput = serde_json::from_value(json!({})).unwrap();
+    assert!(input.instance.is_none());
+    assert!(!input.include_closed);
+    let history: super::ListSessionsInput =
+        serde_json::from_value(json!({"include_closed":true})).unwrap();
+    assert!(history.include_closed);
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let error = server
+            .list_sessions(Parameters(super::ListSessionsInput {
+                instance: Some("../outside".into()),
+                include_closed: false,
+            }))
+            .await
+            .err()
+            .unwrap();
+        assert!(error.contains("name must be"), "{error}");
+        service
+            .set_opencode_enabled(false)
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        let error = server.list_sessions(Parameters(input)).await.err().unwrap();
+        assert!(error.contains("integration is disabled"), "{error}");
+    });
+    assert!(server.tool_router.map.contains_key("list_sessions"));
+}
+
+#[test]
+fn prompted_sessions_require_task_approval_and_valid_literal_input() {
+    use rmcp::handler::server::wrapper::Parameters;
+    let server = McpServer::new(AppService::for_tests());
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        for (confirmed, prompt, expected) in [
+            (false, "Inspect this", "confirmation_required"),
+            (true, " \n\t", "prompt must contain"),
+        ] {
+            let error = server
+                .new_instance_session(Parameters(super::NewInstanceSessionInput {
+                    name: "review".into(),
+                    initial_prompt: prompt.into(),
+                    model: None,
+                    variant: None,
+                    agent: None,
+                    confirmed,
+                }))
+                .await
+                .err()
+                .unwrap();
+            assert!(error.contains(expected), "{error}");
+            let input: super::PromptSessionInput = serde_json::from_value(json!({
+                "session_id":"ses_existing", "prompt":prompt, "confirmed":confirmed,
+            }))
+            .unwrap();
+            assert!(matches!(
+                input.when_busy,
+                crate::store::opencode::WhenBusy::Queue
+            ));
+            let error = server
+                .prompt_session(Parameters(input))
+                .await
+                .err()
+                .unwrap();
+            assert!(error.contains(expected), "{error}");
+        }
+        assert!(server.service.operations().is_empty());
+    });
+}
+
+#[test]
 fn stdio_handshake_defers_early_requests_until_initialized() {
     let initialize: ClientJsonRpcMessage = serde_json::from_value(json!({
         "jsonrpc": "2.0",

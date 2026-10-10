@@ -762,7 +762,7 @@ fn global_h_clears_search_focuses_the_first_item_and_expands_roots_one_level() {
 }
 
 #[test]
-fn z_toggles_templates_and_instances_without_expanding_their_groups() {
+fn z_toggles_root_nodes_with_deeper_groups_collapsed() {
     init_ui();
     let mut snapshot = snapshot();
     let mut setup = snapshot.instances[0].services[0].clone();
@@ -802,8 +802,8 @@ fn z_toggles_templates_and_instances_without_expanding_their_groups() {
         .unwrap();
     let text = rendered_lines(&terminal, area).join("");
     assert!(text.contains("review"));
-    assert!(text.contains("Setup · 1 completed"));
-    assert!(text.contains("Service"));
+    assert!(!text.contains("Setup · 1 completed"));
+    assert!(!text.contains("Service"));
     assert!(!text.contains("migrate · Completed"));
     assert!(!text.contains("web · Running"));
 }
@@ -1019,7 +1019,7 @@ fn description_hotkey_opens_an_unpadded_text_editor_in_insert_mode() {
     let input = layout
         .focus_targets()
         .iter()
-        .find(|target| target.id.as_str() == "textarea")
+        .find(|target| target.id.as_str() == "input")
         .unwrap()
         .clone();
     app.dispatch_focus(&input, true, &mut tuicore::FocusCtx::default());
@@ -1060,16 +1060,6 @@ fn description_hotkey_opens_an_unpadded_text_editor_in_insert_mode() {
             modifiers: KeyModifiers::CONTROL,
         }),
         &mut submit,
-    );
-    assert!(app.view.is_active());
-    assert!(app.description_save.is_none());
-    app.dispatch_event(
-        &route,
-        &TuiEvent::Key(KeyEvent {
-            code: Key::Enter,
-            modifiers: KeyModifiers::CONTROL,
-        }),
-        &mut EventCtx::new(AnimationSettings::default()),
     );
     assert!(!app.view.is_active());
     assert!(app.description_save.is_some());

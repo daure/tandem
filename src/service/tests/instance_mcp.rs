@@ -51,6 +51,82 @@ fn workspace(service: &AppService, name: &str) -> Arc<InstanceScope> {
 }
 
 #[test]
+fn readiness_pings_follow_fresh_settings_and_preserve_the_workspace() {
+    let service = AppService::for_tests();
+    service
+        .set_clear_opencode_history(false)
+        .unwrap()
+        .blocking_recv()
+        .unwrap()
+        .unwrap();
+    service
+        .runtime
+        .block_on(service.create_template("blank".into()))
+        .unwrap();
+    let scope = workspace(&service, "review");
+    let path = service.environments.config.workspaces.join("review");
+    std::fs::write(path.join("result.txt"), "deliverable").unwrap();
+    let receipt = service
+        .runtime
+        .block_on(service.ping_instance(scope.clone(), None))
+        .unwrap();
+    assert_eq!(receipt.instance, "review");
+    assert!(!receipt.sound_scheduled);
+    assert_eq!(service.completion_sound_count_for_tests(), 0);
+
+    let other = AppService::from_config(service.environments.config.clone()).unwrap();
+    other
+        .set_instance_ping_enabled(true)
+        .unwrap()
+        .blocking_recv()
+        .unwrap()
+        .unwrap();
+    let receipt = service
+        .runtime
+        .block_on(service.ping_instance(scope.clone(), Some("ses_review".into())))
+        .unwrap();
+    assert!(receipt.sound_scheduled);
+    assert_eq!(service.completion_sound_count_for_tests(), 1);
+    other.environments.refresh_instances();
+    let pings = other.environments.snapshot().session_pings;
+    assert_eq!(pings.len(), 1);
+    assert_eq!(pings[0].instance, "review");
+    assert_eq!(pings[0].session_id, "ses_review");
+    assert!(pings[0].revision > 0);
+    other
+        .set_instance_ping_enabled(false)
+        .unwrap()
+        .blocking_recv()
+        .unwrap()
+        .unwrap();
+    assert!(
+        !service
+            .runtime
+            .block_on(service.ping_instance(scope.clone(), Some("ses_muted".into())))
+            .unwrap()
+            .sound_scheduled
+    );
+    assert_eq!(service.completion_sound_count_for_tests(), 1);
+    other.environments.refresh_instances();
+    assert_eq!(other.environments.snapshot().session_pings, pings);
+    assert_eq!(
+        std::fs::read_to_string(path.join("result.txt")).unwrap(),
+        "deliverable"
+    );
+    assert!(service.rules.store.snapshot().unwrap().reports.is_empty());
+    std::fs::rename(&path, path.with_file_name("retained-review")).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(
+        service
+            .runtime
+            .block_on(service.ping_instance(scope, None))
+            .unwrap_err()
+            .contains("replaced")
+    );
+    assert_eq!(service.completion_sound_count_for_tests(), 1);
+}
+
+#[test]
 fn conclusion_purges_owned_workspaces_and_saves_linked_acceptance_reports() {
     let service = AppService::for_tests();
     service
@@ -104,6 +180,8 @@ fn conclusion_purges_owned_workspaces_and_saves_linked_acceptance_reports() {
                 enabled: true,
                 start_instance: false,
                 focus_pane: true,
+                throttle_seconds: 0,
+                trigger_at_end: false,
             },
             None,
             "main".into(),

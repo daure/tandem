@@ -4,7 +4,11 @@ use serde_json::Value;
 
 use super::events::Event;
 
+mod instance;
 mod prompt;
+pub(crate) use instance::{
+    InstanceOverrides, default_instance_description, resolve_instance_hooks,
+};
 pub(crate) mod reports;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -27,6 +31,10 @@ pub(crate) struct Definition {
     /// Whether automatic acceptance launches focus their new OpenCode pane.
     #[serde(default = "Definition::default_focus_pane")]
     pub focus_pane: bool,
+    #[serde(default)]
+    pub throttle_seconds: u32,
+    #[serde(default)]
+    pub trigger_at_end: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -65,6 +73,16 @@ pub(crate) struct Acceptance {
     pub error: Option<String>,
     pub rule: Rule,
     pub resolved_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_description: Option<String>,
+}
+
+impl Acceptance {
+    pub(crate) fn instance_description(&self) -> String {
+        self.resolved_description
+            .clone()
+            .unwrap_or_else(|| default_instance_description(&self.rule_name, &self.event_summary))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -80,6 +98,7 @@ pub(crate) struct Snapshot {
     pub rules: Vec<Rule>,
     pub acceptances: Vec<Acceptance>,
     pub evaluation_errors: Vec<Evaluation>,
+    pub evaluation_warnings: Vec<Evaluation>,
     pub error: Option<String>,
     pub workspaces: std::collections::BTreeMap<i64, AcceptanceWorkspace>,
     pub reports: std::collections::BTreeMap<i64, reports::ReportSummary>,
@@ -128,6 +147,9 @@ pub(crate) struct Preview {
     pub template: String,
     pub model: String,
     pub variant: Option<String>,
+    pub instance_name: Option<String>,
+    pub instance_description: Option<String>,
+    pub name_is_advisory: bool,
 }
 
 fn engine() -> rhai::Engine {

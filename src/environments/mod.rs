@@ -8,6 +8,7 @@ mod cpu_temperature;
 mod creation;
 mod docker;
 pub(crate) mod events;
+mod executable;
 mod gateway;
 mod host_resources;
 mod inspection;
@@ -242,6 +243,18 @@ impl Environments {
     }
 
     pub fn refresh_instances(&self) {
+        match journal::session_pings(&self.config) {
+            Ok(pings) => {
+                self.snapshot
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .session_pings = pings
+            }
+            Err(error) => crate::diagnostics::record_error(
+                "cannot read instance pings",
+                &std::io::Error::other(error),
+            ),
+        }
         if let Err(error) = self.refresh_startups() {
             let mut snapshot = self
                 .snapshot

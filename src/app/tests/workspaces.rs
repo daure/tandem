@@ -38,7 +38,7 @@ fn workspace_only_instances_remain_visible_in_both_views_without_opencode_client
                     .find(|row| row.id == "instance:folder")
                     .unwrap();
                 assert_eq!(folder.icon, rows::WORKSPACE_ICON);
-                assert_eq!(folder.tone, rows::Tone::Success);
+                assert_eq!(folder.tone, rows::Tone::Muted);
                 if running_only {
                     assert!(!projected.iter().any(|row| row.id == "instance:review"));
                 }
@@ -53,10 +53,10 @@ fn workspace_only_instances_remain_visible_in_both_views_without_opencode_client
                         .iter()
                         .find(|row| row.id == "template:/tmp/templates/guidance-only")
                         .unwrap();
-                    assert_eq!(template.tone, rows::Tone::Success);
+                    assert_eq!(template.tone, rows::Tone::Normal);
                     assert_eq!(
                         template.text("", None).lines[0].spans[0].style.fg,
-                        Some(tuicore::theme().success_fg())
+                        Some(tuicore::theme().text_fg())
                     );
                 }
             }
@@ -65,7 +65,7 @@ fn workspace_only_instances_remain_visible_in_both_views_without_opencode_client
 }
 
 #[test]
-fn workspace_template_icons_are_green_with_instances_and_keep_empty_or_invalid_states() {
+fn inactive_workspace_templates_use_normal_text_and_invalid_templates_show_errors() {
     init_ui();
     let mut inventory = snapshot();
     inventory.templates[0].compose_file.clear();
@@ -75,7 +75,7 @@ fn workspace_template_icons_are_green_with_instances_and_keep_empty_or_invalid_s
     inventory.instances[0].runtime.workspace_ready = true;
     for (has_instance, invalid, tone) in [
         (false, false, rows::Tone::Normal),
-        (true, false, rows::Tone::Success),
+        (true, false, rows::Tone::Normal),
         (true, true, rows::Tone::Error),
     ] {
         let mut inventory = inventory.clone();
@@ -166,7 +166,7 @@ fn workspace_rows_only_include_populated_groups() {
     let instance = rows.iter().find(|row| row.id == "instance:review").unwrap();
     assert_eq!(instance.status, None);
     assert_eq!(instance.icon, "󱥾");
-    assert_eq!(instance.tone, crate::app::rows::Tone::Success);
+    assert_eq!(instance.tone, crate::app::rows::Tone::Muted);
     let instance_text = instance.text("", None);
     assert_eq!(
         instance_text.lines[0].to_string(),
@@ -174,7 +174,7 @@ fn workspace_rows_only_include_populated_groups() {
     );
     assert_eq!(
         instance_text.lines[0].spans[0].style.fg,
-        Some(tuicore::theme().success_fg())
+        Some(tuicore::theme().muted_fg())
     );
     assert!(instance.resource_text().to_string().is_empty());
     assert!(
@@ -193,7 +193,7 @@ fn workspace_rows_only_include_populated_groups() {
 }
 
 #[test]
-fn workspace_icons_are_green_and_stopped_icons_follow_live_opencode_sessions() {
+fn workspace_icons_follow_attached_presence_and_stopped_icons_follow_live_sessions() {
     use crate::store::opencode::{Activity, Pane, Session, Snapshot};
 
     init_ui();
@@ -269,7 +269,7 @@ fn workspace_icons_are_green_and_stopped_icons_follow_live_opencode_sessions() {
             );
             assert_eq!(
                 text.lines[0].spans[0].style.fg,
-                Some(if workspace_only || green {
+                Some(if green && (!workspace_only || attached) {
                     tuicore::theme().success_fg()
                 } else {
                     inactive_tone.color()
@@ -277,6 +277,15 @@ fn workspace_icons_are_green_and_stopped_icons_follow_live_opencode_sessions() {
                 "activity={activity:?}, attached={attached}, stale={stale}, owned={owned}, show_saved={show_saved}, workspace_only={workspace_only}"
             );
             assert_eq!(text.lines[0].spans[1].style.fg, None);
+            let template = projected.iter().find(|row| row.is_template()).unwrap();
+            assert_eq!(
+                template.tone,
+                if green && (!workspace_only || attached) {
+                    rows::Tone::Success
+                } else {
+                    rows::Tone::Normal
+                }
+            );
         }
     }
 }

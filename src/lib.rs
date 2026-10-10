@@ -15,7 +15,7 @@ use service::AppService;
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let service = AppService::initialize()?;
-    tuicore::TreeApp::new(app::root(service))
+    tuicore::TreeApp::new(app::start(service)?)
         .initial_focus(app::initial_focus())
         .on_message(|app, message, ctx| app.handle_message(message, ctx))
         .notifications(tuicore::ToastRack::new().max_visible(0))
@@ -83,7 +83,7 @@ pub fn run_dev(bind: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         .recv()
         .map_err(|_| "HTTP MCP startup thread exited without status")?
         .map_err(|error| format!("HTTP MCP startup failed: {error}"))?;
-    tuicore::TreeApp::new(app::root(service))
+    tuicore::TreeApp::new(app::start(service)?)
         .initial_focus(app::initial_focus())
         .on_message(|app, message, ctx| app.handle_message(message, ctx))
         .notifications(tuicore::ToastRack::new().max_visible(0))

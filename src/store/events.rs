@@ -3,6 +3,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+pub(crate) mod diagnostics;
+
 pub(crate) const MAX_EVENT_BYTES: usize = 65_536;
 pub(crate) const MAX_BATCH: usize = 100;
 pub(crate) const FEED_LIMIT: usize = 200;
@@ -274,6 +276,7 @@ impl Deletion {
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub(crate) struct Snapshot {
     pub records: Vec<Record>,
+    pub diagnostic_counts: std::collections::BTreeMap<i64, diagnostics::Counts>,
     pub total: u64,
     pub accepted_attempts: Option<u64>,
     pub provider_totals: std::collections::BTreeMap<String, u64>,

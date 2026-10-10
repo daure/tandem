@@ -17,8 +17,29 @@ const FINAL_RISE_DURATION: Duration = Duration::from_millis(150);
 const PEAK_TINT: f64 = 0.20;
 
 pub(super) struct Markers {
-    elapsed: HashMap<String, Duration>,
+    elapsed: HashMap<String, Marker>,
     fade_duration: Duration,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    Completion,
+    Ping,
+}
+
+impl Source {
+    fn color(self) -> Color {
+        let theme = tuicore::theme();
+        match self {
+            Self::Completion => theme.success_fg(),
+            Self::Ping => theme.accent_fg(),
+        }
+    }
+}
+
+struct Marker {
+    elapsed: Duration,
+    source: Source,
 }
 
 fn session(row: &Row) -> Option<(&str, Activity)> {
@@ -41,16 +62,53 @@ impl Markers {
             self.elapsed.clear();
             return;
         }
+        let previous_pings: HashMap<_, _> = previous
+            .iter()
+            .filter_map(|row| session(row).map(|(id, _)| (id, row.ping_revision)))
+            .collect();
         let previous: HashMap<_, _> = previous.iter().filter_map(session).collect();
-        let current: HashMap<_, _> = current.iter().filter_map(session).collect();
-        self.elapsed.retain(|id, _| {
-            current
+        let current_activities: HashMap<_, _> = current.iter().filter_map(session).collect();
+        self.elapsed.retain(|id, marker| {
+            current_activities
                 .get(id.as_str())
-                .is_some_and(|activity| activity.completed())
+                .is_some_and(|activity| match marker.source {
+                    Source::Completion => activity.completed(),
+                    Source::Ping => true,
+                })
         });
-        for (id, activity) in current {
-            if activity.completed() && previous.get(id) == Some(&Activity::Busy) {
-                self.elapsed.insert(id.to_owned(), Duration::ZERO);
+        for (id, activity) in current_activities {
+            if activity.completed()
+                && previous.get(id) == Some(&Activity::Busy)
+                && !self
+                    .elapsed
+                    .get(id)
+                    .is_some_and(|marker| marker.source == Source::Ping)
+            {
+                self.elapsed.insert(
+                    id.to_owned(),
+                    Marker {
+                        elapsed: Duration::ZERO,
+                        source: Source::Completion,
+                    },
+                );
+            }
+        }
+        for row in current {
+            let Some((id, _)) = session(row) else {
+                continue;
+            };
+            if let Some(revision) = row.ping_revision
+                && previous_pings
+                    .get(id)
+                    .is_some_and(|previous| *previous != Some(revision))
+            {
+                self.elapsed.insert(
+                    id.to_owned(),
+                    Marker {
+                        elapsed: Duration::ZERO,
+                        source: Source::Ping,
+                    },
+                );
             }
         }
     }
@@ -69,9 +127,9 @@ impl Markers {
             self.elapsed.clear();
             return TickResult::CHANGED;
         }
-        self.elapsed.retain(|_, elapsed| {
-            *elapsed = elapsed.saturating_add(dt);
-            *elapsed < PULSE_DURATION * PULSE_COUNT + FINAL_RISE_DURATION + self.fade_duration
+        self.elapsed.retain(|_, marker| {
+            marker.elapsed = marker.elapsed.saturating_add(dt);
+            marker.elapsed < PULSE_DURATION * PULSE_COUNT + FINAL_RISE_DURATION + self.fade_duration
         });
         TickResult {
             active: !self.elapsed.is_empty(),
@@ -108,14 +166,12 @@ impl Markers {
     }
 
     pub(super) fn marker(&self, row: &Row, base: Style) -> Option<Span<'static>> {
-        let Some((id, Activity::Idle | Activity::AwaitingAnswer)) = session(row) else {
-            return None;
-        };
-        let elapsed = self.elapsed.get(id)?;
-        let strength = if *elapsed < PULSE_DURATION * PULSE_COUNT {
-            pulse_strength(*elapsed)
+        let marker = self.active_marker(row)?;
+        let elapsed = marker.elapsed;
+        let strength = if elapsed < PULSE_DURATION * PULSE_COUNT {
+            pulse_strength(elapsed)
         } else {
-            let final_elapsed = *elapsed - PULSE_DURATION * PULSE_COUNT;
+            let final_elapsed = elapsed - PULSE_DURATION * PULSE_COUNT;
             if final_elapsed < FINAL_RISE_DURATION {
                 Easing::EaseInOut
                     .apply(final_elapsed.as_secs_f64() / FINAL_RISE_DURATION.as_secs_f64())
@@ -124,32 +180,38 @@ impl Markers {
                     / self.fade_duration.as_secs_f64()
             }
         };
-        let theme = tuicore::theme();
         Some(Span::styled(
             "┃",
-            Style::default().fg(lerp_color(background(base), theme.success_fg(), strength)),
+            Style::default().fg(lerp_color(
+                background(base),
+                marker.source.color(),
+                strength,
+            )),
         ))
     }
 
     pub(super) fn style(&self, row: &Row, base: Style) -> Style {
-        let Some((id, Activity::Idle | Activity::AwaitingAnswer)) = session(row) else {
+        let Some(marker) = self.active_marker(row) else {
             return base;
         };
-        let Some(elapsed) = self.elapsed.get(id) else {
-            return base;
-        };
-        if *elapsed >= PULSE_DURATION * PULSE_COUNT {
+        if marker.elapsed >= PULSE_DURATION * PULSE_COUNT {
             return base;
         }
-        let strength = pulse_strength(*elapsed) * PEAK_TINT;
+        let strength = pulse_strength(marker.elapsed) * PEAK_TINT;
         if strength == 0.0 {
             return base;
         }
         base.bg(lerp_color(
             background(base),
-            tuicore::theme().success_fg(),
+            marker.source.color(),
             strength,
         ))
+    }
+
+    fn active_marker(&self, row: &Row) -> Option<&Marker> {
+        let (id, activity) = session(row)?;
+        let marker = self.elapsed.get(id)?;
+        (marker.source == Source::Ping || activity.completed()).then_some(marker)
     }
 }
 

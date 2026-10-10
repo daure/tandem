@@ -16,6 +16,7 @@ mod dialogs;
 mod enabled;
 mod node;
 mod prompt;
+mod throttle;
 
 use super::{Msg, events::clean};
 use crate::store::rules::{Acceptance, Rule, Snapshot};
@@ -32,6 +33,8 @@ pub(crate) struct Draft {
     pub dirty: bool,
     pub pending_toggle: Option<PendingToggle>,
     pub prompt_error: Option<String>,
+    pub throttle_input: String,
+    pub throttle_error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -39,6 +42,7 @@ pub(crate) enum PendingToggle {
     Enabled(bool),
     StartInstance(bool),
     FocusPane(bool),
+    TriggerAtEnd(bool),
 }
 
 #[derive(Clone, PartialEq)]
@@ -129,18 +133,26 @@ impl Rules {
                     Constraint::Fill(1),
                     move |row: &Entry, _| {
                         let mut text = entry_text(row, cell_spinner.borrow().glyph());
-                        if let Entry::Rule(rule) = row
-                            && let Some(error) = details
-                                .borrow()
-                                .evaluation_errors
-                                .iter()
-                                .find(|error| error.rule_name == rule.definition.name)
-                        {
-                            text.lines[1] = Line::from(format!(
-                                "{} · Last evaluation failure: {}",
-                                clean(&rule.definition.description),
-                                clean(&error.error)
-                            ));
+                        if let Entry::Rule(rule) = row {
+                            let details = details.borrow();
+                            let theme = tuicore::theme();
+                            for (evaluations, label, color) in [
+                                (&details.evaluation_errors, "failure", theme.error_fg()),
+                                (&details.evaluation_warnings, "warning", theme.warning_fg()),
+                            ] {
+                                if let Some(issue) = evaluations
+                                    .iter()
+                                    .find(|issue| issue.rule_name == rule.definition.name)
+                                {
+                                    text.lines[1].spans.push(Span::styled(
+                                        format!(
+                                            " · Last evaluation {label}: {}",
+                                            clean(&issue.error)
+                                        ),
+                                        Style::default().fg(color),
+                                    ));
+                                }
+                            }
                         }
                         text
                     },

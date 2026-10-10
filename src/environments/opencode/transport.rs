@@ -205,6 +205,10 @@ pub(super) async fn zellij(program: &Path, args: &[String]) -> Result<String, St
         .or_else(|| args.first().map(String::as_str))
         .unwrap_or("command");
     let mut command = Command::new(program);
+    if action == "list-sessions" {
+        // A stale inherited name makes Zellij label an exited session as current.
+        command.env_remove("ZELLIJ_SESSION_NAME");
+    }
     command
         .args(args)
         .stdin(Stdio::null())

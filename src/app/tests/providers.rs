@@ -382,7 +382,7 @@ fn render(app: &mut App, width: u16) -> (tuicore::LayoutCtx, String) {
 }
 
 #[test]
-fn event_details_provider_logs_and_details_share_the_bottom_docked_size_across_terminal_resizes() {
+fn event_diagnostics_and_other_details_share_the_bottom_docked_size_across_terminal_resizes() {
     init_ui();
     let mut app = root(AppService::for_tests());
     let row = rows::from_snapshot(&super::snapshot()).remove(0);
@@ -396,11 +396,20 @@ fn event_details_provider_logs_and_details_share_the_bottom_docked_size_across_t
     };
     for kind in [
         "Event details",
+        "Diagnostics",
         "Provider details",
         "Provider logs",
         "Template details",
     ] {
         match kind {
+            "Diagnostics" => {
+                let mut failed = event.clone();
+                let mut acceptance = super::rules::acceptance(super::rules::rule("inspect"), 1, 1);
+                acceptance.status = crate::store::rules::DispatchStatus::Failed;
+                acceptance.error = Some("provisioning failed".into());
+                failed.acceptances.push(acceptance);
+                app.open_event(&failed, &mut EventCtx::default());
+            }
             "Provider logs" => {
                 let (sender, receiver) = tokio::sync::oneshot::channel();
                 app.provider_actions
@@ -421,6 +430,9 @@ fn event_details_provider_logs_and_details_share_the_bottom_docked_size_across_t
         }
         for width in [130, 40, 80, 130] {
             let (_, text) = render(&mut app, width);
+            if kind == "Diagnostics" {
+                assert!(text.contains("Loading event diagnostics"), "{text}");
+            }
             let lines: Vec<_> = text.lines().collect();
             let header = lines.iter().position(|line| line.contains(kind)).unwrap();
             let panel_width = if width < 100 { width } else { width * 75 / 100 };
@@ -834,6 +846,7 @@ fn stream_event_links_apply_an_exact_source_filter_and_restore_provider_selectio
     app.pages_mut()
         .update_events(crate::store::events::Snapshot {
             records: rows,
+            diagnostic_counts: Default::default(),
             total: 2,
             accepted_attempts: None,
             provider_totals: Default::default(),

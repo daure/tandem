@@ -162,6 +162,19 @@ fn startup_uses_the_running_binary_after_its_executable_is_replaced() {
             .is_file()
     );
     assert!(fixture.home.join("workspaces/review/AGENTS.md").is_file());
+    let config: Value = serde_json::from_slice(
+        &fs::read(
+            fixture
+                .home
+                .join("workspaces/review/.opencode/opencode.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        config["mcp"]["tandem-instance"]["command"],
+        json!([executable, "mcp-instance"])
+    );
 }
 
 #[test]

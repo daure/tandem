@@ -16,6 +16,21 @@ use crate::store::environments::{Instance, Repository};
 mod repositories;
 
 impl Environments {
+    pub(crate) fn admit_session_open(
+        &self,
+        name: &str,
+    ) -> Result<(Instance, super::gateway::Lock), String> {
+        crate::store::environments::validate_instance_name(name)?;
+        let lock = super::gateway::lock(&self.config, &format!("instance-{name}"))?;
+        let recorded =
+            super::journal::recorded(&self.config, name)?.ok_or("instance ownership is missing")?;
+        super::ownership::verify(&self.config, &recorded)?;
+        super::removal::validate_workspace(&self.config, name)?;
+        let instance = self.session_instance(name)?;
+        self.prepare_workspace_open(&instance.workspace, name)?;
+        Ok((instance, lock))
+    }
+
     pub fn prepare_workspace_open(&self, workspace: &str, name: &str) -> Result<(), String> {
         if existing(Path::new(workspace))? {
             return Ok(());

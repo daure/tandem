@@ -41,6 +41,7 @@ mod route_menu;
 mod row_actions;
 mod rows;
 mod rules;
+mod sound_menu;
 mod toolbar;
 mod yank_menu;
 use action_menu::ActionMenu;
@@ -54,10 +55,16 @@ use yank_menu::{YankMenu, YankTarget};
 const TREE_FOCUS: &str = "environments";
 const MOBILE_TABS_WIDTH: u16 = 100;
 const SETTINGS_MENU_ID: &str = "settings";
-const STATUS_BAR_MENU_ITEMS: [StatusBarMenuItem; 2] = [
+const SOUND_MENU_ID: &str = "notification-sounds";
+const STATUS_BAR_MENU_ITEMS: [StatusBarMenuItem; 3] = [
     StatusBarMenuItem::Custom {
         id: SETTINGS_MENU_ID,
         label: " Settings",
+    },
+    StatusBarMenuItem::CustomWithHint {
+        id: SOUND_MENU_ID,
+        label: "󰕾 Notifications",
+        hint: "N",
     },
     StatusBarMenuItem::Theme,
 ];
@@ -136,9 +143,12 @@ pub(crate) enum Msg {
     InitialPromptChanged(String),
     StartInstanceChanged(bool),
     OpenSettings,
+    OpenSoundMenu,
     CompletionFadeChanged(String),
     CompletionSoundSelected(String),
     EventAcceptanceSoundSelected(String),
+    InstancePingSoundSelected(String),
+    PreviewSound(String),
     Refresh,
     StopAll,
     PurgeAll,
@@ -149,6 +159,8 @@ pub(crate) enum Msg {
     SetOpencodeHistory(bool),
     SetAttachedSessionsOnly(bool),
     SetCompletionSound(bool),
+    SetEventAcceptanceSound(bool),
+    SetInstancePingSound(bool),
     CopyName,
     CopyDescription,
     CopyWorkspace,
@@ -168,6 +180,8 @@ pub(crate) enum Msg {
     RuleDraftEnabled(Rc<RefCell<rules::Draft>>, bool),
     RuleDraftStartInstance(Rc<RefCell<rules::Draft>>, bool),
     RuleDraftFocusPane(Rc<RefCell<rules::Draft>>, bool),
+    RuleDraftTriggerAtEnd(Rc<RefCell<rules::Draft>>, bool),
+    DiscardRuleDraft(Rc<RefCell<rules::Draft>>),
     FocusEvent(i64),
     FocusRule(String),
     AcceptanceInstance(String),
@@ -225,7 +239,12 @@ trait ModalNode: TuiNode<Msg> + DockChrome {
 
 impl ModalNode for DialogHost<Flex<Msg>, Msg> {
     fn set_bottom_left(&mut self, title: String) {
-        self.dialog_mut().set_bottom_left(title);
+        if title.is_empty() {
+            self.dialog_mut()
+                .clear_title(tuicore::DialogTitlePosition::BottomLeft);
+        } else {
+            self.dialog_mut().set_bottom_left(title);
+        }
     }
 }
 
@@ -250,7 +269,7 @@ pub(crate) struct App {
     service: AppService,
     snapshot: EnvironmentSnapshot,
     overview_loading: bool,
-    view: View,
+    view: sound_menu::Overlay,
     // Action handlers address the active page; both pages retain their own state.
     instances: SharedState,
     toolbar_state: toolbar::SharedState,
@@ -278,6 +297,7 @@ pub(crate) struct App {
     opencode_history: bool,
     attached_sessions_only: bool,
     completion_sound: bool,
+    event_acceptance_sound: bool,
     event_acceptance_count: Option<u64>,
     opencode_action: Option<opencode::PendingAction>,
     opencode_cleanups: Vec<tokio::sync::oneshot::Receiver<Result<(), String>>>,
@@ -297,11 +317,20 @@ pub(crate) struct App {
     rule_toggle: Option<Rc<RefCell<rules::Draft>>>,
     rule_autosave: Option<Rc<RefCell<rules::Draft>>>,
     rule_autosaves: Vec<Rc<RefCell<rules::Draft>>>,
+    rule_invalid_drafts: std::collections::HashMap<String, Rc<RefCell<rules::Draft>>>,
     event_focus_action: Option<
         tokio::sync::oneshot::Receiver<
             Result<crate::store::events::Record, crate::store::events::Error>,
         >,
     >,
+}
+
+pub(crate) fn start(service: AppService) -> Result<App, String> {
+    service
+        .set_instance_ping_enabled(false)?
+        .blocking_recv()
+        .map_err(|_| "settings worker stopped")??;
+    Ok(root(service))
 }
 
 pub(crate) fn root(service: AppService) -> App {
@@ -336,7 +365,6 @@ pub(crate) fn root(service: AppService) -> App {
     {
         let mut toolbar_state = toolbar_state.borrow_mut();
         toolbar_state.opencode_enabled = opencode_enabled;
-        toolbar_state.completion_sound = false;
     }
     let content = Split::vertical(
         overview_tabs(opencode_enabled, opencode_enabled, (0, 0)),
@@ -350,6 +378,7 @@ pub(crate) fn root(service: AppService) -> App {
             .menu_items(STATUS_BAR_MENU_ITEMS)
             .on_custom_menu_item(|id| match id {
                 SETTINGS_MENU_ID => Msg::OpenSettings,
+                SOUND_MENU_ID => Msg::OpenSoundMenu,
                 _ => Msg::Close,
             }),
     )
@@ -384,7 +413,7 @@ pub(crate) fn root(service: AppService) -> App {
         service,
         snapshot,
         overview_loading,
-        view,
+        view: sound_menu::Overlay::new(view),
         instances,
         toolbar_state,
         tab_counts: (0, 0),
@@ -411,6 +440,7 @@ pub(crate) fn root(service: AppService) -> App {
         opencode_history: false,
         attached_sessions_only: opencode_enabled,
         completion_sound: false,
+        event_acceptance_sound: false,
         event_acceptance_count,
         opencode_action: None,
         opencode_cleanups: Vec::new(),
@@ -430,6 +460,7 @@ pub(crate) fn root(service: AppService) -> App {
         rule_toggle: None,
         rule_autosave: None,
         rule_autosaves: Vec::new(),
+        rule_invalid_drafts: Default::default(),
         event_focus_action: None,
     }
 }
@@ -505,7 +536,6 @@ impl App {
         toolbar_state.running_only = self.running_only;
         toolbar_state.opencode_enabled = opencode_enabled;
         toolbar_state.show_saved = self.opencode_history;
-        toolbar_state.completion_sound = self.completion_sound;
         *self.toolbar_state.borrow_mut() = toolbar_state;
         self.snapshot = snapshot;
         snapshot_changed || rows_changed || totals_changed || tabs_changed
@@ -673,6 +703,7 @@ impl App {
 
     pub(crate) fn handle_message(&mut self, message: Msg, ctx: &mut EventCtx<Msg>) {
         match message {
+            Msg::OpenSoundMenu => self.open_sound_menu(ctx),
             Msg::OpenRowMenu(target) => {
                 let menu = self.menu_layer_mut();
                 menu.layer_mut().open_row(target, ctx);
@@ -765,6 +796,10 @@ impl App {
             Msg::RuleDraftFocusPane(draft, focus) => {
                 self.set_rule_draft_focus_pane(draft, focus, ctx);
             }
+            Msg::RuleDraftTriggerAtEnd(draft, trigger) => {
+                self.set_rule_draft_trigger_at_end(draft, trigger, ctx);
+            }
+            Msg::DiscardRuleDraft(draft) => self.discard_rule_draft(draft, ctx),
             Msg::FocusEvent(sequence) => {
                 self.event_focus_action = Some(self.service.retained_event(sequence));
                 self.handle_message(Msg::Close, ctx);
@@ -858,9 +893,19 @@ impl App {
                 ctx.request_redraw();
             }
             Msg::SetCompletionSound(enabled) => {
-                self.event_acceptance_count = self.service.event_snapshot().accepted_attempts;
                 self.completion_sound = enabled;
-                self.toolbar_state.borrow_mut().completion_sound = enabled;
+                ctx.request_redraw();
+            }
+            Msg::SetEventAcceptanceSound(enabled) => {
+                self.event_acceptance_count = self.service.event_snapshot().accepted_attempts;
+                self.event_acceptance_sound = enabled;
+                ctx.request_redraw();
+            }
+            Msg::SetInstancePingSound(enabled) => {
+                match self.service.set_instance_ping_enabled(enabled) {
+                    Ok(reply) => self.settings_save = Some(reply),
+                    Err(error) => ctx.notify(Notification::error("Cannot save settings", error)),
+                }
                 ctx.request_redraw();
             }
             Msg::Close => {
@@ -915,6 +960,13 @@ impl App {
                     Err(error) => ctx.notify(Notification::error("Cannot select sound", error)),
                 }
             }
+            Msg::InstancePingSoundSelected(value) => {
+                match self.service.set_instance_ping_sound_choice(value) {
+                    Ok(reply) => self.settings_save = Some(reply),
+                    Err(error) => ctx.notify(Notification::error("Cannot select sound", error)),
+                }
+            }
+            Msg::PreviewSound(value) => self.service.play_selected_sound(value),
             Msg::Refresh => self.action(4, ctx),
             Msg::StopAll => self.confirm_stop_all(ctx),
             Msg::PurgeAll => self.confirm_purge_all(ctx),
@@ -1267,6 +1319,7 @@ impl App {
                 [
                     &self.service.completion_sound_choice(),
                     &self.service.event_acceptance_sound_choice(),
+                    &self.service.instance_ping_sound_choice(),
                 ],
                 Rc::clone(&self.settings_sound_choice),
             ),
@@ -1838,7 +1891,6 @@ impl App {
         let event = TuiEvent::Hotkey(tuicore::HotkeyEvent::Commit("shift+h".into()));
         self.running_only = true;
         self.opencode_history = false;
-        self.completion_sound = false;
         self.select_overview(self.service.opencode_enabled());
         self.tabs_mut()
             .select_index_with_settings(0, ctx.animation());
@@ -1846,7 +1898,6 @@ impl App {
             let mut toolbar = self.toolbar_state.borrow_mut();
             toolbar.running_only = true;
             toolbar.show_saved = false;
-            toolbar.completion_sound = false;
         }
         let operations = self.service.operations();
         self.update_overview_rows(&self.snapshot.clone(), &operations, false);
@@ -1937,15 +1988,6 @@ impl App {
         if matches!(event, TuiEvent::Key(key) if KeySpec::key(tuicore::Key::Enter).matches(*key))
             && self.activate_row(ctx)
         {
-            ctx.stop_propagation();
-            return true;
-        }
-        if let TuiEvent::Key(key) = event
-            && KeySpec::shifted('n').matches(*key)
-            && self.service.opencode_enabled()
-            && self.attached_sessions_only
-        {
-            self.handle_message(Msg::SetCompletionSound(!self.completion_sound), ctx);
             ctx.stop_propagation();
             return true;
         }
@@ -2070,6 +2112,9 @@ impl TuiNode<Msg> for App {
         self.notifications.render(frame, area);
     }
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
+        if self.sound_menu_event(event, ctx) {
+            return EventOutcome::Handled;
+        }
         if self.refresh_schedule.event(event, Instant::now()) {
             self.service.poll_environments();
         }
@@ -2093,6 +2138,9 @@ impl TuiNode<Msg> for App {
         event: &TuiEvent,
         ctx: &mut EventCtx<Msg>,
     ) -> EventOutcome {
+        if self.sound_menu_event(event, ctx) {
+            return EventOutcome::Handled;
+        }
         if self.refresh_schedule.event(event, Instant::now()) {
             self.service.poll_environments();
         }
@@ -2131,6 +2179,7 @@ impl TuiNode<Msg> for App {
             return self.view.dispatch_event(route, event, ctx);
         }
         let textarea_route = self.view.is_active()
+            && matches!(self.intent, Some(Intent::CreateInstance(_)))
             && route
                 .path
                 .keys()

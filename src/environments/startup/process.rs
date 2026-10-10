@@ -211,7 +211,7 @@ pub(crate) fn inherit(
         return Err("startup lock descriptor is unavailable".into());
     }
     let file = unsafe { File::from_raw_fd(descriptor) };
-    let expected = std::fs::symlink_metadata(config.home.join("locks").join(resource))
+    let expected = std::fs::symlink_metadata(gateway::resource_path(config, resource))
         .map_err(|error| error.to_string())?;
     let actual = file.metadata().map_err(|error| error.to_string())?;
     if !expected.file_type().is_file()

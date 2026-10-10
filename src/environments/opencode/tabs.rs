@@ -4,10 +4,22 @@ use serde::Deserialize;
 
 use super::{Observer, Pane, transport, valid_id};
 
-#[derive(Clone, Deserialize, serde::Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, serde::Serialize)]
 pub(super) struct Control {
     server: String,
     token: String,
+    #[serde(default)]
+    pub(super) prompted_sessions: bool,
+    #[serde(default)]
+    pub(super) session_prompts: bool,
+    #[serde(default)]
+    pub(super) session_tabs: bool,
+}
+
+pub(super) enum CloseOutcome {
+    LegacyPane,
+    SiblingsRemain,
+    ClientEmpty,
 }
 
 impl Control {
@@ -16,6 +28,21 @@ impl Control {
         path: &str,
         body: serde_json::Value,
     ) -> Result<String, String> {
+        let result = self.request_json(path, body).await?;
+        result["id"]
+            .as_str()
+            .filter(|id| valid_id(id))
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                "OpenCode tab action returned no session; check the client before retrying".into()
+            })
+    }
+
+    pub(super) async fn request_json(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         let server = transport::local_server(&self.server)
             .ok_or("OpenCode tab control must be local HTTP")?;
         let mut response = transport::client()?
@@ -50,18 +77,16 @@ impl Control {
                 .take(512)
                 .collect());
         }
-        result["id"]
-            .as_str()
-            .filter(|id| valid_id(id))
-            .map(str::to_owned)
-            .ok_or_else(|| {
-                "OpenCode tab action returned no session; check the client before retrying".into()
-            })
+        Ok(result)
     }
 }
 
 impl Observer {
-    pub(super) async fn close_session_tab(&self, id: &str, pane: &Pane) -> Result<bool, String> {
+    pub(super) async fn close_session_tab(
+        &self,
+        id: &str,
+        pane: &Pane,
+    ) -> Result<CloseOutcome, String> {
         let observer = self.clone();
         let target = pane.clone();
         let session_id = id.to_owned();
@@ -75,9 +100,12 @@ impl Observer {
                 .filter(attached)
                 .find(|presence| presence.id == session_id)
                 .ok_or("The OpenCode tab closed or changed; refresh and try again")?;
-            if presence.tab_control.is_none()
-                && presences.iter().filter(attached).any(|other| other.id != session_id)
-            {
+            let siblings = presences.iter().filter(attached)
+                .any(|other| !other.id.is_empty() && other.id != session_id);
+            if presence.tab_index.is_none() && !siblings {
+                return Ok(None);
+            }
+            if siblings && presence.tab_control.is_none() {
                 return Err("Cannot close one tab without companion tab control; run tandem opencode-setup and reopen the client".to_owned());
             }
             Ok(presence.tab_control.clone())
@@ -85,7 +113,7 @@ impl Observer {
         .await
         .map_err(|error| error.to_string())??;
         let Some(control) = control else {
-            return Ok(false);
+            return Ok(CloseOutcome::LegacyPane);
         };
         let panes = self.list_panes(&pane.session).await?;
         if !panes
@@ -100,7 +128,45 @@ impl Observer {
         if closed != id {
             return Err("OpenCode returned a different conversation; refresh and try again".into());
         }
-        Ok(true)
+        self.wait_for_closed_tab(id, pane).await
+    }
+
+    async fn wait_for_closed_tab(&self, id: &str, pane: &Pane) -> Result<CloseOutcome, String> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
+        loop {
+            let observer = self.clone();
+            let target = pane.clone();
+            let id = id.to_owned();
+            let closed = tokio::task::spawn_blocking(move || {
+                let presences = observer.presences();
+                let attached: Vec<_> = presences
+                    .iter()
+                    .filter(|presence| {
+                        presence.zellij_session == target.session
+                            && presence.pane_id == Some(target.id)
+                    })
+                    .collect();
+                if attached.is_empty() || attached.iter().any(|presence| presence.id == id) {
+                    return None;
+                }
+                Some(if attached.iter().any(|presence| !presence.id.is_empty()) {
+                    CloseOutcome::SiblingsRemain
+                } else {
+                    CloseOutcome::ClientEmpty
+                })
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+            if let Some(closed) = closed {
+                return Ok(closed);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(
+                    "OpenCode tab closure is not yet observed; refresh and check the client".into(),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 
     pub(crate) async fn new_session_tab(

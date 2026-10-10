@@ -322,14 +322,13 @@ fn purge_updates_the_inactive_tab_without_resetting_surviving_rows() {
 }
 
 #[test]
-fn asynchronous_creation_expands_only_its_originating_tab_and_preserves_selection() {
+fn asynchronous_creation_selects_the_client_only_in_its_originating_tab() {
     for origin_sessions in [false, true] {
         let mut app = app();
         if !origin_sessions {
             switch(&mut app);
         }
         render(&mut app);
-        let origin_selection = app.selected().unwrap().id;
         let (sender, reply) = tokio::sync::oneshot::channel();
         app.opencode_action = Some(PendingAction::creation(
             reply,
@@ -366,7 +365,7 @@ fn asynchronous_creation_expands_only_its_originating_tab_and_preserves_selectio
         assert_eq!(app.selected().unwrap().id, selection);
         assert_eq!(render(&mut app).1, before);
         switch(&mut app);
-        assert_eq!(app.selected().unwrap().id, origin_selection);
+        assert_eq!(app.selected().unwrap().id, "opencode-client:review:new:99");
         assert!(render(&mut app).1.contains("Created client"));
     }
 }

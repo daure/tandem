@@ -139,7 +139,11 @@ printf '%s\n' "$*" >> "$TANDEM_HOME/provider-commands"
 case "$1" in
     ps)
         if [ -f "$TANDEM_HOME/provider-absent" ]; then exit 0; fi
-        case "$*" in *cli-test-provider-message*) printf '%s\n' fixture-provider ;; esac
+        case "$*" in
+            *'--filter label=com.docker.compose.project --format '*)
+                printf 'fixture-provider\tcli-test-provider-message\n' ;;
+            *cli-test-provider-message*) printf '%s\n' fixture-provider ;;
+        esac
         ;;
     inspect)
         if [ "$2" = fixture-provider ]; then

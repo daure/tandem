@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, path::Path};
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod conversation;
+pub(crate) mod listing;
 pub(crate) mod observation;
 pub(crate) mod resources;
 pub(crate) mod retention;
@@ -65,6 +66,53 @@ impl Launch {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SessionPrompt {
+    pub launch: Launch,
+    pub agent: Option<String>,
+}
+
+impl SessionPrompt {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        self.launch.validate()?;
+        let prompt = self.launch.prompt.as_deref().ok_or("prompt is required")?;
+        if prompt.trim().is_empty() || prompt.len() > 65_536 || prompt.contains('\0') {
+            return Err("prompt must contain 1 to 65536 bytes of nonblank text without NUL".into());
+        }
+        if let Some(agent) = &self.agent
+            && (agent.trim().is_empty() || agent.len() > 200 || agent.chars().any(char::is_control))
+        {
+            return Err(
+                "agent must contain 1 to 200 bytes of nonblank text without control characters"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WhenBusy {
+    #[default]
+    Queue,
+    Interrupt,
+    Abort,
+}
+
+impl std::str::FromStr for WhenBusy {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "queue" => Ok(Self::Queue),
+            "interrupt" => Ok(Self::Interrupt),
+            "abort" => Ok(Self::Abort),
+            _ => Err("when_busy must be queue, interrupt or abort".into()),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Activity {
@@ -93,6 +141,30 @@ pub(crate) struct Pane {
 pub(crate) struct SessionLocation {
     pub session_id: Option<String>,
     pub pane: Pane,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PromptOutcome {
+    NotSubmitted,
+    Submitted,
+    Queued,
+    Uncertain,
+}
+
+impl PromptOutcome {
+    pub(crate) fn accepted(self) -> bool {
+        matches!(self, Self::Submitted | Self::Queued)
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PromptedSession {
+    pub session_id: Option<String>,
+    pub server: Option<String>,
+    pub pane: Pane,
+    pub prompt_outcome: PromptOutcome,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

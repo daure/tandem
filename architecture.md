@@ -42,13 +42,30 @@ Presentation layers adapt input and output. `AppService` is the sole application
 
 `tandem mcp-instance` is a separate stdio adapter exposing instance-local Start, Stop, repository updates and Conclude through
 `AppService`. Binding resolves its working directory against namespace-owned journal and ownership
-records and holds an open workspace-directory descriptor. Each action compares the live directory's
+records and holds an open workspace-directory descriptor. Each mutation compares the live directory's
 device/inode with that pinned descriptor under the instance lock; lock ownership transfers through
 the existing lifecycle workers, excluding deletion and name reuse through completion. The surface
-provides `get_instructions` with bound identity, bundled `instance-core-guidance.md`, and editable
+also exposes a scoped readiness ping. It verifies the workspace under the instance lock and reads
+the persisted ping toggle and sound selection before scheduling host playback. Ping leaves lifecycle
+and report state unchanged; its receipt confirms scheduling rather than audible delivery. The ping
+toggle defaults off and is shared by processes using the same Tandem home.
+TUI startup persists a disabled ping gate before entering the event loop and initializes its local
+completion and rule-acceptance gates disabled. Selected sounds remain saved; overview resets preserve
+notification enablement. CLI and MCP startup preserve the shared gate.
+Enabled pings with OpenCode session metadata publish per-session receipts in the instance journal.
+Namespace-scoped refresh revisions carry these receipts to independent TUI processes; projection
+matches both instance ownership and session identity. Completion markers use semantic success color,
+while ping markers use the theme accent. An active ping marker retains its original fade timing
+through activity changes and completion; completion sound remains independent.
+The surface provides `get_instructions` with bound identity, bundled `instance-core-guidance.md`, and editable
 `instance-instructions.md` seeded from `instance-agent-instructions.md`. Existing editable guidance
 is preserved and reread per call. Initialization directs agents to read both fields before using tools
-and ask the user to resolve conflicts. Guidance reads verify the pinned workspace under its instance lock.
+and ask the user to resolve conflicts. Guidance reads verify ownership and the pinned workspace before
+and after reading, so they remain available during startup and reject workspace replacement.
+Guidance replies include a read-only status snapshot using shared instance and service projections.
+Docker observation has a two-second budget without waiting for the instance lifecycle lock; failures
+preserve guidance and expose stale/error metadata. Recorded topology supplies configured services
+without containers; topology completeness and observation time distinguish unknown state from stopped.
 The surface has no caller-selected lifecycle target and is not a host-process sandbox. Preparation
 seeds workspace configuration in syntax supported by OpenCode V1 and V2, with explicit Tandem settings,
 preserving existing root and `.opencode` JSON/JSONC configuration. Configuring the surface grants
@@ -120,6 +137,9 @@ holds both through readiness and final outcome publication; its external command
 Readers combine durable startup records with fresh runtime observations, including before containers
 exist. Losing the lease or exceeding the deadline surfaces interruption; observing state performs no
 automatic retry. Other lifecycle actions retain their existing execution scope.
+Purge can remove only retained metadata for failed cold startups with no prepared journal, ownership
+or launch record after the startup lease is released. The instance lock excludes active work and name
+reuse; unverified workspaces, runtime resources, clients and conversation history are preserved.
 
 ## OpenCode observation
 
@@ -160,7 +180,9 @@ session tabs with PID, heartbeat, server, and Zellij identity. Native reactive c
 routes, tab order, and cached session metadata; server-event listeners cover cache changes. All open
 tabs attach to the same client pane and retain their native positions; navigation selects the requested
 OpenCode tab before focusing that pane. Conversation closure uses authenticated companion tab control
-for the selected V2 tab, preserving its client and sibling tabs. V1 conversation closure targets its
+for the selected V2 tab, including the last tab. Fresh receipts verify native tab removal before
+closing an empty client pane, so closed tabs stay closed across client restarts;
+sibling tabs and saved conversation history are preserved. V1 conversation closure targets its
 client pane. Server processes are shared across directories and do not own client attachment identity.
 Fresh receipts and live panes
 establish attachment and authorize navigation or closure of that exact pane. Observed conversations
@@ -184,10 +206,37 @@ Creation requests persist a default-on service-start flag. Prepare-only requests
 repository and Compose preparation while skipping Compose up, gateway startup and readiness waits.
 New instance sessions receive state-aware guidance before initial input; session opening leaves container
 state unchanged. V2 uses durable session instruction entries. V1 appends synthetic no-reply context.
+Prompted conversations in existing instances use a dedicated CLI/management MCP service operation.
+Admission validates retained ownership and the workspace under an instance lock held through delivery.
+An authenticated companion creates a fresh session, attaches guidance, then submits literal task input.
+Tab-capable clients are reused; clientless workspaces launch a client without input before requesting
+the conversation. Receipts retain session/server identity and distinguish submitted, not-submitted and
+uncertain task input. Lost responses never trigger fallback launches or automatic resend; confirmed
+submission is server acceptance rather than model completion. Services, repositories and history are preserved.
+Session-ID follow-up input resolves uniquely across known reachable V2 servers and verifies the owning
+instance and real workspace containment under its instance lock. The companion reopens that exact
+conversation in a tab; absent clients attach to its server and session before submission.
+Omitted settings preserve session choices. Explicit model, variant and agent overrides persist before
+input and may affect ongoing work's subsequent turns. Queue mode admits durable queued input without
+interrupting work or answering forms; interrupt mode stops execution before sending steering input.
+Abort checks active execution, forms and permissions before setup and before submission; concurrent
+external input remains outside Tandem's lock. Receipts distinguish queue admission from submission,
+unsent input and uncertain delivery. Setup failures preserve any applied settings or interruption.
+CLI/management MCP session listings share a read-only service operation with an optional instance filter.
+Results default to attached sessions and freshly observed busy/awaiting-answer work. The default-false
+`include_closed` flag includes saved and unverified detached history through the same projection.
+It reads namespace-scoped retained links independently of rule catalog synchronization, performs bounded
+fresh observation on the service runtime, and
+projects instance ownership by nearest workspace ancestry. Recent root history uses the observer's
+per-directory window alongside known active and retained sessions. Listings expose attachment evidence,
+unknown stale activity, missing workspaces, and partial discovery errors without launching clients or
+starting servers. Concurrent local session edits and folder cleanup suppression apply before projection;
+prompt admission independently verifies identity and ownership.
 Rule launches set their model and optional variant at session creation and send task input after attaching guidance.
 CLI and MCP creation requests carry optional model/variant selections through the detached worker;
-omitted selections leave OpenCode's defaults intact. V2 variant-only requests resolve the default model
-before creating the session. Launch selections are client-scoped and leave shared server configuration unchanged.
+V2 companion-created conversations capture the client's selected model and variant before creation
+unless explicitly overridden. Variant-only requests retain the selected model; explicit models without
+a variant use their model default. Launch selections are client-scoped and leave shared server configuration unchanged.
 Bulk closure selects observed panes by instance ownership or exact external directory and excludes
 owned panes from the external aggregate. With integration enabled, instance purge closes associated
 clients under the instance lock after ownership validation and before resource deletion. Verified local
@@ -268,6 +317,13 @@ process reads durable events through background snapshots, including when a sepa
 the listener. Failed observations retain prior data with error provenance. The event DataView and
 profile renderers are pure presentation; the root coordinator retains modal/focus routing while
 capability-specific event logic lives in `app/events`.
+Event snapshots include namespace-scoped evaluation/dispatch issue counts for visible records.
+The handover feed retains affected events even without an acceptance. Exact diagnostics reads through
+`AppService` serve both the TUI and management MCP from persisted evaluations and pinned rule snapshots;
+they perform no evaluation, dispatch or external commands. Results group the latest 50 attempts with
+explicit truncation and include lineage-verified retained startup log tails. Reused instance names
+cannot supply another acceptance's logs. The TUI loads diagnostics on its background service worker;
+the user-opened bottom dialog keeps a searchable snapshot beside raw event JSON.
 
 Confirmed event deletion removes namespace-scoped events, processing history, pending rule work,
 and associated feedback atomically while holding leases only for the selected events. Dispatch, retry,
@@ -290,27 +346,49 @@ poll and acknowledge notifications independently of event acceptance. Durable re
 sidecar/provider disconnects; external provider side effects require idempotency or reconciliation.
 Agent assignment, session launch, prompt delivery, and task completion remain separate facts.
 
-`store/rules` defines versioned rule snapshots, bounded boolean-only Rhai predicates, in-memory
+`store/rules` defines versioned rule snapshots, bounded boolean Rhai predicates, optional independently
+budgeted string hooks for instance names and descriptions, in-memory
 Handlebars prompt rendering, and independent per-rule/per-attempt acceptances. Scripts expose no
 host I/O. Prompt templates use strict field interpolation and literal event text without HTML
 escaping. Rendering bounds output to 64 KiB, nesting to 32 levels, and template evaluations to 50,000;
 budgeted block execution also bounds empty loops and inline-partial recursion.
 `environments/rules` owns shared definitions in `templates/rules/<name>/rule.json` and namespace-local
-activation, Zellij targets, optimistic revisions, cached definitions, pinned evaluations, acceptances,
+activation, saved session metadata, optimistic revisions, cached definitions, pinned evaluations, acceptances,
 dispatch admission history, and assignment feedback in SQLite. A shared catalog lock precedes write
 transactions for rule saves, discovery, receipt, and replay. New files are inactive; external definition
 edits invalidate local activation. File removal hides the rule and disables future matches, retaining
 its revision identity and pinned history. Invalid files fail closed. Receipt/replay transactions reconcile
 the catalog before selecting rules and
 pin every enabled rule revision; completed evaluations survive redelivery and recovery. Match errors
-and false results are separate outcomes. A match atomically creates its acceptance and assigned
-instance identity before external actions, regardless of sibling outcomes.
+and false results are separate outcomes. An admitted match atomically creates its acceptance and assigned
+instance identity and resolved description before external actions, regardless of sibling outcomes.
+Hook failures fall back independently. A home-wide, case-normalized name ledger commits with the
+acceptance and survives instance and history deletion. Initialization backfills retained acceptance
+and runtime names once in the schema transaction; deleted pre-upgrade identities are unrecoverable.
+Legacy imports reserve names in their runtime-import transaction, including later namespace imports.
+Allocation excludes runtime records from every namespace and all case-insensitive workspace entries,
+with at most 1024 suffix candidates. Exhaustion fails the evaluation without an orphan acceptance.
 
-`service/rules` owns authorization, previews, recovery, and dispatch.
-TUI activation captures its process's current Zellij session; MCP can supply an explicit live target.
-Activation verifies the target. Dispatch rechecks it before preparation and before its durable launch
-marker. A missing target is a pre-launch failure requiring reactivation; accepted revisions retain their
-pinned destination, including across retries.
+Per-rule acceptance throttling defaults off (`throttle_seconds=0`), regardless of `trigger_at_end`.
+SQLite serializes admission by namespace and rule identity in the evaluation transaction.
+With a positive duration, the first matching live evaluation opens
+a fixed window; later matches retain throttled outcomes and warnings without creating acceptances.
+With `trigger_at_end=false`, admission creates the acceptance immediately. With it enabled, the first
+match remains a pinned deferred evaluation until its evaluation-time deadline; a worker cycle creates
+its acceptance at or after expiry. Future deadlines do not occupy the evaluation batch.
+Replay bypasses this gate without reading or changing its window. History deletion preserves windows;
+deleting a deferred evaluation cancels its action.
+Throttle state survives process restarts and remains independent of dispatch admission.
+
+`service/rules` owns authorization, previews, recovery, and dispatch. Previews use a read transaction
+and the prospective acceptance ID; resolved names are advisory and reserve nothing. Fresh dispatch
+rechecks name availability under the case-normalized instance lock. Retries verify the originating
+operation and template before using retained resources; reservations confer no resource ownership.
+Activation verifies that a live Zellij session exists. Saved session names are legacy metadata.
+Dispatch resolves the newest live session by creation time before preparation and before its
+durable launch marker, including on confirmed retries. Full, unformatted Zellij listings exclude exited,
+resurrectable sessions; short listings hide that status. Missing live destinations produce a retained
+pre-launch error. Pinned rule definitions remain immutable; the launch receipt records the actual pane.
 A private namespace file lease serializes background cycles across TUI and owned event-sidecar
 processes. Admission permits four
 active actions and ten starts per minute, counting retries. Each action provisions a fresh instance
@@ -324,8 +402,10 @@ outcome, which does not certify prompt delivery or task completion. Confirmed pr
 the assigned instance; replay intentionally creates new actions. Assignment and its originating-provider
 notification commit together. The sidecar polls automation independently of open UI/MCP clients.
 
-Acceptance instance names include the event sequence and durable acceptance ID within the instance-name
-length limit. SQLite retains each acceptance's workspace and observed conversation metadata, excluding live
+Default acceptance names include the event sequence and durable acceptance ID within the instance-name
+length limit. Custom names receive numeric collision suffixes. Names and resolved descriptions remain
+fixed through retries and recreation; legacy descriptions use the pinned rule name and event summary.
+SQLite retains each acceptance's workspace and observed conversation metadata, excluding live
 pane attachment. Headless dispatch captures metadata when it verifies workspace/pane linkage. Purge refreshes
 metadata under the instance lock, preserves saved endpoints when observation is unavailable, and verifies
 the startup lineage before associating conversations. Event/provider deletion removes dependent

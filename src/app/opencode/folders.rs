@@ -98,25 +98,11 @@ pub(super) fn active_first(rows: &mut [Row], snapshot: &Snapshot, owners: &[Owne
     rows.sort_by_key(|row| ranks[&row.id]);
 }
 
-pub(super) fn active_templates_first(rows: &mut [Row], snapshot: &Snapshot, owners: &[Owner]) {
-    let active_instances = snapshot
-        .sessions
+pub(super) fn active_templates_first(rows: &mut [Row]) {
+    let active_templates = rows
         .iter()
-        .filter(|session| session.live() && !session.stale)
-        .map(|session| session.directory.as_str())
-        .chain(
-            snapshot
-                .clients
-                .iter()
-                .filter(|client| !client.stale)
-                .map(|client| client.directory.as_str()),
-        )
-        .filter_map(|directory| owner(directory, owners))
-        .collect::<HashSet<_>>();
-    let active_templates = owners
-        .iter()
-        .filter(|owner| active_instances.contains(owner.name.as_str()))
-        .map(|owner| owner.template_directory.as_str())
+        .filter(|row| row.instance.is_some() && row.opencode.is_none() && row.tone == Tone::Success)
+        .map(|row| row.directory.clone())
         .collect::<HashSet<_>>();
     let mut ranks = HashMap::new();
     for (index, row) in rows.iter_mut().enumerate() {
@@ -142,4 +128,28 @@ fn owner<'a>(directory: &str, owners: &'a [Owner]) -> Option<&'a str> {
             .iter()
             .map(|owner| (owner.name.as_str(), owner.workspace.as_str())),
     )
+}
+
+pub(super) fn apply_session_pings(
+    rows: &mut [Row],
+    snapshot: &crate::store::environments::EnvironmentSnapshot,
+    owners: &[Owner],
+) {
+    for row in rows {
+        let Some(super::Target::Session { id, .. }) = &row.opencode else {
+            continue;
+        };
+        let Some(instance) = row
+            .workspace
+            .as_deref()
+            .and_then(|directory| owner(directory, owners))
+        else {
+            continue;
+        };
+        row.ping_revision = snapshot
+            .session_pings
+            .iter()
+            .find(|ping| ping.instance == instance && ping.session_id == *id)
+            .map(|ping| ping.revision);
+    }
 }

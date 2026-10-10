@@ -90,14 +90,8 @@ impl Pages {
                         Flex::column()
                             .child(
                                 "template-actions",
-                                toolbar::Toolbar::new(
-                                    keys[4],
-                                    keys[8],
-                                    keys[9],
-                                    toolbar.clone(),
-                                    index == 1,
-                                )
-                                .align_resources_with(states[index].clone()),
+                                toolbar::Toolbar::new(keys[4], keys[8], keys[9], toolbar.clone())
+                                    .align_resources_with(states[index].clone()),
                                 FlexItem::fit_content(),
                             )
                             .child(

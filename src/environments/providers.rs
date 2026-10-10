@@ -125,9 +125,22 @@ impl Providers {
         if providers.is_empty() {
             return Ok(Snapshot::default());
         }
+        let inventory = self.container_inventory(&providers);
         let mut error = None;
         for provider in providers.values_mut() {
-            match self.container(&provider.name) {
+            let container = match &inventory {
+                Ok(projects) => {
+                    let ids = &projects[&self.project(&provider.name)];
+                    if ids.is_empty() {
+                        Ok(None)
+                    } else {
+                        let ids: Vec<_> = ids.iter().map(String::as_str).collect();
+                        self.inspect_containers(&provider.name, &ids).map(Some)
+                    }
+                }
+                Err(issue) => Err(issue.clone()),
+            };
+            match container {
                 Ok(Some(container)) => {
                     provider.container_id = container["Id"].as_str().map(str::to_owned);
                     provider.status = container_status(Some(&container));
@@ -153,6 +166,36 @@ impl Providers {
 
     fn project(&self, name: &str) -> String {
         format!("{}-provider-{name}", self.config.namespace)
+    }
+
+    fn container_inventory(
+        &self,
+        providers: &BTreeMap<String, Provider>,
+    ) -> Result<BTreeMap<String, Vec<String>>, String> {
+        let mut projects: BTreeMap<_, Vec<String>> = providers
+            .keys()
+            .map(|name| (self.project(name), Vec::new()))
+            .collect();
+        let mut list = command::docker();
+        list.args([
+            "ps",
+            "--all",
+            "--filter",
+            "label=com.docker.compose.project",
+            "--format",
+            "{{.ID}}\t{{.Label \"com.docker.compose.project\"}}",
+        ]);
+        let output = command::run(list, Duration::from_secs(10), None)?;
+        for line in output.lines().filter(|line| !line.is_empty()) {
+            let (id, project) = line
+                .split_once('\t')
+                .filter(|(id, _)| !id.is_empty())
+                .ok_or("Docker provider inventory row is invalid")?;
+            if let Some(ids) = projects.get_mut(project) {
+                ids.push(id.to_owned());
+            }
+        }
+        Ok(projects)
     }
 
     fn container(&self, name: &str) -> Result<Option<Value>, String> {

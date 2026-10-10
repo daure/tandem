@@ -3,13 +3,13 @@ use std::time::Instant;
 use super::{
     command::Progress,
     config::Config,
-    docker, journal, lifecycle, ownership, removal,
+    docker, gateway, journal, lifecycle, ownership, removal,
     runtime_db::{self, Kind},
     startup,
 };
 use crate::store::environments::{Instance, OperationState, StartupKind};
 
-pub(super) fn unclaimed_startup(config: &Config, name: &str) -> Result<bool, String> {
+pub(super) fn failed_pre_ownership_startup(config: &Config, name: &str) -> Result<bool, String> {
     if journal::recorded(config, name)?.is_some()
         || runtime_db::load(config, name, Kind::Ownership)?.is_some()
         || runtime_db::load(config, name, Kind::Launch)?.is_some()
@@ -19,10 +19,11 @@ pub(super) fn unclaimed_startup(config: &Config, name: &str) -> Result<bool, Str
     let Some(record) = startup::read(config, name)? else {
         return Ok(false);
     };
+    if gateway::is_locked(config, &startup::lease(&record.operation.id))? {
+        return Ok(false);
+    }
     let record = record.observe(config)?;
-    Ok(record.owner_pid == 0
-        && record.kind == StartupKind::Cold
-        && record.operation.state == OperationState::Failed)
+    Ok(record.kind == StartupKind::Cold && record.operation.state == OperationState::Failed)
 }
 
 pub(super) fn recorded_workspace(config: &Config, name: &str) -> Result<Option<String>, String> {

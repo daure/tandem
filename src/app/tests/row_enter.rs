@@ -23,7 +23,7 @@ fn activate(app: &mut App, id: &str, label: &str, menu: bool) {
         let (_, text) = super::events::render(app, 130);
         let action = text.lines().find(|line| line.contains(label)).unwrap();
         assert!(action.contains("Enter"), "{action}");
-        for character in label.chars() {
+        for character in label.to_lowercase().chars() {
             app.event(&TuiEvent::Key(Key::Char(character).into()), &mut ctx);
         }
         app.event(&TuiEvent::Key(Key::Enter.into()), &mut ctx);

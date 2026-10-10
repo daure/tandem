@@ -9,6 +9,8 @@ use tuicore::{
 use super::{Modal, Msg, properties::Properties, rows::Row};
 use crate::store::environments::TemplateFile;
 
+mod sound;
+
 pub(super) const COMPACT_WIDTH: u16 = 60;
 
 pub(super) fn dialog(title: &str) -> Dialog<Msg> {
@@ -240,10 +242,8 @@ pub(super) fn instance_entry(
 }
 
 pub(super) fn description_entry(value: &str) -> Modal {
-    let mut input = TextareaInput::new()
+    let mut input = TextInput::new()
         .placeholder("Description")
-        .min_rows(2)
-        .max_rows(8)
         .on_change(Msg::DescriptionChanged);
     input.set_value(value);
     input.set_insert_mode(true);
@@ -301,7 +301,7 @@ pub(super) fn settings(
     clear_opencode_history: bool,
     fade_seconds: u64,
     sounds: Vec<crate::store::completion::SoundChoice>,
-    selected_sounds: [&str; 2],
+    selected_sounds: [&str; 3],
     sound_choice: Rc<RefCell<Option<Msg>>>,
 ) -> Modal {
     let mut input = TextInput::new()
@@ -320,56 +320,64 @@ pub(super) fn settings(
     );
     let event_sound = sound_dropdown(
         "Event acceptance sound",
-        sounds,
+        sounds.clone(),
         selected_sounds[1],
-        sound_choice,
+        sound_choice.clone(),
         Msg::EventAcceptanceSoundSelected,
     );
+    let ping_sound = sound_dropdown(
+        "Instance ping sound",
+        sounds,
+        selected_sounds[2],
+        sound_choice,
+        Msg::InstancePingSoundSelected,
+    );
     Box::new(
-        dialog("Settings")
-            .actions([DialogAction::new("Close")
-                .hotkey(KeySpec::plain('x'))
-                .on_trigger(|| Msg::Close)])
-            .host(
-                Flex::column()
-                    .child(
-                        "branch-instances",
-                        Toggle::new("Branch instances")
-                            .checked(branch_instances)
-                            .focused(true)
-                            .on_change(Msg::SetBranchInstances),
-                        FlexItem::content(),
-                    )
-                    .child(
-                        "opencode-integration",
-                        Toggle::new("Enable opencode integration")
-                            .checked(opencode)
-                            .on_change(Msg::SetOpencodeIntegration),
-                        FlexItem::content(),
-                    )
-                    .child(
-                        "clear-opencode-history",
-                        Toggle::new("Clear OpenCode history on new instance")
-                            .checked(clear_opencode_history)
-                            .on_change(Msg::SetClearOpencodeHistory),
-                        FlexItem::content(),
-                    )
-                    .child(
-                        "completion-fade",
-                        FormField::new("Completion fade duration", input),
-                        FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
-                    )
-                    .child(
-                        "completion-sound",
-                        sound,
-                        FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
-                    )
-                    .child(
-                        "event-acceptance-sound",
-                        event_sound,
-                        FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
-                    ),
-            ),
+        dialog("Settings").host(
+            Flex::column()
+                .child(
+                    "branch-instances",
+                    Toggle::new("Branch instances")
+                        .checked(branch_instances)
+                        .focused(true)
+                        .on_change(Msg::SetBranchInstances),
+                    FlexItem::content(),
+                )
+                .child(
+                    "opencode-integration",
+                    Toggle::new("Enable opencode integration")
+                        .checked(opencode)
+                        .on_change(Msg::SetOpencodeIntegration),
+                    FlexItem::content(),
+                )
+                .child(
+                    "clear-opencode-history",
+                    Toggle::new("Clear OpenCode history on new instance")
+                        .checked(clear_opencode_history)
+                        .on_change(Msg::SetClearOpencodeHistory),
+                    FlexItem::content(),
+                )
+                .child(
+                    "completion-fade",
+                    FormField::new("Completion fade duration", input),
+                    FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
+                )
+                .child(
+                    "completion-sound",
+                    sound,
+                    FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
+                )
+                .child(
+                    "event-acceptance-sound",
+                    event_sound,
+                    FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
+                )
+                .child(
+                    "instance-ping-sound",
+                    ping_sound,
+                    FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
+                ),
+        ),
     )
 }
 
@@ -379,14 +387,14 @@ fn sound_dropdown(
     selected_sound: &str,
     sound_choice: Rc<RefCell<Option<Msg>>>,
     selected_message: fn(String) -> Msg,
-) -> Dropdown<crate::store::completion::SoundChoice, String> {
+) -> sound::SoundDropdown {
     if !sounds.iter().any(|sound| sound.id == selected_sound) {
         sounds.push(crate::store::completion::SoundChoice {
             id: selected_sound.into(),
             label: format!("Unavailable: {selected_sound} (using system default)"),
         });
     }
-    Dropdown::single(
+    let dropdown = Dropdown::single(
         sounds,
         |sound| sound.id.clone(),
         |sound| sound.label.clone(),
@@ -395,10 +403,8 @@ fn sound_dropdown(
     .label(label)
     .selected_one(selected_sound.to_owned())
     .commit_mode(DropdownCommitMode::Explicit)
-    .max_popup_height(12)
-    .on_select(move |selected| {
-        *sound_choice.borrow_mut() = selected.into_iter().next().map(selected_message);
-    })
+    .max_popup_height(12);
+    sound::SoundDropdown::new(dropdown, sound_choice, selected_message)
 }
 
 pub(super) fn confirm_stop(name: &str) -> Modal {

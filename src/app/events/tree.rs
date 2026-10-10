@@ -55,6 +55,19 @@ impl Entry {
             Self::Conversation { row, .. } => row.height(),
         }
     }
+    pub(super) fn needs_spinner(&self) -> bool {
+        let row = match self {
+            Self::Event(_) => None,
+            Self::Acceptance(target) => target.instance.as_ref(),
+            Self::Conversation { row, .. } => Some(row.as_ref()),
+        };
+        row.is_some_and(|row| {
+            row.loading
+                || row.secondary_loading
+                || row.metrics.memory_waiting
+                || row.metrics.cpu_waiting
+        })
+    }
     pub(super) fn text(&self, spinner: &str, width: Option<u16>) -> Text<'static> {
         match self {
             Self::Event(row) => super::row_text(row, width),

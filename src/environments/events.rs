@@ -9,6 +9,7 @@ use crate::store::events::{
 };
 
 mod deletion;
+mod diagnostics;
 mod provider_deletion;
 mod streams;
 
@@ -61,11 +62,34 @@ impl EventStore {
                 .execute_batch(include_str!("../../migrations/0009_event_acceptance.sql"))?;
         }
         transaction.execute_batch(include_str!("../../migrations/0010_rules.sql"))?;
+        let catalog_presence: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('event_rules') WHERE name = 'catalog_present')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !catalog_presence {
+            transaction.execute_batch(
+                "ALTER TABLE event_rules ADD COLUMN catalog_present INTEGER NOT NULL DEFAULT 1;",
+            )?;
+        }
         transaction.execute_batch(include_str!("../../migrations/0011_rule_definitions.sql"))?;
         transaction.execute_batch(include_str!(
             "../../migrations/0015_acceptance_workspaces.sql"
         ))?;
         transaction.execute_batch(include_str!("../../migrations/0016_acceptance_reports.sql"))?;
+        transaction.execute_batch(include_str!("../../migrations/0005_runtime_records.sql"))?;
+        transaction.execute_batch(include_str!(
+            "../../migrations/0017_rule_instance_names.sql"
+        ))?;
+        super::rules::names::initialize(&transaction)?;
+        let throttle_evaluations: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('rule_evaluations') WHERE name = 'deadline_ms')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !throttle_evaluations {
+            transaction.execute_batch(include_str!("../../migrations/0018_rule_throttling.sql"))?;
+        }
         let scoped_dispatch_history: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('rule_dispatch_starts') WHERE name = 'namespace')",
             [],
@@ -351,6 +375,7 @@ impl EventStore {
              WHERE namespace = ?1 AND (?3 IS NULL OR sequence = ?3) ORDER BY sequence DESC LIMIT ?2",
         )?;
         let mut records = Vec::new();
+        let mut diagnostic_counts = std::collections::BTreeMap::new();
         for result in statement.query_map(
             params![self.namespace, FEED_LIMIT as i64, sequence],
             |row| {
@@ -363,6 +388,10 @@ impl EventStore {
             },
         )? {
             let (sequence, provider, received_at, payload) = result?;
+            let counts = diagnostics::counts(&transaction, sequence)?;
+            if counts.has_issues() {
+                diagnostic_counts.insert(sequence, counts);
+            }
             let mut attempts = transaction.prepare(
                 "SELECT id, status, replay, created_at, accepted_at FROM event_attempts
                  WHERE event_sequence = ?1 ORDER BY id DESC LIMIT 50",
@@ -398,6 +427,7 @@ impl EventStore {
         }
         Ok(Snapshot {
             records,
+            diagnostic_counts,
             total,
             accepted_attempts: Some(accepted_attempts),
             provider_totals,

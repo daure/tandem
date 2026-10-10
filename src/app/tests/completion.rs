@@ -234,6 +234,195 @@ fn configured_duration_controls_the_final_gutter_fade() {
     );
 }
 
+fn ping_rows(activity: Activity, revision: u64) -> Vec<rows::Row> {
+    let mut rows = rows(activity, false);
+    for row in &mut rows {
+        if row.id.ends_with(":completing") {
+            row.ping_revision = Some(revision);
+        }
+    }
+    rows
+}
+
+#[test]
+fn instance_ping_fades_keep_primary_color_through_new_work_and_completion() {
+    init_ui();
+    for activity in [Activity::Busy, Activity::Idle, Activity::AwaitingAnswer] {
+        let state = instances::state(ping_rows(activity, 1));
+        instances::set_attached_sessions_only(&state, true);
+        let mut view = Instances::new(state.clone());
+        let (baseline, lines) = render(&mut view);
+        assert!(lines.iter().all(|line| !line.contains('┃')));
+        let y = lines
+            .iter()
+            .position(|line| line.contains("Completing session"))
+            .unwrap() as u16;
+        let neighbour_y = lines
+            .iter()
+            .position(|line| line.contains("Idle neighbour"))
+            .unwrap() as u16;
+        instances::replace_rows(&state, ping_rows(activity, 2));
+        render(&mut view);
+        advance(&mut view, 150);
+        let (pulse, _) = render(&mut view);
+        let theme = tuicore::theme();
+        for line in y..y + 2 {
+            let bg = baseline.cell((1, line)).unwrap().bg;
+            let bg = if matches!(bg, Color::Rgb(..)) {
+                bg
+            } else {
+                theme.dialog_bg()
+            };
+            assert_eq!(
+                pulse.cell((1, line)).unwrap().bg,
+                tuicore::lerp_color(bg, theme.accent_fg(), 0.2)
+            );
+            assert_eq!(pulse.cell((0, line)).unwrap().fg, theme.accent_fg());
+        }
+        for line in neighbour_y..neighbour_y + 2 {
+            for x in 0..80 {
+                assert_eq!(pulse.cell((x, line)), baseline.cell((x, line)));
+            }
+        }
+        instances::replace_rows(&state, ping_rows(Activity::Idle, 2));
+        render(&mut view);
+        advance(&mut view, 600);
+        let (peak, _) = render(&mut view);
+        assert_eq!(peak.cell((0, y)).unwrap().fg, theme.accent_fg());
+        advance(&mut view, 5_000);
+        let (fading, _) = render(&mut view);
+        let expected =
+            tuicore::lerp_color(fading.cell((0, y)).unwrap().bg, theme.accent_fg(), 0.75);
+        assert_eq!(fading.cell((0, y)).unwrap().fg, expected);
+        for activity in [
+            Activity::Busy,
+            Activity::AwaitingAnswer,
+            Activity::Busy,
+            Activity::Idle,
+        ] {
+            instances::replace_rows(&state, ping_rows(activity, 2));
+            let (continued, _) = render(&mut view);
+            assert_eq!(continued.cell((0, y)).unwrap().fg, expected);
+            assert_eq!(
+                continued.cell((1, y)).unwrap().bg,
+                fading.cell((1, y)).unwrap().bg
+            );
+        }
+        advance(&mut view, 150);
+        let (continued, _) = render(&mut view);
+        assert_eq!(
+            continued.cell((0, y)).unwrap().fg,
+            tuicore::lerp_color(
+                continued.cell((0, y)).unwrap().bg,
+                theme.accent_fg(),
+                1.0 - 5.15 / 20.0,
+            )
+        );
+        advance(&mut view, 14_850);
+        assert!(render(&mut view).1.iter().all(|line| !line.contains('┃')));
+        instances::replace_rows(&state, ping_rows(Activity::Busy, 2));
+        render(&mut view);
+        instances::replace_rows(&state, ping_rows(Activity::Idle, 2));
+        render(&mut view);
+        advance(&mut view, 750);
+        assert_eq!(
+            render(&mut view).0.cell((0, y)).unwrap().fg,
+            theme.success_fg()
+        );
+        instances::replace_rows(&state, ping_rows(Activity::Idle, 3));
+        render(&mut view);
+        advance(&mut view, 750);
+        assert_eq!(
+            render(&mut view).0.cell((0, y)).unwrap().fg,
+            theme.accent_fg()
+        );
+        advance(&mut view, 20_000);
+        assert!(render(&mut view).1.iter().all(|line| !line.contains('┃')));
+    }
+}
+
+#[test]
+fn ping_signals_are_projected_only_into_the_owning_instances_session_rows() {
+    init_ui();
+    let mut environment = snapshot();
+    environment.instances[0].workspace = "/work".into();
+    for instance in ["other", "review"] {
+        environment.session_pings = vec![crate::store::environments::SessionPing {
+            instance: instance.into(),
+            session_id: "completing".into(),
+            revision: 10,
+        }];
+        let projected = super::super::opencode::project_rows(
+            &environment,
+            &[],
+            &observation(Activity::Idle, false),
+            false,
+            false,
+            true,
+        );
+        assert!(projected.iter().any(|row| row.id.ends_with(":completing")));
+        for row in projected {
+            assert_eq!(
+                row.ping_revision,
+                (instance == "review" && row.id.ends_with(":completing")).then_some(10)
+            );
+        }
+    }
+}
+
+#[test]
+fn completion_sounds_play_while_the_sessions_tree_keeps_the_original_ping_fade() {
+    init_ui();
+    let service = AppService::for_tests();
+    service.set_opencode_snapshot_for_tests(observation(Activity::Busy, false));
+    let mut app = root(service);
+    app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut EventCtx::default());
+    app.handle_message(Msg::SetCompletionSound(true), &mut EventCtx::default());
+    let mut inventory = snapshot();
+    inventory.instances[0].workspace = "/work".into();
+    app.update_snapshot(inventory.clone());
+    let mut view = Instances::new(app.instances.clone());
+    let (_, lines) = render(&mut view);
+    let y = lines
+        .iter()
+        .position(|line| line.contains("Completing session"))
+        .unwrap() as u16;
+    inventory
+        .session_pings
+        .push(crate::store::environments::SessionPing {
+            instance: "review".into(),
+            session_id: "completing".into(),
+            revision: 1,
+        });
+    app.update_snapshot(inventory.clone());
+    render(&mut view);
+    advance(&mut view, 750);
+    assert_eq!(
+        render(&mut view).0.cell((0, y)).unwrap().fg,
+        tuicore::theme().accent_fg()
+    );
+    advance(&mut view, 5_000);
+    let (fading, _) = render(&mut view);
+    for (activity, sounds) in [
+        (Activity::Idle, 1),
+        (Activity::Busy, 1),
+        (Activity::AwaitingAnswer, 2),
+    ] {
+        app.service
+            .set_opencode_snapshot_for_tests(observation(activity, false));
+        app.update_snapshot(inventory.clone());
+        let (continued, _) = render(&mut view);
+        assert_eq!(continued.cell((0, y)), fading.cell((0, y)));
+        assert_eq!(
+            continued.cell((1, y)).unwrap().bg,
+            fading.cell((1, y)).unwrap().bg
+        );
+        assert_eq!(app.service.completion_sound_count_for_tests(), sounds);
+    }
+    advance(&mut view, 15_000);
+    assert!(render(&mut view).1.iter().all(|line| !line.contains('┃')));
+}
+
 #[test]
 fn disabling_animations_clears_the_marker_without_replaying_on_reenable() {
     init_ui();
@@ -373,12 +562,8 @@ fn completion_sound_is_opt_in_and_plays_once_per_busy_to_idle_transition() {
         .set_opencode_snapshot_for_tests(observation(Activity::Busy, false));
     app.update_snapshot(snapshot());
     app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut EventCtx::default());
-    app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Char('N'))),
-        &mut EventCtx::new(AnimationSettings::default()),
-    );
+    app.handle_message(Msg::SetCompletionSound(true), &mut EventCtx::default());
     assert!(app.completion_sound);
-    assert!(app.toolbar_state.borrow().completion_sound);
 
     app.service
         .set_opencode_snapshot_for_tests(observation(Activity::Idle, false));
@@ -386,10 +571,7 @@ fn completion_sound_is_opt_in_and_plays_once_per_busy_to_idle_transition() {
     app.update_snapshot(snapshot());
     assert_eq!(app.service.completion_sound_count_for_tests(), 1);
 
-    app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Char('N'))),
-        &mut EventCtx::new(AnimationSettings::default()),
-    );
+    app.handle_message(Msg::SetCompletionSound(false), &mut EventCtx::default());
     app.service
         .set_opencode_snapshot_for_tests(observation(Activity::Busy, false));
     app.update_snapshot(snapshot());
@@ -407,10 +589,7 @@ fn question_waits_notify_once_and_resume_normal_completion_feedback() {
     service.set_opencode_snapshot_for_tests(observation(Activity::Busy, false));
     let mut app = root(service);
     app.handle_message(Msg::SetAttachedSessionsOnly(true), &mut EventCtx::default());
-    app.event(
-        &TuiEvent::Key(KeyEvent::from(Key::Char('N'))),
-        &mut EventCtx::new(AnimationSettings::default()),
-    );
+    app.handle_message(Msg::SetCompletionSound(true), &mut EventCtx::default());
     assert!(app.completion_sound);
     for (activity, expected_sounds) in [
         (Activity::AwaitingAnswer, 1),

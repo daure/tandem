@@ -142,7 +142,10 @@ impl AppService {
                 "The instance name is already in use; navigate to it or inspect its startup".into(),
             );
         }
-        let description = format!("{}: {}", acceptance.rule_name, acceptance.event_summary);
+        store
+            .ensure_fresh_instance_name(&acceptance.instance)
+            .map_err(|error| error.to_string())?;
+        let description = acceptance.instance_description();
         let origin = acceptance
             .operation_id
             .clone()

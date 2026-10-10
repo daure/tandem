@@ -216,7 +216,10 @@ case "$*" in
       printf 'No active zellij sessions found.\n' >&2
       exit 1
     fi
-    printf 'main\n' ;;
+    case "$*" in
+      *--short*) printf 'main\n' ;;
+      *) printf 'main [Created 1s ago] (current)\n' ;;
+    esac ;;
   *list-panes*) [ ! -f "$root/fail-panes" ] || exit 1; cat "$root/panes.json" ;;
   *new-tab*) printf '9\n' ;;
   *) printf 'terminal_99\n' ;;

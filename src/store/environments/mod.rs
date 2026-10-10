@@ -271,6 +271,16 @@ pub(crate) struct EnvironmentSnapshot {
     pub observed_at_unix_seconds: Option<u64>,
     pub runtime_error: Option<String>,
     pub activities: Vec<Activity>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub session_pings: Vec<SessionPing>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SessionPing {
+    pub instance: String,
+    pub session_id: String,
+    pub revision: u64,
 }
 
 #[derive(
@@ -342,6 +352,12 @@ impl Operation {
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
+pub(crate) struct InstancePing {
+    pub instance: String,
+    pub sound_scheduled: bool,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 pub(crate) struct InstanceInstructions {
     pub file: String,
     pub core_guidance: String,
@@ -350,6 +366,24 @@ pub(crate) struct InstanceInstructions {
     pub template: String,
     pub workspace: String,
     pub namespace: String,
+    pub status: InstanceStatus,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub(crate) struct InstanceStatus {
+    pub instance: Status,
+    pub services: Vec<InstanceServiceStatus>,
+    pub topology_known: bool,
+    pub observed_at_unix_seconds: Option<u64>,
+    pub stale: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+pub(crate) struct InstanceServiceStatus {
+    pub name: String,
+    pub replica: u64,
+    pub status: Status,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]

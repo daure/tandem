@@ -13,7 +13,346 @@ fn definition(name: &str, script: &str) -> Definition {
         enabled: true,
         start_instance: true,
         focus_pane: true,
+        throttle_seconds: 0,
+        trigger_at_end: false,
     }
+}
+
+#[test]
+fn dispatch_work_is_oldest_first_namespace_scoped_and_excludes_terminal_or_reported_history() {
+    let home = tempfile::tempdir().unwrap();
+    let config = Config::at(home.path().into(), "dispatch-query".into(), 9876).unwrap();
+    let store = RuleStore::open(&config).unwrap();
+    let events = EventStore::open(&config).unwrap();
+    let token = events.register_provider("sample").unwrap();
+    let rule = definition("inspect", "fn matches(event) { true }");
+    store.save(rule.clone(), None, "main".into()).unwrap();
+    let statuses = [
+        DispatchStatus::Queued,
+        DispatchStatus::Provisioning,
+        DispatchStatus::Launching,
+        DispatchStatus::Launched,
+        DispatchStatus::Failed,
+        DispatchStatus::Uncertain,
+        DispatchStatus::Queued,
+        DispatchStatus::Provisioning,
+        DispatchStatus::Launching,
+    ];
+    events
+        .ingest(
+            &token,
+            Batch {
+                events: (0..statuses.len())
+                    .map(|id| super::super::events::tests::event(&id.to_string()))
+                    .collect(),
+            },
+        )
+        .unwrap();
+    store.evaluate().unwrap();
+    let mut history = store.snapshot().unwrap().acceptances;
+    history.reverse();
+    for (index, (acceptance, status)) in history.iter_mut().zip(statuses).enumerate() {
+        acceptance.status = status;
+        store.update(acceptance, false).unwrap();
+        if index >= 6 {
+            store
+                .save_report(
+                    acceptance.id,
+                    &crate::store::rules::reports::ReportInput {
+                        title: "Completed inspection".into(),
+                        summary: "Dispatch belongs to conclusion cleanup".into(),
+                        markdown: "Inspection completed.".into(),
+                    },
+                )
+                .unwrap();
+        }
+    }
+
+    let other = Config::at(home.path().into(), "other".into(), 9876).unwrap();
+    let foreign = RuleStore::open(&other).unwrap();
+    let revision = foreign.snapshot().unwrap().rules[0].revision;
+    foreign.save(rule, Some(revision), "main".into()).unwrap();
+    let foreign_events = EventStore::open(&other).unwrap();
+    let foreign_token = foreign_events.register_provider("sample").unwrap();
+    foreign_events
+        .ingest(
+            &foreign_token,
+            Batch {
+                events: vec![super::super::events::tests::event("foreign")],
+            },
+        )
+        .unwrap();
+    foreign.evaluate().unwrap();
+    assert_eq!(foreign.dispatch_acceptances().unwrap().len(), 1);
+    assert_eq!(store.dispatch_acceptances().unwrap(), history[..3]);
+
+    history[0].status = DispatchStatus::Failed;
+    store.update(&history[0], false).unwrap();
+    assert_eq!(store.dispatch_acceptances().unwrap(), history[1..3]);
+    history[4].status = DispatchStatus::Queued;
+    store.update(&history[4], false).unwrap();
+    let restarted = RuleStore::open(&config).unwrap();
+    assert_eq!(
+        restarted.dispatch_acceptances().unwrap(),
+        vec![history[1].clone(), history[2].clone(), history[4].clone()]
+    );
+    let snapshot = restarted.snapshot().unwrap();
+    history.reverse();
+    assert_eq!(snapshot.acceptances, history);
+    assert_eq!(snapshot.reports.len(), 3);
+}
+
+#[test]
+fn custom_assignments_survive_pending_work_replay_deletion_and_restart() {
+    let home = tempfile::tempdir().unwrap();
+    let config = Config::at(home.path().into(), "custom-names".into(), 9876).unwrap();
+    let store = RuleStore::open(&config).unwrap();
+    let events = EventStore::open(&config).unwrap();
+    let token = events.register_provider("sample").unwrap();
+    let rule = definition(
+        "inspect",
+        "fn matches(event) { true } fn instance_name(event) { \" PR / 82 \" } fn instance_description(event) { \" slack://channel?team=T1&id=C2 \" }",
+    );
+    store.save(rule.clone(), None, "main".into()).unwrap();
+    let sequence = events
+        .ingest(
+            &token,
+            Batch {
+                events: vec![super::super::events::tests::event("one")],
+            },
+        )
+        .unwrap()
+        .receipts[0]
+        .sequence;
+    let record = store.event(sequence).unwrap();
+    let input = rules::event_input(
+        &record.event,
+        &record.provider,
+        sequence,
+        &record.received_at,
+    );
+    let connection = events.connection().unwrap();
+    let before: i64 = connection
+        .query_row("PRAGMA data_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        store
+            .preview_instance_identity(&rule, &input, sequence, &record.event.summary)
+            .unwrap(),
+        ("pr-82".into(), "slack://channel?team=T1&id=C2".into())
+    );
+    let after: i64 = connection
+        .query_row("PRAGMA data_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(after, before);
+    assert!(store.snapshot().unwrap().acceptances.is_empty());
+    store.evaluate().unwrap();
+    let first = store.snapshot().unwrap().acceptances.remove(0);
+    assert_eq!(first.instance, "pr-82");
+    assert_eq!(
+        first.instance_description(),
+        "slack://channel?team=T1&id=C2"
+    );
+    let mut changed = first.clone();
+    changed.resolved_description = Some("changed".into());
+    assert!(matches!(
+        store.update(&changed, false),
+        Err(Error::Conflict(_))
+    ));
+    assert_eq!(
+        RuleStore::open(&config)
+            .unwrap()
+            .acceptance(first.id)
+            .unwrap(),
+        first
+    );
+    events.replay(sequence, "again").unwrap();
+    store.evaluate().unwrap();
+    assert_eq!(store.snapshot().unwrap().acceptances[0].instance, "pr-82-2");
+    events.delete(Deletion::Event(sequence)).unwrap();
+    let store = RuleStore::open(&config).unwrap();
+    events
+        .ingest(
+            &token,
+            Batch {
+                events: vec![super::super::events::tests::event("two")],
+            },
+        )
+        .unwrap();
+    store.evaluate().unwrap();
+    assert_eq!(store.snapshot().unwrap().acceptances[0].instance, "pr-82-3");
+}
+
+#[test]
+fn preview_uses_durable_next_id_without_writing_or_reserving() {
+    let home = tempfile::tempdir().unwrap();
+    let config = Config::at(home.path().into(), "preview".into(), 9876).unwrap();
+    let store = RuleStore::open(&config).unwrap();
+    let events = EventStore::open(&config).unwrap();
+    let connection = events.connection().unwrap();
+    connection
+        .execute(
+            "INSERT INTO sqlite_sequence(name, seq) VALUES ('rule_acceptances', 99)",
+            [],
+        )
+        .unwrap();
+    let before: i64 = connection
+        .query_row("PRAGMA data_version", [], |row| row.get(0))
+        .unwrap();
+    let rule = definition("inspect", "fn matches(event) { true }");
+    let summary = "x".repeat(1200);
+    let (name, description) = store
+        .preview_instance_identity(&rule, &serde_json::json!({}), 42, &summary)
+        .unwrap();
+    assert_eq!(name, "inspect-42-a100");
+    assert_eq!(description, format!("inspect: {summary}"));
+    let after: i64 = connection
+        .query_row("PRAGMA data_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(before, after);
+    connection
+        .execute(
+            "UPDATE sqlite_sequence SET seq = ?1 WHERE name = 'rule_acceptances'",
+            [i64::MAX],
+        )
+        .unwrap();
+    assert!(
+        store
+            .preview_instance_identity(&rule, &serde_json::json!({}), 42, "summary")
+            .is_err()
+    );
+    let count: i64 = connection
+        .query_row("SELECT count(*) FROM rule_instance_names", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn exhaustion_and_filesystem_errors_leave_no_orphan_acceptance_or_reservation() {
+    let home = tempfile::tempdir().unwrap();
+    let config = Config::at(home.path().into(), "exhausted".into(), 9876).unwrap();
+    let store = RuleStore::open(&config).unwrap();
+    let events = EventStore::open(&config).unwrap();
+    let token = events.register_provider("sample").unwrap();
+    store
+        .save(
+            definition(
+                "inspect",
+                "fn matches(event) { true } fn instance_name(event) { \"full\" }",
+            ),
+            None,
+            "main".into(),
+        )
+        .unwrap();
+    events
+        .ingest(
+            &token,
+            Batch {
+                events: vec![super::super::events::tests::event("one")],
+            },
+        )
+        .unwrap();
+    let connection = events.connection().unwrap();
+    for number in 1..=1024 {
+        let name = if number == 1 {
+            "full".into()
+        } else {
+            format!("full-{number}")
+        };
+        connection
+            .execute(
+                "INSERT INTO rule_instance_names VALUES (?1, 'foreign', NULL)",
+                [name],
+            )
+            .unwrap();
+    }
+    store.evaluate().unwrap();
+    let snapshot = store.snapshot().unwrap();
+    assert!(snapshot.acceptances.is_empty());
+    assert_eq!(
+        snapshot.evaluation_errors[0].error,
+        "instance name candidates exhausted (1024)"
+    );
+    assert_eq!(events.snapshot().unwrap().accepted_attempts, Some(0));
+    connection
+        .execute("DELETE FROM rule_instance_names", [])
+        .unwrap();
+    events
+        .ingest(
+            &token,
+            Batch {
+                events: vec![super::super::events::tests::event("two")],
+            },
+        )
+        .unwrap();
+    std::fs::remove_dir(&config.workspaces).unwrap();
+    assert!(store.evaluate().is_err());
+    assert!(store.snapshot().unwrap().acceptances.is_empty());
+    std::fs::create_dir(&config.workspaces).unwrap();
+    store.evaluate().unwrap();
+    assert_eq!(store.snapshot().unwrap().acceptances[0].instance, "full");
+    let count: i64 = connection
+        .query_row("SELECT count(*) FROM rule_instance_names", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn legacy_descriptions_and_cross_namespace_acceptance_backfill_remain_frozen() {
+    let home = tempfile::tempdir().unwrap();
+    let config = Config::at(home.path().into(), "legacy-names".into(), 9876).unwrap();
+    let store = RuleStore::open(&config).unwrap();
+    let events = EventStore::open(&config).unwrap();
+    let token = events.register_provider("sample").unwrap();
+    store
+        .save(
+            definition("inspect", "fn matches(event) { true }"),
+            None,
+            "main".into(),
+        )
+        .unwrap();
+    events
+        .ingest(
+            &token,
+            Batch {
+                events: vec![super::super::events::tests::event("one")],
+            },
+        )
+        .unwrap();
+    store.evaluate().unwrap();
+    let acceptance = store.snapshot().unwrap().acceptances.remove(0);
+    let connection = events.connection().unwrap();
+    connection.execute_batch("UPDATE rule_acceptances SET payload = json_remove(payload, '$.resolved_description'); DELETE FROM rule_instance_names; DELETE FROM rule_instance_name_backfill;").unwrap();
+    let mut legacy = store.acceptance(acceptance.id).unwrap();
+    assert_eq!(legacy.resolved_description, None);
+    assert_eq!(
+        legacy.instance_description(),
+        rules::default_instance_description(&legacy.rule_name, &legacy.event_summary)
+    );
+    legacy.resolved_description = Some(legacy.instance_description());
+    assert!(store.update(&legacy, false).is_err());
+    let other = Config::at(home.path().into(), "other".into(), 9876).unwrap();
+    RuleStore::open(&other).unwrap();
+    let namespace: String = connection
+        .query_row(
+            "SELECT namespace FROM rule_instance_names WHERE name_key = ?1",
+            [&acceptance.instance],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(namespace, config.namespace);
+    connection
+        .execute_batch("DELETE FROM rule_acceptances;")
+        .unwrap();
+    RuleStore::open(&other).unwrap();
+    assert_eq!(
+        names::find_available_name(&connection, &other, &acceptance.instance).unwrap(),
+        Some(format!("{}-2", acceptance.instance))
+    );
 }
 
 #[test]
@@ -58,6 +397,11 @@ fn definition_upgrade_preserves_pinned_work_history_and_provider_metadata() {
          UPDATE rule_acceptances SET payload = json_set(json_remove(payload, '$.rule.definition.start_instance', '$.rule.definition.focus_pane'), '$.rule.definition.metadata', json('{\"owner\":\"fixture\"}'));"
     ).unwrap();
 
+    events
+        .connection()
+        .unwrap()
+        .execute_batch("ALTER TABLE event_rules DROP COLUMN catalog_present;")
+        .unwrap();
     let migrated = RuleStore::open(&config).unwrap();
     assert_eq!(migrated.snapshot().unwrap(), snapshot);
     assert_eq!(events.snapshot().unwrap(), history);

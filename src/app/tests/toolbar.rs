@@ -99,14 +99,6 @@ fn tabs_share_toolbar_controls_and_retain_separate_searches() {
             assert_eq!(app.attached_sessions_only, sessions);
             assert!(app.running_only && app.opencode_history && app.completion_sound);
             let lines = rendered_lines(&toolbar_terminal(&mut app, width), area);
-            assert_eq!(lines[1].contains("󰕾"), sessions);
-            if !sessions {
-                app.event(
-                    &TuiEvent::Key(KeyEvent::from(Key::Char('N'))),
-                    &mut EventCtx::new(settings),
-                );
-                assert!(app.completion_sound);
-            }
             assert_eq!(
                 lines[2].contains("missing-workspace"),
                 sessions,
@@ -499,11 +491,7 @@ fn global_h_opens_the_expanded_agent_view_and_restores_default_filters() {
     assert_eq!(app.selected().unwrap().id, "instance:review");
     let terminal = toolbar_terminal(&mut app, 130);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 130, 30));
-    assert!(
-        lines[1].contains("○── 󰈈 |A| ○── 󰋚 |O| ○── 󰕾 |N|"),
-        "{}",
-        lines[1]
-    );
+    assert!(lines[1].contains("○── 󰈈 |A| ○── 󰋚 |O|"), "{}", lines[1]);
     assert_eq!(app.tabs_mut().selected_index(), 0);
     let overview = lines.join("\n");
     assert!(overview.contains("review"), "{overview}");
@@ -870,7 +858,6 @@ fn toolbar_manual_refresh_honors_a_configured_hotkey() {
         tuicore::KeySpec::shifted('s'),
         tuicore::KeySpec::shifted('p'),
         Default::default(),
-        false,
     );
     let area = Rect::new(0, 0, 40, 1);
     toolbar.layout(area, &mut tuicore::LayoutCtx::new());

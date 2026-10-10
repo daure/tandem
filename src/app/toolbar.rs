@@ -26,7 +26,6 @@ pub(super) struct State {
     pub running_only: bool,
     pub opencode_enabled: bool,
     pub show_saved: bool,
-    pub completion_sound: bool,
 }
 
 impl State {
@@ -64,7 +63,6 @@ impl State {
             running_only: true,
             opencode_enabled: false,
             show_saved: false,
-            completion_sound: false,
         }
     }
 }
@@ -74,20 +72,15 @@ pub(super) type SharedState = Rc<RefCell<State>>;
 pub(super) struct Toolbar {
     running: Toggle<Msg>,
     history: Toggle<Msg>,
-    sound: Toggle<Msg>,
     history_visible: bool,
-    sound_visible: bool,
-    sessions: bool,
     stop: Button<Msg>,
     purge: Button<Msg>,
     refresh_key: KeySpec,
     running_key: KeySpec,
     history_key: KeySpec,
-    sound_key: KeySpec,
     bulk_keys: [KeySpec; 2],
     running_area: Rect,
     history_area: Rect,
-    sound_area: Rect,
     stop_area: Rect,
     purge_area: Rect,
     state: SharedState,
@@ -112,13 +105,11 @@ impl Toolbar {
         stop_key: KeySpec,
         purge_key: KeySpec,
         state: SharedState,
-        sessions: bool,
     ) -> Self {
         let stop_disabled = state.borrow().stop_targets.is_empty();
         let purge_disabled = state.borrow().purge_targets.is_empty();
         let running_key = KeySpec::shifted('a');
         let history_key = KeySpec::shifted('o');
-        let sound_key = KeySpec::shifted('n');
         let history_visible = state.borrow().opencode_enabled;
         Self {
             running: Toggle::new("󰈈")
@@ -129,13 +120,7 @@ impl Toolbar {
                 .hotkey(hotkey(history_key))
                 .preserve_focus_on_hotkey(true)
                 .on_change(Msg::SetOpencodeHistory),
-            sound: Toggle::new("󰕾")
-                .hotkey(hotkey(sound_key))
-                .preserve_focus_on_hotkey(true)
-                .on_change(Msg::SetCompletionSound),
             history_visible,
-            sound_visible: false,
-            sessions,
             stop: Button::new(" Stop all")
                 .hotkey(hotkey(stop_key))
                 .hotkey_label_mode(HotkeyLabelMode::Inline)
@@ -149,11 +134,9 @@ impl Toolbar {
             refresh_key,
             running_key,
             history_key,
-            sound_key,
             bulk_keys: [stop_key, purge_key],
             running_area: Rect::default(),
             history_area: Rect::default(),
-            sound_area: Rect::default(),
             stop_area: Rect::default(),
             purge_area: Rect::default(),
             state,
@@ -232,19 +215,14 @@ impl Toolbar {
         let purge_disabled = state.purge_targets.is_empty();
         let show_all = !state.running_only;
         let show_saved = state.show_saved;
-        let completion_sound = state.completion_sound;
         let changed = self.stop.is_disabled() != stop_disabled
             || self.purge.is_disabled() != purge_disabled
             || self.running.is_checked() != show_all
             || self.history.is_checked() != show_saved
-            || self.sound.is_checked() != completion_sound
             || self.history_visible != state.opencode_enabled;
         self.history_visible = state.opencode_enabled;
         if self.history.is_checked() != show_saved {
             self.history.set_value(show_saved);
-        }
-        if self.sound.is_checked() != completion_sound {
-            self.sound.set_value(completion_sound);
         }
         self.stop.set_disabled(stop_disabled);
         self.purge.set_disabled(purge_disabled);
@@ -258,15 +236,6 @@ impl Toolbar {
         let TuiEvent::Key(key) = event else {
             return false;
         };
-        if self.sessions && self.history_visible && self.sound_key.matches(*key) {
-            let outcome = self.sound.toggle();
-            if outcome.changed {
-                ctx.emit(Msg::SetCompletionSound(outcome.value));
-                ctx.request_redraw();
-            }
-            ctx.stop_propagation();
-            return true;
-        }
         if self.history_visible && self.history_key.matches(*key) {
             let outcome = self.history.toggle();
             if outcome.changed {
@@ -312,11 +281,6 @@ impl TuiNode<Msg> for Toolbar {
                     .measure(proposal)
                     .preferred
                     .width
-                    .saturating_add(if self.sessions {
-                        self.sound.measure(proposal).preferred.width
-                    } else {
-                        0
-                    })
                     .saturating_add(2)
             } else {
                 0
@@ -340,7 +304,6 @@ impl TuiNode<Msg> for Toolbar {
             super::instances::set_cpu_column_min_width(instances, cpu_width);
         }
         let compact = area.width < MOBILE_TABS_WIDTH;
-        self.sound_visible = self.history_visible && self.sessions;
         let spacing = u16::from(area.width >= 50);
         let bulk_hotkey_mode = if area.width < 50 {
             HotkeyLabelMode::PreferMnemonic
@@ -391,24 +354,6 @@ impl TuiNode<Msg> for Toolbar {
             0
         };
         let history_right_padding = u16::from(self.history_visible);
-        let sound_width = if self.sound_visible {
-            let measured = self.sound.measure(proposal).preferred.width;
-            let visible = if compact {
-                measured.saturating_sub(4)
-            } else {
-                measured
-            };
-            visible.min(area.width.saturating_sub(
-                purge_width
-                    + stop_width
-                    + running_width
-                    + history_width
-                    + history_right_padding
-                    + 2 * spacing,
-            ))
-        } else {
-            0
-        };
         self.purge_area = Rect::new(
             area.right().saturating_sub(purge_width).max(area.x),
             area.y,
@@ -433,21 +378,13 @@ impl TuiNode<Msg> for Toolbar {
             history_width,
             area.height.min(1),
         );
-        self.sound_area = Rect::new(
-            self.history_area
-                .right()
-                .saturating_add(history_right_padding),
-            area.y,
-            sound_width,
-            area.height.min(1),
-        );
         self.totals_width = self.totals_text().width();
         // Reserve both padding cells before the sibling DataView publishes its layout gutter.
         let totals_width = (self.totals_width.min(u16::MAX as usize) as u16).saturating_add(2);
         let available = self
             .stop_area
             .x
-            .saturating_sub(self.sound_area.right().saturating_add(2));
+            .saturating_sub(self.history_area.right().saturating_add(2));
         self.totals_area = if totals_width <= available {
             let offset = totals_width.saturating_add(1);
             self.stop_area.x = self.stop_area.x.saturating_sub(offset);
@@ -470,11 +407,6 @@ impl TuiNode<Msg> for Toolbar {
                 self.history_area,
                 |ctx| self.history.layout(self.history_area, ctx),
             );
-            if self.sound_visible {
-                ctx.push_slot(ChildKey::new("completion-sound"), self.sound_area, |ctx| {
-                    self.sound.layout(self.sound_area, ctx)
-                });
-            }
         }
         ctx.push_slot(ChildKey::new("stop-all"), self.stop_area, |ctx| {
             self.stop.layout(self.stop_area, ctx)
@@ -488,9 +420,6 @@ impl TuiNode<Msg> for Toolbar {
     fn render<'a>(&'a self, frame: &mut Frame, _area: Rect, ctx: &mut RenderCtx<'a>) {
         <Toggle<Msg> as TuiNode<Msg>>::render(&self.running, frame, self.running_area, ctx);
         if self.history_visible {
-            if self.sound_visible {
-                <Toggle<Msg> as TuiNode<Msg>>::render(&self.sound, frame, self.sound_area, ctx);
-            }
             <Toggle<Msg> as TuiNode<Msg>>::render(&self.history, frame, self.history_area, ctx);
         }
         <Button<Msg> as TuiNode<Msg>>::render(&self.stop, frame, self.stop_area, ctx);
@@ -507,12 +436,6 @@ impl TuiNode<Msg> for Toolbar {
     fn event(&mut self, event: &TuiEvent, ctx: &mut EventCtx<Msg>) -> EventOutcome {
         self.sync_disabled();
         if self.action_hotkey(event, ctx) {
-            return EventOutcome::Handled;
-        }
-        if self.sound_visible
-            && (self.sound.is_focused() || matches!(event, TuiEvent::Mouse(_)))
-            && self.sound.event(event, ctx) == EventOutcome::Handled
-        {
             return EventOutcome::Handled;
         }
         if self.history_visible
@@ -549,15 +472,6 @@ impl TuiNode<Msg> for Toolbar {
                 .running
                 .dispatch_event(&EventRoute::new(path), event, ctx);
         }
-        if self.sound_visible
-            && let Some(path) = route
-                .path
-                .without_first_if(&ChildKey::new("completion-sound"))
-        {
-            return self
-                .sound
-                .dispatch_event(&EventRoute::new(path), event, ctx);
-        }
         if self.history_visible
             && let Some(path) = route
                 .path
@@ -592,13 +506,6 @@ impl TuiNode<Msg> for Toolbar {
                 dt,
                 settings,
             ));
-            if self.sound_visible {
-                result = result.merge(<Toggle<Msg> as TuiNode<Msg>>::tick(
-                    &mut self.sound,
-                    dt,
-                    settings,
-                ));
-            }
         }
         let totals_waiting = {
             let totals = &self.state.borrow().totals;
@@ -622,7 +529,6 @@ impl TuiNode<Msg> for Toolbar {
         self.running.focus(target, running_focused, ctx);
         if !focused {
             self.history.focus(target, false, ctx);
-            self.sound.focus(target, false, ctx);
         }
     }
 
@@ -630,11 +536,6 @@ impl TuiNode<Msg> for Toolbar {
         if let Some(target) = target.for_child(&ChildKey::new("opencode-history")) {
             self.history
                 .dispatch_focus(&target, focused && self.history_visible, ctx);
-            return;
-        }
-        if let Some(target) = target.for_child(&ChildKey::new("completion-sound")) {
-            self.sound
-                .dispatch_focus(&target, focused && self.sound_visible, ctx);
             return;
         }
         if let Some(target) = target.for_child(&ChildKey::new("running-only")) {
@@ -650,7 +551,6 @@ impl TuiNode<Msg> for Toolbar {
 
     fn init(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.history.init(ctx);
-        self.sound.init(ctx);
         self.running.init(ctx);
         for (_, button) in self.buttons_mut() {
             button.init(ctx);
@@ -658,7 +558,6 @@ impl TuiNode<Msg> for Toolbar {
     }
     fn mount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.history.mount(ctx);
-        self.sound.mount(ctx);
         self.running.mount(ctx);
         for (_, button) in self.buttons_mut() {
             button.mount(ctx);
@@ -666,7 +565,6 @@ impl TuiNode<Msg> for Toolbar {
     }
     fn unmount(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.history.unmount(ctx);
-        self.sound.unmount(ctx);
         self.running.unmount(ctx);
         for (_, button) in self.buttons_mut() {
             button.unmount(ctx);
@@ -674,7 +572,6 @@ impl TuiNode<Msg> for Toolbar {
     }
     fn destroy(&mut self, ctx: &mut LifecycleCtx<Msg>) {
         self.history.destroy(ctx);
-        self.sound.destroy(ctx);
         self.running.destroy(ctx);
         for (_, button) in self.buttons_mut() {
             button.destroy(ctx);

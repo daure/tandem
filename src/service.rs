@@ -149,7 +149,7 @@ impl AppService {
         self.play_selected_sound(self.event_acceptance_sound_choice());
     }
 
-    fn play_selected_sound(&self, choice: String) {
+    pub(crate) fn play_selected_sound(&self, choice: String) {
         let choice = if self.sound_choices.iter().any(|sound| sound.id == choice) {
             choice
         } else {

@@ -25,7 +25,7 @@ fn rule_tools_round_trip_definitions_preview_retained_events_and_enforce_authori
             .unwrap();
         let sequence = receipt.receipts[0].sequence;
         let definition: crate::store::rules::Definition = serde_json::from_value(json!({
-            "name": "inspect", "script": "fn matches(event) { event.profile == \"message\" }",
+            "name": "inspect", "script": "fn matches(event) { event.profile == \"message\" } fn instance_name(event) { \" PR 82! \" } fn instance_description(event) { \"slack://channel?team=T1&id=C2\" }",
             "template": "blank", "model": "openai/test#fast", "enabled": false,
             "initial_prompt": "Inspect {{event.data.text}}"
         }))
@@ -62,6 +62,12 @@ fn rule_tools_round_trip_definitions_preview_retained_events_and_enforce_authori
             .unwrap()
             .0;
         assert_eq!(preview["matched"], true);
+        assert_eq!(preview["instance_name"], "pr-82");
+        assert_eq!(
+            preview["instance_description"],
+            "slack://channel?team=T1&id=C2"
+        );
+        assert_eq!(preview["name_is_advisory"], true);
         assert_eq!(preview["model"], "openai/test#fast");
         assert_eq!(
             preview["resolved_prompt"],
@@ -75,6 +81,36 @@ fn rule_tools_round_trip_definitions_preview_retained_events_and_enforce_authori
         assert_eq!(event["sequence"], sequence);
         assert_eq!(event["event"]["metadata"]["source"], "fixture");
         assert_eq!(event["acceptances"], json!([]));
+        let before = server
+            .get_event(Parameters(super::super::EventInput { sequence }))
+            .await
+            .unwrap()
+            .0;
+        let diagnostics = server
+            .get_event_diagnostics(Parameters(super::super::EventInput { sequence }))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(diagnostics["sequence"], sequence);
+        assert_eq!(diagnostics["attempts_total"], 1);
+        assert_eq!(diagnostics["attempts_truncated"], false);
+        assert_eq!(diagnostics["attempts"][0]["rules"], json!([]));
+        assert_eq!(
+            server
+                .get_event(Parameters(super::super::EventInput { sequence }))
+                .await
+                .unwrap()
+                .0,
+            before
+        );
+        assert!(
+            server
+                .get_event_diagnostics(Parameters(super::super::EventInput {
+                    sequence: sequence + 1
+                }))
+                .await
+                .is_err()
+        );
         let mut enabled = definition;
         enabled.enabled = true;
         let error = server

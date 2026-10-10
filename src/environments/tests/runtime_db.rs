@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    environments::{compose, journal, ownership, templates},
+    environments::{compose, events::EventStore, journal, ownership, rules::names, templates},
     store::environments::{Instance, Template},
 };
 use serde_json::json;
@@ -81,6 +81,83 @@ fn instance_records_are_namespace_scoped_and_publish_atomic_revisions() {
     journal::forget(&config, "Review").unwrap();
     for kind in [Kind::Journal, Kind::Ownership, Kind::Launch] {
         assert!(load(&config, "Review", kind).unwrap().is_none());
+    }
+}
+
+#[test]
+fn journal_ownership_failures_identify_recorded_and_expected_fields() {
+    let (_home, config, _template, instance) = fixture();
+    save(
+        &config,
+        &instance.name,
+        Kind::Journal,
+        &json!({"expected":instance}).to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        journal::recorded(&config, &instance.name).unwrap(),
+        Some(instance.clone())
+    );
+    for field in [
+        "name",
+        "project",
+        "workspace",
+        "template_directory",
+        "services",
+        "name_and_project",
+    ] {
+        let mut invalid = instance.clone();
+        let details = match field {
+            "name" => {
+                invalid.name = "Other".into();
+                "name: recorded=\"Other\", expected=\"Review\"".into()
+            }
+            "project" => {
+                invalid.project = "foreign-review".into();
+                format!(
+                    "project: recorded=\"foreign-review\", expected={:?}",
+                    instance.project
+                )
+            }
+            "workspace" => {
+                invalid.workspace = "/foreign/workspaces/Review".into();
+                format!(
+                    "workspace: recorded=\"/foreign/workspaces/Review\", expected={:?}",
+                    config.workspaces.join(&instance.name)
+                )
+            }
+            "template_directory" => {
+                invalid.template_directory = "/foreign/templates/website".into();
+                format!(
+                    "template_directory: recorded=\"/foreign/templates/website\", expected={:?}",
+                    config.templates.join(&instance.template)
+                )
+            }
+            "services" => {
+                invalid.workspace_only = true;
+                invalid.services.push(Default::default());
+                "services: recorded count=1, expected count=0 for workspace_only=true".into()
+            }
+            "name_and_project" => {
+                invalid.name = "Other".into();
+                invalid.project = "foreign-review".into();
+                format!(
+                    "name: recorded=\"Other\", expected=\"Review\"; project: recorded=\"foreign-review\", expected={:?}",
+                    instance.project
+                )
+            }
+            _ => unreachable!(),
+        };
+        let payload = json!({"expected":invalid}).to_string();
+        save(&config, &instance.name, Kind::Journal, &payload).unwrap();
+        assert_eq!(
+            journal::recorded(&config, &instance.name).unwrap_err(),
+            format!("instance record ownership mismatch for Review: {details}")
+        );
+        assert_eq!(
+            load(&config, &instance.name, Kind::Journal).unwrap(),
+            Some(payload)
+        );
     }
 }
 
@@ -212,7 +289,23 @@ fn instance_launch_storage_keeps_recipe_directories_clean_and_repairs_materializ
 fn migration_imports_validated_records_once_with_private_backups() {
     let (_home, config, template, instance) = fixture();
     let paths = legacy(&config, &template, &instance);
+    save(
+        &config,
+        &instance.name,
+        Kind::Journal,
+        &fs::read_to_string(&paths[0]).unwrap(),
+    )
+    .unwrap();
     prepare(&config).unwrap();
+    let reservation: (String, Option<i64>) = open(&config)
+        .unwrap()
+        .query_row(
+            "SELECT namespace, acceptance_id FROM rule_instance_names WHERE name_key = 'review'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(reservation, (config.namespace.clone(), None));
     assert_eq!(
         journal::recorded(&config, "Review")
             .unwrap()
@@ -244,6 +337,132 @@ fn migration_imports_validated_records_once_with_private_backups() {
     fs::write(&paths[0], json!({"expected":instance}).to_string()).unwrap();
     prepare(&config).unwrap();
     assert!(journal::recorded(&config, "Review").unwrap().is_none());
+}
+
+#[test]
+fn late_namespace_import_names_survive_purge_and_preserve_existing_attribution() {
+    for prior_reservation in [false, true] {
+        let (_home, config, template, mut instance) = fixture();
+        prepare(&config).unwrap();
+        EventStore::open(&config).unwrap();
+        let connection = open(&config).unwrap();
+        let marker: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM rule_instance_name_backfill",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(marker, 1);
+        if prior_reservation {
+            connection
+                .execute(
+                    "INSERT INTO rule_instance_names VALUES ('review', ?1, 77)",
+                    [&config.namespace],
+                )
+                .unwrap();
+        }
+        let mut other = config.clone();
+        other.namespace = "late-import".into();
+        instance.project = other.project(&instance.name);
+        fs::create_dir(&instance.workspace).unwrap();
+        let originals = legacy(&other, &template, &instance);
+        prepare(&other).unwrap();
+        require_ready(&other).unwrap();
+        assert!(originals.iter().all(|path| !path.exists()));
+        let reservation: (String, Option<i64>) = connection
+            .query_row(
+                "SELECT namespace, acceptance_id FROM rule_instance_names WHERE name_key = 'review'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let expected = if prior_reservation {
+            (config.namespace.clone(), Some(77))
+        } else {
+            (other.namespace.clone(), None)
+        };
+        assert_eq!(reservation, expected);
+        journal::forget(&other, &instance.name).unwrap();
+        fs::remove_dir(&instance.workspace).unwrap();
+        for kind in [Kind::Journal, Kind::Startup, Kind::Ownership, Kind::Launch] {
+            assert!(load(&other, &instance.name, kind).unwrap().is_none());
+        }
+        assert_eq!(
+            names::find_available_name(&connection, &config, "review").unwrap(),
+            Some("review-2".into())
+        );
+        drop(connection);
+        prepare(&other).unwrap();
+        let reopened = open(&config).unwrap();
+        assert_eq!(
+            names::find_available_name(&reopened, &config, "review").unwrap(),
+            Some("review-2".into())
+        );
+    }
+}
+
+#[test]
+fn late_import_reservations_commit_atomically_with_records_and_namespace_marker() {
+    let (_home, config, template, mut instance) = fixture();
+    prepare(&config).unwrap();
+    EventStore::open(&config).unwrap();
+    let mut other = config.clone();
+    other.namespace = "late-import".into();
+    instance.project = other.project(&instance.name);
+    let originals = legacy(&other, &template, &instance);
+    let connection = open(&config).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_import_name BEFORE INSERT ON rule_instance_names
+         WHEN NEW.namespace = 'late-import'
+         BEGIN SELECT RAISE(ABORT, 'blocked imported name'); END;",
+        )
+        .unwrap();
+    assert!(
+        prepare(&other)
+            .unwrap_err()
+            .contains("blocked imported name")
+    );
+    assert!(require_ready(&other).is_err());
+    assert!(originals.iter().all(|path| path.exists()));
+    for table in [
+        "runtime_records",
+        "runtime_imports",
+        "runtime_import_files",
+        "rule_instance_names",
+    ] {
+        let count: i64 = connection
+            .query_row(
+                &format!("SELECT count(*) FROM {table} WHERE namespace = ?1"),
+                [&other.namespace],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "{table}");
+    }
+    connection
+        .execute_batch("DROP TRIGGER reject_import_name;")
+        .unwrap();
+    prepare(&other).unwrap();
+    require_ready(&other).unwrap();
+    assert!(originals.iter().all(|path| !path.exists()));
+    let records: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM runtime_records WHERE namespace = ?1 AND name = 'review'",
+            [&other.namespace],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(records, 3);
+    let names: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM rule_instance_names WHERE namespace = ?1 AND name_key = 'review'",
+            [&other.namespace],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(names, 1);
 }
 
 #[test]

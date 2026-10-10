@@ -32,6 +32,8 @@ fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_own
                 enabled: true,
                 start_instance: false,
                 focus_pane: true,
+                throttle_seconds: 0,
+                trigger_at_end: false,
             },
             None,
             "main".into(),
@@ -115,6 +117,10 @@ fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_own
     assert_eq!(session.server, "http://127.0.0.1:12345");
     assert_eq!(session.activity, Activity::Idle);
     assert!(session.panes.is_empty());
+    assert_eq!(
+        restarted.retained_sessions().unwrap(),
+        vec![session.clone()]
+    );
     let mut recent = observed.clone();
     let mut removed = recent.sessions[0].clone();
     removed.id = "ses_removed".into();
@@ -195,6 +201,13 @@ fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_own
         1
     );
     let other = Config::at(config.home.clone(), "other".into(), 9876).unwrap();
+    assert!(
+        RuleStore::open(&other)
+            .unwrap()
+            .retained_sessions()
+            .unwrap()
+            .is_empty()
+    );
     assert!(
         RuleStore::open(&other)
             .unwrap()

@@ -10,7 +10,9 @@ use crate::{
 
 mod actions;
 mod guidance;
+mod listing;
 mod observation;
+mod prompted;
 mod sessions;
 
 pub(super) use actions::launch_workspace_opencode;

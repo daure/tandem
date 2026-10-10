@@ -39,6 +39,7 @@ def main():
         if 'TANDEM_V2_PLUGIN_DIR' not in os.environ:
             package.mkdir()
             shutil.copyfile(Path(__file__).resolve().parents[1] / 'bridge.mjs', package / 'bridge.mjs')
+            shutil.copyfile(Path(__file__).resolve().parents[1] / 'session-input.mjs', package / 'session-input.mjs')
             (package / 'tui.js').write_text("export { default } from './bridge.mjs'\n")
         control = root / 'control'
         control.mkdir()
@@ -260,6 +261,7 @@ export default { id: "test.route", setup(ctx) {
                 wait_for(lambda: not records() or all(not Path(f'/proc/{record["pid"]}').exists() for record in records()), timeout=15)
                 assert api('/api/session/active')['data'] == {}
                 print('PASS: closing the client removes presence; no model run occurred')
+                route_file.unlink()
                 for model, variant, expected in [
                     ('', '', None),
                     ('openai/gpt-5.2', '', {'providerID': 'openai', 'id': 'gpt-5.2', 'variant': 'default'}),
@@ -270,16 +272,26 @@ export default { id: "test.route", setup(ctx) {
                                     f'TANDEM_SESSION_MODEL={model}', f'TANDEM_SESSION_VARIANT={variant}',
                                     binary, str(workspace), '--server', url)
                     guided_pane_id = int(guided_pane.removeprefix('terminal_'))
-                    guided = wait_for(lambda: next((record for record in records()
-                        if record['pane_id'] == guided_pane_id and record['id']), None))
+                    try:
+                        guided = wait_for(lambda: next((record for record in records()
+                            if record['pane_id'] == guided_pane_id and record['id']
+                            and 'tab_index' in record), None))
+                    except AssertionError:
+                        print(f'Fresh-client setup failed: model={model!r}, variant={variant!r}')
+                        print(zj('action', 'dump-screen', '--pane-id', guided_pane, '--full'))
+                        raise
+                    assert native_order(guided) == [guided['id']], guided
                     assert any(entry['key'] == 'tandem.services' and entry['value'] == instructions
                                for entry in api(f'/api/experimental/session/{guided["id"]}/instructions/entries')['data'])
                     actual = api(f'/api/session/{guided["id"]}')['data'].get('model')
                     assert actual == expected, {'requested': model, 'variant': variant, 'expected': expected, 'actual': actual}
                     assert api('/api/session/active')['data'] == {}
+                    control_receipt = guided['tab_control']
+                    assert tab_action('/tabs/close', {'sessionID': guided['id']}) == guided['id']
+                    wait_for(lambda: receipt('') and not receipt('').get('tabs'))
                     zj('action', 'close-pane', '--pane-id', guided_pane)
                     wait_for(lambda: not records() or all(not Path(f'/proc/{record["pid"]}').exists() for record in records()), timeout=15)
-                print('PASS: client startup preserves default or explicit model/variant and durable instructions without model prompts')
+                print('PASS: fresh clients preserve model/variant and instructions, while closed tabs stay closed across client restarts')
             finally:
                 if created:
                     subprocess.run([zellij, 'kill-session', name], env=env, capture_output=True, timeout=10)

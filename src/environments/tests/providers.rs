@@ -1,5 +1,216 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn provider_snapshots_batch_listing_and_isolate_collector_failures() {
+    const FIXTURE: &str = "TANDEM_PROVIDER_SNAPSHOT_FIXTURE";
+    if let Some(directory) = std::env::var_os(FIXTURE) {
+        check_provider_snapshots(std::path::Path::new(&directory));
+        return;
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let docker = directory.path().join("docker");
+    fs::write(
+        &docker,
+        r#"#!/bin/sh
+set -eu
+root=${0%/*}
+printf '%s\n' "$*" >> "$root/calls"
+case "$1" in
+    ps)
+        if [ -f "$root/list-error" ]; then
+            cat "$root/list-error" >&2
+            exit 1
+        fi
+        cat "$root/listing"
+        ;;
+    inspect)
+        [ "$#" -eq 2 ]
+        if [ -f "$root/$2-error" ]; then
+            cat "$root/$2-error" >&2
+            exit 1
+        fi
+        cat "$root/$2.json"
+        ;;
+    *) exit 1 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&docker, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(directory.path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "environments::providers::tests::provider_snapshots_batch_listing_and_isolate_collector_failures",
+            "--nocapture",
+        ])
+        .env(FIXTURE, directory.path())
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+fn check_provider_snapshots(directory: &std::path::Path) {
+    let config = Config::at(directory.join("home"), "snapshot-test".into(), 9876).unwrap();
+    EventStore::open(&config).unwrap();
+    let manager = Providers::new(&config).unwrap();
+    assert!(manager.snapshot().unwrap().providers.is_empty());
+    assert!(!directory.join("calls").exists());
+
+    for name in ["alpha", "beta"] {
+        let package = config.home.join("templates/providers").join(name);
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("Dockerfile"), "FROM scratch\n").unwrap();
+        fs::write(
+            package.join("provider.json"),
+            json!({
+                "schema_version": 2, "name": name, "description": "Fixture",
+                "protocol": "tandem-events-v1",
+                "streams": [{"name": "updates", "profile": "generic"}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+    let collector = |id: &str, name: &str, running: bool| {
+        json!([{
+            "Id": id, "State": {"Running": running, "Paused": false},
+            "Config": {"Labels": {
+                "io.tandem.provider-namespace": config.namespace,
+                "io.tandem.provider-name": name,
+                "com.docker.compose.project": manager.project(name),
+                "com.docker.compose.service": "collector"
+            }}
+        }])
+    };
+    fs::write(
+        directory.join("alpha.json"),
+        collector("alpha", "alpha", true).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("beta.json"),
+        collector("beta", "beta", false).to_string(),
+    )
+    .unwrap();
+    let listing = "alpha\tsnapshot-test-provider-alpha\nbeta\tsnapshot-test-provider-beta\nunrelated\tother-provider-alpha\nprefix\tsnapshot-test-provider-alpha-extra\nempty-label\t\n";
+    fs::write(directory.join("listing"), listing).unwrap();
+    let snapshot = |inspected: &[&str]| {
+        let snapshot = manager.snapshot().unwrap();
+        let calls = fs::read_to_string(directory.join("calls")).unwrap();
+        fs::remove_file(directory.join("calls")).unwrap();
+        let mut expected = vec![
+            "ps --all --filter label=com.docker.compose.project --format {{.ID}}\t{{.Label \"com.docker.compose.project\"}}".to_owned(),
+        ];
+        expected.extend(inspected.iter().map(|id| format!("inspect {id}")));
+        assert_eq!(calls.lines().collect::<Vec<_>>(), expected);
+        assert_eq!(snapshot.providers.len(), 2);
+        for provider in &snapshot.providers {
+            assert_eq!(provider.streams.len(), 1);
+            assert_eq!(provider.streams[0].name, "updates");
+        }
+        snapshot
+    };
+
+    let observed = snapshot(&["alpha", "beta"]);
+    assert_eq!(observed.error, None);
+    assert_eq!(observed.providers[0].status, Status::Running);
+    assert_eq!(observed.providers[1].status, Status::Stopped);
+    assert_eq!(observed.providers[1].container_id.as_deref(), Some("beta"));
+
+    fs::write(
+        directory.join("listing"),
+        "alpha-new\tsnapshot-test-provider-alpha\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.join("alpha-new.json"),
+        collector("alpha-new", "alpha", false).to_string(),
+    )
+    .unwrap();
+    let observed = snapshot(&["alpha-new"]);
+    assert_eq!(observed.providers[0].status, Status::Stopped);
+    assert_eq!(
+        observed.providers[0].container_id.as_deref(),
+        Some("alpha-new")
+    );
+    assert_eq!(observed.providers[1].status, Status::NotStarted);
+    assert_eq!(observed.providers[1].container_id, None);
+
+    fs::write(directory.join("listing"), listing).unwrap();
+    fs::write(directory.join("alpha-error"), "inspection failed").unwrap();
+    let observed = snapshot(&["alpha", "beta"]);
+    assert_eq!(observed.providers[0].status, Status::Unknown);
+    assert!(
+        observed.providers[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("inspection failed")
+    );
+    assert_eq!(observed.providers[1].status, Status::Stopped);
+    assert_eq!(observed.providers[1].error, None);
+    fs::remove_file(directory.join("alpha-error")).unwrap();
+
+    for namespace in [None, Some("foreign")] {
+        let mut foreign = collector("alpha", "alpha", true);
+        let labels = foreign[0]["Config"]["Labels"].as_object_mut().unwrap();
+        match namespace {
+            Some(namespace) => {
+                labels.insert("io.tandem.provider-namespace".into(), json!(namespace));
+            }
+            None => {
+                labels.remove("io.tandem.provider-namespace");
+            }
+        }
+        fs::write(directory.join("alpha.json"), foreign.to_string()).unwrap();
+        let observed = snapshot(&["alpha", "beta"]);
+        assert_eq!(observed.providers[0].status, Status::Unknown);
+        assert_eq!(observed.providers[0].container_id, None);
+        assert_eq!(
+            observed.providers[0].error.as_deref(),
+            Some("provider container has unverifiable ownership")
+        );
+        assert_eq!(observed.providers[1].status, Status::Stopped);
+        assert_eq!(observed.providers[1].error, None);
+    }
+
+    fs::write(directory.join("list-error"), "listing failed").unwrap();
+    let observed = snapshot(&[]);
+    assert!(
+        observed
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("listing failed")
+    );
+    for provider in observed.providers {
+        assert_eq!(provider.status, Status::Unknown);
+        assert_eq!(provider.container_id, None);
+        assert!(
+            provider
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("listing failed")
+        );
+    }
+}
+
 #[test]
 fn provider_ownership_requires_namespace_name_project_and_collector_service() {
     let mut container = json!({"Config": {"Labels": {

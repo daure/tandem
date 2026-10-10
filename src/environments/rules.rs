@@ -4,11 +4,16 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 
 use super::{config::Config, events::EventStore};
 use crate::store::{
-    events::{Error, Event, NotificationKind, ProviderNotification},
-    rules::{self, Acceptance, Definition, DispatchStatus, Evaluation, Rule, Snapshot},
+    events::{Error, NotificationKind, ProviderNotification},
+    rules::{self, Acceptance, Definition, Evaluation, Rule, Snapshot},
 };
 
+#[cfg(test)]
+use crate::store::rules::DispatchStatus;
+
 pub(super) mod catalog;
+mod evaluation;
+pub(super) mod names;
 mod reports;
 mod workspaces;
 
@@ -75,6 +80,57 @@ fn decode<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, Error> {
 }
 
 impl RuleStore {
+    pub(crate) fn preview_instance_identity(
+        &self,
+        definition: &Definition,
+        input: &serde_json::Value,
+        sequence: i64,
+        event_summary: &str,
+    ) -> Result<(String, String), Error> {
+        let mut connection = self.events.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let previous: i64 = transaction.query_row(
+            "SELECT max(COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'rule_acceptances'), 0),
+                        COALESCE((SELECT MAX(id) FROM rule_acceptances), 0))",
+            [],
+            |row| row.get(0),
+        )?;
+        let id = previous
+            .checked_add(1)
+            .ok_or_else(|| Error::Storage("acceptance identity exhausted".into()))?;
+        let overrides: rules::InstanceOverrides =
+            rules::resolve_instance_hooks(definition, input).map_err(Error::Invalid)?;
+        let base = overrides
+            .custom_name
+            .unwrap_or_else(|| rules::instance_name(&definition.name, sequence, id));
+        let name = names::find_available_name(&transaction, &self.config, &base)?
+            .ok_or_else(|| Error::Conflict("instance name candidates exhausted (1024)".into()))?;
+        let description = overrides.custom_description.unwrap_or_else(|| {
+            rules::default_instance_description(&definition.name, event_summary)
+        });
+        transaction.commit()?;
+        Ok((name, description))
+    }
+
+    pub(crate) fn ensure_fresh_instance_name(&self, name: &str) -> Result<(), Error> {
+        names::ensure_fresh(&self.events.connection()?, &self.config, name)
+    }
+
+    pub(crate) fn ensure_retry_instance_name(
+        &self,
+        name: &str,
+        template: &str,
+        origin: &str,
+    ) -> Result<(), Error> {
+        names::ensure_retry(
+            &self.events.connection()?,
+            &self.config,
+            name,
+            template,
+            origin,
+        )
+    }
+
     pub(crate) fn event_lease(&self, sequence: i64) -> Result<Option<super::gateway::Lock>, Error> {
         self.events.event_lease(sequence)
     }
@@ -88,6 +144,22 @@ impl RuleStore {
             |row| row.get(0),
         ).optional()?.ok_or(Error::NotFound)?;
         decode(&payload)
+    }
+
+    pub(crate) fn dispatch_acceptances(&self) -> Result<Vec<Acceptance>, Error> {
+        let connection = self.events.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT a.payload FROM rule_acceptances a
+             JOIN event_attempts p ON p.id = a.attempt_id JOIN events e ON e.sequence = p.event_sequence
+             WHERE e.namespace = ?1
+               AND json_extract(a.payload, '$.status') IN ('queued', 'provisioning', 'launching')
+               AND NOT EXISTS (SELECT 1 FROM rule_acceptance_reports r WHERE r.acceptance_id = a.id)
+             ORDER BY a.id ASC",
+        )?;
+        statement
+            .query_map([&self.config.namespace], |row| row.get::<_, String>(0))?
+            .map(|text| decode(&text?))
+            .collect()
     }
 
     pub(crate) fn provider_deleting(&self, sequence: i64) -> Result<bool, Error> {
@@ -160,10 +232,23 @@ impl RuleStore {
                 })
             })?
             .collect::<Result<_, _>>()?;
+        drop(statement);
+        let mut statement = transaction.prepare("SELECT r.attempt_id, r.rule_name, r.rule_revision, r.warning FROM rule_evaluations r JOIN event_attempts p ON p.id = r.attempt_id JOIN events e ON e.sequence = p.event_sequence WHERE e.namespace = ?1 AND r.warning IS NOT NULL ORDER BY r.attempt_id DESC LIMIT 100")?;
+        let evaluation_warnings = statement
+            .query_map([&self.config.namespace], |row| {
+                Ok(Evaluation {
+                    attempt_id: row.get(0)?,
+                    rule_name: row.get(1)?,
+                    rule_revision: row.get(2)?,
+                    error: row.get(3)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
         let snapshot = Snapshot {
             rules,
             acceptances: acceptances(&transaction, None, &self.config.namespace)?,
             evaluation_errors,
+            evaluation_warnings,
             error: None,
             workspaces: self.workspaces(&transaction)?,
             reports: self.report_summaries(&transaction)?,
@@ -218,82 +303,13 @@ impl RuleStore {
         })
     }
 
-    pub(crate) fn evaluate(&self) -> Result<(), Error> {
-        let connection = self.events.connection()?;
-        let mut statement = connection.prepare("SELECT r.attempt_id, r.rule_name FROM rule_evaluations r JOIN event_attempts p ON p.id = r.attempt_id JOIN events e ON e.sequence = p.event_sequence WHERE e.namespace = ?1 AND r.outcome IS NULL ORDER BY r.attempt_id, r.rule_name LIMIT 32")?;
-        let pending = statement
-            .query_map([&self.config.namespace], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        for (attempt, name) in pending {
-            self.evaluate_one(attempt, &name)?;
-        }
-        Ok(())
-    }
-
-    fn evaluate_one(&self, attempt: i64, name: &str) -> Result<(), Error> {
-        let mut connection = self.events.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let pending: Option<(String, i64, String, String, String)> = transaction.query_row(
-            "SELECT r.rule_snapshot, e.sequence, e.provider, e.received_at, e.payload FROM rule_evaluations r JOIN event_attempts p ON p.id = r.attempt_id JOIN events e ON e.sequence = p.event_sequence WHERE e.namespace = ?1 AND r.attempt_id = ?2 AND r.rule_name = ?3 AND r.outcome IS NULL",
-            params![self.config.namespace, attempt, name], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))).optional()?;
-        let Some((snapshot, sequence, provider, received_at, payload)) = pending else {
-            return Ok(());
-        };
-        let rule: Rule = decode(&snapshot)?;
-        let event: Event = decode(&payload)?;
-        let input = rules::event_input(&event, &provider, sequence, &received_at);
-        let (outcome, error) = match rules::matches(&rule.definition, &input) {
-            Ok(true) => {
-                transaction.execute("INSERT INTO rule_acceptances(attempt_id, rule_name, payload) VALUES (?1, ?2, '')", params![attempt, name])?;
-                let id = transaction.last_insert_rowid();
-                let instance = rules::instance_name(name, sequence, id);
-                let prompt = rules::render_prompt(&rule.definition.initial_prompt, &input);
-                let timestamp = chrono::Utc::now().to_rfc3339();
-                let acceptance = Acceptance {
-                    id,
-                    event_sequence: sequence,
-                    event_summary: event.summary,
-                    attempt_id: attempt,
-                    rule_name: name.into(),
-                    rule_revision: rule.revision,
-                    accepted_at: timestamp.clone(),
-                    instance,
-                    session_id: None,
-                    pane: None,
-                    operation_id: None,
-                    launch_started_at: None,
-                    status: if prompt.is_ok() {
-                        DispatchStatus::Queued
-                    } else {
-                        DispatchStatus::Failed
-                    },
-                    error: prompt.as_ref().err().cloned(),
-                    rule,
-                    resolved_prompt: prompt.ok(),
-                };
-                transaction.execute(
-                    "UPDATE rule_acceptances SET payload = ?2 WHERE id = ?1",
-                    params![id, encode(&acceptance)?],
-                )?;
-                transaction.execute("UPDATE event_attempts SET status = 'accepted', accepted_at = COALESCE(accepted_at, ?2) WHERE id = ?1", params![attempt, timestamp])?;
-                ("matched", None)
-            }
-            Ok(false) => ("no_match", None),
-            Err(error) => ("failed", Some(error)),
-        };
-        transaction.execute("UPDATE rule_evaluations SET outcome = ?3, error = ?4 WHERE attempt_id = ?1 AND rule_name = ?2", params![attempt, name, outcome, error])?;
-        transaction.commit()?;
-        Ok(())
-    }
-
     pub(crate) fn update(&self, acceptance: &Acceptance, assigned: bool) -> Result<(), Error> {
         let mut connection = self.events.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let previous: String = transaction.query_row("SELECT a.payload FROM rule_acceptances a JOIN event_attempts p ON p.id = a.attempt_id JOIN events e ON e.sequence = p.event_sequence WHERE e.namespace = ?1 AND a.id = ?2", params![self.config.namespace, acceptance.id], |row| row.get(0)).optional()?.ok_or(Error::NotFound)?;
         let previous: Acceptance = decode(&previous)?;
         if previous.instance != acceptance.instance
+            || previous.resolved_description != acceptance.resolved_description
             || previous.attempt_id != acceptance.attempt_id
             || previous.rule_name != acceptance.rule_name
         {
@@ -362,3 +378,7 @@ impl RuleStore {
 #[cfg(test)]
 #[path = "tests/rules.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "rules/tests/throttling.rs"]
+mod throttling_tests;

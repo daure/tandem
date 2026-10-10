@@ -185,7 +185,7 @@ fn instance_summary(instance: &Instance, startup: Option<&StartupTiming>) -> Ins
     InstanceSummary {
         label: (!workspace_ready).then_some(summary.label),
         tone: if workspace_ready {
-            Tone::Success
+            Tone::Muted
         } else {
             summary.severity.into()
         },
@@ -230,6 +230,7 @@ fn startup_label(status: &str, startup: &StartupTiming) -> String {
 pub(super) struct Row {
     pub opencode: Option<super::opencode::Target>,
     pub opencode_activity: Option<crate::store::opencode::Activity>,
+    pub ping_revision: Option<u64>,
     pub id: String,
     pub parent: Option<String>,
     pub label: String,
@@ -851,9 +852,7 @@ fn from_snapshot_with_operations_and_totals(
             ),
             status: None,
             icon: TEMPLATE_ICON,
-            tone: if running_count > 0
-                || template.error.is_none() && template.workspace_only() && total_count > 0
-            {
+            tone: if running_count > 0 {
                 Tone::Success
             } else if template.error.is_some() {
                 Tone::Error
@@ -973,6 +972,7 @@ fn from_snapshot_with_operations_and_totals(
             id: instance_id.clone(),
             opencode: None,
             opencode_activity: None,
+            ping_revision: None,
             template_capabilities: String::new(),
             parent: Some(parent),
             label,
@@ -1079,6 +1079,7 @@ fn from_snapshot_with_operations_and_totals(
                 id: service_id.clone(),
                 opencode: None,
                 opencode_activity: None,
+                ping_revision: None,
                 template_capabilities: String::new(),
                 parent: Some(if service.one_shot {
                     setup_id.clone()

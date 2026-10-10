@@ -90,7 +90,7 @@ impl Record {
     }
 }
 
-fn lease(id: &str) -> String {
+pub(super) fn lease(id: &str) -> String {
     format!("startup-{id}")
 }
 

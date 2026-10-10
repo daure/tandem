@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "rule_throttle.rs"]
+mod throttle_tests;
+
 pub(super) fn rule(name: &str) -> Rule {
     Rule {
         definition: Definition {
@@ -23,6 +26,8 @@ pub(super) fn rule(name: &str) -> Rule {
             enabled: false,
             start_instance: true,
             focus_pane: true,
+            throttle_seconds: 0,
+            trigger_at_end: false,
         },
         revision: 1,
         zellij_session: "main".into(),
@@ -97,6 +102,7 @@ pub(super) fn acceptance(rule: Rule, id: i64, sequence: i64) -> Acceptance {
         error: None,
         rule,
         resolved_prompt: Some("Inspect the event".into()),
+        resolved_description: None,
     }
 }
 
@@ -1121,7 +1127,18 @@ fn prompt_template_errors_appear_below_the_prompt_and_clear_when_corrected() {
         );
         finish_autosaves(&mut app);
         app.tick(Duration::ZERO, AnimationSettings::default());
-        let (layout, text) = render(&mut app, 130);
+        let area = Rect::new(0, 0, 130, 40);
+        let mut layout = tuicore::LayoutCtx::new();
+        layout.with_overlay_bounds(area, |ctx| app.layout(area, ctx));
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| {
+                let mut ctx = RenderCtx::new();
+                app.render(frame, area, &mut ctx);
+                ctx.flush(frame);
+            })
+            .unwrap();
+        let text = rendered_lines(&terminal, area).join("\n");
         let prompt = layout
             .focus_targets()
             .iter()
@@ -1418,6 +1435,7 @@ fn settings_toggles_reject_dirty_unsaved_and_bulk_pending_fields() {
             ("enabled", "Active", false),
             ("start-instance", "Start instance", true),
             ("focus-pane", "Focus new pane", true),
+            ("trigger-at-end", "Trigger at end", false),
         ] {
             settings_input(&mut app, slot, &[Key::Char(' ')]);
             app.tick(Duration::ZERO, AnimationSettings::default());
@@ -1445,6 +1463,7 @@ fn reopen_pending_toggle(slot: &str, edit: bool) {
     assert_setting(&mut app, "Active", true);
     assert_setting(&mut app, "Start instance", slot != "start-instance");
     assert_setting(&mut app, "Focus new pane", slot != "focus-pane");
+    assert_setting(&mut app, "Trigger at end", slot == "trigger-at-end");
     if edit {
         settings_input(
             &mut app,
@@ -1474,6 +1493,7 @@ fn reopen_pending_toggle(slot: &str, edit: bool) {
     assert_eq!(saved.definition.enabled, !edit);
     assert_eq!(saved.definition.start_instance, slot != "start-instance");
     assert_eq!(saved.definition.focus_pane, slot != "focus-pane");
+    assert_eq!(saved.definition.trigger_at_end, slot == "trigger-at-end");
     assert_eq!(
         saved.definition.description,
         if edit {
@@ -1495,6 +1515,7 @@ fn reopen_pending_toggle(slot: &str, edit: bool) {
     assert_setting(&mut app, "Active", !edit);
     assert_setting(&mut app, "Start instance", slot != "start-instance");
     assert_setting(&mut app, "Focus new pane", slot != "focus-pane");
+    assert_setting(&mut app, "Trigger at end", slot == "trigger-at-end");
 }
 
 #[test]

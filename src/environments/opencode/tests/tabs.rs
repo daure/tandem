@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[test]
@@ -24,8 +25,9 @@ fn tab_actions_use_the_exact_client_and_preserve_the_zellij_pane() {
                 background["id"] = json!("ses_background");
                 value["tabs"] = json!([background]);
             }
-            fs::write(receipt, value.to_string()).unwrap();
+            fs::write(&receipt, value.to_string()).unwrap();
             let expected_body = if focus || close { json!({"sessionID":"ses_background"}) } else { json!({"directory":directory, "instructions":"Services won't start automatically"}) }.to_string();
+            let closed_receipt = receipt.clone();
             let controller = tokio::spawn(async move {
                 let (mut stream, _) = tokio::time::timeout(std::time::Duration::from_secs(2), listener.accept()).await.expect("client control request").unwrap();
                 let mut bytes = Vec::new();
@@ -49,6 +51,11 @@ fn tab_actions_use_the_exact_client_and_preserve_the_zellij_pane() {
                     ("409 Conflict", json!({"error":"Enable OpenCode session tabs before creating a tab"}))
                 };
                 let body = body.to_string();
+                if close && succeeds {
+                    let mut value: serde_json::Value = serde_json::from_str(&fs::read_to_string(&closed_receipt).unwrap()).unwrap();
+                    value["tabs"].as_array_mut().unwrap().retain(|tab| tab["id"] != "ses_background");
+                    fs::write(closed_receipt, value.to_string()).unwrap();
+                }
                 stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
             });
             let target = Pane { session: "main".into(), id: 7, tab_id: 99, tab_name: "stale".into() };
@@ -79,6 +86,120 @@ fn tab_actions_use_the_exact_client_and_preserve_the_zellij_pane() {
             }
         });
     }
+}
+
+#[test]
+fn closing_the_last_native_session_closes_its_client_pane_once() {
+    for (home, succeeds) in [false, true]
+        .into_iter()
+        .flat_map(|home| [false, true].map(|succeeds| (home, succeeds)))
+    {
+        let root = tempfile::tempdir().unwrap();
+        let observer = observer(root.path());
+        presence(
+            &observer,
+            "client.json",
+            "ses_last",
+            7,
+            "http://127.0.0.1:1",
+        );
+        let receipt = observer.presence.join("client.json");
+        let mut value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&receipt).unwrap()).unwrap();
+        value["tab_index"] = json!(0);
+        if home {
+            let tab = value.clone();
+            value["id"] = json!("");
+            value.as_object_mut().unwrap().remove("tab_index");
+            value["tabs"] = json!([tab]);
+        }
+        let target = Pane {
+            session: "main".into(),
+            id: 7,
+            tab_id: 4,
+            tab_name: "Review".into(),
+        };
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            value["tab_control"] = json!({"server":format!("http://{}", listener.local_addr().unwrap()), "token":"client-secret"});
+            fs::write(&receipt, value.to_string()).unwrap();
+            let calls = root.path().join("calls");
+            let controller = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0; 4096];
+                    let count = stream.read(&mut chunk).await.unwrap();
+                    assert_ne!(count, 0);
+                    bytes.extend_from_slice(&chunk[..count]);
+                    if bytes.ends_with(b"{\"sessionID\":\"ses_last\"}") { break; }
+                }
+                let request = String::from_utf8(bytes).unwrap();
+                assert!(request.starts_with("POST /tabs/close HTTP/1.1\r\n"), "{request}");
+                assert!(!fs::read_to_string(calls).unwrap().contains("close-pane"));
+                let (status, body) = if succeeds {
+                    value["id"] = json!("");
+                    value["tabs"] = json!([]);
+                    fs::write(receipt, value.to_string()).unwrap();
+                    ("200 OK", json!({"id":"ses_last"}))
+                } else {
+                    ("409 Conflict", json!({"error":"OpenCode refused tab closure"}))
+                };
+                let body = body.to_string();
+                stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            });
+            let result = tokio::time::timeout(Duration::from_secs(3), observer.close("ses_last", &target)).await.unwrap();
+            controller.await.unwrap();
+            result
+        });
+        let calls = fs::read_to_string(root.path().join("calls")).unwrap();
+        if !succeeds {
+            assert!(result.unwrap_err().contains("refused tab closure"));
+            assert!(!calls.contains("close-pane"), "{calls}");
+            continue;
+        }
+        result.unwrap();
+        assert_eq!(calls.matches("close-pane").count(), 1, "{calls}");
+        assert!(
+            calls.contains("--session main action close-pane --pane-id terminal_7"),
+            "{calls}"
+        );
+        assert!(
+            !calls.contains("new-pane") && !calls.contains("new-tab"),
+            "{calls}"
+        );
+    }
+}
+
+#[test]
+fn clients_with_native_tabs_disabled_close_their_pane() {
+    let root = tempfile::tempdir().unwrap();
+    let observer = observer(root.path());
+    presence(
+        &observer,
+        "client.json",
+        "ses_active",
+        7,
+        "http://127.0.0.1:1",
+    );
+    let path = observer.presence.join("client.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    value["tab_control"] = json!({"server":"http://127.0.0.1:1", "token":"client-secret"});
+    fs::write(path, value.to_string()).unwrap();
+    let target = Pane {
+        session: "main".into(),
+        id: 7,
+        tab_id: 4,
+        tab_name: "Review".into(),
+    };
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(observer.close("ses_active", &target))
+        .unwrap();
+    let calls = fs::read_to_string(root.path().join("calls")).unwrap();
+    assert_eq!(calls.matches("close-pane").count(), 1, "{calls}");
 }
 
 #[test]

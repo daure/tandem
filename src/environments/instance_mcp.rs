@@ -7,9 +7,13 @@ use std::{
 };
 
 use super::{
-    Environments, config::Config, gateway, journal, ownership, removal, repositories, templates,
+    Environments, config::Config, docker, gateway, journal, ownership, removal, repositories,
+    startup, templates,
 };
-use crate::store::environments::{Instance, InstanceInstructions, RepositoryUpdates};
+use crate::store::environments::{
+    ContainerState, Instance, InstanceInstructions, InstanceServiceStatus, InstanceStatus,
+    OperationState, RepositoryUpdates,
+};
 
 #[derive(Debug)]
 pub(crate) struct InstanceScope {
@@ -21,6 +25,14 @@ pub(crate) struct InstanceScope {
 }
 
 impl Environments {
+    pub(crate) fn record_instance_ping(
+        &self,
+        instance: &str,
+        session_id: &str,
+    ) -> Result<(), String> {
+        journal::record_ping(&self.config, instance, session_id)
+    }
+
     pub(crate) fn update_instance_repositories(
         &self,
         scope: &InstanceScope,
@@ -45,18 +57,122 @@ impl Environments {
         &self,
         scope: &InstanceScope,
     ) -> Result<InstanceInstructions, String> {
-        let _lock = gateway::lock(&self.config, &format!("instance-{}", scope.name))?;
         let instance = self.verify_instance_scope(scope)?;
         let file = self.config.instance_instructions();
-        Ok(InstanceInstructions {
+        let markdown = super::config::read_text(&file)?;
+        let status = self.instance_status(instance.clone());
+        let instructions = InstanceInstructions {
             file: file.display().to_string(),
             core_guidance: include_str!("../../instance-core-guidance.md").into(),
-            markdown: super::config::read_text(&file)?,
+            markdown,
             instance: instance.name,
             template: instance.template,
             workspace: instance.workspace,
             namespace: self.config.namespace.clone(),
-        })
+            status,
+        };
+        // Lifecycle changes may replace the workspace while editable guidance is read.
+        self.verify_instance_scope(scope)?;
+        Ok(instructions)
+    }
+
+    fn instance_status(&self, recorded: Instance) -> InstanceStatus {
+        let mut errors = Vec::new();
+        let mut observed_at = None;
+        let mut instance = if recorded.workspace_only {
+            observed_at = Some(journal::now());
+            recorded.clone()
+        } else {
+            match docker::inspect_until(&self.config, Instant::now() + Duration::from_secs(2)) {
+                Ok(instances) => {
+                    let observed = instances
+                        .into_iter()
+                        .find(|item| item.name == recorded.name);
+                    match observed {
+                        Some(observed)
+                            if observed.template != recorded.template
+                                || observed.template_directory != recorded.template_directory
+                                || observed.workspace != recorded.workspace
+                                || observed.project != recorded.project =>
+                        {
+                            errors.push(
+                                "observed instance conflicts with workspace ownership".into(),
+                            );
+                            recorded.clone()
+                        }
+                        observed => {
+                            observed_at = Some(journal::now());
+                            observed.unwrap_or_else(|| {
+                                let mut instance = recorded.clone();
+                                instance.services.clear();
+                                instance
+                            })
+                        }
+                    }
+                }
+                Err(error) => {
+                    errors.push(error);
+                    recorded.clone()
+                }
+            }
+        };
+        if let Err(error) = journal::enrich(&self.config, std::slice::from_mut(&mut instance)) {
+            errors.push(error);
+        }
+        match startup::read(&self.config, &instance.name).and_then(|record| {
+            record
+                .map(|record| record.observe(&self.config))
+                .transpose()
+        }) {
+            Ok(Some(record)) => {
+                instance.pending = record.operation.state == OperationState::Running;
+                if instance.pending {
+                    instance.runtime.activity = Some(record.activity());
+                    for mut service in record.services {
+                        if !instance.services.iter().any(|current| {
+                            current.name == service.name
+                                && current.runtime.replica.max(1) == service.runtime.replica.max(1)
+                        }) {
+                            service.runtime.waiting = record.start_instance;
+                            instance.services.push(service);
+                        }
+                    }
+                    for service in &mut instance.services {
+                        service.runtime.waiting |= record.start_instance
+                            && matches!(
+                                service.state(),
+                                ContainerState::Created | ContainerState::Missing
+                            );
+                    }
+                }
+                if record.operation.error.is_some() {
+                    instance.runtime.issue = record.operation.error;
+                }
+            }
+            Ok(None) => {}
+            Err(error) => errors.push(error),
+        }
+        let stale = !errors.is_empty();
+        super::project_instance(&mut instance, stale, journal::now());
+        let mut services: Vec<_> = instance
+            .services
+            .iter()
+            .map(|service| InstanceServiceStatus {
+                name: service.name.clone(),
+                replica: service.runtime.replica.max(1),
+                status: service.status_summary().status,
+            })
+            .collect();
+        services.sort_by(|a, b| (&a.name, a.replica).cmp(&(&b.name, b.replica)));
+        InstanceStatus {
+            instance: instance.status_summary().status,
+            services,
+            topology_known: instance.workspace_only
+                || instance.runtime.topology_known && !recorded.services.is_empty(),
+            observed_at_unix_seconds: observed_at,
+            stale,
+            error: stale.then(|| errors.join("\n")),
+        }
     }
 
     pub(crate) fn bind_instance_workspace(&self) -> Result<InstanceScope, String> {
@@ -195,7 +311,7 @@ pub(super) fn prepare_config(config: &Config, workspace: &Path) -> Result<(), St
         }
         Err(error) => return Err(error.to_string()),
     }
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let executable = super::executable::installed()?;
     // V2 normalizes this shared syntax; native V2-only keys would break V1 workspaces.
     let content = serde_json::json!({
         "$schema": "https://opencode.ai/config.json",
@@ -212,6 +328,7 @@ pub(super) fn prepare_config(config: &Config, workspace: &Path) -> Result<(), St
         }},
         "permission": {
             "tandem-instance_get_instructions": "allow",
+            "tandem-instance_ping": "allow",
             "tandem-instance_start_self": "allow",
             "tandem-instance_stop_self": "allow",
             "tandem-instance_update_repositories": "allow",

@@ -4,6 +4,7 @@ use rmcp::{
     Json, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, tool::IntoCallToolResult, wrapper::Parameters},
     model::{CallToolResult, ServerCapabilities, ServerInfo},
+    service::{RequestContext, RoleServer},
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
@@ -13,7 +14,7 @@ use crate::{
     environments::InstanceScope,
     service::AppService,
     store::{
-        environments::{InstanceInstructions, Operation, RepositoryUpdates},
+        environments::{InstanceInstructions, InstancePing, Operation, RepositoryUpdates},
         rules::reports::{Report, ReportInput, ReportSummary},
     },
 };
@@ -63,7 +64,7 @@ impl InstanceMcpServer {
 #[tool_router]
 impl InstanceMcpServer {
     #[tool(
-        description = "Call first. Returns bundled core_guidance, editable markdown reread on each call, its absolute path, and the bound instance, template, workspace and namespace. Read both guidance fields; ask the user before acting if they conflict."
+        description = "Call first. Returns bundled core_guidance, editable markdown reread on each call, its absolute path, and the bound instance, template, workspace and namespace. Includes status with the aggregate instance status, service/replica statuses, topology completeness, observation time and stale/error metadata. Docker observation has a two-second budget; observation failure preserves guidance. Running containers do not prove application readiness. Read both guidance fields; ask the user before acting if they conflict."
     )]
     async fn get_instructions(
         &self,
@@ -84,6 +85,27 @@ impl InstanceMcpServer {
     ) -> Result<Json<Operation>, String> {
         self.service
             .instance_self_action(Arc::clone(&self.scope), true)
+            .await
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Ping the user when ready or when attention is needed. Schedules the configured instance-ping sound when the Sessions D toggle is enabled. Controls only this connection's owning instance. Leaves services, reports and instance lifecycle unchanged. The reply reports scheduling, not audible delivery."
+    )]
+    async fn ping(
+        &self,
+        Parameters(_): Parameters<SelfInput>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<InstancePing>, String> {
+        self.service
+            .ping_instance(
+                Arc::clone(&self.scope),
+                context
+                    .meta
+                    .get("ai.opencode/sessionID")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned),
+            )
             .await
             .map(Json)
     }

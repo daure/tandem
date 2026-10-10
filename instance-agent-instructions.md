@@ -16,6 +16,9 @@ Use `update_repositories` for approved repository updates. Inspect every result 
 workspace is current; ask before resolving skipped or failed checkouts. Run relevant checks against
 the updated sources.
 
+Use `ping` to request user attention when ready. Sound delivery depends on the user's notification
+setting; the call does not stop services or conclude the instance.
+
 ## Conclude
 
 The `conclude` tool controls the owning instance, including manually created instances.

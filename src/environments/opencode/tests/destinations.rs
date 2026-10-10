@@ -1,5 +1,73 @@
 use super::*;
 
+#[test]
+fn rule_destinations_select_the_newest_running_session_and_reject_exited_targets() {
+    let root = tempfile::tempdir().unwrap();
+    let observer = observer(root.path());
+    fs::write(
+        &observer.zellij,
+        r#"#!/bin/sh
+root=$(dirname "$0")
+[ "$*" = 'list-sessions --no-formatting --reverse' ] || exit 1
+[ -z "${ZELLIJ_SESSION_NAME+x}" ] || exit 1
+cat "$root/sessions"
+"#,
+    )
+    .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    for (sessions, expected) in [
+        (
+            "dead [Created 1s ago] (EXITED - attach to resurrect)\nnewest live [Created 2s ago] \nold [Created 3s ago] (current)\n",
+            "newest live",
+        ),
+        ("old [Created 3s ago] (current)\n", "old"),
+    ] {
+        fs::write(root.path().join("sessions"), sessions).unwrap();
+        assert_eq!(
+            runtime
+                .block_on(observer.resolve_rule_destination())
+                .unwrap(),
+            expected
+        );
+        runtime
+            .block_on(observer.validate_rule_destination(expected))
+            .unwrap();
+        assert!(
+            runtime
+                .block_on(observer.validate_rule_destination("dead"))
+                .unwrap_err()
+                .contains("not live")
+        );
+    }
+    for sessions in ["", "dead [Created 1s ago] (EXITED - attach to resurrect)\n"] {
+        fs::write(root.path().join("sessions"), sessions).unwrap();
+        assert!(
+            runtime
+                .block_on(observer.resolve_rule_destination())
+                .unwrap_err()
+                .contains("no live Zellij session")
+        );
+    }
+    fs::write(root.path().join("sessions"), "broken inventory\n").unwrap();
+    assert!(
+        runtime
+            .block_on(observer.resolve_rule_destination())
+            .unwrap_err()
+            .contains("Invalid Zellij session inventory")
+    );
+    fs::write(
+        &observer.zellij,
+        "#!/bin/sh\nprintf 'inventory unavailable' >&2\nexit 1\n",
+    )
+    .unwrap();
+    assert!(
+        runtime
+            .block_on(observer.resolve_rule_destination())
+            .unwrap_err()
+            .contains("inventory unavailable")
+    );
+}
+
 fn destination(session: &str) -> Pane {
     Pane {
         session: session.into(),

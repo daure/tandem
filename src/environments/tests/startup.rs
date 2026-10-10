@@ -49,6 +49,25 @@ fn fixture() -> (tempfile::TempDir, Config, Record) {
 }
 
 #[test]
+fn inherited_instance_descriptors_use_the_same_case_normalized_lock_key() {
+    let (_directory, config, _record) = fixture();
+    let held = gateway::lock(&config, "instance-review").unwrap();
+    let descriptor = unsafe { libc::fcntl(held.descriptor(), libc::F_DUPFD_CLOEXEC, 3) };
+    assert!(descriptor >= 3);
+    let inherited = inherit(&config, "instance-Review", descriptor).unwrap();
+    assert!(
+        gateway::lock(&config, "instance-REVIEW")
+            .unwrap_err()
+            .contains("busy")
+    );
+    assert_eq!(
+        gateway::resource_path(&config, "template-Review"),
+        config.home.join("locks/template-Review")
+    );
+    drop(inherited);
+}
+
+#[test]
 fn reconnect_exposes_startup_before_containers_exist() {
     let (_directory, config, record) = fixture();
     let _instance = gateway::lock(&config, "instance-Review").unwrap();
@@ -229,25 +248,71 @@ fn completion_write_failures_preserve_the_last_durable_startup_record() {
 }
 
 #[test]
-fn purge_clears_an_unclaimed_cold_startup_and_preserves_unverified_data() {
-    for existing_workspace in [false, true] {
-        let (_directory, config, mut record) = fixture();
-        record.owner_pid = 0;
-        record.operation.state = OperationState::Failed;
-        record.operation.error =
-            Some("cannot launch startup worker: No such file or directory (os error 2)".into());
-        write(&config, &record).unwrap();
+fn purge_clears_failed_pre_ownership_startups_and_preserves_unverified_data() {
+    for (owner_pid, existing_workspace) in [
+        (0, false),
+        (0, true),
+        (std::process::id(), false),
+        (std::process::id(), true),
+    ] {
+        let (_directory, mut config, mut record) = fixture();
+        config.operation_id = Some(record.operation.id.clone());
+        record.owner_pid = owner_pid;
         let workspace = config.workspaces.join("Review");
         if existing_workspace {
             fs::create_dir(&workspace).unwrap();
             fs::write(workspace.join("data"), "keep").unwrap();
         }
+        if owner_pid == 0 {
+            record.operation.error =
+                Some("cannot launch startup worker: No such file or directory (os error 2)".into());
+        } else {
+            write(&config, &record).unwrap();
+            let held_lease = gateway::lock(&config, &lease(&record.operation.id)).unwrap();
+            super::super::templates::create(&config, "website").unwrap();
+            let error = super::super::lifecycle::start(
+                &config,
+                "website",
+                "Review",
+                Startup {
+                    before_creation: Some(Box::new(|_, _| {
+                        Err("OpenCode history clear blocked".into())
+                    })),
+                    ..Default::default()
+                },
+                60,
+                std::sync::Arc::new(|_| {}),
+                |_| {},
+            )
+            .unwrap_err();
+            assert_eq!(error, "OpenCode history clear blocked");
+            assert!(journal::recorded(&config, "Review").unwrap().is_none());
+            let retained = journal::enrich(&config, &mut []).unwrap();
+            assert_eq!(retained.len(), 1);
+            assert_eq!(retained[0].action, "create_instance");
+            assert_eq!(retained[0].error.as_deref(), Some(error.as_str()));
+            assert!(retained[0].finished);
+            record.operation.error = Some(error);
+            record.operation.state = OperationState::Failed;
+            write(&config, &record).unwrap();
+            drop(held_lease);
+            if !existing_workspace {
+                fs::remove_dir(&workspace).unwrap();
+            }
+        }
+        record.operation.state = OperationState::Failed;
+        write(&config, &record).unwrap();
         let mut instances = Vec::new();
         let mut activities = Vec::new();
         enrich(&config, &mut instances, &mut activities).unwrap();
         assert_eq!(instances.len(), 1);
 
         let held = gateway::lock(&config, "instance-Review").unwrap();
+        assert!(
+            gateway::lock(&config, "instance-review")
+                .unwrap_err()
+                .contains("busy")
+        );
         assert!(
             super::super::lifecycle::delete(
                 &config,
@@ -261,7 +326,7 @@ fn purge_clears_an_unclaimed_cold_startup_and_preserves_unverified_data() {
         assert!(read(&config, "Review").unwrap().is_some());
         drop(held);
         super::super::lifecycle::delete(&config, "Review", std::sync::Arc::new(|_| {}), &|_, _| {
-            panic!("unclaimed startup must not close clients")
+            panic!("pre-ownership startup must not close clients")
         })
         .unwrap();
 
@@ -274,6 +339,9 @@ fn purge_clears_an_unclaimed_cold_startup_and_preserves_unverified_data() {
         assert!(instances.is_empty());
         assert!(activities.is_empty());
         assert!(journal::enrich(&config, &mut instances).unwrap().is_empty());
+        for kind in [Kind::Startup, Kind::Journal, Kind::Ownership, Kind::Launch] {
+            assert!(runtime_db::load(&config, "Review", kind).unwrap().is_none());
+        }
         if existing_workspace {
             assert_eq!(fs::read_to_string(workspace.join("data")).unwrap(), "keep");
         } else {
@@ -283,29 +351,60 @@ fn purge_clears_an_unclaimed_cold_startup_and_preserves_unverified_data() {
 }
 
 #[test]
-fn metadata_only_purge_requires_a_failed_unclaimed_cold_startup_without_preparation() {
+fn metadata_only_purge_requires_a_failed_cold_startup_without_ownership_or_lease() {
     let (_directory, config, mut record) = fixture();
-    let eligible =
-        |config: &Config| super::super::cleanup::unclaimed_startup(config, "Review").unwrap();
+    let eligible = |config: &Config| {
+        super::super::cleanup::failed_pre_ownership_startup(config, "Review").unwrap()
+    };
     assert!(!eligible(&config));
-    let _lease = gateway::lock(&config, &lease(&record.operation.id)).unwrap();
-    record.owner_pid = 0;
+    let _instance = gateway::lock(&config, "instance-Review").unwrap();
+    let held_lease = gateway::lock(&config, &lease(&record.operation.id)).unwrap();
     write(&config, &record).unwrap();
     assert!(!eligible(&config));
+    record.started_at = journal::now().saturating_sub(record.timeout + 1);
+    write(&config, &record).unwrap();
+    assert_eq!(
+        record.clone().observe(&config).unwrap().operation.state,
+        OperationState::Failed
+    );
+    assert!(!eligible(&config));
+    record.operation.state = OperationState::Failed;
+    write(&config, &record).unwrap();
+    assert!(!eligible(&config));
+    drop(held_lease);
+    assert!(eligible(&config));
+    record.started_at = journal::now();
+    record.operation.state = OperationState::Running;
+    write(&config, &record).unwrap();
+    let interrupted = record.clone().observe(&config).unwrap();
+    assert_eq!(interrupted.operation.state, OperationState::Failed);
+    assert_eq!(
+        interrupted.operation.error.as_deref(),
+        Some("Startup interrupted; inspect runtime state before retrying")
+    );
+    assert!(eligible(&config));
     record.operation.state = OperationState::Succeeded;
     write(&config, &record).unwrap();
     assert!(!eligible(&config));
     record.operation.state = OperationState::Failed;
-    record.owner_pid = 42;
-    write(&config, &record).unwrap();
-    assert!(!eligible(&config));
-    record.owner_pid = 0;
     record.kind = StartupKind::Hot;
     write(&config, &record).unwrap();
     assert!(!eligible(&config));
     record.kind = StartupKind::Cold;
+    record.workspace_ready = true;
+    record.services = vec![InstanceService {
+        name: "api".into(),
+        ..Default::default()
+    }];
+    record.operation.instance = Some(Instance::default());
     write(&config, &record).unwrap();
     assert!(eligible(&config));
+    for kind in [Kind::Ownership, Kind::Launch] {
+        runtime_db::save(&config, "Review", kind, "{}").unwrap();
+        assert!(!eligible(&config));
+        runtime_db::remove(&config, "Review", &[kind]).unwrap();
+        assert!(eligible(&config));
+    }
     let template = super::super::templates::create(&config, "website").unwrap();
     journal::prepare(&config, &template, "Review", None).unwrap();
     assert!(!eligible(&config));

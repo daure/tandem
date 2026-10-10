@@ -8,6 +8,9 @@ mod event_severity;
 #[path = "event_deletion.rs"]
 mod event_deletion;
 
+#[path = "event_diagnostics.rs"]
+mod event_diagnostics;
+
 pub(crate) fn event(id: &str) -> Event {
     serde_json::from_value(json!({
         "schema_version": 1, "event_id": id, "stream": "samples",

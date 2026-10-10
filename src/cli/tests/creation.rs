@@ -20,9 +20,11 @@ mod inspection;
 mod lifecycle;
 mod opencode;
 mod preparation;
+mod prompted;
 mod providers;
 mod repository_updates;
 mod rules;
+mod session_prompt;
 mod startup;
 mod workspaces;
 

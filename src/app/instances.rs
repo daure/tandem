@@ -355,7 +355,7 @@ impl Instances {
                         .map(|row| (row.id.clone(), row.parent.clone()))
                 })
         };
-        let query = if select_created.is_some() {
+        let query = if select_created.is_some() || expand_session.is_some() {
             String::new()
         } else {
             self.tree.transform_state().search.clone()
@@ -497,7 +497,9 @@ impl Instances {
             self.tree.reveal_highlighted();
             self.state.borrow_mut().select_created = None;
         }
-        if let Some((_, parent)) = expand_session {
+        if let Some((id, parent)) = expand_session {
+            self.tree.set_search_query("");
+            self.stripe_query.clear();
             let mut ancestor = parent;
             while let Some(parent) = ancestor {
                 self.tree.expand(&parent);
@@ -508,6 +510,8 @@ impl Instances {
                     .find(|row| row.id == parent)
                     .and_then(|row| row.parent.clone());
             }
+            self.tree.highlight_id(&id);
+            self.tree.reveal_highlighted();
             self.state.borrow_mut().expand_session = None;
         }
         self.record_highlighted();
@@ -593,22 +597,6 @@ impl Instances {
             self.stripe_query = query;
         }
         self.record_highlighted();
-    }
-
-    fn overview_expanded_ids(rows: &[Row]) -> Vec<String> {
-        rows.iter()
-            .filter(|row| {
-                (row.parent.is_none()
-                    && !Self::external_workspace(row)
-                    && !Self::external_workspaces_group(row))
-                    || row.instance.is_some()
-            })
-            .map(|row| row.id.clone())
-            .collect()
-    }
-
-    fn external_workspace(row: &Row) -> bool {
-        row.id.starts_with("opencode-workspace:")
     }
 
     fn external_workspaces_group(row: &Row) -> bool {
@@ -700,25 +688,10 @@ impl Instances {
     }
 
     fn toggle_overview_expansion(&mut self, ctx: &mut EventCtx<Msg>) -> EventOutcome {
-        let parent_ids = self
-            .tree
-            .rows()
-            .iter()
-            .filter_map(|row| row.parent.clone())
-            .collect::<HashSet<_>>();
-        let mut expandable_ids = Self::overview_expanded_ids(self.tree.rows())
-            .into_iter()
-            .filter(|id| parent_ids.contains(id))
-            .collect::<Vec<_>>();
-        if self.state.borrow().attached_sessions_only {
-            expandable_ids.extend(
-                self.tree
-                    .rows()
-                    .iter()
-                    .filter(|row| parent_ids.contains(&row.id) && Self::external_workspace(row))
-                    .map(|row| row.id.clone()),
-            );
-        }
+        let expandable_ids = Self::default_expanded_ids(
+            self.tree.rows(),
+            self.state.borrow().attached_sessions_only,
+        );
         let mut all_expanded = true;
         for id in &expandable_ids {
             all_expanded &= !self.tree.expand(id).changed;

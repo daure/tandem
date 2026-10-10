@@ -42,6 +42,8 @@ pub(super) enum FeedbackSetting {
     FadeSeconds,
     Sound,
     EventAcceptanceSound,
+    InstancePingSound,
+    InstancePingEnabled,
 }
 
 impl FeedbackSetting {
@@ -50,13 +52,16 @@ impl FeedbackSetting {
             Self::FadeSeconds => "completion.fade_seconds",
             Self::Sound => "completion.sound",
             Self::EventAcceptanceSound => "events.acceptance_sound",
+            Self::InstancePingSound => "instances.ping_sound",
+            Self::InstancePingEnabled => "instances.ping_enabled",
         }
     }
 
     fn default_value(self) -> &'static str {
         match self {
             Self::FadeSeconds => "20",
-            Self::Sound | Self::EventAcceptanceSound => "",
+            Self::Sound | Self::EventAcceptanceSound | Self::InstancePingSound => "",
+            Self::InstancePingEnabled => "false",
         }
     }
 }
@@ -64,7 +69,7 @@ impl FeedbackSetting {
 pub(super) struct Settings {
     branch_instances: AtomicBool,
     opencode: Arc<[AtomicBool; 2]>,
-    feedback: Arc<[RwLock<String>; 3]>,
+    feedback: Arc<[RwLock<String>; 5]>,
     startup_history: Arc<RwLock<StartupHistory>>,
     commands: mpsc::Sender<SettingsRequest>,
 }
@@ -109,6 +114,14 @@ impl Settings {
             RwLock::new(read_feedback(
                 &connection,
                 FeedbackSetting::EventAcceptanceSound,
+            )?),
+            RwLock::new(read_feedback(
+                &connection,
+                FeedbackSetting::InstancePingSound,
+            )?),
+            RwLock::new(read_feedback(
+                &connection,
+                FeedbackSetting::InstancePingEnabled,
             )?),
         ]);
         let opencode = Arc::new([
@@ -177,6 +190,8 @@ impl Settings {
             FeedbackSetting::FadeSeconds,
             FeedbackSetting::Sound,
             FeedbackSetting::EventAcceptanceSound,
+            FeedbackSetting::InstancePingSound,
+            FeedbackSetting::InstancePingEnabled,
         ] {
             self.feedback_request(kind, None)?
                 .blocking_recv()
@@ -314,7 +329,7 @@ fn read_startup_table(
 fn persist_settings(
     connection: Connection,
     receiver: mpsc::Receiver<SettingsRequest>,
-    feedback: Arc<[RwLock<String>; 3]>,
+    feedback: Arc<[RwLock<String>; 5]>,
     startup_history: Arc<RwLock<StartupHistory>>,
     opencode: Arc<[AtomicBool; 2]>,
 ) {
@@ -492,6 +507,41 @@ impl AppService {
     pub(crate) fn event_acceptance_sound_choice(&self) -> String {
         self.settings
             .feedback(FeedbackSetting::EventAcceptanceSound)
+    }
+
+    pub(crate) fn instance_ping_sound_choice(&self) -> String {
+        self.settings.feedback(FeedbackSetting::InstancePingSound)
+    }
+
+    pub(super) fn refresh_instance_ping_settings(&self) -> Result<(), String> {
+        for kind in [
+            FeedbackSetting::InstancePingSound,
+            FeedbackSetting::InstancePingEnabled,
+        ] {
+            self.settings
+                .feedback_request(kind, None)?
+                .blocking_recv()
+                .map_err(|_| "settings worker stopped")??;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn instance_ping_enabled(&self) -> bool {
+        self.settings.feedback(FeedbackSetting::InstancePingEnabled) == "true"
+    }
+
+    pub(crate) fn set_instance_ping_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
+        self.set_feedback(FeedbackSetting::InstancePingEnabled, enabled.to_string())
+    }
+
+    pub(crate) fn set_instance_ping_sound_choice(
+        &self,
+        value: String,
+    ) -> Result<oneshot::Receiver<Result<String, String>>, String> {
+        self.set_sound_choice(FeedbackSetting::InstancePingSound, value)
     }
 
     pub(crate) fn set_completion_fade_seconds(

@@ -131,7 +131,7 @@ pub(crate) fn ensure(config: &Config) -> Result<String, String> {
         Instant::now() + Duration::from_secs(30),
         &progress,
     )?;
-    let executable = installed_executable()?;
+    let executable = super::executable::installed()?;
     if let Some(receipt) = running(config) {
         if executable_is_current(&receipt, &executable)? {
             return Ok(receipt.origin);
@@ -208,24 +208,6 @@ pub(crate) fn ensure(config: &Config) -> Result<String, String> {
         }
         thread::sleep(Duration::from_millis(100));
     }
-}
-
-fn installed_executable() -> Result<PathBuf, String> {
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::ffi::{OsStrExt, OsStringExt};
-        // Open clients can retain an unlinked executable after an atomic installation.
-        // Resolve its installed path so those clients cannot downgrade the receiver.
-        if let Some(path) = executable
-            .as_os_str()
-            .as_bytes()
-            .strip_suffix(b" (deleted)")
-        {
-            return Ok(std::ffi::OsString::from_vec(path.to_vec()).into());
-        }
-    }
-    Ok(executable)
 }
 
 #[cfg(target_os = "linux")]

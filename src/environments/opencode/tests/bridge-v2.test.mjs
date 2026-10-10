@@ -117,11 +117,12 @@ test("V2 presence follows router forms and model metadata without exposing crede
 
 test("V2 session selections preserve defaults and attach instructions before optional task input", async (t) => {
   const selections = [
-    [undefined, undefined, undefined],
+    [undefined, undefined, { providerID: "remembered", id: "sol-fast", variant: "medium" }],
     ["openai/test", undefined, { providerID: "openai", id: "test" }],
     ["openai/test#fast", undefined, { providerID: "openai", id: "test", variant: "fast" }],
     ["openai/test", "high", { providerID: "openai", id: "test", variant: "high" }],
-    [undefined, "high", { providerID: "default-provider", id: "default-model", variant: "high" }],
+    [undefined, "high", { providerID: "remembered", id: "sol-fast", variant: "high" }],
+    [undefined, undefined, undefined],
   ]
   for (const [text, modelName, variantName, selected] of ["", "Literal 'text'; $(not-a-shell)"].flatMap((text) => selections.map((selection) => [text, ...selection]))) {
     await t.test(`${text || "instructions only"}: ${modelName ?? "default"}/${variantName ?? "default"}`, async (t) => {
@@ -142,7 +143,7 @@ test("V2 session selections preserve defaults and attach instructions before opt
         options: { presenceDirectory: root }, location: { directory: "/work/review" },
         client: {
           server: { info: async () => ({ urls: ["http://127.0.0.1:4199"] }) },
-          model: { default: async (input) => { calls.push(["default", input]); return { data: { providerID: "default-provider", id: "default-model" } } } },
+          model: { default: async () => assert.fail("client selection must take precedence over server defaults") },
           session: {
             create: async (input) => { calls.push(["create", input]); return { id: "ses_new" } },
             prompt: async (input) => { calls.push(["prompt", input]) },
@@ -150,7 +151,11 @@ test("V2 session selections preserve defaults and attach instructions before opt
           },
         },
         data: { session: {}, location: { provider: { list: () => [] }, model: { list: () => [] } } },
-        ui: { router: { current: () => route, navigate: (next) => { route = next; calls.push(["route", next]) } }, toast: { show: () => assert.fail("unexpected error") } },
+        ui: {
+          model: { current: () => selected ? { providerID: "remembered", modelID: "sol-fast", variant: "medium" } : undefined },
+          router: { current: () => route, navigate: (next) => { route = next; calls.push(["route", next]) } },
+          toast: { show: () => assert.fail("unexpected error") },
+        },
       }
       const dispose = await plugin.setup(context, reactiveForTest())
       t.after(dispose)
@@ -158,7 +163,6 @@ test("V2 session selections preserve defaults and attach instructions before opt
         ["instructions", { sessionID: "ses_new", key: "tandem.services", value: "Services won't start automatically" }],
         ["route", { type: "session", sessionID: "ses_new" }]]
       if (text) expected.push(["prompt", { sessionID: "ses_new", text }])
-      if (!modelName && variantName) expected.unshift(["default", { location: { directory: "/work/review" } }])
       assert.deepEqual(calls, expected)
       assert.equal(process.env.TANDEM_INITIAL_PROMPT, undefined)
       assert.equal(process.env.TANDEM_SESSION_MODEL, undefined)
@@ -167,7 +171,7 @@ test("V2 session selections preserve defaults and attach instructions before opt
   }
 })
 
-async function tabClient(t) {
+async function tabClient(t, selectedModel) {
   const root = await mkdtemp(join(tmpdir(), "tandem-v2-tabs-"))
   t.after(() => rm(root, { recursive: true, force: true }))
   let route = { type: "home" }
@@ -184,6 +188,7 @@ async function tabClient(t) {
     },
     data: { session: {}, location: { provider: { list: () => [] }, model: { list: () => [] } } },
     ui: {
+      ...(selectedModel ? { model: { current: () => selectedModel } } : {}),
       router: { current: () => route },
       tabs: {
         enabled: () => enabled,
@@ -398,4 +403,77 @@ test("unloaded, changing, or closed tabs must be checked before creating an empt
       }
     })
   }
+})
+
+test("prompted sessions create fresh tabs with selections and instructions before literal input", async (t) => {
+  for (const selection of [{}, { model: "openai/test" }, { model: "openai/test#high" }, { model: "openai/test", variant: "low" }, { variant: "high" }, { agent: "tracer" }, { agent: "tracer", model: "openai/test", variant: "high" }]) {
+    await t.test(JSON.stringify(selection), async (t) => {
+      const client = await tabClient(t, { providerID: "openai", modelID: "sol-fast", variant: "medium" })
+      client.context.client.agent = { get: async (input) => {
+        assert.deepEqual(input, { agentID: "tracer", location: { directory: "/work/review" } })
+        return { id: "tracer" }
+      } }
+      const ids = ["ses_empty", "ses_busy"]
+      client.context.ui.tabs.list = () => ids.map((sessionID) => ({ sessionID }))
+      client.context.client.session.create = async (input) => {
+        client.calls.push(["create", input])
+        client.context.ui.model.current = () => ({ providerID: "opencode", modelID: "exo-free", variant: "low" })
+        return { id: "ses_new" }
+      }
+      client.context.client.model = { default: async () => assert.fail("client selection must take precedence over server defaults") }
+      client.context.client.session.prompt = async (input) => { client.calls.push(["prompt", input]) }
+      const input = { directory: "/work/review", initial_prompt: "Literal 'text'; $(not-a-shell)\n日本語", instructions: "Services are stopped", ...selection }
+      const response = await client.request(input, undefined, "/sessions")
+      assert.equal(response.status, 200)
+      assert.deepEqual(await response.json(), {
+        session_id: "ses_new", server: "http://127.0.0.1:4199", prompt_outcome: "submitted", error: null,
+      })
+      const explicitVariant = selection.variant ?? selection.model?.split("#")[1]
+      const model = selection.model ? { providerID: "openai", id: "test", ...(explicitVariant ? { variant: explicitVariant } : {}) }
+        : { providerID: "openai", id: "sol-fast", variant: selection.variant ?? "medium" }
+      assert.deepEqual(client.calls, [
+        ["create", { location: { directory: "/work/review" }, ...(model ? { model } : {}), ...(selection.agent ? { agent: selection.agent } : {}) }],
+        ["instructions", { sessionID: "ses_new", key: "tandem.services", value: input.instructions }],
+        ["focus", "ses_new"],
+        ["prompt", { sessionID: "ses_new", text: input.initial_prompt }],
+      ])
+      assert.deepEqual(ids, ["ses_empty", "ses_busy"])
+    })
+  }
+})
+
+test("prompted session failures retain identity and distinguish unsent from uncertain input", async (t) => {
+  for (const phase of ["selection", "create", "instructions", "focus", "prompt"]) {
+    await t.test(phase, async (t) => {
+      const client = await tabClient(t, { providerID: "openai", modelID: "sol-fast" })
+      let attempts = 0
+      const fail = async () => { attempts++; throw new Error("connection lost") }
+      client.context.client.session.prompt = async () => assert.fail("input must be blocked")
+      if (phase === "selection") client.context.ui.model.current = () => { attempts++; return undefined }
+      else if (phase === "instructions") client.context.client.session.instructions.entry.put = fail
+      else if (phase === "focus") client.context.ui.tabs.focus = () => { attempts++; return false }
+      else client.context.client.session[phase] = fail
+      const response = await client.request({ directory: "/work/review", initial_prompt: "Inspect this", instructions: "Services are stopped" }, undefined, "/sessions")
+      assert.equal(response.status, 200)
+      const outcome = await response.json()
+      assert.equal(outcome.session_id, ["selection", "create"].includes(phase) ? null : "ses_new")
+      assert.equal(outcome.prompt_outcome, phase === "prompt" ? "uncertain" : "not_submitted")
+      assert.match(outcome.error, phase === "prompt" ? /delivery may be uncertain/ : /initial prompt was not submitted/)
+      assert.equal(attempts, 1)
+      if (phase === "selection") assert.deepEqual(client.calls, [])
+    })
+  }
+})
+
+test("prompted sessions reject mismatched workspaces and invalid input before creating a conversation", async (t) => {
+  const client = await tabClient(t)
+  for (const input of [
+    { directory: "/work/other", initial_prompt: "Inspect" },
+    { directory: "/work/review", initial_prompt: " \n\t" },
+    { directory: "/work/review", initial_prompt: "x".repeat(65_537) },
+    { directory: "/work/review", initial_prompt: "a\0b" },
+  ]) {
+    assert.equal((await client.request(input, undefined, "/sessions")).status, 400)
+  }
+  assert.deepEqual(client.calls, [])
 })

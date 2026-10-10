@@ -3,6 +3,7 @@ import { homedir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { createServer } from "node:http"
 import { randomBytes } from "node:crypto"
+import { applyInstructions, promptExistingSession, promptFreshSession, selectModel } from "./session-input.mjs"
 
 // Runs in each TUI, not in the shared server: route and terminal identity are client-local.
 const plugin = {
@@ -59,24 +60,44 @@ const plugin = {
         },
       },
       client: { session: {
+        validateAgent: (directory, agentID, options) => context.client.agent.get({ agentID, location: { directory } }, options),
         async defaultModel(directory, options) {
           const result = await context.client.model.default({ location: { directory } }, options)
           if (!result.data) throw new Error("OpenCode has no default model")
           return { providerID: result.data.providerID, id: result.data.id }
         },
-        async create({ directory, model }, options) {
-          return { data: await context.client.session.create({ location: { directory }, ...(model ? { model } : {}) }, options) }
+        async create({ directory, model, agent }, options) {
+          return { data: await context.client.session.create({ location: { directory }, ...(model ? { model } : {}), ...(agent ? { agent } : {}) }, options) }
         },
+        get: (sessionID, options) => context.client.session.get({ sessionID }, options),
+        async busy(session, options) {
+          const [active] = await Promise.all([
+            context.client.session.active(options),
+            context.data.session.form.sync(session.id, session.location),
+            context.data.session.permission.sync(session.id),
+          ])
+          return Boolean(active[session.id])
+            || (context.data.session.form.list(session.id, session.location)?.length ?? 0) > 0
+            || (context.data.session.permission.list(session.id)?.length ?? 0) > 0
+        },
+        switchAgent: (sessionID, agent, options) => context.client.session.switchAgent({ sessionID, agent }, options),
+        switchModel: (sessionID, model, options) => context.client.session.switchModel({ sessionID, model }, options),
+        interrupt: (sessionID, options) => context.client.session.interrupt({ sessionID, resume: false }, options),
         async attachInstructions(sessionID, instructions, options) {
           const entry = context.client.session?.instructions?.entry
           if (!entry?.put) throw new Error("This OpenCode server does not support session instruction entries")
           await entry.put({ sessionID, key: "tandem.services", value: instructions }, options)
         },
-        promptAsync({ sessionID, parts }, options) {
-          return context.client.session.prompt({ sessionID, text: parts.map((part) => part.text).join("\n") }, options)
+        promptAsync({ sessionID, parts, delivery, resume }, options) {
+          return context.client.session.prompt({ sessionID, text: parts.map((part) => part.text).join("\n"),
+            ...(delivery ? { delivery } : {}), ...(resume != null ? { resume } : {}),
+          }, options)
         },
       } },
-      ui: { toast: (options) => context.ui.toast.show(options) },
+      ui: {
+        toast: (options) => context.ui.toast.show(options),
+        ...(context.ui.model?.current ? { selectedModel: () => context.ui.model.current() } : {}),
+      },
       lifecycle: {
         onDispose(fn) { dispose = fn },
         watch(read, changed) {
@@ -109,7 +130,7 @@ const plugin = {
     let stopped = false
     let pending = Promise.resolve()
     const initialRequest = new AbortController()
-    const tabControl = api.tabs ? await serveTabs(api, initialRequest.signal) : undefined
+    const tabControl = await serveTabs(api, initialRequest.signal)
 
     const initializeConversation = async () => {
       if (stopped || !api.state.ready || (initialPrompt === undefined && initialInstructions === undefined && initialModel === undefined && initialVariant === undefined)) return
@@ -130,13 +151,7 @@ const plugin = {
           throwOnError: true,
           signal: AbortSignal.any([initialRequest.signal, AbortSignal.timeout(15_000)]),
         }
-        const [modelID, embeddedVariant] = modelName?.split("#") ?? []
-        const variant = selectedVariant ?? embeddedVariant
-        const [providerID, ...modelPath] = modelID?.split("/") ?? []
-        let model = modelName ? { providerID, id: modelPath.join("/"), ...(variant ? { variant } : {}) } : undefined
-        if (!model && variant && api.client.session.defaultModel) {
-          model = { ...await api.client.session.defaultModel(directory, options), variant }
-        }
+        const { model, variant } = await selectModel(api, directory, modelName, selectedVariant, options, false)
         const result = await api.client.session.create({ directory, ...(model ? { model } : {}) }, options)
         if (stopped) return
         if (!result.data?.id) throw new Error("Session creation returned no session")
@@ -198,7 +213,7 @@ const plugin = {
         title: session?.title ?? "OpenCode",
         directory: session?.directory ?? api.state.path.directory,
         server: server ?? "",
-        tab_control: tabControl?.receipt,
+        tab_control: tabControl ? { ...tabControl.receipt, session_tabs: Boolean(api.tabs?.enabled()) } : undefined,
         last_question: lastQuestions.get(sessionID),
         activity: awaitingAnswer
           ? "awaiting_answer"
@@ -294,9 +309,11 @@ async function serveTabs(api, disposed) {
     if (request.headers.authorization !== `Bearer ${token}`) return reply(401, { error: "Unauthorized" })
     const focusing = request.url === "/tabs/focus"
     const closing = request.url === "/tabs/close"
-    if (request.method !== "POST" || (!focusing && !closing && request.url !== "/tabs")) return reply(404, { error: "Unknown action" })
+    const existing = request.url === "/sessions/prompt"
+    const prompting = request.url === "/sessions" || existing
+    if (request.method !== "POST" || (!prompting && !focusing && !closing && request.url !== "/tabs")) return reply(404, { error: "Unknown action" })
     if (busy) return reply(409, { error: "OpenCode tab action is already in progress" })
-    if (!focusing && !api.tabs.enabled()) return reply(409, { error: "Enable OpenCode session tabs before changing tabs" })
+    if (!prompting && !focusing && !api.tabs?.enabled()) return reply(409, { error: "Enable OpenCode session tabs before changing tabs" })
     busy = true
     const cancelled = new AbortController()
     response.on("close", () => cancelled.abort())
@@ -306,10 +323,36 @@ async function serveTabs(api, disposed) {
       request.setEncoding("utf8")
       for await (const chunk of request) {
         body += chunk
-        if (Buffer.byteLength(body) > 16_384) throw new Error("Tab request is too large")
+        if (Buffer.byteLength(body) > (prompting ? 524_288 : 16_384)) throw new Error("Tab request is too large")
       }
-      const { directory, sessionID, instructions } = JSON.parse(body)
+      const input = JSON.parse(body)
+      const { directory, sessionID, instructions } = input
       if (instructions != null && typeof instructions !== "string") return reply(400, { error: "Invalid session instructions" })
+      if (prompting) {
+        if (typeof directory !== "string" || directory !== api.state.path.directory || !api.state.ready) {
+          return reply(400, { error: "OpenCode client workspace does not match the requested directory" })
+        }
+        if (!api.tabs?.enabled() && api.route.current.name !== "home" && !(existing && api.route.current.params?.sessionID === sessionID)) {
+          return reply(409, { error: "Enable session tabs or open a fresh client before prompting a new conversation" })
+        }
+        if (typeof input.initial_prompt !== "string" || !input.initial_prompt.trim()
+          || Buffer.byteLength(input.initial_prompt) > 65_536 || input.initial_prompt.includes("\0")) {
+          return reply(400, { error: "Invalid initial prompt" })
+        }
+        if ((input.model != null && (typeof input.model !== "string" || !input.model.includes("/")))
+          || (input.variant != null && typeof input.variant !== "string")
+          || (input.agent != null && (typeof input.agent !== "string" || !input.agent.trim()
+            || Buffer.byteLength(input.agent) > 200 || /\p{Cc}/u.test(input.agent)))) {
+          return reply(400, { error: "Invalid model selection" })
+        }
+        if (existing) {
+          if (typeof sessionID !== "string" || !/^[a-zA-Z0-9_]{1,127}$/.test(sessionID)) return reply(400, { error: "Invalid session identity" })
+          input.when_busy ??= "queue"
+          if (!["queue", "interrupt", "abort"].includes(input.when_busy)) return reply(400, { error: "Invalid busy-session policy" })
+          return reply(200, await promptExistingSession(api, input, signal))
+        }
+        return reply(200, await promptFreshSession(api, input, signal))
+      }
       if (closing) {
         if (!api.tabs.list().some((tab) => tab.sessionID === sessionID)) {
           return reply(409, { error: "The OpenCode tab closed; refresh and try again" })
@@ -327,10 +370,10 @@ async function serveTabs(api, disposed) {
       if (focusing) {
         const current = api.route.current
         const selected = current.name === "session" && current.params?.sessionID === sessionID
-        const open = api.tabs.enabled() && api.tabs.list().some((tab) => tab.sessionID === sessionID)
+        const open = api.tabs?.enabled() && api.tabs.list().some((tab) => tab.sessionID === sessionID)
         if (!selected && !open) return reply(409, { error: "The OpenCode tab closed; refresh and try again" })
         signal.throwIfAborted()
-        if (api.tabs.enabled() && api.tabs.focus(sessionID) === false) {
+        if (api.tabs?.enabled() && api.tabs.focus(sessionID) === false) {
           return reply(409, { error: "OpenCode refused tab navigation" })
         }
         return reply(200, { id: sessionID })
@@ -387,23 +430,14 @@ async function serveTabs(api, disposed) {
   })
   server.unref()
   return {
-    receipt: { server: `http://127.0.0.1:${server.address().port}`, token },
+    receipt: {
+      server: `http://127.0.0.1:${server.address().port}`, token,
+      prompted_sessions: true, session_prompts: Boolean(api.client?.session?.get), session_tabs: Boolean(api.tabs?.enabled()),
+    },
     close: () => new Promise((resolve) => {
       server.close(resolve)
       server.closeAllConnections()
     }),
-  }
-}
-
-async function applyInstructions(api, sessionID, directory, instructions, options) {
-  if (!instructions) return
-  if (api.client.session.attachInstructions) {
-    await api.client.session.attachInstructions(sessionID, instructions, options)
-  } else {
-    // V1 has no instruction entries; synthetic no-reply context never starts a model request.
-    await api.client.session.prompt({
-      directory, sessionID, noReply: true, parts: [{ type: "text", text: instructions, synthetic: true }],
-    }, options)
   }
 }
 

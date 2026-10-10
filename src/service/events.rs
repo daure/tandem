@@ -142,6 +142,18 @@ impl AppService {
             .map_err(|error| error.to_string())
     }
 
+    pub(crate) fn event_diagnostics(
+        &self,
+        sequence: i64,
+    ) -> oneshot::Receiver<Result<crate::store::events::diagnostics::Diagnostics, Error>> {
+        let store = self.events.store.clone();
+        let (sender, receiver) = oneshot::channel();
+        self.runtime.spawn_blocking(move || {
+            let _ = sender.send(store.diagnostics(sequence));
+        });
+        receiver
+    }
+
     pub(crate) async fn replay_event_request(
         &self,
         sequence: i64,

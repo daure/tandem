@@ -99,6 +99,7 @@ fn scoped_conclusion_survives_mcp_kill_and_retains_searchable_reports_after_reso
             "conclude",
             "get_event_report",
             "get_instructions",
+            "ping",
             "search_events",
             "start_self",
             "stop_self",

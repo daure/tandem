@@ -19,13 +19,45 @@ pub(in crate::environments) fn recorded(
 pub(super) fn validate(config: &Config, name: &str, instance: &Instance) -> Result<(), String> {
     validate_instance_name(&instance.name)?;
     validate_name(&instance.template)?;
-    if instance.name != name
-        || instance.project != config.project(name)
-        || Path::new(&instance.workspace) != config.workspaces.join(name)
-        || Path::new(&instance.template_directory) != config.templates.join(&instance.template)
-        || instance.workspace_only && !instance.services.is_empty()
-    {
-        return Err(format!("instance record ownership mismatch for {name}"));
+    let mut mismatches = Vec::new();
+    if instance.name != name {
+        mismatches.push(format!(
+            "name: recorded={:?}, expected={name:?}",
+            instance.name
+        ));
+    }
+    let project = config.project(name);
+    if instance.project != project {
+        mismatches.push(format!(
+            "project: recorded={:?}, expected={project:?}",
+            instance.project
+        ));
+    }
+    let workspace = config.workspaces.join(name);
+    if Path::new(&instance.workspace) != workspace {
+        mismatches.push(format!(
+            "workspace: recorded={:?}, expected={workspace:?}",
+            instance.workspace
+        ));
+    }
+    let template_directory = config.templates.join(&instance.template);
+    if Path::new(&instance.template_directory) != template_directory {
+        mismatches.push(format!(
+            "template_directory: recorded={:?}, expected={template_directory:?}",
+            instance.template_directory
+        ));
+    }
+    if instance.workspace_only && !instance.services.is_empty() {
+        mismatches.push(format!(
+            "services: recorded count={}, expected count=0 for workspace_only=true",
+            instance.services.len()
+        ));
+    }
+    if !mismatches.is_empty() {
+        return Err(format!(
+            "instance record ownership mismatch for {name}: {}",
+            mismatches.join("; ")
+        ));
     }
     Ok(())
 }
