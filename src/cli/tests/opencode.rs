@@ -278,7 +278,11 @@ impl Drop for Server {
 const ZELLIJ: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$TANDEM_HOME/zellij-calls"
 case "$*" in
-  list-sessions*) printf 'main\n';;
+  list-sessions*)
+    case "$*" in
+      *--short*) printf 'main\n' ;;
+      *) printf 'main [Created 1s ago]\n' ;;
+    esac ;;
   *list-panes*) cat "$TANDEM_HOME/panes.json";;
   *new-tab*|*new-pane*)
     if [ "$FAIL_OPENCODE" = 1 ]; then printf 'fixture OpenCode launch failed\n' >&2; exit 23; fi
