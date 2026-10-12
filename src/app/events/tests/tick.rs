@@ -1,7 +1,10 @@
 use super::*;
 use crate::store::{environments::Instance, opencode::Activity};
 
-fn events(instance_loading: Option<bool>, conversation: Option<Activity>) -> Events {
+pub(in crate::app::events) fn events(
+    instance_loading: Option<bool>,
+    conversation: Option<Activity>,
+) -> Events {
     crate::app::tests::init_ui();
     let mut context = super::super::acceptances::Context::default();
     let mut record = Record {
@@ -81,7 +84,7 @@ fn disabled() -> AnimationSettings {
     }
 }
 
-fn render(events: &mut Events) -> String {
+pub(in crate::app::events) fn render(events: &mut Events) -> String {
     let area = Rect::new(0, 0, 130, 30);
     events.layout(area, &mut LayoutCtx::default());
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(130, 30)).unwrap();
@@ -123,7 +126,11 @@ fn loading_instances_and_busy_conversations_animate_only_when_enabled() {
         assert!(render(&mut events).contains("⠋"));
         let tick = events.tick(Duration::from_millis(80), AnimationSettings::default());
         assert!(
-            tick.active && tick.changed,
+            !tick.active
+                && tick.changed
+                && tick
+                    .next_tick
+                    .is_some_and(|wait| wait <= Duration::from_millis(80)),
             "loading feed did not animate: {tick:?}"
         );
         assert!(render(&mut events).contains("⠙"));
@@ -134,4 +141,106 @@ fn loading_instances_and_busy_conversations_animate_only_when_enabled() {
         );
         assert!(render(&mut events).contains("⠙"));
     }
+}
+
+#[test]
+fn busy_events_reuse_the_projection_until_inputs_change() {
+    let mut events = events(Some(false), Some(Activity::Busy));
+    let first = events.projections;
+    for _ in 0..10 {
+        events.tick(Duration::from_millis(80), disabled());
+    }
+    assert_eq!(events.projections, first);
+    events.context.borrow_mut().opencode.sessions[0].title = "Updated conversation".into();
+    events.dirty.set(true);
+    events.tick(Duration::ZERO, disabled());
+    assert_eq!(events.projections, first + 1);
+    assert!(render(&mut events).contains("Updated conversation"));
+
+    events.toolbar.borrow_mut().show_saved = false;
+    events.tick(Duration::ZERO, disabled());
+    assert_eq!(events.projections, first + 2);
+}
+
+#[test]
+fn clean_events_process_focus_deletion_and_filter_requests() {
+    let mut events = events(Some(false), None);
+    let mut pinned = events.shared.borrow().records[0].clone();
+    pinned.sequence = 20;
+    events.requested.borrow_mut().record = Some(pinned);
+    events.tick(Duration::ZERO, disabled());
+    assert_eq!(
+        events.view.second().highlighted_id().as_deref(),
+        Some("event:20")
+    );
+    assert_eq!(events.pinned.as_ref().map(|row| row.sequence), Some(20));
+
+    events.requested.borrow_mut().deletion = Some(Deletion::Event(20));
+    events.tick(Duration::ZERO, disabled());
+    assert!(events.pinned.is_none());
+    assert!(!events.projected.iter().any(|row| row.id() == "event:20"));
+
+    *events.filter.borrow_mut() = Some(vec![StreamKey::new("other".into(), "other".into())]);
+    events.tick(Duration::ZERO, disabled());
+    assert!(events.projected.is_empty());
+    *events.filter.borrow_mut() = Some(Vec::new());
+    events.requested.borrow_mut().reset_filters = true;
+    events.tick(Duration::ZERO, disabled());
+    assert!(!events.projected.is_empty());
+}
+
+#[test]
+fn large_busy_event_feeds_reuse_shared_targets_and_settled_projections() {
+    let mut events = events(Some(false), Some(Activity::Busy));
+    {
+        let mut context = events.context.borrow_mut();
+        let instance = context.inventory.instances[0].clone();
+        let session = context.opencode.sessions[0].clone();
+        context.inventory.instances = (0..20)
+            .map(|index| {
+                let mut instance = instance.clone();
+                instance.name = format!("review-{index}");
+                instance.workspace = format!("/tmp/opencode/review-{index}");
+                instance
+            })
+            .collect();
+        context.opencode.sessions = (0..20)
+            .flat_map(|instance| {
+                let session = session.clone();
+                (0..10).map(move |index| {
+                    let mut session = session.clone();
+                    session.id = format!("ses_{instance}_{index}");
+                    session.directory = format!("/tmp/opencode/review-{instance}");
+                    session
+                })
+            })
+            .collect();
+    }
+    {
+        let mut shared = events.shared.borrow_mut();
+        let acceptance = shared.records[0].acceptances[0].clone();
+        shared.records[0].acceptances = (0..50)
+            .map(|index| {
+                let mut acceptance = acceptance.clone();
+                acceptance.id = index + 1;
+                acceptance.instance = format!("review-{}", index % 20);
+                acceptance
+            })
+            .collect();
+    }
+    events.dirty.set(true);
+    events.tick(Duration::ZERO, disabled());
+    assert_eq!(events.projected.len(), 551);
+    let Entry::Acceptance(target) = &events.projected[1] else {
+        panic!("acceptance row");
+    };
+    let Entry::Conversation { target: child, .. } = &events.projected[2] else {
+        panic!("conversation row");
+    };
+    assert!(Rc::ptr_eq(target, child));
+    let projections = events.projections;
+    for _ in 0..10 {
+        events.tick(Duration::from_millis(80), disabled());
+    }
+    assert_eq!(events.projections, projections);
 }

@@ -29,6 +29,35 @@ fn setup() -> (tempfile::TempDir, Config, EventStore, String) {
 }
 
 #[test]
+fn consecutive_event_deletions_keep_temporary_targets_scoped_to_each_operation() {
+    let (_home, _config, store, token) = setup();
+    let received = store
+        .ingest(
+            &token,
+            Batch {
+                events: vec![event("first"), event("second")],
+            },
+        )
+        .unwrap();
+    for receipt in received.receipts {
+        assert_eq!(store.delete(Deletion::Event(receipt.sequence)).unwrap(), 1);
+    }
+    assert_eq!(store.snapshot().unwrap().total, 0);
+}
+
+#[test]
+fn cached_event_connections_reject_symlinked_database_paths() {
+    let (_home, config, store, _token) = setup();
+    store.snapshot().unwrap();
+    let outside = tempfile::NamedTempFile::new().unwrap();
+    let path = config.home.join("settings.sqlite3");
+    fs::rename(&path, config.home.join("original.sqlite3")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), path).unwrap();
+    assert!(matches!(store.snapshot(), Err(Error::Storage(_))));
+    assert_eq!(fs::metadata(outside.path()).unwrap().len(), 0);
+}
+
+#[test]
 fn opening_stream_controls_preserves_state_and_supports_declaration_tracking() {
     let (_home, config, store, _token) = setup();
     let connection = store.connection().unwrap();

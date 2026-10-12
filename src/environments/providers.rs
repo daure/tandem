@@ -1,11 +1,12 @@
-use std::{collections::BTreeMap, fs, io::Write, time::Duration};
+use std::{collections::BTreeMap, fs, io::Write, sync::Arc, time::Duration};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
 use super::{
     command,
     config::{Config, read_text},
+    database::{Lease, Pool},
     events::EventStore,
     gateway, provider_sidecar,
 };
@@ -19,12 +20,14 @@ mod streams;
 #[derive(Clone)]
 pub(crate) struct Providers {
     config: Config,
+    connections: Arc<Pool>,
 }
 
 impl Providers {
     pub(crate) fn new(config: &Config) -> Result<Self, String> {
         let manager = Self {
             config: config.clone(),
+            connections: Arc::new(Pool::new(config.home.join("settings.sqlite3"))),
         };
         manager
             .database()?
@@ -33,13 +36,8 @@ impl Providers {
         Ok(manager)
     }
 
-    fn database(&self) -> Result<Connection, String> {
-        let connection = Connection::open(self.config.home.join("settings.sqlite3"))
-            .map_err(|error| error.to_string())?;
-        connection
-            .busy_timeout(Duration::from_secs(5))
-            .map_err(|error| error.to_string())?;
-        Ok(connection)
+    fn database(&self) -> Result<Lease, String> {
+        self.connections.get(|_| Ok(()))
     }
 
     fn definition(&self, name: &str) -> Result<Provider, String> {
@@ -93,7 +91,7 @@ impl Providers {
             }
         }
         let connection = self.database()?;
-        let mut statement = connection.prepare("SELECT name, directory, manifest, error FROM provider_launches WHERE namespace = ?1").map_err(|error| error.to_string())?;
+        let mut statement = connection.prepare_cached("SELECT name, directory, manifest, error FROM provider_launches WHERE namespace = ?1").map_err(|error| error.to_string())?;
         for row in statement
             .query_map([&self.config.namespace], |row| {
                 Ok((

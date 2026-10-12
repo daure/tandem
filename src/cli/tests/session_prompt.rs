@@ -39,7 +39,9 @@ impl Server {
                     .unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
+                if reader.read_line(&mut line).unwrap() == 0 {
+                    continue;
+                }
                 let method = line.split_whitespace().next().unwrap().to_owned();
                 let path = line.split_whitespace().nth(1).unwrap().to_owned();
                 let mut length = 0;

@@ -178,8 +178,14 @@ impl Observer {
     }
 
     fn inventory(&self) -> (Vec<Presence>, BTreeMap<String, BTreeSet<String>>) {
+        self.inventory_at_ports(&discovery::listening_ports())
+    }
+
+    fn inventory_at_ports(
+        &self,
+        listening: &BTreeSet<u16>,
+    ) -> (Vec<Presence>, BTreeMap<String, BTreeSet<String>>) {
         let presences = self.presences();
-        let listening = discovery::listening_ports();
         let mut servers = BTreeMap::<String, BTreeSet<String>>::new();
         for presence in &presences {
             if let Some(server) = local_server(&presence.server) {

@@ -149,8 +149,9 @@ impl Changes {
         let observer = observer.clone();
         let sessions = snapshot.sessions.clone();
         let (presences, sources, servers) = tokio::task::spawn_blocking(move || {
-            let (presences, sources) = observer.inventory();
-            let (_, servers) = observer.inventory_with_sessions(&sessions);
+            let listening = super::discovery::listening_ports();
+            let (presences, sources) = observer.inventory_at_ports(&listening);
+            let (_, servers) = observer.inventory_with_sessions_at_ports(&sessions, &listening);
             (presences, sources, servers)
         })
         .await

@@ -311,7 +311,7 @@ pub(crate) enum OperationState {
     Failed,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
 pub(crate) struct Operation {
     pub id: String,
     pub action: String,

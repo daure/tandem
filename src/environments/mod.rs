@@ -6,6 +6,7 @@ pub(crate) mod config;
 mod containers;
 mod cpu_temperature;
 mod creation;
+mod database;
 mod docker;
 pub(crate) mod events;
 mod executable;

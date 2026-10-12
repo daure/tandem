@@ -106,14 +106,17 @@ impl AppService {
         }
         #[cfg(not(test))]
         {
-            Command::new("xdg-open")
+            let mut child = Command::new("xdg-open")
                 .arg(target)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .map(|_| ())
-                .map_err(|error| format!("cannot open system target: {error}"))
+                .map_err(|error| format!("cannot open system target: {error}"))?;
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            Ok(())
         }
     }
 

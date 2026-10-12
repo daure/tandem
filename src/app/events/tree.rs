@@ -1,4 +1,5 @@
 use ratatui::text::Text;
+use std::{collections::HashMap, rc::Rc};
 
 use super::{Record, search_text};
 use crate::app::{
@@ -9,8 +10,8 @@ use crate::app::{
 #[derive(Clone, PartialEq)]
 pub(super) enum Entry {
     Event(Box<Record>),
-    Acceptance(Box<Target>),
-    Conversation { target: Box<Target>, row: Box<Row> },
+    Acceptance(Rc<Target>),
+    Conversation { target: Rc<Target>, row: Box<Row> },
 }
 
 impl Entry {
@@ -31,9 +32,9 @@ impl Entry {
     pub(super) fn target(&self) -> Option<Target> {
         match self {
             Self::Event(_) => None,
-            Self::Acceptance(target) => Some(*target.clone()),
+            Self::Acceptance(target) => Some(target.as_ref().clone()),
             Self::Conversation { target, row } => {
-                let mut target = *target.clone();
+                let mut target = target.as_ref().clone();
                 target.selected = Some(*row.clone());
                 Some(target)
             }
@@ -68,10 +69,19 @@ impl Entry {
                 || row.metrics.cpu_waiting
         })
     }
-    pub(super) fn text(&self, spinner: &str, width: Option<u16>) -> Text<'static> {
+    pub(super) fn text(
+        &self,
+        spinner: &str,
+        width: Option<u16>,
+        times: &super::relative_times::RelativeTimes,
+    ) -> Text<'static> {
         match self {
             Self::Event(row) => super::row_text(row, width),
-            Self::Acceptance(target) => target.text(spinner, width),
+            Self::Acceptance(target) => target.text_with_relative_date(
+                spinner,
+                width,
+                times.acceptance_text(target.acceptance.id),
+            ),
             Self::Conversation { row, .. } => row.text(spinner, width),
         }
     }
@@ -96,25 +106,41 @@ pub(super) fn project(
     show_saved: bool,
 ) -> Vec<Entry> {
     let mut rows = Vec::new();
+    let instances = super::super::rows::from_snapshot_with_operations(&context.inventory, &[])
+        .into_iter()
+        .filter_map(|row| Some(((row.instance.clone()?, row.template.clone()), row)))
+        .collect::<HashMap<_, _>>();
+    let acceptances = rules
+        .acceptances
+        .iter()
+        .map(|row| (row.id, row))
+        .collect::<HashMap<_, _>>();
     for record in records {
         rows.push(Entry::Event(Box::new(record.clone())));
         for acceptance in &record.acceptances {
-            let acceptance = rules
-                .acceptances
-                .iter()
-                .find(|row| row.id == acceptance.id)
+            let acceptance = acceptances
+                .get(&acceptance.id)
+                .copied()
                 .unwrap_or(acceptance);
-            let target = Target::new(
-                acceptance,
-                rules.workspaces.get(&acceptance.id),
-                context,
-                show_saved,
-            )
-            .with_report(rules.reports.get(&acceptance.id));
-            rows.push(Entry::Acceptance(Box::new(target.clone())));
+            let target = Rc::new(
+                Target::with_instance(
+                    acceptance,
+                    rules.workspaces.get(&acceptance.id),
+                    context,
+                    show_saved,
+                    instances
+                        .get(&(
+                            acceptance.instance.clone(),
+                            acceptance.rule.definition.template.clone(),
+                        ))
+                        .cloned(),
+                )
+                .with_report(rules.reports.get(&acceptance.id)),
+            );
+            rows.push(Entry::Acceptance(target.clone()));
             for row in &target.conversations {
                 rows.push(Entry::Conversation {
-                    target: Box::new(target.clone()),
+                    target: target.clone(),
                     row: Box::new(row.clone()),
                 });
             }

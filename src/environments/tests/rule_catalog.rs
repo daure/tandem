@@ -213,6 +213,7 @@ fn rule_files_and_directories_must_be_real_catalog_paths() {
     let config = Config::at(home.path().into(), "paths".into(), 9876).unwrap();
     let store = RuleStore::open(&config).unwrap();
     let path = put(&config, &definition());
+    assert_eq!(store.snapshot().unwrap().rules.len(), 1);
     let original = fs::read_to_string(&path).unwrap();
     let external = outside.path().join("rule.json");
     fs::write(&external, &original).unwrap();
@@ -227,4 +228,32 @@ fn rule_files_and_directories_must_be_real_catalog_paths() {
     assert!(store.snapshot().is_err());
     assert!(store.save(definition(), None, "main".into()).is_err());
     assert_eq!(fs::read_to_string(&external).unwrap(), original);
+}
+
+#[test]
+fn cached_rule_validation_checks_current_contents_on_every_read() {
+    let home = tempfile::tempdir().unwrap();
+    let config = Config::at(home.path().into(), "cached".into(), 9876).unwrap();
+    let store = RuleStore::open(&config).unwrap();
+    let saved = store.save(definition(), None, "main".into()).unwrap();
+    assert_eq!(store.snapshot().unwrap().rules, vec![saved.clone()]);
+    assert_eq!(store.snapshot().unwrap().rules, vec![saved.clone()]);
+
+    let mut edited = saved.definition.clone();
+    edited.script = "fn matches(event) { fals }".into();
+    assert_eq!(edited.script.len(), saved.definition.script.len());
+    put(&config, &edited);
+    let current = store.snapshot().unwrap().rules.remove(0);
+    assert_eq!(current.definition.script, edited.script);
+    assert!(!current.definition.enabled);
+    assert_eq!(current.revision, saved.revision + 1);
+
+    edited.script = "fn matches(event) {".into();
+    put(&config, &edited);
+    assert!(store.snapshot().is_err());
+    put(&config, &saved.definition);
+    assert_eq!(
+        store.snapshot().unwrap().rules[0].definition,
+        recipe(&saved.definition)
+    );
 }

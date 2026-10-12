@@ -825,7 +825,9 @@ impl TuiNode<Msg> for Instances {
             ));
         }
         if !self.session_timers.is_empty() {
-            result.active = true;
+            result = result.merge(TickResult::scheduled_after(
+                Duration::from_secs(1) - self.timer_display_phase,
+            ));
         }
         if changed || timer_changed {
             result.merge(TickResult::CHANGED)

@@ -53,7 +53,8 @@ fn rule_history_animates_starting_instances_when_animations_are_enabled() {
         };
         let result = view.tick(Duration::from_millis(80), settings);
         if enabled {
-            assert!(result.changed && result.active);
+            assert!(result.changed && !result.active);
+            assert_eq!(result.next_tick, Some(Duration::from_millis(80)));
         }
         let glyph = if enabled { "⠙" } else { "⠋" };
         let text = render(&mut view);

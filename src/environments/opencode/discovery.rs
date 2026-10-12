@@ -8,9 +8,16 @@ impl Observer {
         &self,
         sessions: &[Session],
     ) -> (Vec<Presence>, BTreeMap<String, BTreeSet<String>>) {
-        let (_, mut servers) = self.inventory();
+        self.inventory_with_sessions_at_ports(sessions, &listening_ports())
+    }
+
+    pub(super) fn inventory_with_sessions_at_ports(
+        &self,
+        sessions: &[Session],
+        listening: &BTreeSet<u16>,
+    ) -> (Vec<Presence>, BTreeMap<String, BTreeSet<String>>) {
+        let (_, mut servers) = self.inventory_at_ports(listening);
         let presences = self.observed_presences();
-        let listening = listening_ports();
         let required = presences
             .iter()
             .map(|presence| (&presence.server, &presence.directory))

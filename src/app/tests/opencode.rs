@@ -759,7 +759,12 @@ fn session_timers_share_a_display_beat_across_refreshes_and_stop_when_idle() {
         rendered_lines(terminal, area).join("\n")
     };
     assert!(render(&mut tree, &mut terminal).contains("⠋ Sleep for 30 seconds"));
-    tree.tick(Duration::from_millis(80), AnimationSettings::default());
+    let tick = tree.tick(Duration::from_millis(80), AnimationSettings::default());
+    assert!(!tick.active);
+    assert!(
+        tick.next_tick
+            .is_some_and(|wait| wait <= Duration::from_millis(80))
+    );
     assert!(render(&mut tree, &mut terminal).contains("⠙ Sleep for 30 seconds"));
     tree.tick(Duration::from_millis(920), AnimationSettings::default());
     for second in 1..=4 {
@@ -808,6 +813,15 @@ fn session_timers_share_a_display_beat_across_refreshes_and_stop_when_idle() {
         );
         tree.tick(Duration::from_millis(580), AnimationSettings::default());
     }
+    let tick = tree.tick(
+        Duration::ZERO,
+        AnimationSettings {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+    assert!(!tick.active);
+    assert_eq!(tick.next_tick, Some(Duration::from_secs(1)));
     observation.sessions[0].activity = Activity::Idle;
     observation.sessions[0].activity_started_at_milliseconds = None;
     observation.sessions[0].activity_elapsed_milliseconds = Some(5_000);

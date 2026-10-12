@@ -269,6 +269,8 @@ pub(crate) struct App {
     service: AppService,
     snapshot: EnvironmentSnapshot,
     overview_loading: bool,
+    overview_operations: Vec<Operation>,
+    overview_options: (bool, bool),
     view: sound_menu::Overlay,
     // Action handlers address the active page; both pages retain their own state.
     instances: SharedState,
@@ -413,6 +415,8 @@ pub(crate) fn root(service: AppService) -> App {
         service,
         snapshot,
         overview_loading,
+        overview_operations: Vec::new(),
+        overview_options: (true, false),
         view: sound_menu::Overlay::new(view),
         instances,
         toolbar_state,
@@ -517,9 +521,18 @@ impl App {
         if self.completion_sound && opencode_snapshot.completed_since(&self.opencode_snapshot) {
             self.service.play_completion_sound();
         }
+        let opencode_changed = self.opencode_snapshot != opencode_snapshot;
         self.opencode_snapshot = opencode_snapshot;
-        let rows_changed =
-            self.update_overview_rows(&snapshot, &operations, initial_load_completed);
+        let rows_changed = if initial_load_completed
+            || snapshot_changed
+            || opencode_changed
+            || operations != self.overview_operations
+            || (self.running_only, self.opencode_history) != self.overview_options
+        {
+            self.update_overview_rows(&snapshot, &operations, initial_load_completed)
+        } else {
+            false
+        };
         let mut toolbar_state = toolbar::State::from_snapshots(&snapshot, &self.opencode_snapshot);
         if !initial_load_completed
             && !tabs_changed
@@ -614,6 +627,8 @@ impl App {
             return false;
         }
         let mut changed = false;
+        self.overview_operations = operations.to_vec();
+        self.overview_options = (self.running_only, self.opencode_history);
         let opencode = self.opencode_snapshot.clone();
         self.pages_mut()
             .update_acceptance_context(snapshot, &opencode);

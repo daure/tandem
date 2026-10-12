@@ -1,8 +1,11 @@
-use std::{fs, io::Write, path::PathBuf, time::Duration};
+use std::{fs, io::Write, path::PathBuf, sync::Arc};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
-use super::config::{Config, private_file};
+use super::{
+    config::{Config, private_file},
+    database::{Lease, Pool},
+};
 use crate::store::events::{
     Attempt, Batch, Error, FEED_LIMIT, Ingestion, MAX_BATCH, NotificationKind, ProcessingStatus,
     ProviderNotification, Receipt, Record, Snapshot,
@@ -18,6 +21,7 @@ pub(crate) struct EventStore {
     path: PathBuf,
     namespace: String,
     config: Config,
+    connections: Arc<Pool>,
 }
 
 impl EventStore {
@@ -26,6 +30,7 @@ impl EventStore {
             path: config.home.join("settings.sqlite3"),
             namespace: config.namespace.clone(),
             config: config.clone(),
+            connections: Arc::new(Pool::new(config.home.join("settings.sqlite3"))),
         };
         let mut connection = store.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -103,7 +108,7 @@ impl EventStore {
         Ok(store)
     }
 
-    pub(super) fn connection(&self) -> Result<Connection, Error> {
+    pub(super) fn connection(&self) -> Result<Lease, Error> {
         match private_file(&self.path, true) {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -119,10 +124,11 @@ impl EventStore {
             }
             Err(error) => return Err(Error::Storage(error.to_string())),
         }
-        let connection = Connection::open(&self.path)?;
-        connection.busy_timeout(Duration::from_secs(5))?;
-        connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
-        Ok(connection)
+        self.connections
+            .get(|connection| {
+                connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")
+            })
+            .map_err(Error::Storage)
     }
 
     pub(crate) fn register_provider(&self, name: &str) -> Result<String, Error> {
@@ -217,7 +223,7 @@ impl EventStore {
     }
 
     pub(crate) fn authenticate(&self, token: &str) -> Result<(), Error> {
-        self.provider(&self.connection()?, token).map(|_| ())
+        self.provider(&*self.connection()?, token).map(|_| ())
     }
 
     pub(crate) fn set_ingestion_enabled(&self, name: &str, enabled: bool) -> Result<bool, Error> {
@@ -343,25 +349,24 @@ impl EventStore {
     fn snapshot_for(&self, sequence: Option<i64>) -> Result<Snapshot, Error> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let total = transaction.query_row(
-            "SELECT count(*) FROM events WHERE namespace = ?1",
-            [&self.namespace],
-            |row| row.get(0),
-        )?;
+        let total = transaction
+            .prepare_cached("SELECT count(*) FROM events WHERE namespace = ?1")?
+            .query_row([&self.namespace], |row| row.get(0))?;
         let provider_totals = transaction
-            .prepare(
+            .prepare_cached(
                 "SELECT provider, count(*) FROM events WHERE namespace = ?1 GROUP BY provider",
             )?
             .query_map([&self.namespace], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<_, _>>()?;
-        let accepted_attempts = transaction.query_row(
+        let accepted_attempts = transaction.prepare_cached(
             "SELECT count(*) FROM event_attempts p JOIN events e ON e.sequence = p.event_sequence
              WHERE e.namespace = ?1 AND p.status = 'accepted'",
+        )?.query_row(
             [&self.namespace],
             |row| row.get::<_, u64>(0),
         )?;
         let provider_handovers = transaction
-            .prepare(
+            .prepare_cached(
                 "SELECT e.provider, count(DISTINCT e.sequence) FROM events e
                  JOIN event_attempts p ON p.event_sequence = e.sequence
                  JOIN rule_acceptances a ON a.attempt_id = p.id
@@ -370,7 +375,7 @@ impl EventStore {
             )?
             .query_map([&self.namespace], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<_, _>>()?;
-        let mut statement = transaction.prepare(
+        let mut statement = transaction.prepare_cached(
             "SELECT sequence, provider, received_at, payload FROM events
              WHERE namespace = ?1 AND (?3 IS NULL OR sequence = ?3) ORDER BY sequence DESC LIMIT ?2",
         )?;
@@ -392,7 +397,7 @@ impl EventStore {
             if counts.has_issues() {
                 diagnostic_counts.insert(sequence, counts);
             }
-            let mut attempts = transaction.prepare(
+            let mut attempts = transaction.prepare_cached(
                 "SELECT id, status, replay, created_at, accepted_at FROM event_attempts
                  WHERE event_sequence = ?1 ORDER BY id DESC LIMIT 50",
             )?;

@@ -1,7 +1,7 @@
 use super::*;
-use crate::environments::events::EventStore;
+use crate::environments::{database::Lease, events::EventStore};
 
-fn fixture() -> (tempfile::TempDir, Config, Connection) {
+fn fixture() -> (tempfile::TempDir, Config, Lease) {
     let home = tempfile::tempdir().unwrap();
     let config = Config::at(home.path().into(), "names".into(), 9876).unwrap();
     let events = EventStore::open(&config).unwrap();

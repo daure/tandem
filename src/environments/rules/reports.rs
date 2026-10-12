@@ -22,7 +22,7 @@ impl RuleStore {
         connection: &rusqlite::Connection,
     ) -> Result<std::collections::BTreeMap<i64, ReportSummary>, Error> {
         let select = REPORT_SELECT.replace("r.markdown", "''");
-        let mut statement = connection.prepare(&select)?;
+        let mut statement = connection.prepare_cached(&select)?;
         let mut summaries = std::collections::BTreeMap::new();
         for report in statement.query_map([&self.config.namespace], read_report)? {
             let mut details = report?.details;

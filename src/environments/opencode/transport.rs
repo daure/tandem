@@ -29,6 +29,8 @@ pub(super) fn local_server(value: &str) -> Option<String> {
 
 pub(super) fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
+        // OpenCode endpoints are restricted to local HTTP, so TLS roots are unused.
+        .tls_built_in_root_certs(false)
         .timeout(Duration::from_secs(2))
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()

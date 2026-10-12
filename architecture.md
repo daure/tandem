@@ -126,6 +126,11 @@ participate in the migration gate. Detached workers require their parent's compl
 
 A serial refresh worker coalesces inventory requests and uses persisted revision counters to observe changes from other Tandem processes. Resource collection augments inventory snapshots but does not determine lifecycle or health. Sampling failures retain valid prior readings with error provenance.
 
+Event, rule and provider adapters reuse exclusive SQLite connection leases with bounded idle and
+statement caches. Transactions remain operation-scoped; temporary tables must be removed before
+successful commit. Database identity or permission changes discard idle handles. Leases with unfinished
+transactions close to roll back. Idle limits do not restrict concurrent operations.
+
 Resource collection runs on a five-second cadence independently of the inventory schedule and terminal focus. Each batch publishes host memory and CPU temperature atomically with container usage. The TUI header incorporates the latest OpenCode usage only when a resource batch publishes; activity and inventory projections retain their own cadence. Initial CPU warm-up and manual refresh may publish sooner.
 
 Long-running mutations publish progress through operation records. Completion is based on fresh observations of the targeted resources, not command exit alone. External commands run with bounded lifetimes and keep their output away from terminal and MCP protocol streams.

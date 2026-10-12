@@ -723,7 +723,8 @@ fn health_check_loader_animates_on_the_service_until_ready() {
         "{lines:#?}"
     );
     let result = tree.tick(Duration::from_millis(80), AnimationSettings::default());
-    assert!(result.changed && result.active);
+    assert!(result.changed && !result.active);
+    assert_eq!(result.next_tick, Some(Duration::from_millis(80)));
     let terminal = render(&mut tree, 110);
     let lines = rendered_lines(&terminal, Rect::new(0, 0, 110, 18));
     assert!(
@@ -808,7 +809,8 @@ fn pending_instance_rows_are_visible_and_animate_before_container_discovery() {
     );
 
     let result = tree.tick(Duration::from_millis(80), AnimationSettings::default());
-    assert!(result.changed && result.active);
+    assert!(result.changed && !result.active);
+    assert_eq!(result.next_tick, Some(Duration::from_millis(80)));
 }
 
 #[test]

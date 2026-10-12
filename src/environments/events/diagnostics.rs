@@ -159,20 +159,23 @@ impl EventStore {
 }
 
 pub(super) fn counts(connection: &Connection, sequence: i64) -> Result<Counts, Error> {
-    let (errors, evaluation_warnings) = connection.query_row(
-        "SELECT COALESCE(sum(r.outcome = 'failed' OR r.error IS NOT NULL), 0),
+    let (errors, evaluation_warnings) = connection
+        .prepare_cached(
+            "SELECT COALESCE(sum(r.outcome = 'failed' OR r.error IS NOT NULL), 0),
                 COALESCE(sum(r.outcome = 'throttled' OR r.warning IS NOT NULL), 0)
          FROM rule_evaluations r JOIN event_attempts p ON p.id = r.attempt_id
          WHERE p.event_sequence = ?1",
-        [sequence],
-        |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
-    )?;
-    let (dispatch_errors, warnings) = connection.query_row(
+        )?
+        .query_row([sequence], |row| {
+            Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?))
+        })?;
+    let (dispatch_errors, warnings) = connection.prepare_cached(
         "SELECT COALESCE(sum(json_extract(a.payload, '$.status') != 'uncertain'
                 AND (json_extract(a.payload, '$.status') = 'failed' OR json_extract(a.payload, '$.error') IS NOT NULL)), 0),
                 COALESCE(sum(json_extract(a.payload, '$.status') = 'uncertain'), 0)
          FROM rule_acceptances a JOIN event_attempts p ON p.id = a.attempt_id
          WHERE p.event_sequence = ?1",
+    )?.query_row(
         [sequence], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
     )?;
     Ok(Counts {

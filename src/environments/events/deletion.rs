@@ -93,6 +93,7 @@ impl EventStore {
                 [],
             )?;
         }
+        transaction.execute_batch("DROP TABLE event_deletion_targets;")?;
         transaction.commit()?;
         Ok(count)
     }

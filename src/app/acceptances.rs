@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{borrow::Cow, cell::RefCell, rc::Rc};
 
 use ratatui::{
     style::Style,
@@ -57,18 +57,41 @@ impl Target {
             .find(|row| {
                 row.instance.as_deref() == Some(&acceptance.instance)
                     && row.template == acceptance.rule.definition.template
-            })
-            .map(|mut row| {
-                row.template_capabilities =
-                    format!("· {} {}", super::rows::TEMPLATE_ICON, row.template);
-                row
             });
+        Self::with_instance(acceptance, history, context, show_saved, instance)
+    }
+
+    pub(super) fn with_instance(
+        acceptance: &Acceptance,
+        history: Option<&AcceptanceWorkspace>,
+        context: &Context,
+        show_saved: bool,
+        instance: Option<Row>,
+    ) -> Self {
+        let instance = instance.map(|mut row| {
+            row.template_capabilities =
+                format!("· {} {}", super::rows::TEMPLATE_ICON, row.template);
+            row
+        });
         let workspace = instance
             .as_ref()
             .and_then(|row| row.workspace.clone())
             .or_else(|| history.map(|row| row.directory.clone()));
-        let mut observed = context.opencode.clone();
-        if let Some(history) = history {
+        let mut observed = Cow::Borrowed(&context.opencode);
+        if let Some(history) = history.filter(|history| {
+            context.opencode.sessions.iter().any(|session| {
+                history
+                    .removed_sessions
+                    .contains(&(session.server.clone(), session.id.clone()))
+            }) || history.sessions.iter().any(|saved| {
+                !context
+                    .opencode
+                    .sessions
+                    .iter()
+                    .any(|session| session.id == saved.id)
+            })
+        }) {
+            let observed = observed.to_mut();
             observed.sessions.retain(|session| {
                 !history
                     .removed_sessions
@@ -183,6 +206,15 @@ impl Target {
     }
 
     pub(super) fn text(&self, spinner: &str, width: Option<u16>) -> Text<'static> {
+        self.text_with_relative_date(spinner, width, None)
+    }
+
+    pub(super) fn text_with_relative_date(
+        &self,
+        spinner: &str,
+        width: Option<u16>,
+        relative_date: Option<&str>,
+    ) -> Text<'static> {
         let theme = tuicore::theme();
         let muted = Style::default().fg(theme.muted_fg());
         let color = match self.acceptance.status {
@@ -204,7 +236,10 @@ impl Target {
                 format!("{:?}", self.acceptance.status),
                 Style::default().fg(color),
             ),
-            Span::styled(format!(" · {}", self.relative_date), muted),
+            Span::styled(
+                format!(" · {}", relative_date.unwrap_or(&self.relative_date)),
+                muted,
+            ),
         ];
         if self.instance.is_none() {
             header.push(Span::styled(format!(" · {}", self.missing), muted));

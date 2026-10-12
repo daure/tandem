@@ -1,14 +1,22 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
 };
 
 use rusqlite::{Transaction, params};
 
 use super::{Definition, Error, decode, encode, rules};
 use crate::environments::config::{Config, read_text};
+
+type ValidatedDefinitions = VecDeque<(String, Definition)>;
+
+fn validated_definitions() -> &'static Mutex<ValidatedDefinitions> {
+    static DEFINITIONS: OnceLock<Mutex<ValidatedDefinitions>> = OnceLock::new();
+    DEFINITIONS.get_or_init(Mutex::default)
+}
 
 fn storage(error: impl std::fmt::Display) -> Error {
     Error::Storage(error.to_string())
@@ -68,6 +76,14 @@ fn read(path: &Path) -> Result<Definition, Error> {
         )));
     }
     let text = read_text(path).map_err(storage)?;
+    if let Some(definition) = validated_definitions()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .find_map(|(source, definition)| (source == &text).then(|| definition.clone()))
+    {
+        return Ok(definition);
+    }
     let value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| Error::Invalid(format!("{}: {error}", path.display())))?;
     if value.get("enabled").is_some() {
@@ -80,6 +96,13 @@ fn read(path: &Path) -> Result<Definition, Error> {
         .map_err(|error| Error::Invalid(format!("{}: {error}", path.display())))?;
     rules::validate(&definition)
         .map_err(|error| Error::Invalid(format!("{}: {error}", path.display())))?;
+    let mut definitions = validated_definitions()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if definitions.len() == 100 {
+        definitions.pop_front();
+    }
+    definitions.push_back((text, definition.clone()));
     Ok(definition)
 }
 
@@ -159,7 +182,7 @@ pub(in crate::environments) fn synchronize(
 ) -> Result<(), Error> {
     let root = root(config)?;
     let definitions = list(&root)?;
-    let mut statement = transaction.prepare(
+    let mut statement = transaction.prepare_cached(
         "SELECT name, definition, revision, catalog_present FROM event_rules WHERE namespace = ?1",
     )?;
     let previous = statement

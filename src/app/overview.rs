@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{cell::Cell, rc::Rc, time::Duration};
 
 use ratatui::{Frame, layout::Rect};
 use tuicore::{
@@ -24,6 +24,7 @@ pub(super) struct Pages {
     event_focus: super::events::FocusState,
     rule_focus: super::rules::FocusState,
     acceptance_context: super::acceptances::SharedContext,
+    events_dirty: Rc<Cell<bool>>,
 }
 
 impl Pages {
@@ -49,6 +50,7 @@ impl Pages {
         let acceptance_context = std::rc::Rc::new(std::cell::RefCell::new(
             super::acceptances::Context::default(),
         ));
+        let events_dirty = Rc::new(Cell::new(true));
         let pages = std::array::from_fn(|index| {
             let (key, page): (&str, Box<dyn TuiNode<Msg>>) = if index == 4 {
                 (
@@ -69,15 +71,18 @@ impl Pages {
             } else if index == 2 {
                 (
                     "events-page",
-                    Box::new(super::events::Events::new(
-                        events.clone(),
-                        event_filter.clone(),
-                        providers.clone(),
-                        event_focus.clone(),
-                        toolbar.clone(),
-                        rules.clone(),
-                        acceptance_context.clone(),
-                    )),
+                    Box::new(
+                        super::events::Events::new(
+                            events.clone(),
+                            event_filter.clone(),
+                            providers.clone(),
+                            event_focus.clone(),
+                            toolbar.clone(),
+                            rules.clone(),
+                            acceptance_context.clone(),
+                        )
+                        .with_dirty_signal(events_dirty.clone()),
+                    ),
                 )
             } else {
                 (
@@ -115,6 +120,7 @@ impl Pages {
             event_focus,
             rule_focus,
             acceptance_context,
+            events_dirty,
         }
     }
 
@@ -128,6 +134,7 @@ impl Pages {
     }
 
     pub(super) fn select_events(&mut self) {
+        self.events_dirty.set(true);
         self.active = 2;
     }
 
@@ -171,9 +178,11 @@ impl Pages {
         let mut context = self.acceptance_context.borrow_mut();
         if context.inventory != *inventory {
             context.inventory = inventory.clone();
+            self.events_dirty.set(true);
         }
         if context.opencode != *opencode {
             context.opencode = opencode.clone();
+            self.events_dirty.set(true);
         }
     }
     pub(super) fn update_rules(&mut self, snapshot: crate::store::rules::Snapshot) -> bool {
@@ -181,6 +190,7 @@ impl Pages {
             return false;
         }
         *self.rules.borrow_mut() = snapshot;
+        self.events_dirty.set(true);
         true
     }
     pub(super) fn focus_event(&mut self, record: crate::store::events::Record) {
@@ -266,6 +276,7 @@ impl Pages {
             return false;
         }
         self.providers.borrow_mut().snapshot = snapshot;
+        self.events_dirty.set(true);
         true
     }
 
@@ -298,6 +309,7 @@ impl Pages {
             return false;
         }
         *self.events.borrow_mut() = snapshot;
+        self.events_dirty.set(true);
         true
     }
 
@@ -399,8 +411,14 @@ impl TuiNode<Msg> for Pages {
     fn tick(&mut self, dt: Duration, settings: AnimationSettings) -> TickResult {
         self.pages
             .iter_mut()
-            .fold(TickResult::IDLE, |result, page| {
-                result.merge(page.tick(dt, settings))
+            .enumerate()
+            .fold(TickResult::IDLE, |result, (index, page)| {
+                let mut tick = page.tick(dt, settings);
+                if index != self.active {
+                    tick.changed = false;
+                    tick.layout = false;
+                }
+                result.merge(tick)
             })
     }
 
@@ -458,3 +476,7 @@ impl TuiNode<Msg> for Pages {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/pages.rs"]
+mod tests;

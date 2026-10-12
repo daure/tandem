@@ -36,3 +36,39 @@ fn event_relative_times_keep_their_state_through_refresh_and_schedule_live_updat
         TickResult::IDLE
     );
 }
+
+#[test]
+fn acceptance_relative_times_render_without_rebuilding_the_event_tree() {
+    let mut events = super::super::tick_tests::events(Some(false), None);
+    let projections = events.projections;
+    let accepted_at = events.shared.borrow().records[0].acceptances[0]
+        .accepted_at
+        .clone();
+    let target = chrono::DateTime::parse_from_rfc3339(&accepted_at).unwrap();
+    let reference = time::OffsetDateTime::from_unix_timestamp(target.timestamp() + 30).unwrap();
+    assert!(
+        events
+            .relative_times
+            .borrow_mut()
+            .tick(Duration::ZERO, AnimationSettings::default())
+            .next_tick
+            .is_some()
+    );
+    events
+        .relative_times
+        .borrow_mut()
+        .acceptance_dates
+        .get_mut(&1)
+        .unwrap()
+        .set_reference(reference);
+    assert!(super::super::tick_tests::render(&mut events).contains("A moment ago"));
+    events
+        .relative_times
+        .borrow_mut()
+        .acceptance_dates
+        .get_mut(&1)
+        .unwrap()
+        .set_reference(reference + time::Duration::seconds(60));
+    assert!(super::super::tick_tests::render(&mut events).contains("1 minute ago"));
+    assert_eq!(events.projections, projections);
+}

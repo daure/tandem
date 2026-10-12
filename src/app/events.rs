@@ -1,4 +1,9 @@
-use std::{cell::RefCell, collections::BTreeSet, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeSet,
+    rc::Rc,
+    time::Duration,
+};
 
 use ratatui::{
     Frame,
@@ -67,6 +72,9 @@ pub(super) struct Events {
     rules: super::rules::SharedState,
     context: super::acceptances::SharedContext,
     projected: Vec<Entry>,
+    dirty: Rc<Cell<bool>>,
+    #[cfg(test)]
+    projections: usize,
     initial_roots_expanded: bool,
     spinner: Rc<RefCell<Spinner>>,
     relative_times: Rc<RefCell<relative_times::RelativeTimes>>,
@@ -124,7 +132,8 @@ impl Events {
                         let width = ctx
                             .available_width
                             .map(|width| width.saturating_sub(if issue.is_some() { 2 } else { 0 }));
-                        let mut text = row.text(cell_spinner.borrow().glyph(), width);
+                        let times = cell_times.borrow();
+                        let mut text = row.text(cell_spinner.borrow().glyph(), width, &times);
                         if let Some(counts) = issue {
                             let color = if counts.errors > 0 {
                                 tuicore::theme().error_fg()
@@ -137,7 +146,7 @@ impl Events {
                             );
                         }
                         if let Entry::Event(record) = row
-                            && let Some(relative) = cell_times.borrow().text(record.sequence)
+                            && let Some(relative) = times.text(record.sequence)
                         {
                             rows::right_suffix(
                                 &mut text.lines[1].spans,
@@ -244,6 +253,9 @@ impl Events {
             rules,
             context,
             projected: Vec::new(),
+            dirty: Rc::new(Cell::new(true)),
+            #[cfg(test)]
+            projections: 0,
             initial_roots_expanded: false,
             spinner,
             relative_times,
@@ -252,6 +264,12 @@ impl Events {
 
     fn header(&self) -> &HeaderRow {
         self.view.first().first()
+    }
+
+    pub(super) fn with_dirty_signal(mut self, dirty: Rc<Cell<bool>>) -> Self {
+        self.dirty = dirty;
+        self.dirty.set(true);
+        self
     }
 
     fn header_mut(&mut self) -> &mut HeaderRow {
@@ -306,6 +324,17 @@ impl Events {
         if let Some(names) = filter {
             self.sources = names;
         }
+        let handovers_changed = handovers_only != self.handovers_only;
+        if !self.dirty.replace(false)
+            && !history_changed
+            && !handovers_changed
+            && !filtered
+            && !reset_filters
+            && deletion.is_none()
+            && selected.is_none()
+        {
+            return self.expand_created_session();
+        }
         let snapshot = self.shared.borrow().clone();
         let stream_sources = filters::inventory(
             &self.providers.borrow().snapshot,
@@ -314,7 +343,6 @@ impl Events {
             self.pinned.as_ref(),
         );
         let streams_changed = stream_sources != self.stream_sources;
-        let handovers_changed = handovers_only != self.handovers_only;
         if streams_changed {
             self.streams_mut().set_rows(stream_sources.clone());
             self.stream_sources = stream_sources;
@@ -360,6 +388,10 @@ impl Events {
             records.push(pinned.clone());
         }
         records.sort_by_key(|row| std::cmp::Reverse(row.sequence));
+        #[cfg(test)]
+        {
+            self.projections += 1;
+        }
         let projected = tree::project(
             &records,
             &self.rules.borrow(),
@@ -373,6 +405,7 @@ impl Events {
             && !handovers_changed
             && !reset_filters
             && deletion.is_none()
+            && selected.is_none()
         {
             return self.expand_created_session() || history_changed;
         }

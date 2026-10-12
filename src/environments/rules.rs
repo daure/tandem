@@ -60,7 +60,7 @@ pub(super) fn acceptances(
     sequence: Option<i64>,
     namespace: &str,
 ) -> Result<Vec<Acceptance>, Error> {
-    let mut statement = connection.prepare(
+    let mut statement = connection.prepare_cached(
         "SELECT a.payload FROM rule_acceptances a
          JOIN event_attempts p ON p.id = a.attempt_id JOIN events e ON e.sequence = p.event_sequence
          WHERE e.namespace = ?1 AND (?2 IS NULL OR e.sequence = ?2) ORDER BY a.id DESC",
@@ -113,7 +113,7 @@ impl RuleStore {
     }
 
     pub(crate) fn ensure_fresh_instance_name(&self, name: &str) -> Result<(), Error> {
-        names::ensure_fresh(&self.events.connection()?, &self.config, name)
+        names::ensure_fresh(&*self.events.connection()?, &self.config, name)
     }
 
     pub(crate) fn ensure_retry_instance_name(
@@ -123,7 +123,7 @@ impl RuleStore {
         origin: &str,
     ) -> Result<(), Error> {
         names::ensure_retry(
-            &self.events.connection()?,
+            &*self.events.connection()?,
             &self.config,
             name,
             template,
@@ -148,7 +148,7 @@ impl RuleStore {
 
     pub(crate) fn dispatch_acceptances(&self) -> Result<Vec<Acceptance>, Error> {
         let connection = self.events.connection()?;
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare_cached(
             "SELECT a.payload FROM rule_acceptances a
              JOIN event_attempts p ON p.id = a.attempt_id JOIN events e ON e.sequence = p.event_sequence
              WHERE e.namespace = ?1
@@ -204,7 +204,7 @@ impl RuleStore {
         let mut connection = self.events.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         catalog::synchronize(&self.config, &transaction)?;
-        let mut statement = transaction.prepare("SELECT definition, revision, zellij_session FROM event_rules WHERE namespace = ?1 AND catalog_present = 1 ORDER BY name")?;
+        let mut statement = transaction.prepare_cached("SELECT definition, revision, zellij_session FROM event_rules WHERE namespace = ?1 AND catalog_present = 1 ORDER BY name")?;
         let definitions = statement
             .query_map([&self.config.namespace], |row| {
                 Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?))
@@ -221,7 +221,7 @@ impl RuleStore {
                 })
             })
             .collect::<Result<_, Error>>()?;
-        let mut statement = transaction.prepare("SELECT r.attempt_id, r.rule_name, r.rule_revision, r.error FROM rule_evaluations r JOIN event_attempts p ON p.id = r.attempt_id JOIN events e ON e.sequence = p.event_sequence WHERE e.namespace = ?1 AND r.error IS NOT NULL ORDER BY r.attempt_id DESC LIMIT 100")?;
+        let mut statement = transaction.prepare_cached("SELECT r.attempt_id, r.rule_name, r.rule_revision, r.error FROM rule_evaluations r JOIN event_attempts p ON p.id = r.attempt_id JOIN events e ON e.sequence = p.event_sequence WHERE e.namespace = ?1 AND r.error IS NOT NULL ORDER BY r.attempt_id DESC LIMIT 100")?;
         let evaluation_errors = statement
             .query_map([&self.config.namespace], |row| {
                 Ok(Evaluation {
@@ -233,7 +233,7 @@ impl RuleStore {
             })?
             .collect::<Result<_, _>>()?;
         drop(statement);
-        let mut statement = transaction.prepare("SELECT r.attempt_id, r.rule_name, r.rule_revision, r.warning FROM rule_evaluations r JOIN event_attempts p ON p.id = r.attempt_id JOIN events e ON e.sequence = p.event_sequence WHERE e.namespace = ?1 AND r.warning IS NOT NULL ORDER BY r.attempt_id DESC LIMIT 100")?;
+        let mut statement = transaction.prepare_cached("SELECT r.attempt_id, r.rule_name, r.rule_revision, r.warning FROM rule_evaluations r JOIN event_attempts p ON p.id = r.attempt_id JOIN events e ON e.sequence = p.event_sequence WHERE e.namespace = ?1 AND r.warning IS NOT NULL ORDER BY r.attempt_id DESC LIMIT 100")?;
         let evaluation_warnings = statement
             .query_map([&self.config.namespace], |row| {
                 Ok(Evaluation {

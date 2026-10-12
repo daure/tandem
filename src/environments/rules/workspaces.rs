@@ -11,7 +11,7 @@ use crate::store::{
 impl RuleStore {
     pub(crate) fn retained_sessions(&self) -> Result<Vec<crate::store::opencode::Session>, Error> {
         Ok(self
-            .workspaces(&self.events.connection()?)?
+            .workspaces(&*self.events.connection()?)?
             .into_values()
             .flat_map(|workspace| workspace.sessions)
             .collect())
@@ -21,7 +21,7 @@ impl RuleStore {
         &self,
         connection: &Connection,
     ) -> Result<std::collections::BTreeMap<i64, AcceptanceWorkspace>, Error> {
-        let mut statement = connection.prepare(
+        let mut statement = connection.prepare_cached(
             "SELECT w.acceptance_id, w.payload FROM rule_acceptance_workspaces w
              JOIN rule_acceptances a ON a.id = w.acceptance_id
              JOIN event_attempts p ON p.id = a.attempt_id
