@@ -1396,3 +1396,7 @@ cargo release major   # major: 0.1.0 -> 1.0.0
 The command checks the branch and local Tuicore path, then runs the release workflow's formatting, script tests, Clippy, and Rust tests before changing the version. Cargo validation uses two compilation jobs, two test threads, stripped debug data, disabled incremental compilation, and the persistent `target/release-check` directory. It then bumps Tandem, refreshes and commits the local lockfile, creates an annotated tag without opening an editor or pager, and atomically pushes `main` and its `vX.Y.Z` tag. Generated `Cargo.lock` changes are accepted; all other files must be clean. It returns without waiting for GitHub Actions. Existing `cargo patch`, `cargo minor`, and `cargo major` aliases use the same release flow.
 
 GitHub Actions resolves the highest stable, non-yanked Tuicore version from crates.io before running Cargo checks and builds. This only modifies the disposable CI checkout; local development always builds the sibling `../tuicore` checkout. Registry or compatibility failures stop the build.
+
+Every `main` push validates the source and warms dependency caches for checks, tests and the Linux
+distribution profile. Successful `main` runs save those caches for tag builds to restore. Tags run all
+release checks and publish only after archive and executable verification succeeds.
