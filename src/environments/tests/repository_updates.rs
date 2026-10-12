@@ -13,14 +13,19 @@ fn update_one(workspace: &Path, template: &Template) -> RepositoryUpdate {
 
 #[test]
 fn clean_shallow_checkouts_fast_forward_to_their_configured_upstream_branch() {
-    for branch in [None, Some("release")] {
+    for branch in [None, Some("release"), Some("home")] {
         let (_home, config, template, workspace) = fixture();
         let source = Path::new(&template.manifest.repositories[0].source);
         git_test(source, &["branch", "release"]);
         provision(&config, &template, &workspace, branch).unwrap();
         let target = workspace.join("src/app");
         let before = git_test(&target, &["rev-parse", "HEAD"]);
-        git_test(source, &["switch", branch.unwrap_or("trunk")]);
+        let upstream = if branch == Some("release") {
+            "release"
+        } else {
+            "trunk"
+        };
+        git_test(source, &["switch", upstream]);
         for content in ["First update", "Latest update"] {
             fs::write(source.join("file.txt"), content).unwrap();
             git_test(source, &["add", "."]);
@@ -39,6 +44,10 @@ fn clean_shallow_checkouts_fast_forward_to_their_configured_upstream_branch() {
         let result = update_one(&workspace, &template);
         assert_eq!(result.status, RepositoryUpdateStatus::Updated, "{result:?}");
         assert_eq!(result.branch.as_deref(), Some(branch.unwrap_or("trunk")));
+        assert_eq!(
+            result.upstream.as_deref(),
+            Some(format!("refs/remotes/origin/{upstream}").as_str())
+        );
         assert_eq!(result.before.as_deref(), Some(before.as_str()));
         assert_eq!(result.after.as_deref(), Some(latest.as_str()));
         assert_eq!(

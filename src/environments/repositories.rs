@@ -305,7 +305,7 @@ fn select_branch(checkout: &Path, branch: Option<&str>, deadline: Instant) -> Re
                 checkout,
                 &[
                     "switch",
-                    "--no-track",
+                    "--track",
                     "-c",
                     branch,
                     "refs/remotes/origin/HEAD",

@@ -222,7 +222,9 @@ fn checkout_record_failure_stops_queued_clones_and_records_in_flight_successes()
 fn declared_repositories_use_shallow_default_existing_or_new_local_branches() {
     for (default, branch) in [
         ("main", None),
+        ("main", Some("Feature-123")),
         ("master", None),
+        ("master", Some("Feature-123")),
         ("trunk", None),
         ("trunk", Some("trunk")),
         ("trunk", Some("existing")),
@@ -275,18 +277,21 @@ fn declared_repositories_use_shallow_default_existing_or_new_local_branches() {
             git_test(&target, &["remote", "get-url", "origin"]),
             template.manifest.repositories[0].source
         );
+        assert_eq!(
+            git_test(
+                &target,
+                &["rev-parse", "--symbolic-full-name", "@{upstream}"]
+            ),
+            format!(
+                "refs/remotes/origin/{}",
+                if branch == Some("existing") {
+                    "existing"
+                } else {
+                    default
+                }
+            )
+        );
         if branch == Some("Feature-123") {
-            assert_eq!(
-                git_test(
-                    &target,
-                    &[
-                        "for-each-ref",
-                        "--format=%(upstream)",
-                        "refs/heads/Feature-123"
-                    ]
-                ),
-                ""
-            );
             assert_eq!(git_test(source, &["branch", "--list", "Feature-123"]), "");
         }
         git_test(&target, &["fetch", "--unshallow"]);

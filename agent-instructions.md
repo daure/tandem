@@ -197,7 +197,7 @@ Read `core_guidance` together with this editable guidance for placement and clea
 - Tandem provisions missing repositories with host Git before Compose configuration, builds or
   startup, using depth-1 single-branch clones of the source default. With Branch instances enabled,
   it shallow-fetches and checks out the instance-named remote branch when present,
-  otherwise creates a local branch from the remote default; when disabled it uses the default branch.
+  otherwise creates a local branch tracking the remote default; when disabled it uses the default branch.
   Local source defaults follow their checked-out branch. New branches are not pushed.
   Restore history on demand with `git fetch --unshallow` if the checkout is shallow;
   fetch other branches explicitly.
