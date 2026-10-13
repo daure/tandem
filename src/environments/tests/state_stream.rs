@@ -13,7 +13,7 @@ use crate::{
 fn fixture() -> (tempfile::TempDir, Config, Store) {
     let home = tempfile::Builder::new()
         .prefix("tandem-state-")
-        .tempdir_in("/tmp/opencode")
+        .tempdir()
         .unwrap();
     let config = Config::at(home.path().to_owned(), "state-test".into(), 9876).unwrap();
     runtime_db::prepare(&config).unwrap();

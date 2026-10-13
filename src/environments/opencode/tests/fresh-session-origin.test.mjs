@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { promptFreshSession } from "../session-input.mjs"
 
 function api(prompt) {
@@ -22,7 +23,7 @@ test("fresh empty sessions return identity without submitting model input", asyn
 })
 
 test("session identity reaches the private receipt before prompt delivery", async (t) => {
-  const root = await mkdtemp("/tmp/opencode/tandem-origin-")
+  const root = await mkdtemp(join(tmpdir(), "tandem-origin-"))
   t.after(() => rm(root, { recursive: true, force: true }))
   const path = join(root, "identity.json")
   await writeFile(path, JSON.stringify({ request_id: "request-1", directory: "/work/review" }), { mode: 0o600 })
@@ -51,7 +52,7 @@ test("correlated creation distinguishes preflight refusal from lost native creat
       const outcome = await promptFreshSession(bridge, {
         directory: "/work/review",
         initial_prompt: "Review the message",
-        identity_receipt: "/tmp/opencode/unused-identity.json",
+        identity_receipt: join(tmpdir(), "unused-identity.json"),
       }, new AbortController().signal)
       assert.equal(outcome.session_id, null)
       assert.equal(outcome.creation_outcome, failure === "preflight" ? "not_created" : "uncertain")
@@ -63,7 +64,7 @@ test("correlated creation distinguishes preflight refusal from lost native creat
 test("identity handoff rejects symlinks, public files and mismatched workspaces", async (t) => {
   for (const failure of ["symlink", "public", "workspace"]) {
     await t.test(failure, async (t) => {
-      const root = await mkdtemp("/tmp/opencode/tandem-origin-")
+      const root = await mkdtemp(join(tmpdir(), "tandem-origin-"))
       t.after(() => rm(root, { recursive: true, force: true }))
       const path = join(root, "identity.json")
       const target = failure === "symlink" ? join(root, "target.json") : path

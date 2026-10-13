@@ -9,7 +9,7 @@ mod bursts;
 fn fixture() -> (tempfile::TempDir, Config, Arc<Store>) {
     let home = tempfile::Builder::new()
         .prefix("tandem-socket-")
-        .tempdir_in("/tmp/opencode")
+        .tempdir()
         .unwrap();
     let config = Config::at(home.path().to_owned(), "socket-test".into(), 9876).unwrap();
     crate::environments::runtime_db::prepare(&config).unwrap();
