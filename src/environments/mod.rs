@@ -252,6 +252,14 @@ impl Environments {
     }
 
     pub fn refresh_instances(&self) {
+        self.refresh_instances_with_mode(false);
+    }
+
+    pub(crate) fn refresh_instances_fresh(&self) {
+        self.refresh_instances_with_mode(true);
+    }
+
+    fn refresh_instances_with_mode(&self, fresh: bool) {
         match journal::session_pings(&self.config) {
             Ok(pings) => {
                 self.snapshot
@@ -275,7 +283,7 @@ impl Environments {
         }
         let revision = self.instance_revision.load(Ordering::SeqCst);
         let observed = match &self.shared_state {
-            Some(store) => store.inspect_instances(),
+            Some(store) => store.inspect_instances(fresh),
             None => docker::inspect(&self.config),
         };
         let instances = observed.and_then(|mut instances| {

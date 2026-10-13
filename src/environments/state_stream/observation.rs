@@ -56,12 +56,13 @@ impl Store {
         Ok(inventory)
     }
 
-    pub(crate) fn inspect_instances(&self) -> Result<Vec<Instance>, String> {
+    pub(crate) fn inspect_instances(&self, fresh: bool) -> Result<Vec<Instance>, String> {
         let deadline = Instant::now() + Duration::from_secs(35);
         loop {
             let revision = self.inventory_revision()?;
             if let Some((_, observation)) =
                 self.observation::<InventoryObservation>("instances", 0)?
+                && !fresh
                 && observation.revision == revision
                 && state_stream::now().saturating_sub(observation.at) < 10
             {
@@ -71,6 +72,7 @@ impl Store {
                 let revision = self.inventory_revision()?;
                 if let Some((_, observation)) =
                     self.observation::<InventoryObservation>("instances", 0)?
+                    && !fresh
                     && observation.revision == revision
                     && state_stream::now().saturating_sub(observation.at) < 10
                 {

@@ -130,9 +130,11 @@ impl RefreshWorker {
                             errors.push(format!("Settings: {error}"));
                         }
                         if targets[1] {
-                            environments.refresh_instances();
                             if manual {
+                                environments.refresh_instances_fresh();
                                 environments.refresh_resources(true);
+                            } else {
+                                environments.refresh_instances();
                             }
                         }
                         let snapshot = environments.snapshot();

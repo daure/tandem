@@ -217,7 +217,8 @@ Writes time out after five seconds. Write timeout, journal overrun, or server sh
 subscribers; reconnect for replay or a fresh snapshot. Frames and complete snapshots are limited to 16 MiB.
 Oversized state produces a diagnostic and preserves the last published snapshot. OpenCode observers
 share a namespace lease; background Docker inspections share a ten-second cache invalidated by
-Tandem inventory revisions. Subscriber count does not increase upstream collection.
+Tandem inventory revisions. Explicit CLI inspection and manual refresh remain fresh.
+Subscriber count does not increase upstream collection.
 
 ### Origin semantics
 

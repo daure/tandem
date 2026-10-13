@@ -167,7 +167,7 @@ Namespace leases single-flight OpenCode subscriptions across TUI and headless pr
 read completed shared observations on a background worker and retain their local edit overlays.
 Blocking publication retains lease ownership through commit, including after async cancellation.
 Background instance reads share a ten-second Docker inspection cache, invalidated by durable inventory
-revisions and rechecked under its observation lease. Explicit CLI inspection remains fresh.
+revisions and rechecked under its observation lease. Explicit CLI inspection and manual refresh remain fresh.
 Replaying recorded publications supports reconnects and process restarts; reconciliation supplies
 current state after downtime without claiming a history of unobserved external transitions.
 
