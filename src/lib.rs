@@ -5,6 +5,7 @@ mod environments;
 mod events_http;
 mod mcp;
 mod service;
+mod state_socket;
 mod store;
 
 use std::net::SocketAddr;
@@ -55,6 +56,20 @@ pub fn run_events(bind: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     let result = runtime.block_on(events_http::run(service.clone(), bind, None));
     drop(runtime);
     result
+}
+
+pub fn run_state() -> Result<(), Box<dyn std::error::Error>> {
+    let service = AppService::initialize()?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(service.serve_state()).map_err(Into::into)
+}
+
+pub fn watch_state(since: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let service = AppService::initialize()?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime
+        .block_on(service.watch_state(since))
+        .map_err(Into::into)
 }
 
 #[cfg(debug_assertions)]

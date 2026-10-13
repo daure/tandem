@@ -10,7 +10,7 @@ mod database;
 mod docker;
 pub(crate) mod events;
 mod executable;
-mod gateway;
+pub(crate) mod gateway;
 mod host_resources;
 mod inspection;
 mod instance_mcp;
@@ -27,6 +27,7 @@ pub(crate) mod rules;
 pub(crate) mod runtime_db;
 pub(crate) mod sound;
 pub(crate) mod startup;
+pub(crate) mod state_stream;
 mod stats;
 mod template_files;
 mod templates;
@@ -63,6 +64,7 @@ pub(crate) struct Environments {
     instance_revision: AtomicU64,
     inventory_generation: AtomicU64,
     resources: Mutex<resources::ResourceCache>,
+    shared_state: Option<Arc<state_stream::Store>>,
 }
 
 struct Job {
@@ -110,7 +112,13 @@ impl Environments {
             instance_revision: AtomicU64::new(0),
             inventory_generation: AtomicU64::new(0),
             resources: Mutex::new(resources::ResourceCache::default()),
+            shared_state: None,
         }
+    }
+
+    pub(crate) fn with_shared_state(mut self, store: Arc<state_stream::Store>) -> Self {
+        self.shared_state = Some(store);
+        self
     }
 
     pub fn snapshot(&self) -> EnvironmentSnapshot {
@@ -266,7 +274,11 @@ impl Environments {
             return;
         }
         let revision = self.instance_revision.load(Ordering::SeqCst);
-        let instances = docker::inspect(&self.config).and_then(|mut instances| {
+        let observed = match &self.shared_state {
+            Some(store) => store.inspect_instances(),
+            None => docker::inspect(&self.config),
+        };
+        let instances = observed.and_then(|mut instances| {
             let activities = journal::enrich(&self.config, &mut instances)?;
             self.snapshot
                 .lock()

@@ -16,8 +16,9 @@ mod refresh;
 mod rules;
 mod settings;
 mod startup;
+mod state_stream;
 
-pub(crate) use creation::NewInstanceOutcome;
+pub(crate) use creation::{NewInstanceOutcome, NewInstanceRequest};
 pub(crate) use environments::CreateInstanceOutcome;
 
 #[derive(Clone)]
@@ -32,6 +33,7 @@ pub(crate) struct AppService {
     events: Arc<events::Integration>,
     providers: Arc<providers::Integration>,
     rules: Arc<rules::Integration>,
+    state_stream: Arc<crate::environments::state_stream::Store>,
     #[cfg(not(test))]
     sound_playback: Arc<SoundPlayback>,
 }
@@ -69,13 +71,16 @@ impl AppService {
     }
 
     fn from_config(config: crate::environments::config::Config) -> Result<Self, Box<dyn Error>> {
+        let state_stream = Arc::new(crate::environments::state_stream::Store::new(&config)?);
         let events = Arc::new(events::Integration::new(&config)?);
         let providers = Arc::new(providers::Integration::new(&config)?);
         let rules = Arc::new(rules::Integration::new(&config)?);
         let settings = Arc::new(settings::Settings::open(
             config.home.join("settings.sqlite3"),
         )?);
-        let environments = Arc::new(crate::environments::Environments::new(config));
+        let environments = Arc::new(
+            crate::environments::Environments::new(config).with_shared_state(state_stream.clone()),
+        );
         let refresh = Arc::new(refresh::RefreshWorker::start(
             Arc::clone(&environments),
             Arc::clone(&settings),
@@ -90,6 +95,7 @@ impl AppService {
             events,
             providers,
             rules,
+            state_stream,
             #[cfg(not(test))]
             sound_playback: Arc::new(SoundPlayback::default()),
             state: Arc::new(ServiceState {

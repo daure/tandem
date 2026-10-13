@@ -1,9 +1,9 @@
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::{ContainerState, Instance, InstanceService};
 
-#[derive(Clone, Debug, Default, Serialize, JsonSchema, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub(crate) struct UsageSummary {
     pub memory_bytes: Option<u64>,
     pub cpu_basis_points: Option<u64>,

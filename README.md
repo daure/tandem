@@ -143,6 +143,105 @@ exits nonzero on those errors; an empty partial result does not prove there are 
 Use an owned V2 session's `session_id` with `prompt-session`/`prompt_session`, which verifies the target
 again before submitting input.
 
+## Local state stream and session origins
+
+```bash
+tandem serve-state
+tandem state-socket
+tandem watch --json
+tandem watch --json --since '<saved-cursor>'
+tandem new-instance review -t website --opencode "Inspect this message" --origin 'slack://channel?message=123' --json
+tandem new-instance-session review "Investigate further" --origin 'slack://channel?message=123' --json
+tandem prompt-session ses_example "Check the tests" --origin 'slack://channel?message=456' --json
+```
+
+`serve-state` is a foreground service with a lifetime independent of the TUI. Run it in a separate
+terminal or a user service to keep observation available while the TUI is closed. CLI commands and
+origin persistence work with no state server running. The stream does not start OpenCode servers,
+launch clients, ingest provider events, or run rules. It reuses OpenCode observation, including
+five-second client-process samples; subscribers do not add collection work.
+
+For the default home and namespace, the socket is `$XDG_RUNTIME_DIR/tandem/state.sock`.
+Other homes/namespaces use private scoped directories beneath `$XDG_RUNTIME_DIR/tandem`.
+Without `XDG_RUNTIME_DIR`, private runtime storage beneath the Tandem home supplies the socket.
+`state-socket` prints the resolved path. Use the same `TANDEM_HOME` and `TANDEM_NAMESPACE` in the
+server and consumer. Socket directories have mode `0700`; sockets have mode `0600`.
+Both ends verify the peer's user ID. There is no TCP listener, HTTP wrapper, or broker dependency.
+
+### Protocol version 1
+
+Messages are UTF-8 newline-delimited JSON over a Unix stream socket. Embedded newlines are JSON
+escaped. Every message has `type`, `version: 1`, `at` in Unix seconds, `cursor`, and `data`.
+Consumers must tolerate additional fields and unknown event types.
+
+| Type | Full `data` object |
+|---|---|
+| `snapshot` | `instances`: the `list-instances --json` object; `sessions`: the `list-sessions --json --include-closed` object |
+| `instance.changed` | An instance, including `summary`, `workspace_only`, and `description` |
+| `instance.removed` | The last published instance |
+| `session.created` | A listed session, including all currently associated `origins` |
+| `session.changed` | A listed session, including title, activity, attachment, panes, origins, model, variant, agent, and context usage |
+| `session.removed` | The last published session |
+| `state.changed` | Full listing metadata under `instances` and `sessions`, including retained activities and observation errors |
+| `replay.complete` | `null`; its cursor marks the replay boundary |
+
+On an ordinary connection, the server sends one snapshot, then changes. The snapshot and cursor
+share a committed database boundary; connecting does not trigger external reads. Listing objects
+use the CLI projections. A snapshot represents the latest published observations, not a new
+simultaneous verification of Docker and OpenCode. Pending baseline observation retains known
+sessions with stale/unknown activity rather than treating startup as evidence of their removal.
+Failed Docker observation retains known container-backed instances with stale runtime state and an
+inventory error. Fresh successful observation reconciles their presence.
+
+Replace objects by case-normalized instance name or `(server, session_id)`. Replace the entire
+local cache on a snapshot. `removed` means the object left the published projection; it does not
+by itself prove deletion from OpenCode or removal of Docker resources. Pane/tab IDs are observations,
+not durable navigation identities; navigation still needs fresh ownership and pane verification.
+No raw OpenCode message bodies, task input, companion credentials, or token deltas are broadcast.
+
+For optional backfill, send `{"since":"<saved-cursor>"}` followed by a newline within 100 ms of
+connecting. `watch --json --since` sends this request. A retained cursor yields recorded events
+strictly after that cursor, followed by `replay.complete` and live changes. Resume requires the
+consumer's state at its saved cursor. Invalid, future, foreign, or expired cursors and oversized backfills
+receive a replacement snapshot with `reset: true`. Malformed subscription JSON or requests exceeding
+4096 bytes disconnect the client. Cursors persist across server restarts and are opaque.
+
+The journal retains at most 4096 events and 32 MiB per namespace. Initial replay is limited to 2 MiB;
+larger backfills receive a snapshot. Replay covers recorded publications, not every intermediate
+mutation or external event while no observer was running. Reconciliation restores current state;
+it cannot recreate an external conversation created and deleted entirely during downtime.
+
+At most 16 clients can connect. Independent subscribers read journal pages of at most 64 events and
+2 MiB, with a single-frame allowance for larger objects. There are no accumulating live queues.
+Writes time out after five seconds. Write timeout, journal overrun, or server shutdown disconnects
+subscribers; reconnect for replay or a fresh snapshot. Frames and complete snapshots are limited to 16 MiB.
+Oversized state produces a diagnostic and preserves the last published snapshot. OpenCode observers
+share a namespace lease; background Docker inspections share a ten-second cache invalidated by
+Tandem inventory revisions. Subscriber count does not increase upstream collection.
+
+### Origin semantics
+
+Origins are exact, opaque strings of at most 512 Unicode scalar values. Empty strings, whitespace,
+and embedded newlines are preserved. They are correlation metadata, not authorization or idempotency
+keys. Sessions expose a deduplicated, first-associated-order `origins` array in listings and events.
+Prompting appends an origin to the verified target before attempting delivery; an origin does not
+certify that input was submitted or that work completed. Reusing a tag does not suppress a new command.
+
+Creation registers correlation before contacting the companion. The companion records exact
+session identity before attaching instructions or submitting input. Origin binding and the first
+published session commit together. This handoff permits identity recovery after an outer response
+or CLI process is lost, without resending input. If native creation itself loses its identity,
+creation remains uncertain and unbound candidates in that directory remain quarantined; Tandem
+does not guess from titles, timestamps, panes, or session-list differences.
+
+Origins persist in private `state-stream.sqlite3` independently of replay retention and remain
+available for retained session records across restarts. Confirmed Tandem session deletion removes
+their origin associations. `new-instance --opencode --json` returns the same session/input receipt
+shape as `new-instance-session --json`, including for a blank session. Available receipts are
+printed before a nonzero exit when instance provisioning fails after session creation.
+Origin-aware instance launches and JSON receipts require the current companion; run
+`tandem opencode-setup` and restart open clients after upgrading it.
+
 ## CLI instance lifecycle
 
 ```bash

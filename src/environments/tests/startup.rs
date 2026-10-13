@@ -43,6 +43,9 @@ fn fixture() -> (tempfile::TempDir, Config, Record) {
         workspace_ready: false,
         opencode_requested: false,
         opencode_result: None,
+        session_origin: None,
+        session_receipt_requested: false,
+        opencode_session: None,
         services: Vec::new(),
     };
     (directory, config, record)

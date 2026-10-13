@@ -68,7 +68,11 @@ impl Control {
         }
         let result: serde_json::Value = serde_json::from_slice(&bytes)
             .map_err(|_| "Invalid OpenCode tab response; check the client before retrying")?;
-        if !succeeded {
+        let creation_refused = path == "/sessions"
+            && result["creation_outcome"] == "not_created"
+            && result["session_id"].is_null()
+            && result["prompt_outcome"] == "not_submitted";
+        if !succeeded && !creation_refused {
             return Err(result["error"]
                 .as_str()
                 .unwrap_or("OpenCode refused the tab action")

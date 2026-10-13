@@ -26,6 +26,8 @@ mod repository_updates;
 mod rules;
 mod session_prompt;
 mod startup;
+mod state_origins;
+mod state_stream;
 mod workspaces;
 
 struct Fixture {

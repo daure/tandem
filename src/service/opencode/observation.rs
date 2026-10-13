@@ -18,7 +18,100 @@ pub(super) async fn run(
     settings: Arc<crate::service::settings::Settings>,
     generation: u64,
     signal: Arc<Signal>,
+    shared: Option<Arc<crate::environments::state_stream::Store>>,
 ) {
+    let _lease = if let Some(store) = &shared {
+        let mut revision = 0;
+        loop {
+            if !settings.opencode_enabled() {
+                return;
+            }
+            let adapter = store.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                Ok::<_, String>((
+                    adapter.observation_lease("opencode")?,
+                    adapter.observation::<Snapshot>("opencode", revision)?,
+                ))
+            })
+            .await;
+            match result {
+                Ok(Ok((Some(lease), observation))) => {
+                    if let Some((_, mut snapshot)) = observation {
+                        let Some(owner) = integration.upgrade() else {
+                            return;
+                        };
+                        for session in &mut snapshot.sessions {
+                            session.stale = true;
+                        }
+                        let mut state = owner
+                            .state
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        if state.generation != generation {
+                            return;
+                        }
+                        state.snapshot = snapshot;
+                        state.initial_observation_complete = false;
+                    }
+                    break Some(Arc::new(lease));
+                }
+                Ok(Ok((None, observation))) => {
+                    if let Some((current, snapshot)) = observation {
+                        revision = current;
+                        let Some(owner) = integration.upgrade() else {
+                            return;
+                        };
+                        let mut state = owner
+                            .state
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner());
+                        if state.generation != generation {
+                            return;
+                        }
+                        state.snapshot = snapshot;
+                        state.initial_observation_complete = true;
+                        drop(state);
+                        owner.published.notify_one();
+                    }
+                }
+                Ok(Err(error)) => {
+                    publish(&integration, generation, Err(error));
+                    return;
+                }
+                Err(error) => {
+                    publish(&integration, generation, Err(error.to_string()));
+                    return;
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    } else {
+        None
+    };
+    if let Some(store) = &shared {
+        let adapter = store.clone();
+        if let Ok(Ok(retained)) =
+            tokio::task::spawn_blocking(move || adapter.retained_sessions()).await
+        {
+            let Some(owner) = integration.upgrade() else {
+                return;
+            };
+            let mut state = owner
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            for session in retained {
+                if !state
+                    .snapshot
+                    .sessions
+                    .iter()
+                    .any(|known| known.id == session.id && known.server == session.server)
+                {
+                    state.snapshot.sessions.push(session);
+                }
+            }
+        }
+    }
     let watched = observer.clone();
     let notifications = Arc::clone(&signal);
     let mut changes =
@@ -125,6 +218,7 @@ pub(super) async fn run(
             }
         }
         if flags & REMOTE == 0 && !local {
+            save_shared(&integration, generation, shared.as_ref(), _lease.as_ref()).await;
             continue;
         }
         let mut result = tokio::time::timeout(
@@ -153,6 +247,43 @@ pub(super) async fn run(
             return;
         }
         publish(&integration, generation, result);
+        save_shared(&integration, generation, shared.as_ref(), _lease.as_ref()).await;
+    }
+}
+
+async fn save_shared(
+    integration: &Weak<Integration>,
+    generation: u64,
+    store: Option<&Arc<crate::environments::state_stream::Store>>,
+    lease: Option<&Arc<crate::environments::gateway::Lock>>,
+) {
+    let (Some(store), Some(owner)) = (store, integration.upgrade()) else {
+        return;
+    };
+    let snapshot = {
+        let state = owner
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if state.generation != generation {
+            return;
+        }
+        state.retention.visible_snapshot(&state.snapshot)
+    };
+    drop(owner);
+    let store = store.clone();
+    let lease = lease.cloned();
+    match tokio::task::spawn_blocking(move || {
+        let _lease = lease;
+        store.save_observation("opencode", &snapshot)
+    })
+    .await
+    {
+        Ok(Ok(())) => {}
+        result => crate::diagnostics::record_error(
+            "cannot share OpenCode observation",
+            &std::io::Error::other(format!("{result:?}")),
+        ),
     }
 }
 
@@ -230,6 +361,7 @@ pub(super) fn publish(
     let abandoned = retention.observe(snapshot);
     retention.discard_abandoned(snapshot);
     drop(state);
+    owner.published.notify_one();
     if !abandoned.is_empty() {
         tokio::task::spawn_blocking(move || {
             for message in abandoned {

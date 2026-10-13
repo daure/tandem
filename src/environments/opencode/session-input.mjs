@@ -27,8 +27,13 @@ function receipt(api, sessionID = null) {
   }
 }
 
+export function rejectFreshSession(api, error) {
+  return { ...receipt(api), creation_outcome: "not_created", error }
+}
+
 export async function promptFreshSession(api, input, signal) {
   const outcome = receipt(api)
+  if (input.identity_receipt != null) outcome.creation_outcome = "not_created"
   let creating = false
   const options = { throwOnError: true, signal }
   try {
@@ -36,14 +41,18 @@ export async function promptFreshSession(api, input, signal) {
     const { model, variant } = await selectModel(api, input.directory, input.model, input.variant, options)
     signal.throwIfAborted()
     creating = true
+    if (input.identity_receipt != null) outcome.creation_outcome = "uncertain"
     const result = await api.client.session.create({ directory: input.directory, ...(model ? { model } : {}), ...(input.agent ? { agent: input.agent } : {}) }, options)
     outcome.session_id = result.data?.id ?? null
     if (!outcome.session_id) throw new Error("Session creation returned no session")
+    if (input.identity_receipt != null) outcome.creation_outcome = "created"
+    await recordIdentity(input, outcome)
     signal.throwIfAborted()
     await applyInstructions(api, outcome.session_id, input.directory, input.instructions, options)
     signal.throwIfAborted()
     focusSession(api, outcome.session_id)
     signal.throwIfAborted()
+    if (input.initial_prompt == null) return outcome
     outcome.prompt_outcome = "uncertain"
     const response = await api.client.session.promptAsync({
       directory: input.directory, sessionID: outcome.session_id,
@@ -64,6 +73,24 @@ export async function promptFreshSession(api, input, signal) {
           : "Model selection failed; initial prompt was not submitted"
   }
   return outcome
+}
+
+async function recordIdentity(input, outcome) {
+  if (input.identity_receipt == null) return
+  if (typeof input.identity_receipt !== "string" || !input.identity_receipt.startsWith("/")) throw new Error("Invalid identity receipt")
+  const file = await open(input.identity_receipt, constants.O_RDWR | constants.O_NOFOLLOW)
+  try {
+    const stat = await file.stat()
+    if (!stat.isFile() || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0 || stat.size > 16384) throw new Error("Identity receipt must be private")
+    const request = JSON.parse(await file.readFile("utf8"))
+    if (request.directory !== input.directory || typeof request.request_id !== "string") throw new Error("Identity receipt does not match this workspace")
+    const payload = JSON.stringify({ request_id: request.request_id, directory: input.directory, session_id: outcome.session_id, server: outcome.server.replace(/\/$/, "") })
+    await file.truncate(0)
+    await file.write(payload, 0, "utf8")
+    await file.sync()
+  } finally {
+    await file.close()
+  }
 }
 
 function focusSession(api, id, existing = false) {
@@ -153,3 +180,5 @@ export async function applyInstructions(api, sessionID, directory, instructions,
     }, options)
   }
 }
+import { constants } from "node:fs"
+import { open } from "node:fs/promises"

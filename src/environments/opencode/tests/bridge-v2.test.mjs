@@ -272,6 +272,12 @@ test("concurrent tab requests are rejected and disposal cancels creation before 
   const pending = client.request().catch(() => undefined)
   await started
   assert.equal((await client.request()).status, 409)
+  const refused = await client.request({ directory: "/work/review", initial_prompt: "Inspect" }, undefined, "/sessions")
+  assert.equal(refused.status, 409)
+  assert.deepEqual(await refused.json(), {
+    session_id: null, server: "http://127.0.0.1:4199", prompt_outcome: "not_submitted",
+    creation_outcome: "not_created", error: "OpenCode tab action is already in progress",
+  })
   await client.dispose()
   await pending
   assert.equal(signal.aborted, true)
@@ -473,7 +479,13 @@ test("prompted sessions reject mismatched workspaces and invalid input before cr
     { directory: "/work/review", initial_prompt: "x".repeat(65_537) },
     { directory: "/work/review", initial_prompt: "a\0b" },
   ]) {
-    assert.equal((await client.request(input, undefined, "/sessions")).status, 400)
+    const response = await client.request(input, undefined, "/sessions")
+    assert.equal(response.status, 400)
+    const outcome = await response.json()
+    assert.equal(outcome.creation_outcome, "not_created")
+    assert.equal(outcome.session_id, null)
+    assert.equal(outcome.server, "http://127.0.0.1:4199")
+    assert.equal(outcome.prompt_outcome, "not_submitted")
   }
   assert.deepEqual(client.calls, [])
 })

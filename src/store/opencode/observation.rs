@@ -5,7 +5,7 @@ use super::{Client, Session, Snapshot};
 pub(crate) type PaneKey = (String, u32);
 pub(crate) type DirectoryKey = (String, String);
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub(crate) struct Evidence {
     pub missing_directories: BTreeSet<String>,
     pub verified_panes: BTreeSet<PaneKey>,
@@ -21,7 +21,7 @@ pub(crate) struct Exclusions {
     pub directories: BTreeSet<DirectoryKey>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub(crate) enum Scope {
     Global,
     Server(String),
@@ -29,7 +29,7 @@ pub(crate) enum Scope {
     Pane(PaneKey),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub(crate) struct Failure {
     pub scope: Scope,
     pub message: String,

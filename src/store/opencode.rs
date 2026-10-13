@@ -158,13 +158,15 @@ impl PromptOutcome {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct PromptedSession {
     pub session_id: Option<String>,
     pub server: Option<String>,
     pub pane: Pane,
     pub prompt_outcome: PromptOutcome,
     pub error: Option<String>,
+    #[serde(skip)]
+    pub creation_confirmed_absent: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -235,7 +237,7 @@ impl Session {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct Client {
     pub title: String,
     pub directory: String,
@@ -245,7 +247,7 @@ pub(crate) struct Client {
     pub awaiting_presence_since: Option<u64>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct Snapshot {
     pub directories: Vec<String>,
     pub sessions: Vec<Session>,

@@ -18,6 +18,7 @@ mod v2;
 pub(crate) use conversation::load as conversation;
 pub(crate) use history::clear as clear_history;
 pub(crate) use sessions::rename;
+pub(crate) use transport::local_server;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -30,7 +31,7 @@ use std::{
 use crate::store::opencode::observation::{Evidence, Exclusions, Failure};
 use crate::store::opencode::{Activity, Client, Pane, Session, Snapshot, conversation::LatestTurn};
 use serde::Deserialize;
-use transport::{get, local_server, zellij};
+use transport::{get, zellij};
 
 const QUESTION_REFRESH_LIMIT: usize = 16;
 pub(crate) const SESSION_DIRECTORY_WINDOW: usize = 21;
@@ -952,7 +953,7 @@ fn apply_turn_timing(session: &mut Session, turn: &LatestTurn, observed_at: u64)
     }
 }
 
-fn valid_id(value: &str) -> bool {
+pub(crate) fn valid_id(value: &str) -> bool {
     value.starts_with("ses_")
         && value.len() < 128
         && value

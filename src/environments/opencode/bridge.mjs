@@ -3,7 +3,7 @@ import { homedir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { createServer } from "node:http"
 import { randomBytes } from "node:crypto"
-import { applyInstructions, promptExistingSession, promptFreshSession, selectModel } from "./session-input.mjs"
+import { applyInstructions, promptExistingSession, promptFreshSession, rejectFreshSession, selectModel } from "./session-input.mjs"
 
 // Runs in each TUI, not in the shared server: route and terminal identity are client-local.
 const plugin = {
@@ -306,13 +306,16 @@ async function serveTabs(api, disposed) {
       response.writeHead(status, { "Content-Type": "application/json" })
       response.end(JSON.stringify(body))
     }
-    if (request.headers.authorization !== `Bearer ${token}`) return reply(401, { error: "Unauthorized" })
     const focusing = request.url === "/tabs/focus"
     const closing = request.url === "/tabs/close"
     const existing = request.url === "/sessions/prompt"
     const prompting = request.url === "/sessions" || existing
-    if (request.method !== "POST" || (!prompting && !focusing && !closing && request.url !== "/tabs")) return reply(404, { error: "Unknown action" })
-    if (busy) return reply(409, { error: "OpenCode tab action is already in progress" })
+    const reject = (status, error) => reply(status, request.url === "/sessions"
+      ? rejectFreshSession(api, error)
+      : { error })
+    if (request.headers.authorization !== `Bearer ${token}`) return reject(401, "Unauthorized")
+    if (request.method !== "POST" || (!prompting && !focusing && !closing && request.url !== "/tabs")) return reject(404, "Unknown action")
+    if (busy) return reject(409, "OpenCode tab action is already in progress")
     if (!prompting && !focusing && !api.tabs?.enabled()) return reply(409, { error: "Enable OpenCode session tabs before changing tabs" })
     busy = true
     const cancelled = new AbortController()
@@ -327,23 +330,23 @@ async function serveTabs(api, disposed) {
       }
       const input = JSON.parse(body)
       const { directory, sessionID, instructions } = input
-      if (instructions != null && typeof instructions !== "string") return reply(400, { error: "Invalid session instructions" })
+      if (instructions != null && typeof instructions !== "string") return reject(400, "Invalid session instructions")
       if (prompting) {
         if (typeof directory !== "string" || directory !== api.state.path.directory || !api.state.ready) {
-          return reply(400, { error: "OpenCode client workspace does not match the requested directory" })
+          return reject(400, "OpenCode client workspace does not match the requested directory")
         }
         if (!api.tabs?.enabled() && api.route.current.name !== "home" && !(existing && api.route.current.params?.sessionID === sessionID)) {
-          return reply(409, { error: "Enable session tabs or open a fresh client before prompting a new conversation" })
+          return reject(409, "Enable session tabs or open a fresh client before prompting a new conversation")
         }
-        if (typeof input.initial_prompt !== "string" || !input.initial_prompt.trim()
-          || Buffer.byteLength(input.initial_prompt) > 65_536 || input.initial_prompt.includes("\0")) {
-          return reply(400, { error: "Invalid initial prompt" })
+        if ((existing || input.initial_prompt != null) && (typeof input.initial_prompt !== "string" || !input.initial_prompt.trim()
+          || Buffer.byteLength(input.initial_prompt) > 65_536 || input.initial_prompt.includes("\0"))) {
+          return reject(400, "Invalid initial prompt")
         }
         if ((input.model != null && (typeof input.model !== "string" || !input.model.includes("/")))
           || (input.variant != null && typeof input.variant !== "string")
           || (input.agent != null && (typeof input.agent !== "string" || !input.agent.trim()
             || Buffer.byteLength(input.agent) > 200 || /\p{Cc}/u.test(input.agent)))) {
-          return reply(400, { error: "Invalid model selection" })
+          return reject(400, "Invalid model selection")
         }
         if (existing) {
           if (typeof sessionID !== "string" || !/^[a-zA-Z0-9_]{1,127}$/.test(sessionID)) return reply(400, { error: "Invalid session identity" })
@@ -413,11 +416,11 @@ async function serveTabs(api, disposed) {
       api.tabs.focus(result.data.id)
       reply(200, { id: result.data.id })
     } catch {
-      if (!response.destroyed) reply(502, { error: closing
+      if (!response.destroyed) reject(502, closing
         ? "Could not close the OpenCode tab; refresh and try again"
         : focusing
           ? "Could not select the OpenCode tab; refresh and try again"
-          : "Could not create an OpenCode tab; check the client before retrying because creation may be uncertain" })
+          : "Could not create an OpenCode tab; check the client before retrying because creation may be uncertain")
     } finally {
       busy = false
     }

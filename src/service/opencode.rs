@@ -8,20 +8,20 @@ use crate::{
     store::opencode::{CloseScope, Pane, Session, Snapshot, retention::Retention},
 };
 
-mod actions;
+pub(super) mod actions;
 mod guidance;
 mod listing;
 mod observation;
-mod prompted;
+pub(super) mod prompted;
 mod sessions;
 
-pub(super) use actions::launch_workspace_opencode;
 pub(super) use guidance::instance_guidance;
 
 pub(super) struct Integration {
     state: Mutex<State>,
     pub(super) observer: Observer,
     pub(super) current_zellij: String,
+    pub(super) published: tokio::sync::Notify,
 }
 
 struct State {
@@ -52,6 +52,7 @@ impl Integration {
         Self {
             observer: Observer::from_env(),
             current_zellij: std::env::var("ZELLIJ_SESSION_NAME").unwrap_or_default(),
+            published: tokio::sync::Notify::new(),
             state: Mutex::new(State {
                 snapshot: Snapshot::default(),
                 initial_observation_complete: false,
@@ -230,6 +231,7 @@ impl super::AppService {
             settings,
             generation,
             signal,
+            Some(self.state_stream.clone()),
         )));
     }
 

@@ -146,6 +146,31 @@ Purge can remove only retained metadata for failed cold startups with no prepare
 or launch record after the startup lease is released. The instance lock excludes active work and name
 reuse; unverified workspaces, runtime resources, clients and conversation history are preserved.
 
+## Local state transport
+
+`serve-state` runs a namespace-scoped, leased Unix listener independently of terminal clients.
+Its service coordinator activates existing instance and OpenCode observation without resource,
+provider, rule, or template polling. Subscriber admission reads the committed state projection and
+cursor together; clients consume a snapshot or bounded replay followed by full-object NDJSON changes.
+Independent bounded journal readers and write deadlines isolate slow readers. Private runtime paths and peer UID
+checks isolate users; canonical-home/namespace scoping separates local deployments.
+
+Private `state-stream.sqlite3` owns the projected state, bounded publication journal, session origins,
+creation requests, deletion markers, and shared observations. Stream writes do not take the settings
+or domain database's writer lock. Origin requests gate first publication before native creation;
+private companion identity handoffs bind the exact conversation before prompting. Completed identity
+records remain available until caller acknowledgment and observation, with seven-day retention for
+observed unacknowledged records. Unknown native creation remains explicit and is never correlated by
+session-list differences. Confirmed non-creation releases its gate. Journal pruning preserves origins.
+
+Namespace leases single-flight OpenCode subscriptions across TUI and headless processes. Followers
+read completed shared observations on a background worker and retain their local edit overlays.
+Blocking publication retains lease ownership through commit, including after async cancellation.
+Background instance reads share a ten-second Docker inspection cache, invalidated by durable inventory
+revisions and rechecked under its observation lease. Explicit CLI inspection remains fresh.
+Replaying recorded publications supports reconnects and process restarts; reconciliation supplies
+current state after downtime without claiming a history of unobserved external transitions.
+
 ## OpenCode observation
 
 `service/opencode` owns a cancellable, single-flight event-driven observer and navigation tasks, gated by the

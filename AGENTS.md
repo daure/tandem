@@ -7,6 +7,22 @@
 5. Put tests in sibling `tests/` directories. Treat warnings as build failures.
 6. Maintain `agent-instructions.md` according to the guidance below.
 
+## Local state publications
+
+`serve-state` exposes private Unix-socket NDJSON through `AppService`, independently of the TUI.
+CLI listings and stream objects share domain projections. Publish completed, allowlisted state;
+do not collect new data per subscriber or forward raw OpenCode payloads, task input, or credentials.
+`store/state_stream.rs` owns versioned envelopes and entity comparisons; `environments/state_stream`
+owns the bounded journal, atomic snapshot/cursor boundary, origin associations, and shared observation
+leases. New observable domain state belongs in this publication path, with its event and replay
+semantics documented beside the CLI protocol. Consumers tolerate unknown event types.
+
+Keep origin binding ahead of first publication, preserve uncertainty across worker/response loss,
+and enforce deletion markers inside every session-write transaction. Replay describes recorded
+publications; it cannot promise unobserved external history. Keep queues, writes, journal retention,
+and shared collection bounded. Blocking publishers retain their observation lease through commit.
+Test reconnect, origin races, stale reads, and slow clients when changing this contract.
+
 ## OpenCode live verification
 
 After changing `src/environments/opencode/bridge.mjs`, install the rebuilt companion at the path

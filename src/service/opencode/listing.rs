@@ -27,11 +27,21 @@ impl super::super::AppService {
         }
         let mut previous = self.opencode_snapshot();
         let store = self.rules.store.clone();
-        let retained = self
+        let mut retained = self
             .runtime
             .spawn_blocking(move || store.retained_sessions().map_err(|error| error.to_string()))
             .await
             .map_err(|error| error.to_string())??;
+        let store = self.state_stream.clone();
+        retained.extend(
+            self.runtime
+                .spawn_blocking(move || {
+                    store.recover_identities()?;
+                    store.retained_sessions()
+                })
+                .await
+                .map_err(|error| error.to_string())??,
+        );
         for session in retained {
             if !previous
                 .sessions
@@ -79,22 +89,50 @@ impl super::super::AppService {
         if !self.opencode_enabled() {
             return Err("OpenCode integration is disabled".into());
         }
-        let state = self
-            .opencode
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        super::sessions::apply_edits(&mut snapshot, &state.session_edits);
-        super::sessions::apply_forgotten(&mut snapshot, &state.forgotten_directories);
-        super::sessions::apply_forgotten(&mut snapshot, &state.clearing_directories);
+        {
+            let state = self
+                .opencode
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            super::sessions::apply_edits(&mut snapshot, &state.session_edits);
+            super::sessions::apply_forgotten(&mut snapshot, &state.forgotten_directories);
+            super::sessions::apply_forgotten(&mut snapshot, &state.clearing_directories);
+        }
         let observation_error = snapshot.error.clone();
+        let mut sessions = crate::store::opencode::listing::project(
+            snapshot,
+            &inventory.instances,
+            instance.as_deref(),
+            include_closed,
+        );
+        let store = self.state_stream.clone();
+        let observed = serde_json::to_value(&sessions).map_err(|error| error.to_string())?;
+        let (origins, edits) = self
+            .runtime
+            .spawn_blocking(move || {
+                store.recover_identities()?;
+                store.retire_renames(&observed)?;
+                Ok::<_, String>((store.origins()?, store.session_edits()?))
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+        sessions.retain_mut(|session| {
+            match edits.get(&(session.server.clone(), session.session_id.clone())) {
+                Some(Some(title)) => {
+                    session.title.clone_from(title);
+                    true
+                }
+                Some(None) => false,
+                None => true,
+            }
+        });
+        for session in &mut sessions {
+            let key = serde_json::to_string(&(&session.server, &session.session_id)).unwrap();
+            session.origins = origins.get(&key).cloned().unwrap_or_default();
+        }
         Ok(SessionListing {
-            sessions: crate::store::opencode::listing::project(
-                snapshot,
-                &inventory.instances,
-                instance.as_deref(),
-                include_closed,
-            ),
+            sessions,
             observed_at_unix_seconds: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()

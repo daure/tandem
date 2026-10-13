@@ -117,6 +117,8 @@ fn prompted_sessions_preserve_existing_work_and_return_delivery_receipts_without
             "--agent",
             "tracer",
             "--json",
+            "--origin",
+            "slack://channel?message=123",
         ]);
         assert_eq!(
             output.status.success(),
@@ -154,6 +156,12 @@ fn prompted_sessions_preserve_existing_work_and_return_delivery_receipts_without
             }
         );
         assert_eq!(outcome["server"], "http://127.0.0.1:4199");
+        if !matches!(result, "disconnected" | "wrong-server") {
+            let connection =
+                rusqlite::Connection::open(fixture.home.join("state-stream.sqlite3")).unwrap();
+            let origin: String = connection.query_row("SELECT origin FROM session_origins WHERE namespace = 'cli-test' AND session_id = 'ses_new'", [], |row| row.get(0)).unwrap();
+            assert_eq!(origin, "slack://channel?message=123");
+        }
         assert_eq!(
             fs::read_to_string(workspace.join("app/file.txt")).unwrap(),
             "Uncommitted work"

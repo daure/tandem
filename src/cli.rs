@@ -128,6 +128,18 @@ enum Commands {
         description: Option<String>,
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set, help = "Start configured services; false prepares the instance without Compose startup")]
         start_instance: bool,
+        #[arg(
+            long,
+            requires = "opencode",
+            help = "Opaque session correlation tag, at most 512 Unicode characters"
+        )]
+        origin: Option<String>,
+        #[arg(
+            long,
+            requires = "opencode",
+            help = "Print the created session identity and input receipt as JSON"
+        )]
+        json: bool,
     },
     #[command(
         about = "Create and prompt a fresh OpenCode conversation in an existing owned instance"
@@ -155,6 +167,11 @@ enum Commands {
             help = "Print session identity and prompt-submission outcome as JSON"
         )]
         json: bool,
+        #[arg(
+            long,
+            help = "Opaque session correlation tag, at most 512 Unicode characters"
+        )]
+        origin: Option<String>,
     },
     #[command(
         about = "Reopen an existing owned OpenCode conversation and submit literal task input"
@@ -175,6 +192,11 @@ enum Commands {
         when_busy: String,
         #[arg(long)]
         json: bool,
+        #[arg(
+            long,
+            help = "Append an opaque session correlation tag, at most 512 Unicode characters"
+        )]
+        origin: Option<String>,
     },
     #[command(
         about = "Start an existing instance by reapplying its trusted template; wait for readiness"
@@ -224,6 +246,20 @@ enum Commands {
     ServeEvents {
         #[arg(long, default_value = "127.0.0.1:7350")]
         bind: SocketAddr,
+    },
+    #[command(about = "Serve private local state changes independently of the TUI")]
+    ServeState,
+    #[command(about = "Print the state socket path for this Tandem home and namespace")]
+    StateSocket,
+    #[command(about = "Print the local state stream as newline-delimited JSON")]
+    Watch {
+        #[arg(long, required = true)]
+        json: bool,
+        #[arg(
+            long,
+            help = "Replay retained records after this opaque cursor, or receive a replacement snapshot"
+        )]
+        since: Option<String>,
     },
     #[cfg(debug_assertions)]
     #[command(about = "Run the TUI and loopback HTTP MCP for development")]
@@ -365,6 +401,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         Some(Commands::ServeEvents { bind }) => crate::run_events(bind),
+        Some(Commands::ServeState) => crate::run_state(),
+        Some(Commands::StateSocket) => {
+            let service = crate::service::AppService::initialize()?;
+            println!("{}", service.state_socket_path()?.display());
+            Ok(())
+        }
+        Some(Commands::Watch { json: _, since }) => crate::watch_state(since),
         #[cfg(debug_assertions)]
         Some(Commands::Dev { bind }) => {
             tuicore::init();
@@ -379,32 +422,71 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             variant,
             description,
             start_instance,
+            origin,
+            json,
         }) => {
             let service = crate::service::AppService::initialize()?;
             eprintln!("Checking {name} for template {template}...");
-            let (instance, status) = match service.new_instance(
+            let prompt_expected = opencode
+                .as_ref()
+                .and_then(|prompt| prompt.as_deref())
+                .is_some_and(|prompt| !prompt.trim().is_empty());
+            let (instance, status, receipt) = match service.new_instance(
                 &name,
-                template,
-                opencode.map(|prompt| crate::store::opencode::Launch {
-                    prompt,
-                    model,
-                    variant,
-                }),
-                description,
-                start_instance,
+                crate::service::NewInstanceRequest {
+                    template,
+                    opencode: opencode.map(|prompt| crate::store::opencode::Launch {
+                        prompt,
+                        model,
+                        variant,
+                    }),
+                    description,
+                    start_instance,
+                    origin,
+                    session_receipt_requested: json,
+                },
             )? {
-                crate::service::NewInstanceOutcome::Created(instance) => (
+                crate::service::NewInstanceOutcome::Created(instance, receipt) => (
                     instance,
                     if start_instance {
                         "ready"
                     } else {
                         "prepared; services not started"
                     },
+                    receipt,
                 ),
-                crate::service::NewInstanceOutcome::Existing(instance) => {
-                    (instance, "already exists; left unchanged")
+                crate::service::NewInstanceOutcome::Existing(instance, receipt) => {
+                    (instance, "already exists; left unchanged", receipt)
+                }
+                crate::service::NewInstanceOutcome::Failed { error, session } => {
+                    if json && let Some(session) = session {
+                        println!("{}", serde_json::to_string(&session)?);
+                    }
+                    return Err(error.into());
                 }
             };
+            if json {
+                let receipt = receipt.as_ref().ok_or(
+                    "OpenCode session receipt unavailable; inspect the client before retrying",
+                )?;
+                println!("{}", serde_json::to_string(&receipt)?);
+            }
+            if let Some(receipt) = receipt
+                && (receipt.session_id.is_none()
+                    || receipt.error.is_some()
+                    || !receipt.prompt_outcome.accepted()
+                        && (prompt_expected
+                            || receipt.prompt_outcome
+                                != crate::store::opencode::PromptOutcome::NotSubmitted))
+            {
+                return Err(receipt
+                    .error
+                    .unwrap_or_else(|| "OpenCode session creation is uncertain".into())
+                    .into());
+            }
+            if json {
+                return Ok(());
+            }
             println!(
                 "Instance {} {status}\nWorkspace: {}",
                 instance.name, instance.workspace
@@ -423,9 +505,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             variant,
             agent,
             json,
+            origin,
         }) => {
             let service = crate::service::AppService::initialize()?;
-            let outcome = service.prompt_instance_session_wait(
+            let outcome = service.prompt_instance_session_with_origin_wait(
                 name,
                 crate::store::opencode::SessionPrompt {
                     launch: crate::store::opencode::Launch {
@@ -435,6 +518,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                     },
                     agent,
                 },
+                origin,
             )?;
             inspection::print_prompt_outcome(outcome, json)
         }
@@ -446,9 +530,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             agent,
             when_busy,
             json,
+            origin,
         }) => {
             let service = crate::service::AppService::initialize()?;
-            let outcome = service.prompt_session_wait(
+            let outcome = service.prompt_session_with_origin_wait(
                 session_id,
                 crate::store::opencode::SessionPrompt {
                     launch: crate::store::opencode::Launch {
@@ -459,6 +544,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                     agent,
                 },
                 when_busy.parse()?,
+                origin,
             )?;
             inspection::print_prompt_outcome(outcome, json)
         }

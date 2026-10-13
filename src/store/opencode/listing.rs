@@ -11,7 +11,7 @@ pub(crate) enum Availability {
     WorkspaceMissing,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct ListedSession {
     pub session_id: String,
     pub instance: Option<String>,
@@ -23,6 +23,12 @@ pub(crate) struct ListedSession {
     pub panes: Vec<Pane>,
     pub stale: bool,
     pub availability: Availability,
+    pub origins: Vec<String>,
+    pub model: Option<String>,
+    pub variant: Option<String>,
+    pub agent: Option<String>,
+    pub context_tokens: Option<u64>,
+    pub context_limit: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -82,6 +88,12 @@ pub(crate) fn project(
             } else {
                 Availability::Observed
             },
+            origins: Vec::new(),
+            model: session.model,
+            variant: session.variant,
+            agent: session.agent,
+            context_tokens: session.context_tokens,
+            context_limit: session.context_limit,
         });
     }
     sessions.sort_by(|left, right| {

@@ -58,23 +58,6 @@ impl AppService {
         validate_launch(&self.settings, &self.opencode)
     }
 
-    pub(in crate::service) async fn launch_instance_opencode(
-        &self,
-        workspace: &str,
-        name: &str,
-        launch: &crate::store::opencode::Launch,
-    ) -> Result<(), String> {
-        launch_instance_opencode(
-            Arc::clone(&self.environments),
-            &self.settings,
-            &self.opencode,
-            workspace,
-            name,
-            launch,
-        )
-        .await
-    }
-
     pub(crate) fn new_opencode_session(
         &self,
         directory: &str,
@@ -167,7 +150,7 @@ impl AppService {
     }
 }
 
-fn validate_launch(
+pub(in crate::service) fn validate_launch(
     settings: &crate::service::settings::Settings,
     integration: &super::Integration,
 ) -> Result<(), String> {
@@ -178,6 +161,39 @@ fn validate_launch(
         return Err("Run Tandem inside Zellij to create an OpenCode session".into());
     }
     Ok(())
+}
+
+fn session_destination(
+    snapshot: &Snapshot,
+    current: &str,
+    preferred: Option<Pane>,
+    matches: impl Fn(&str) -> bool,
+) -> Result<Option<Pane>, String> {
+    let panes = snapshot
+        .sessions
+        .iter()
+        .filter(|session| matches(&session.directory))
+        .flat_map(|session| &session.panes)
+        .chain(
+            snapshot
+                .clients
+                .iter()
+                .filter(|client| matches(&client.directory))
+                .map(|client| &client.pane),
+        )
+        .collect::<Vec<_>>();
+    if preferred
+        .as_ref()
+        .is_some_and(|pane| !panes.contains(&pane))
+    {
+        return Err("OpenCode pane is unavailable; refresh and try again".into());
+    }
+    Ok(preferred.or_else(|| {
+        panes
+            .into_iter()
+            .min_by_key(|pane| pane.session != current)
+            .cloned()
+    }))
 }
 
 pub(in crate::service) async fn launch_instance_opencode(
@@ -215,7 +231,6 @@ pub(in crate::service) async fn launch_workspace_opencode(
     instructions: Option<&str>,
 ) -> Result<(), String> {
     validate_launch(settings, integration)?;
-    // A short-lived CLI has no TUI observation cache yet.
     let snapshot = tokio::time::timeout(
         Duration::from_secs(15),
         integration
@@ -241,37 +256,4 @@ pub(in crate::service) async fn launch_workspace_opencode(
         )
         .await
         .map(|_| ())
-}
-
-fn session_destination(
-    snapshot: &Snapshot,
-    current: &str,
-    preferred: Option<Pane>,
-    matches: impl Fn(&str) -> bool,
-) -> Result<Option<Pane>, String> {
-    let panes = snapshot
-        .sessions
-        .iter()
-        .filter(|session| matches(&session.directory))
-        .flat_map(|session| &session.panes)
-        .chain(
-            snapshot
-                .clients
-                .iter()
-                .filter(|client| matches(&client.directory))
-                .map(|client| &client.pane),
-        )
-        .collect::<Vec<_>>();
-    if preferred
-        .as_ref()
-        .is_some_and(|pane| !panes.contains(&pane))
-    {
-        return Err("OpenCode pane is unavailable; refresh and try again".into());
-    }
-    Ok(preferred.or_else(|| {
-        panes
-            .into_iter()
-            .min_by_key(|pane| pane.session != current)
-            .cloned()
-    }))
 }

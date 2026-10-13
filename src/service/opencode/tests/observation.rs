@@ -65,7 +65,7 @@ esac
         let settings = Arc::new(crate::service::settings::Settings::open(root.path().join("settings.sqlite3")).unwrap());
         let owner = Arc::new(Integration::new());
         let signal = Arc::new(Signal::default());
-        let worker = tokio::spawn(run(observer, Arc::downgrade(&owner), settings, 0, Arc::clone(&signal)));
+        let worker = tokio::spawn(run(observer, Arc::downgrade(&owner), settings, 0, Arc::clone(&signal), None));
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 if !owner.state.lock().unwrap().snapshot.sessions.is_empty() { break; }
@@ -184,7 +184,7 @@ fn live_events_refresh_state_and_idle_sampling_does_not_query_the_server() {
         owner.observer = observer.clone();
         let owner = Arc::new(owner);
         let signal = Arc::new(Signal::default());
-        let worker = tokio::spawn(run(observer, Arc::downgrade(&owner), settings, 0, Arc::clone(&signal)));
+        let worker = tokio::spawn(run(observer, Arc::downgrade(&owner), settings, 0, Arc::clone(&signal), None));
         let wait = |activity| {
             let owner = Arc::clone(&owner);
             async move {

@@ -178,6 +178,8 @@ fn prompts_resolve_owned_sessions_reopen_exact_history_and_never_resend_uncertai
             "--agent",
             "tracer",
             "--json",
+            "--origin",
+            "slack://channel?message=followup",
         ]);
         assert_eq!(
             output.status.success(),
@@ -188,6 +190,23 @@ fn prompts_resolve_owned_sessions_reopen_exact_history_and_never_resend_uncertai
         let outcome: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(outcome["session_id"], "ses_existing");
         assert_eq!(outcome["server"], server.url);
+        let listed = fixture.run(&["list-sessions", "--json", "--include-closed"]);
+        assert!(
+            listed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&listed.stderr)
+        );
+        let listing: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+        let session = listing["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["session_id"] == "ses_existing")
+            .unwrap();
+        assert_eq!(
+            session["origins"],
+            json!(["slack://channel?message=followup"])
+        );
         assert_eq!(
             outcome["prompt_outcome"],
             if matches!(result, "queued" | "detached") {

@@ -19,6 +19,7 @@ impl Observer {
         current: &str,
         input: &SessionPrompt,
         instructions: &str,
+        identity_receipt: Option<&str>,
     ) -> Result<PromptedSession, String> {
         let existing = self.prompt_client(directory, current, None).await?;
         let client = match existing {
@@ -34,6 +35,7 @@ impl Observer {
                         server: None,
                         pane,
                         prompt_outcome: PromptOutcome::NotSubmitted,
+                        creation_confirmed_absent: true,
                         error: Some("OpenCode companion unavailable; run tandem opencode-setup and reopen the client. Initial prompt was not submitted".into()),
                     }),
                 }
@@ -49,6 +51,7 @@ impl Observer {
                 "variant": input.launch.variant,
                 "agent": input.agent,
                 "instructions": instructions,
+                "identity_receipt": identity_receipt,
             }),
             None,
         )
@@ -122,6 +125,7 @@ impl Observer {
                     _ => return Ok(PromptedSession {
                         session_id: Some(session.id.clone()), server: Some(session.server.clone()), pane,
                         prompt_outcome: PromptOutcome::NotSubmitted,
+                        creation_confirmed_absent: false,
                         error: Some("OpenCode companion unavailable or server changed; prompt was not submitted. Run tandem opencode-setup and reopen the client".into()),
                     }),
                 }
@@ -259,18 +263,20 @@ impl Observer {
             }
             Ok(receipt)
         }) {
-            Ok((session_id, prompt_outcome, error)) => PromptedSession {
+            Ok((session_id, prompt_outcome, error, creation_confirmed_absent)) => PromptedSession {
                 session_id,
                 server: Some(server),
                 pane,
                 prompt_outcome,
                 error,
+                creation_confirmed_absent,
             },
             Err(error) => PromptedSession {
                 session_id: target_id.map(str::to_owned),
                 server: Some(server),
                 pane,
                 prompt_outcome: PromptOutcome::Uncertain,
+                creation_confirmed_absent: false,
                 error: Some(format!(
                     "{error}; session creation or prompt delivery may be uncertain. Inspect the client before retrying"
                 )),
@@ -328,7 +334,7 @@ impl Observer {
     }
 }
 
-type Receipt = (Option<String>, PromptOutcome, Option<String>);
+type Receipt = (Option<String>, PromptOutcome, Option<String>, bool);
 
 fn parse_receipt(value: serde_json::Value, server: &str) -> Result<Receipt, String> {
     if value["server"]
@@ -356,5 +362,7 @@ fn parse_receipt(value: serde_json::Value, server: &str) -> Result<Receipt, Stri
             .take(512)
             .collect()
     });
-    Ok((session_id, prompt_outcome, error))
+    let creation_confirmed_absent =
+        session_id.is_none() && value["creation_outcome"] == "not_created";
+    Ok((session_id, prompt_outcome, error, creation_confirmed_absent))
 }

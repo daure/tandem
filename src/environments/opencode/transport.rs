@@ -8,7 +8,7 @@ use tokio::{
 
 const LIMIT: u64 = 8 * 1024 * 1024;
 
-pub(super) fn local_server(value: &str) -> Option<String> {
+pub(crate) fn local_server(value: &str) -> Option<String> {
     let url = reqwest::Url::parse(value).ok()?;
     let host = url.host_str()?;
     if url.scheme() != "http"

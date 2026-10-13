@@ -38,6 +38,12 @@ pub(crate) struct Record {
     pub opencode_requested: bool,
     #[serde(default)]
     pub opencode_result: Option<Result<(), String>>,
+    #[serde(default)]
+    pub session_origin: Option<String>,
+    #[serde(default)]
+    pub session_receipt_requested: bool,
+    #[serde(default)]
+    pub opencode_session: Option<crate::store::opencode::PromptedSession>,
     pub services: Vec<InstanceService>,
 }
 
@@ -216,6 +222,18 @@ impl Writer {
 
     pub fn opencode_result(&self, result: Result<(), String>) {
         self.update(|record| record.opencode_result = Some(result));
+    }
+
+    pub(crate) fn opencode_session(
+        &self,
+        receipt: crate::store::opencode::PromptedSession,
+    ) -> Result<(), String> {
+        let mut record = self
+            .record
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        record.opencode_session = Some(receipt);
+        update(&self.config, &record)
     }
 
     pub fn finish(&self, operation: Operation) -> Result<(), String> {

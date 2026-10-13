@@ -16,6 +16,7 @@ mod instance_mcp;
 mod manifest_updates;
 mod restart;
 mod service_preview;
+mod state_stream;
 mod template_files;
 mod template_removal;
 mod template_removal_live;

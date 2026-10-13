@@ -53,7 +53,7 @@ impl AppService {
                             break;
                         }
                         if record.operation.state != OperationState::Running {
-                            let _ = reply.send(Ok(()));
+                            let _ = reply.send(Err("OpenCode launch result unavailable; inspect the client before retrying".into()));
                             break;
                         }
                     }
@@ -108,6 +108,8 @@ impl AppService {
                     preserve_opencode_history: claimed.record.preserve_opencode_history,
                     description: claimed.record.description.clone(),
                     opencode,
+                    session_origin: claimed.record.session_origin.clone(),
+                    session_receipt_requested: claimed.record.session_receipt_requested,
                     writer: Some(Arc::clone(&claimed.writer)),
                     ..Default::default()
                 },

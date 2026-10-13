@@ -162,6 +162,12 @@ impl super::super::AppService {
                 .cloned()
                 .map(|key| (key, None))
                 .collect();
+            if let Err(error) = service.state_stream.apply_session_edits(&edits) {
+                outcome.error = Some(format!(
+                    "{}; session state persistence failed: {error}",
+                    outcome.error.unwrap_or_default()
+                ));
+            }
             if !edits.is_empty()
                 && let Err(error) = service.rules.update_opencode_history(&edits)
             {
@@ -251,7 +257,11 @@ impl super::super::AppService {
                     }
                 }
                 let rules = Arc::clone(&service.rules);
-                tokio::task::spawn_blocking(move || rules.update_opencode_history(&edits))
+                let store = service.state_stream.clone();
+                tokio::task::spawn_blocking(move || {
+                    store.apply_session_edits(&edits)?;
+                    rules.update_opencode_history(&edits).map_err(|error| error.to_string())
+                })
                     .await
                     .map_err(|error| error.to_string())?
                     .map_err(|error| format!("OpenCode session changed, but retained history could not be updated: {error}"))

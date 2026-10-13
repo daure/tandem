@@ -49,6 +49,9 @@ pub(crate) fn launch(
         workspace_ready: false,
         opencode_requested: startup.opencode.is_some(),
         opencode_result: None,
+        session_origin: startup.session_origin.clone(),
+        session_receipt_requested: startup.session_receipt_requested,
+        opencode_session: None,
         services: Vec::new(),
     };
     write(config, &record)?;

@@ -52,6 +52,7 @@ fn new_instance_accepts_long_short_and_mixed_options() {
             start_instance,
             model,
             variant,
+            ..
         }) = parse(&arguments).unwrap().command
         else {
             panic!("expected new-instance");
@@ -70,8 +71,8 @@ fn new_instance_accepts_long_short_and_mixed_options() {
 }
 
 #[test]
-fn session_model_and_variant_flags_require_opencode() {
-    for flag in ["--model", "--variant"] {
+fn session_options_require_opencode() {
+    for flag in ["--model", "--variant", "--origin"] {
         assert!(
             parse(&[
                 "tandem",

@@ -13,13 +13,14 @@ pub(crate) struct ProcessSample {
     pub observed_at: Instant,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub(crate) struct ProcessResource {
     pub pid: u32,
     pub session_id: String,
     pub directory: String,
     pub zellij_session: String,
     pub pane_id: Option<u32>,
+    #[serde(skip)]
     pub sample: Option<ProcessSample>,
     pub usage: UsageSummary,
     pub error: Option<String>,

@@ -190,6 +190,9 @@ fn retries_require_matching_origin_and_template_when_resources_remain() {
         workspace_ready: false,
         opencode_requested: false,
         opencode_result: None,
+        session_origin: None,
+        session_receipt_requested: false,
+        opencode_session: None,
         services: vec![],
     };
     let payload = serde_json::to_string(&record).unwrap();

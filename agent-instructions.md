@@ -298,6 +298,12 @@ Read `core_guidance` together with this editable guidance for placement and clea
   Approve interruption before selecting `interrupt`; `abort` rejects observed busy or awaiting-answer
   sessions. `queued` confirms admission, not completion. Setup failures may leave settings or interruption
   applied without sending input. Inspect uncertain outcomes before retrying; input is never automatically resent.
+- External consumers can follow private local NDJSON with `serve-state` and `watch --json`, independently
+  of an open TUI. Reconnect for a snapshot or retained cursor replay; replay covers recorded publications,
+  not unobserved external history. CLI session creation and prompting accept opaque origin tags;
+  listings retain each session's `origins`. Use origin correlation and JSON session receipts rather than
+  before/after list differences. Tags do not authorize work, deduplicate commands, or certify input
+  delivery. Ordinary CLI operations and origin persistence require no running state server.
 - Stop preserves instance data; deletion permanently removes its workspace and owned resources.
   With OpenCode integration enabled, instance purge first closes associated observed clients in the
   workspace and its subdirectories. Closure failures block that instance's deletion; clients outside
