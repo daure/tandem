@@ -22,7 +22,7 @@ fn instance_repository_updates_return_partial_results_and_stay_within_the_bound_
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let workspace = fixture.home.join("workspaces/review");
+    let workspace = fixture.home.join("workspaces/website/review");
     let app = workspace.join("app");
     for target in ["app", "lib"] {
         git(&workspace.join(target), &["switch", "trunk"]);
@@ -70,7 +70,7 @@ fn instance_repository_updates_return_partial_results_and_stay_within_the_bound_
     );
     assert_eq!(
         git(
-            &fixture.home.join("workspaces/other/app"),
+            &fixture.home.join("workspaces/website/other/app"),
             &["rev-parse", "HEAD"]
         ),
         before

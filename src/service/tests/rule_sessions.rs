@@ -36,12 +36,12 @@ impl Server {
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let config = service.config_for_tests();
-        let directory = config
-            .workspaces
-            .join("shared")
-            .to_str()
+        let directory = service
+            .environments
+            .recorded_instance("shared")
             .unwrap()
-            .to_owned();
+            .map(|instance| instance.workspace)
+            .unwrap_or_else(|| config.workspaces.join("blank/shared").display().to_string());
         let data = Arc::new(Mutex::new(Data::default()));
         let inputs = data.clone();
         let stop = Arc::new(AtomicBool::new(false));

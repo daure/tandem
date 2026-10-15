@@ -16,7 +16,7 @@ fn instance_closure_survives_disconnect_and_preserves_services_workspace_and_his
         assert!(
             fixture
                 .home
-                .join("workspaces/review/app/file.txt")
+                .join("workspaces/website/review/app/file.txt")
                 .is_file()
         );
         agent.close(Some(libc::SIGKILL));
@@ -26,7 +26,7 @@ fn instance_closure_survives_disconnect_and_preserves_services_workspace_and_his
         assert!(
             fixture
                 .home
-                .join("workspaces/review/app/file.txt")
+                .join("workspaces/website/review/app/file.txt")
                 .is_file()
         );
         assert!(fixture.runtime_record("review", "journal").is_some());
@@ -65,7 +65,7 @@ fn close_rejects_noops_missing_metadata_and_callers_from_other_instances() {
     assert!(
         fixture
             .home
-            .join("workspaces/review/app/file.txt")
+            .join("workspaces/website/review/app/file.txt")
             .is_file()
     );
 }

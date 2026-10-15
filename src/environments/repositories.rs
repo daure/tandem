@@ -86,8 +86,12 @@ pub(super) fn prepare(
     }
     real_directory(root)?;
     real_directory(workspace)?;
-    if workspace.parent() != Some(root) {
-        return Err("repository workspace must be a direct child of the workspace root".into());
+    if workspace.parent() != Some(root)
+        && workspace.parent() != Some(root.join(&template.name).as_path())
+    {
+        return Err(
+            "repository workspace must belong to the workspace root or its template folder".into(),
+        );
     }
     // Preflight every existing target before installing any new checkout.
     for repository in repositories {

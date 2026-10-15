@@ -21,7 +21,7 @@ fn prompted_sessions_preserve_existing_work_and_return_delivery_receipts_without
             "{}",
             String::from_utf8_lossy(&created.stderr)
         );
-        let workspace = fixture.home.join("workspaces/review");
+        let workspace = fixture.home.join("workspaces/website/review");
         fs::write(workspace.join("app/file.txt"), "Uncommitted work").unwrap();
         fs::write(workspace.join("AGENTS.md"), "User guidance\n").unwrap();
         let startup = fixture.runtime_record("review", "startup");

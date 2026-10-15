@@ -25,7 +25,7 @@ impl Companion {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let server = format!("http://{}", listener.local_addr().unwrap());
-        let directory = fixture.home.join("workspaces/review");
+        let directory = fixture.home.join("workspaces/website/review");
         let root = fixture.home.join("state/tandem/opencode");
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("client.json"), json!({
@@ -176,7 +176,7 @@ fn listings_recover_creation_origins_from_private_identity_handoffs() {
     assert!(created.status.success());
     let receipt: serde_json::Value = serde_json::from_slice(&created.stdout).unwrap();
     let server = receipt["server"].as_str().unwrap();
-    let directory = fixture.home.join("workspaces/review");
+    let directory = fixture.home.join("workspaces/website/review");
     let connection = rusqlite::Connection::open(fixture.home.join("state-stream.sqlite3")).unwrap();
     connection
         .execute("DELETE FROM session_creation_requests", [])

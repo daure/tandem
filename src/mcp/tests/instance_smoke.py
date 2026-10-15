@@ -36,7 +36,7 @@ def workspace_fixture(binary):
                 environment.pop(key)
         for name in ("review", "other"):
             run_cli(binary, environment, "new-instance", name, "-t", "blank")
-        workspace = home / "workspaces/review"
+        workspace = home / "workspaces/blank/review"
         nested = workspace / "app/src"
         nested.mkdir(parents=True)
         config = json.loads((workspace / ".opencode/opencode.json").read_text())
@@ -72,7 +72,7 @@ def smoke(binary):
         instructions = client.tool("get_instructions")
         assert policy in instructions["core_guidance"], instructions
         assert policy in instructions["markdown"], instructions
-        assert policy in (home / "workspaces/review/AGENTS.md").read_text()
+        assert policy in (home / "workspaces/blank/review/AGENTS.md").read_text()
         description = next(tool["description"] for tool in tools if tool["name"] == "purge")
         assert "Ignore unless explicitly instructed" in description, description
         for tool in tools:
@@ -84,9 +84,9 @@ def smoke(binary):
                 required = {"title", "summary"}
             assert set(tool["inputSchema"].get("required", [])) == required, tool
             assert "outputSchema" not in tool, tool
-        data = home / "workspaces/review/result.txt"
+        data = home / "workspaces/blank/review/result.txt"
         data.write_text("retained deliverable")
-        sibling = home / "workspaces/other/result.txt"
+        sibling = home / "workspaces/blank/other/result.txt"
         sibling.write_text("sibling deliverable")
         for name in ("stop_self", "start_self", "stop_self"):
             result = client.tool(name, timeout=30)

@@ -211,14 +211,25 @@ impl Environments {
         let relative = directory
             .strip_prefix(&self.config.workspaces)
             .map_err(|_| "MCP directory is outside Tandem's instance workspaces")?;
-        let name = relative
+        let names: Vec<_> = relative
             .components()
-            .next()
-            .and_then(|part| part.as_os_str().to_str())
-            .ok_or("MCP directory must belong to an instance workspace")?;
-        crate::store::environments::validate_instance_name(name)?;
-        let instance =
-            journal::recorded(&self.config, name)?.ok_or("instance ownership is missing")?;
+            .take(2)
+            .filter_map(|part| part.as_os_str().to_str())
+            .collect();
+        let mut found = None;
+        for name in names.into_iter().rev() {
+            if crate::store::environments::validate_instance_name(name).is_err() {
+                continue;
+            }
+            if let Some(instance) = journal::recorded(&self.config, name)?
+                && directory.starts_with(&instance.workspace)
+            {
+                found = Some(instance);
+                break;
+            }
+        }
+        let instance = found.ok_or("instance ownership is missing")?;
+        let name = &instance.name;
         ownership::verify(&self.config, &instance)?;
         removal::validate_workspace(&self.config, name)?;
         // Holding the directory open pins its inode across deletion and name reuse.

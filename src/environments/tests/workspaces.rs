@@ -1,5 +1,5 @@
 use super::*;
-use crate::environments::{journal, ownership, removal};
+use crate::environments::{Startup, journal, ownership, removal};
 use crate::store::environments::{RepositoryCheckout, Status, Template};
 
 fn workspace_template(config: &Config) -> Template {
@@ -22,18 +22,15 @@ fn ready_workspace(config: &Config, template: &Template, name: &str) {
         name,
     )
     .unwrap();
-    fs::create_dir_all(config.workspaces.join(name).join("app")).unwrap();
+    let workspace =
+        std::path::PathBuf::from(journal::recorded(config, name).unwrap().unwrap().workspace);
+    fs::create_dir_all(workspace.join("app")).unwrap();
     journal::checkout(
         config,
         name,
         RepositoryCheckout {
             target: "app".into(),
-            path: config
-                .workspaces
-                .join(name)
-                .join("app")
-                .display()
-                .to_string(),
+            path: workspace.join("app").display().to_string(),
             cloned: true,
         },
     )
@@ -127,7 +124,7 @@ fn workspace_inventory_survives_reconnection_and_docker_failure_without_becoming
             .0
             .is_some()
     );
-    fs::remove_dir_all(config.workspaces.join("Feature-1")).unwrap();
+    fs::remove_dir_all(config.workspaces.join("local/Feature-1")).unwrap();
     let missing = journal::workspace_instance(&config, "Feature-1")
         .unwrap()
         .unwrap();
@@ -154,7 +151,7 @@ fn workspace_template_removal_and_purges_release_identity_without_docker() {
     .unwrap();
     assert!(journal::workspaces(&config).unwrap().is_empty());
     assert!(!std::path::Path::new(&template.directory).exists());
-    assert!(!config.workspaces.join("three").exists());
+    assert!(!config.workspaces.join("local/three").exists());
 }
 
 #[test]
@@ -162,7 +159,7 @@ fn failed_client_closure_preserves_instance_data_and_allows_purge_retry() {
     let (_directory, config) = fixture();
     let template = workspace_template(&config);
     ready_workspace(&config, &template, "review");
-    let workspace = config.workspaces.join("review");
+    let workspace = config.workspaces.join("local/review");
     let error = lifecycle::delete(&config, "review", Arc::new(|_| {}), &|path, _| {
         assert_eq!(std::path::Path::new(path), workspace);
         assert!(workspace.join("app").is_dir());
@@ -214,4 +211,175 @@ fn launch_kind_changes_and_forged_workspace_ownership_are_rejected() {
         })
         .is_err()
     );
+}
+
+#[test]
+fn new_workspaces_use_template_folders_and_existing_flat_workspaces_keep_their_paths() {
+    let (_directory, config) = fixture();
+    templates::create(&config, "local").unwrap();
+    let flat = config.workspaces.join("old");
+    fs::create_dir(&flat).unwrap();
+    fs::write(flat.join("user.txt"), "preserved").unwrap();
+    for name in ["old", "one", "two", "local"] {
+        let instance = lifecycle::start(
+            &config,
+            "local",
+            name,
+            Startup::default(),
+            30,
+            Arc::new(|_| {}),
+            |_| {},
+        )
+        .unwrap();
+        let expected = if name == "old" {
+            flat.clone()
+        } else {
+            config.workspaces.join("local").join(name)
+        };
+        assert_eq!(std::path::Path::new(&instance.workspace), expected);
+        assert!(expected.join("AGENTS.md").is_file());
+    }
+    let environment = Environments::new(config.clone());
+    for name in ["old", "one", "two", "local"] {
+        let path = environment.workspace(name).unwrap();
+        fs::create_dir_all(std::path::Path::new(&path).join("app/src")).unwrap();
+        let scope = environment
+            .bind_instance_directory(&std::path::Path::new(&path).join("app/src"))
+            .unwrap();
+        assert_eq!(
+            environment.verify_instance_scope(&scope).unwrap().name,
+            name
+        );
+        let restarted = lifecycle::start(
+            &config,
+            "local",
+            name,
+            Startup::default(),
+            30,
+            Arc::new(|_| {}),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(restarted.workspace, path);
+    }
+    lifecycle::delete(&config, "one", Arc::new(|_| {}), &|_, _| Ok(())).unwrap();
+    assert!(!config.workspaces.join("local/one").exists());
+    assert!(config.workspaces.join("local/two/AGENTS.md").is_file());
+    assert_eq!(
+        fs::read_to_string(flat.join("user.txt")).unwrap(),
+        "preserved"
+    );
+    lifecycle::delete_template(&config, "local", Arc::new(|_| {}), &|_, _| Ok(())).unwrap();
+    assert!(!flat.exists());
+    assert!(!config.workspaces.join("local/two").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn grouped_workspace_symlinks_cannot_redirect_creation_or_purge() {
+    let (_directory, config) = fixture();
+    templates::create(&config, "local").unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("user.txt"), "preserved").unwrap();
+    let group = config.workspaces.join("local");
+    std::os::unix::fs::symlink(outside.path(), &group).unwrap();
+    assert!(
+        lifecycle::start(
+            &config,
+            "local",
+            "one",
+            Startup::default(),
+            30,
+            Arc::new(|_| {}),
+            |_| {}
+        )
+        .is_err()
+    );
+    assert!(!outside.path().join("one").exists());
+    fs::remove_file(&group).unwrap();
+    let instance = lifecycle::start(
+        &config,
+        "local",
+        "one",
+        Startup::default(),
+        30,
+        Arc::new(|_| {}),
+        |_| {},
+    )
+    .unwrap();
+    fs::remove_dir_all(&instance.workspace).unwrap();
+    std::os::unix::fs::symlink(outside.path(), &instance.workspace).unwrap();
+    assert!(
+        lifecycle::delete(&config, "one", Arc::new(|_| {}), &|_, _| panic!(
+            "unverified workspace must not close clients"
+        ))
+        .is_err()
+    );
+    assert_eq!(
+        fs::read_to_string(outside.path().join("user.txt")).unwrap(),
+        "preserved"
+    );
+}
+
+#[test]
+fn a_flat_instance_cannot_be_used_as_a_template_group() {
+    let (_directory, config) = fixture();
+    templates::create(&config, "local").unwrap();
+    templates::create(&config, "other").unwrap();
+    fs::create_dir(config.workspaces.join("local")).unwrap();
+    let legacy = crate::store::environments::Instance {
+        name: "local".into(),
+        template: "other".into(),
+        template_directory: config.templates.join("other").display().to_string(),
+        workspace: config.workspaces.join("local").display().to_string(),
+        project: config.project("local"),
+        workspace_only: true,
+        ..Default::default()
+    };
+    crate::environments::runtime_db::save(
+        &config,
+        "local",
+        crate::environments::runtime_db::Kind::Journal,
+        &json!({"expected": legacy}).to_string(),
+    )
+    .unwrap();
+    ownership::record(&config, "other", &config.templates.join("other"), "local").unwrap();
+    lifecycle::start(
+        &config,
+        "other",
+        "local",
+        Startup::default(),
+        30,
+        Arc::new(|_| {}),
+        |_| {},
+    )
+    .unwrap();
+    let error = lifecycle::start(
+        &config,
+        "local",
+        "one",
+        Startup::default(),
+        30,
+        Arc::new(|_| {}),
+        |_| {},
+    )
+    .unwrap_err();
+    assert!(error.contains("occupied by a flat instance"), "{error}");
+    assert!(!config.workspaces.join("local/one").exists());
+    let record = json!({
+        "operation": Environments::new(config.clone()).begin("create_instance", "one", Some("local".into())).unwrap(),
+        "description": null, "branch_instances": false, "kind": "cold",
+        "started_at": journal::now(), "timeout": 30, "owner_pid": 42,
+        "workspace_ready": false, "services": [],
+        "workspace": config.workspaces.join("local/one")
+    });
+    crate::environments::runtime_db::save(
+        &config,
+        "one",
+        crate::environments::runtime_db::Kind::Startup,
+        &record.to_string(),
+    )
+    .unwrap();
+    let error = crate::environments::workspace::resolve(&config, "local", "one").unwrap_err();
+    assert!(error.contains("occupied by a flat instance"), "{error}");
 }

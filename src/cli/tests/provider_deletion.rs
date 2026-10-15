@@ -44,7 +44,7 @@ fn fixture() -> (Fixture, history_server::Server) {
     fs::create_dir_all(&credentials).unwrap();
     fs::write(credentials.join("dev-message.token"), "token").unwrap();
     let server = history_server::Server::start();
-    let workspace = fixture.home.join("workspaces/review");
+    let workspace = fixture.home.join("workspaces/blank/review");
     server.session("ses_provider", workspace.to_str().unwrap(), None);
     server.session("ses_unrelated", fixture.source.to_str().unwrap(), None);
     let daemon = fixture.home.join("daemons/test");
@@ -81,7 +81,7 @@ fn mcp_provider_deletion_requires_approval_and_purges_only_its_owned_resources_a
     assert_eq!(refused["isError"], true, "{refused}");
     assert!(refused.to_string().contains("confirmation_required"));
     assert!(fixture.home.join("templates/providers/message").exists());
-    assert!(fixture.home.join("workspaces/review").exists());
+    assert!(fixture.home.join("workspaces/blank/review").exists());
     assert!(server.data.lock().unwrap().deleted.is_empty());
     let result = delete_when_idle(&mut client);
     assert_ne!(result["isError"], true, "{result}");
@@ -89,7 +89,7 @@ fn mcp_provider_deletion_requires_approval_and_purges_only_its_owned_resources_a
         "templates/providers/message",
         "runtime/cli-test/providers/message",
         "provider-credentials/cli-test/dev-message.token",
-        "workspaces/review",
+        "workspaces/blank/review",
     ] {
         assert!(!fixture.home.join(path).exists(), "{path}");
     }
@@ -166,7 +166,7 @@ fn provider_deletion_preserves_named_target_workspaces_and_conversations() {
     let mut client = Client::with_command(fixture.command(&["mcp"]));
     let result = delete_when_idle(&mut client);
     assert_ne!(result["isError"], true, "{result}");
-    assert!(fixture.home.join("workspaces/review").is_dir());
+    assert!(fixture.home.join("workspaces/blank/review").is_dir());
     assert!(fixture.runtime_record("review", "startup").is_some());
     assert!(server.data.lock().unwrap().deleted.is_empty());
     assert!(
@@ -205,7 +205,7 @@ fn provider_cleanup_keeps_acceptance_ownership_through_scoped_start_and_legacy_s
             fixture.set_runtime_record("review", "startup", &record);
         }
         let mut command = fixture.command(&["mcp-instance"]);
-        command.current_dir(fixture.home.join("workspaces/review"));
+        command.current_dir(fixture.home.join("workspaces/blank/review"));
         let mut scoped = Client::with_command(command);
         assert_eq!(scoped.tool("start_self", json!({}))["state"], "succeeded");
         let started = fixture.runtime_record("review", "startup").unwrap();
@@ -214,7 +214,7 @@ fn provider_cleanup_keeps_acceptance_ownership_through_scoped_start_and_legacy_s
         let mut management = Client::with_command(fixture.command(&["mcp"]));
         let result = delete_when_idle(&mut management);
         assert_ne!(result["isError"], true, "{result}");
-        assert!(!fixture.home.join("workspaces/review").exists());
+        assert!(!fixture.home.join("workspaces/blank/review").exists());
     }
 }
 
@@ -226,7 +226,7 @@ fn mcp_provider_deletion_preserves_retry_evidence_after_external_failure() {
     let result = delete_when_idle(&mut client);
     assert_eq!(result["isError"], true, "{result}");
     assert!(fixture.home.join("templates/providers/message").exists());
-    assert!(fixture.home.join("workspaces/review").exists());
+    assert!(fixture.home.join("workspaces/blank/review").exists());
     let connection = rusqlite::Connection::open(fixture.home.join("settings.sqlite3")).unwrap();
     assert!(!connection.query_row("SELECT enabled FROM provider_ingestion WHERE namespace='cli-test' AND name='dev-message'", [], |row| row.get::<_, bool>(0)).unwrap());
     assert_eq!(
@@ -250,7 +250,7 @@ fn mcp_provider_deletion_preserves_retry_evidence_after_external_failure() {
     let result = delete_when_idle(&mut client);
     assert_eq!(result["isError"], true, "{result}");
     assert!(result.to_string().contains("500"), "{result}");
-    assert!(fixture.home.join("workspaces/review").exists());
+    assert!(fixture.home.join("workspaces/blank/review").exists());
     server.data.lock().unwrap().delete_failure = false;
     let result = delete_when_idle(&mut client);
     assert_ne!(result["isError"], true, "{result}");
@@ -266,7 +266,7 @@ fn mcp_provider_deletion_removes_saved_sessions_after_the_created_instance_is_ab
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!fixture.home.join("workspaces/review").exists());
+    assert!(!fixture.home.join("workspaces/blank/review").exists());
     assert!(server.data.lock().unwrap().deleted.is_empty());
     let mut client = Client::with_command(fixture.command(&["mcp"]));
     let result = delete_when_idle(&mut client);
@@ -317,7 +317,10 @@ fn mcp_provider_deletion_refuses_shared_packages_active_dispatches_and_reused_in
             _ => unreachable!(),
         };
         assert!(result.to_string().contains(expected), "{reason}: {result}");
-        assert!(fixture.home.join("workspaces/review").exists(), "{reason}");
+        assert!(
+            fixture.home.join("workspaces/blank/review").exists(),
+            "{reason}"
+        );
         assert!(
             fixture.home.join("templates/providers/message").exists(),
             "{reason}"

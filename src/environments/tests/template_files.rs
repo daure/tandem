@@ -122,7 +122,7 @@ fn unsafe_seed_entries_are_reported_as_invalid_templates() {
             "{entry}"
         );
         assert!(start(&config, Startup::default()).is_err(), "{entry}");
-        assert!(!config.workspaces.join("review").exists(), "{entry}");
+        assert!(!config.workspaces.join("local/review").exists(), "{entry}");
         assert_eq!(
             fs::read_to_string(outside.path().join("source")).unwrap(),
             "untouched"

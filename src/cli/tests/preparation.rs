@@ -23,10 +23,15 @@ fn prepare(fixture: &Fixture) {
     assert!(
         fixture
             .home
-            .join("workspaces/review/app/file.txt")
+            .join("workspaces/website/review/app/file.txt")
             .is_file()
     );
-    assert!(fixture.home.join("workspaces/review/AGENTS.md").is_file());
+    assert!(
+        fixture
+            .home
+            .join("workspaces/website/review/AGENTS.md")
+            .is_file()
+    );
     assert!(!fixture.home.join("started").exists());
     let calls = fs::read_to_string(fixture.home.join("docker-calls")).unwrap();
     assert!(!calls.contains("up --detach"), "{calls}");
@@ -106,7 +111,7 @@ fn prepared_service_instances_can_be_deleted_without_starting_containers() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!fixture.home.join("workspaces/review").exists());
+    assert!(!fixture.home.join("workspaces/website/review").exists());
     assert!(fixture.runtime_record("review", "journal").is_none());
     assert!(!fixture.home.join("started").exists());
 }

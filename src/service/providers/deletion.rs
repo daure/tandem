@@ -77,15 +77,22 @@ impl AppService {
             if acceptance.rule.definition.target_instance.is_some() {
                 continue;
             }
-            let Some(operation) = &acceptance.operation_id else {
+            if acceptance.operation_id.is_none() {
                 continue;
-            };
+            }
             if !instances.insert(acceptance.instance.clone()) {
                 continue;
             }
+            let retained = self
+                .rules
+                .store
+                .retained_workspace(acceptance.id)
+                .map_err(|error| error.to_string())?;
             self.providers.manager.delete_created_instance(
-                &acceptance.instance,
-                operation,
+                acceptance,
+                retained
+                    .as_ref()
+                    .map(|workspace| workspace.directory.as_str()),
                 &|workspace, deadline: Instant| {
                     self.runtime
                         .handle()

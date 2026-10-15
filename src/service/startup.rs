@@ -106,6 +106,7 @@ impl AppService {
                     branch_instances: claimed.record.branch_instances,
                     start_instance: claimed.record.start_instance,
                     preserve_opencode_history: claimed.record.preserve_opencode_history,
+                    workspace: claimed.record.workspace.clone(),
                     description: claimed.record.description.clone(),
                     opencode,
                     session_origin: claimed.record.session_origin.clone(),

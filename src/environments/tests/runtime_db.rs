@@ -24,6 +24,8 @@ fn fixture() -> (tempfile::TempDir, Config, Template, Instance) {
 fn source(config: &Config, template: &Template, name: &str) -> String {
     let mut model = json!({"name":config.project(name), "services":{"web":{"image":"nginx"}}});
     compose::decorate(config, template, name, "", &mut model).unwrap();
+    model["services"]["web"]["labels"][compose::WORKSPACE] =
+        config.workspaces.join(name).display().to_string().into();
     serde_json::to_string(&model).unwrap().replace('$', "$$")
 }
 
@@ -226,6 +228,7 @@ fn instance_launch_storage_keeps_recipe_directories_clean_and_repairs_materializ
         &config,
         &template,
         &instance.name,
+        instance.workspace.clone().into(),
         source(&config, &template, &instance.name),
     );
     journal::record_launch(&config, &snapshot, Vec::new(), "description").unwrap();
@@ -529,6 +532,7 @@ fn launch_materialization_rejects_symlink_destinations_and_database_errors_propa
         &config,
         &template,
         &instance.name,
+        instance.workspace.clone().into(),
         source(&config, &template, &instance.name),
     );
     save(
@@ -554,4 +558,43 @@ fn launch_materialization_rejects_symlink_destinations_and_database_errors_propa
             .unwrap_err()
             .contains("regular file")
     );
+}
+
+#[test]
+fn launch_snapshots_and_ownership_pin_the_grouped_workspace() {
+    let (_home, config, template, instance) = fixture();
+    let workspace = config.workspaces.join(&template.name).join(&instance.name);
+    let mut model = json!({"services": {"web": {"image": "nginx"}}});
+    compose::decorate(&config, &template, &instance.name, "", &mut model).unwrap();
+    assert_eq!(
+        model["services"]["web"]["labels"][compose::WORKSPACE],
+        workspace.display().to_string()
+    );
+    let snapshot = launch::Snapshot::new(
+        &config,
+        &template,
+        &instance.name,
+        workspace.clone(),
+        model.to_string(),
+    );
+    journal::record_launch(&config, &snapshot, Vec::new(), "").unwrap();
+    ownership::record(
+        &config,
+        &template.name,
+        Path::new(&template.directory),
+        &instance.name,
+    )
+    .unwrap();
+    fs::create_dir_all(&workspace).unwrap();
+    launch::materialize(&config, &instance.name).unwrap();
+    assert_eq!(
+        launch::load(&config, &instance.name)
+            .unwrap()
+            .unwrap()
+            .workspace,
+        workspace
+    );
+    let recorded = journal::recorded(&config, &instance.name).unwrap().unwrap();
+    ownership::verify(&config, &recorded).unwrap();
+    assert_eq!(recorded.workspace, workspace.display().to_string());
 }

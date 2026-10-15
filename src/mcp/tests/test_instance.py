@@ -36,7 +36,7 @@ class InstanceTests(unittest.TestCase):
 
     def test_ping_is_scoped_and_muted_by_default(self):
         with workspace_fixture(BINARY) as (home, _, client):
-            before = (home / "workspaces/review/AGENTS.md").read_text()
+            before = (home / "workspaces/blank/review/AGENTS.md").read_text()
             self.assertEqual(client.tool("ping"), {
                 "instance": "review", "sound_scheduled": False,
             })
@@ -45,8 +45,8 @@ class InstanceTests(unittest.TestCase):
             }, expect_error=True)
             self.assertEqual(result["code"], -32602)
             self.assertIn("unknown field `name`", result["message"])
-            self.assertEqual((home / "workspaces/review/AGENTS.md").read_text(), before)
-            self.assertTrue((home / "workspaces/other").is_dir())
+            self.assertEqual((home / "workspaces/blank/review/AGENTS.md").read_text(), before)
+            self.assertTrue((home / "workspaces/blank/other").is_dir())
 
     def test_old_connection_cannot_control_a_recreated_workspace(self):
         with workspace_fixture(BINARY) as (home, environment, client):
@@ -56,7 +56,7 @@ class InstanceTests(unittest.TestCase):
                 result = client.request("tools/call", {"name": name, "arguments": {}})
                 self.assertTrue(result.get("isError"), result)
                 self.assertIn("replaced", str(result))
-            self.assertTrue((home / "workspaces/review").is_dir())
+            self.assertTrue((home / "workspaces/blank/review").is_dir())
 
     def test_enabled_pings_publish_the_calling_session_metadata_without_replaying_muted_calls(self):
         with workspace_fixture(BINARY) as (home, environment, _):
@@ -66,7 +66,7 @@ class InstanceTests(unittest.TestCase):
             player.write_text("#!/bin/sh\nexit 0\n")
             player.chmod(0o755)
             client = Client(BINARY, {**environment, "PATH": f"{bin_directory}:{environment['PATH']}"},
-                            command="mcp-instance", cwd=home / "workspaces/review")
+                            command="mcp-instance", cwd=home / "workspaces/blank/review")
             self.addCleanup(client.close)
             client.tool("get_instructions")
             def ping():
@@ -96,7 +96,7 @@ class InstanceTests(unittest.TestCase):
     def test_unowned_workspaces_and_wrong_namespaces_exit_without_protocol_output(self):
         with workspace_fixture(BINARY) as (home, environment, _):
             for directory, namespace in [(home, "instance-mcp-test"),
-                                         (home / "workspaces/review", "another")]:
+                                         (home / "workspaces/blank/review", "another")]:
                 result = subprocess.run(
                     [str(BINARY), "mcp-instance"], cwd=directory,
                     env={**environment, "TANDEM_NAMESPACE": namespace},

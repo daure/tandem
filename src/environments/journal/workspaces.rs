@@ -34,7 +34,12 @@ pub(super) fn validate(config: &Config, name: &str, instance: &Instance) -> Resu
         ));
     }
     let workspace = config.workspaces.join(name);
-    if Path::new(&instance.workspace) != workspace {
+    if !super::super::workspace::matches(
+        config,
+        &instance.template,
+        name,
+        Path::new(&instance.workspace),
+    ) {
         mismatches.push(format!(
             "workspace: recorded={:?}, expected={workspace:?}",
             instance.workspace
@@ -78,12 +83,13 @@ pub(in crate::environments) fn prepare(
         );
     }
     let mut record = read(config, name)?;
+    let workspace = super::super::workspace::resolve(config, &template.name, name)?;
     let instance = record.expected.get_or_insert_with(|| Instance {
         name: name.into(),
         description: description.unwrap_or_default().into(),
         template: template.name.clone(),
         template_directory: template.directory.clone(),
-        workspace: config.workspaces.join(name).display().to_string(),
+        workspace: workspace.display().to_string(),
         project: config.project(name),
         workspace_only: template.workspace_only(),
         ..Default::default()

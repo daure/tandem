@@ -62,7 +62,9 @@ impl AppService {
             let service = Self::from_config(config).map_err(|error| error.to_string())?;
             let scope = service
                 .environments
-                .bind_instance_directory(&service.environments.config.workspaces.join(name))?;
+                .bind_instance_directory(std::path::Path::new(
+                    &service.environments.workspace(name)?,
+                ))?;
             let instance = service.environments.verify_instance_scope(&scope)?;
             if scope.identity(&service.environments.config)? != request.identity {
                 return Err("instance closure workspace was replaced".into());

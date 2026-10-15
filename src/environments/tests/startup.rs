@@ -36,6 +36,7 @@ fn fixture() -> (tempfile::TempDir, Config, Record) {
         branch_instances: false,
         start_instance: true,
         preserve_opencode_history: false,
+        workspace: None,
         kind: StartupKind::Cold,
         started_at: journal::now(),
         timeout: 60,
@@ -300,7 +301,7 @@ fn purge_clears_failed_pre_ownership_startups_and_preserves_unverified_data() {
             write(&config, &record).unwrap();
             drop(held_lease);
             if !existing_workspace {
-                fs::remove_dir(&workspace).unwrap();
+                fs::remove_dir(config.workspaces.join("website/Review")).unwrap();
             }
         }
         record.operation.state = OperationState::Failed;

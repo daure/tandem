@@ -29,6 +29,8 @@ pub(crate) struct Record {
     pub start_instance: bool,
     #[serde(default)]
     pub preserve_opencode_history: bool,
+    #[serde(default)]
+    pub workspace: Option<std::path::PathBuf>,
     pub kind: StartupKind,
     pub started_at: u64,
     pub timeout: u64,
@@ -327,9 +329,7 @@ pub(super) fn enrich(
                     template: template.clone(),
                     description: record.description.clone().unwrap_or_default(),
                     template_directory: config.templates.join(template).display().to_string(),
-                    workspace: config
-                        .workspaces
-                        .join(&operation.name)
+                    workspace: super::workspace::resolve(config, template, &operation.name)?
                         .display()
                         .to_string(),
                     project: config.project(&operation.name),

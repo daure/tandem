@@ -24,7 +24,7 @@ fn success(output: Output) -> String {
 fn repository_only_creation_reopens_and_deletes_across_processes_without_docker() {
     let fixture = repository_fixture();
     success(fixture.run(&["new-instance", "review", "-t", "website", "-o"]));
-    let workspace = fixture.home.join("workspaces/review");
+    let workspace = fixture.home.join("workspaces/website/review");
     let guidance = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
     assert!(guidance.contains("## Repositories"));
     assert!(guidance.contains("./app/AGENTS.md"));
@@ -83,7 +83,7 @@ fn partial_repository_setup_is_retained_and_retry_preserves_work() {
     assert_eq!(record["repositories"].as_array().unwrap().len(), 1);
     assert_eq!(record["expected"]["runtime"]["workspace_ready"], false);
     assert!(record["activity"]["error"].is_string());
-    let checkout = fixture.home.join("workspaces/review/app");
+    let checkout = fixture.home.join("workspaces/website/review/app");
     fs::write(checkout.join("file.txt"), "keep changes").unwrap();
     fs::write(
         &manifest,
@@ -111,7 +111,8 @@ fn compose_only_instances_generate_service_guidance_without_repository_or_http_c
     let fixture = Fixture::new();
     fs::remove_file(fixture.home.join("templates/website/tandem.json")).unwrap();
     success(fixture.run(&["new-instance", "review", "-t", "website"]));
-    let guidance = fs::read_to_string(fixture.home.join("workspaces/review/AGENTS.md")).unwrap();
+    let guidance =
+        fs::read_to_string(fixture.home.join("workspaces/website/review/AGENTS.md")).unwrap();
     assert!(guidance.contains("## Services"));
     assert!(guidance.contains("## Docker"));
     assert!(!guidance.contains("application repositories"));
@@ -131,7 +132,7 @@ fn blank_workspaces_create_reopen_and_delete_without_git_or_docker() {
     .unwrap();
     fs::set_permissions(fixture.bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
     success(fixture.run(&["new-instance", "scratch", "-t", "website", "-o"]));
-    let workspace = fixture.home.join("workspaces/scratch");
+    let workspace = fixture.home.join("workspaces/website/scratch");
     assert_eq!(fs::read_dir(&workspace).unwrap().count(), 2);
     assert!(workspace.join(".opencode/opencode.json").is_file());
     let guidance = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
@@ -176,7 +177,7 @@ fn git_managed_read_only_templates_support_instance_creation_and_cleanup() {
     assert!(fixture.runtime_record("scratch", "ownership").is_some());
     fs::remove_dir_all(&template).unwrap();
     success(fixture.run(&["delete-instance", "scratch"]));
-    assert!(!fixture.home.join("workspaces/scratch").exists());
+    assert!(!fixture.home.join("workspaces/website/scratch").exists());
     assert!(fixture.runtime_record("scratch", "journal").is_none());
     assert!(fixture.runtime_record("scratch", "ownership").is_none());
 }
@@ -196,7 +197,7 @@ fn guidance_only_workspaces_create_open_and_delete_without_git_or_docker() {
     .unwrap();
     fs::set_permissions(fixture.bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
     success(fixture.run(&["new-instance", "review", "-t", "website", "-o"]));
-    let workspace = fixture.home.join("workspaces/review");
+    let workspace = fixture.home.join("workspaces/website/review");
     let generated = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
     assert!(generated.starts_with("# review\n"));
     assert!(generated.ends_with(guidance));

@@ -106,18 +106,20 @@ impl AppService {
         {
             return Err("Dispatch is still active; wait before recreating its instance".into());
         }
-        let directory = self
-            .environments
-            .config
-            .workspaces
-            .join(&acceptance.instance)
-            .display()
-            .to_string();
-        if snapshot
-            .workspaces
-            .get(&id)
-            .is_some_and(|workspace| workspace.directory != directory)
-        {
+        let directory = match snapshot.workspaces.get(&id) {
+            Some(workspace) => std::path::PathBuf::from(&workspace.directory),
+            None => crate::environments::workspace::resolve(
+                &self.environments.config,
+                acceptance.template(),
+                &acceptance.instance,
+            )?,
+        };
+        if !crate::environments::workspace::matches(
+            &self.environments.config,
+            acceptance.template(),
+            &acceptance.instance,
+            &directory,
+        ) {
             return Err(
                 "The recorded workspace differs from the configured instance directory".into(),
             );
@@ -165,6 +167,7 @@ impl AppService {
                 instance_lock: Some(lock),
                 origin_operation_id: Some(origin),
                 preserve_opencode_history: true,
+                workspace: Some(directory),
                 start_instance: acceptance.rule.definition.start_instance,
                 description: Some(description),
                 ..Default::default()

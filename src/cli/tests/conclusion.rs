@@ -61,7 +61,7 @@ fn fixture() -> Fixture {
     fs::create_dir_all(&presence).unwrap();
     fs::write(presence.join("incident.json"), json!({
         "pid": std::process::id(), "observed_at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
-        "id": "ses_incident", "title": "Incident", "directory": fixture.home.join("workspaces/review"),
+        "id": "ses_incident", "title": "Incident", "directory": fixture.home.join("workspaces/website/review"),
         "server": "", "activity": "idle", "zellij_session": "main", "pane_id": 100
     }).to_string()).unwrap();
     fixture
@@ -70,7 +70,13 @@ fn fixture() -> Fixture {
 fn client(fixture: &Fixture, name: &str) -> Client {
     let mut command = fixture.command(&["mcp-instance"]);
     command
-        .current_dir(fixture.home.join("workspaces").join(name))
+        .current_dir(
+            fixture
+                .home
+                .join("workspaces")
+                .join(if name == "reader" { "blank" } else { "website" })
+                .join(name),
+        )
         .stderr(Stdio::inherit());
     Client::with_command(command)
 }
@@ -133,7 +139,7 @@ fn scoped_purge_survives_mcp_kill_and_preserves_memory_after_resource_deletion()
         reader.tool("get_memory", json!({"memory_id": memory["memory_id"]}))["markdown"],
         input()["markdown"]
     );
-    assert!(fixture.home.join("workspaces/review").is_dir());
+    assert!(fixture.home.join("workspaces/website/review").is_dir());
     agent.close(Some(libc::SIGKILL));
     fs::write(fixture.home.join("release-close"), "").unwrap();
     wait_for(|| {
@@ -143,8 +149,8 @@ fn scoped_purge_survives_mcp_kill_and_preserves_memory_after_resource_deletion()
         )["cleanup_state"]
             == "purged"
     });
-    assert!(!fixture.home.join("workspaces/review").exists());
-    assert!(fixture.home.join("workspaces/reader").is_dir());
+    assert!(!fixture.home.join("workspaces/website/review").exists());
+    assert!(fixture.home.join("workspaces/blank/reader").is_dir());
     assert!(fixture.runtime_record("review", "journal").is_none());
     assert!(fixture.runtime_record("review", "startup").is_none());
     let results =
@@ -185,7 +191,7 @@ fn scoped_purge_survives_mcp_kill_and_preserves_memory_after_resource_deletion()
     assert!(unlinked["conclusion_id"].as_i64().unwrap() > 0);
     reader.close(Some(libc::SIGKILL));
     wait_for(|| {
-        !fixture.home.join("workspaces/reader").exists()
+        !fixture.home.join("workspaces/blank/reader").exists()
             && fixture.runtime_record("reader", "journal").is_none()
             && fixture.runtime_record("reader", "startup").is_none()
     });
@@ -303,7 +309,7 @@ fn unlinked_purge_preserves_resources_on_close_failure_and_survives_retry_discon
     assert!(
         fixture
             .home
-            .join("workspaces/review/app/file.txt")
+            .join("workspaces/website/review/app/file.txt")
             .is_file()
     );
     assert!(
@@ -325,11 +331,11 @@ fn unlinked_purge_preserves_resources_on_close_failure_and_survives_retry_discon
     agent.close(Some(libc::SIGKILL));
     fs::write(fixture.home.join("release-close"), "").unwrap();
     wait_for(|| {
-        !fixture.home.join("workspaces/review").exists()
+        !fixture.home.join("workspaces/website/review").exists()
             && fixture.runtime_record("review", "journal").is_none()
             && fixture.runtime_record("review", "startup").is_none()
     });
-    assert!(fixture.home.join("workspaces/reader").is_dir());
+    assert!(fixture.home.join("workspaces/blank/reader").is_dir());
     assert!(fixture.runtime_record("review", "journal").is_none());
     assert_eq!(
         connection
@@ -367,7 +373,11 @@ fn instance_guidance_is_scoped_reread_and_preserved_across_restarts() {
     assert_eq!(guidance["namespace"], "cli-test");
     assert_eq!(
         guidance["workspace"],
-        fixture.home.join("workspaces/review").display().to_string()
+        fixture
+            .home
+            .join("workspaces/website/review")
+            .display()
+            .to_string()
     );
     assert_eq!(
         guidance["core_guidance"],
@@ -402,7 +412,7 @@ const ZELLIJ: &str = r#"#!/bin/sh
 case "$*" in
   *close-pane*|*close-tab*)
     printf '%s\n' "$*" >> "$TANDEM_HOME/zellij-calls"
-    test -d "$TANDEM_HOME/workspaces/review" || exit 1
+    test -d "$TANDEM_HOME/workspaces/website/review" || exit 1
     touch "$TANDEM_HOME/closing"
     count=0
     while [ ! -f "$TANDEM_HOME/release-close" ]; do

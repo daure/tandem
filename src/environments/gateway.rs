@@ -244,7 +244,14 @@ pub(crate) fn ensure(config: &Config, progress: Progress, timeout: Duration) -> 
     private_file(&path, false)
         .and_then(|mut file| file.write_all(model.to_string().as_bytes()))
         .map_err(|error| error.to_string())?;
-    let mut command = compose::command(config, Path::new(&directory), &path, "gateway", None);
+    let mut command = compose::command(
+        config,
+        Path::new(&directory),
+        &path,
+        "gateway",
+        &directory,
+        None,
+    );
     command.args(["up", "--detach"]);
     run(command, remaining(deadline)?, Some(progress))?;
     Ok(())

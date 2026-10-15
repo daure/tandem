@@ -5,6 +5,15 @@ use crate::environments::opencode::tests::history_server;
 
 #[test]
 fn headless_dispatch_retains_ownership_through_retry_purge_and_historical_reopening() {
+    dispatch_history(false);
+}
+
+#[test]
+fn retained_flat_workspace_history_recreates_the_same_directory() {
+    dispatch_history(true);
+}
+
+fn dispatch_history(flat: bool) {
     let mut service = AppService::for_tests();
     service
         .runtime
@@ -35,6 +44,8 @@ esac
     fs::write(config.home.join("rule-sessions"), "main [Created 2s ago]\n").unwrap();
     let integration = Arc::get_mut(&mut service.opencode).unwrap();
     integration.observer.zellij = zellij;
+    integration.observer.presence = config.home.join("presence");
+    integration.observer.daemons = config.home.join("daemons");
     integration.current_zellij = "main".into();
     let presence = integration.observer.presence.clone();
     let seed = config.templates.join("blank/tandem-files");
@@ -87,6 +98,9 @@ esac
         DispatchStatus::Failed
     );
     fs::remove_file(seed.join("unsafe")).unwrap();
+    if flat {
+        fs::create_dir(config.workspaces.join(&acceptance.instance)).unwrap();
+    }
     acceptance = service
         .runtime
         .block_on(service.retry_acceptance(acceptance.id, true))
@@ -112,7 +126,20 @@ esac
     assert_eq!(acceptance.status, DispatchStatus::Launching);
     assert_eq!(acceptance.pane.as_ref().unwrap().session, "newest");
     assert_eq!(acceptance.rule.zellij_session, "expired");
-    let directory = config.workspaces.join(&acceptance.instance);
+    let directory = std::path::PathBuf::from(
+        service
+            .environments
+            .workspace(&acceptance.instance)
+            .unwrap(),
+    );
+    assert_eq!(
+        directory,
+        if flat {
+            config.workspaces.join(&acceptance.instance)
+        } else {
+            config.workspaces.join("blank").join(&acceptance.instance)
+        }
+    );
     let server = history_server::Server::start();
     server.session("ses_retained", directory.to_str().unwrap(), None);
     {

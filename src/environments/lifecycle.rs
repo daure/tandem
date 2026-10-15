@@ -65,14 +65,14 @@ pub(crate) fn start(
             }
         }
         let branch = startup.branch_instances.then_some(name);
+        let workspace = super::workspace::resolve(config, template_name, name)?;
+        super::workspace::validate(config, &workspace)?;
         if existing_ids.is_empty()
             && journal::recorded(config, name)?.is_none()
             && let Some(before_creation) = startup.before_creation
         {
-            super::removal::validate_workspace(config, name)?;
-            let workspace = config.workspaces.join(name);
             fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
-            super::removal::validate_workspace(config, name)?;
+            super::workspace::validate(config, &workspace)?;
             before_creation(
                 workspace.to_str().ok_or("invalid workspace path")?,
                 deadline,
@@ -83,7 +83,6 @@ pub(crate) fn start(
             .ok_or("instance record missing")?
             .description;
         ownership::record(config, template_name, Path::new(&template.directory), name)?;
-        let workspace = config.workspaces.join(name);
         fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
         if !fs::canonicalize(&workspace)
             .map_err(|error| error.to_string())?
@@ -182,6 +181,7 @@ pub(crate) fn start(
             Path::new(&template.directory),
             &rendered,
             name,
+            &workspace,
             branch,
         );
         // A reused instance name may retain image tags built by another template.
@@ -363,13 +363,14 @@ pub(super) fn delete_with_lock(
     before_deletion: &super::BeforeDeletion<'_>,
     lock: Option<gateway::Lock>,
 ) -> Result<(), String> {
-    delete_with_provenance(config, name, None, progress, before_deletion, lock)
+    delete_with_provenance(config, name, None, None, progress, before_deletion, lock)
 }
 
 pub(super) fn delete_for_provider(
     config: &Config,
     name: &str,
     operation: &str,
+    workspace: Option<&Path>,
     progress: Progress,
     before_deletion: &super::BeforeDeletion<'_>,
 ) -> Result<(), String> {
@@ -377,6 +378,7 @@ pub(super) fn delete_for_provider(
         config,
         name,
         Some(operation),
+        workspace,
         progress,
         before_deletion,
         None,
@@ -387,6 +389,7 @@ fn delete_with_provenance(
     config: &Config,
     name: &str,
     operation: Option<&str>,
+    historical_workspace: Option<&Path>,
     progress: Progress,
     before_deletion: &super::BeforeDeletion<'_>,
     lock: Option<gateway::Lock>,
@@ -406,7 +409,11 @@ fn delete_with_provenance(
                 ));
             }
             None => {
-                let workspace_absent = match fs::symlink_metadata(config.workspaces.join(name)) {
+                let workspace = historical_workspace
+                    .map(Path::to_path_buf)
+                    .map_or_else(|| super::workspace::existing(config, name), Ok)?;
+                super::workspace::validate(config, &workspace)?;
+                let workspace_absent = match fs::symlink_metadata(&workspace) {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
                     Ok(_) => false,
                     Err(error) => return Err(error.to_string()),
@@ -415,7 +422,6 @@ fn delete_with_provenance(
                     && journal::recorded(config, name)?.is_none()
                     && runtime::project_ids(config, name, deadline)?.is_empty()
                 {
-                    let workspace = config.workspaces.join(name);
                     before_deletion(
                         workspace.to_str().ok_or("invalid workspace path")?,
                         deadline,
@@ -648,7 +654,8 @@ pub(super) fn remove_workspace(
     progress: Progress,
 ) -> Result<(), String> {
     validate_instance_name(name)?;
-    let workspace = config.workspaces.join(name);
+    let workspace = super::workspace::existing(config, name)?;
+    super::workspace::validate(config, &workspace)?;
     let metadata = match fs::symlink_metadata(&workspace) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -657,11 +664,7 @@ pub(super) fn remove_workspace(
     if !metadata.file_type().is_dir() {
         return Err("workspace must be a real directory, not a symlink".into());
     }
-    let root = fs::canonicalize(&config.workspaces).map_err(|error| error.to_string())?;
     let workspace = fs::canonicalize(&workspace).map_err(|error| error.to_string())?;
-    if workspace.parent() != Some(root.as_path()) {
-        return Err("workspace escapes workspace root".into());
-    }
     progress("Removing instance workspace".into());
     fs::remove_dir_all(workspace).map_err(|error| error.to_string())
 }

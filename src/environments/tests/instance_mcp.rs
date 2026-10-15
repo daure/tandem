@@ -9,7 +9,7 @@ fn owned_workspace(config: &Config, name: &str) {
     let template = templates::get(config, "blank").unwrap();
     journal::prepare(config, &template, name, None).unwrap();
     ownership::record(config, "blank", Path::new(&template.directory), name).unwrap();
-    fs::create_dir_all(config.workspaces.join(name).join("app/src")).unwrap();
+    fs::create_dir_all(config.workspaces.join("blank").join(name).join("app/src")).unwrap();
     journal::workspace_ready(config, name).unwrap();
 }
 
@@ -34,7 +34,7 @@ fn instance_control_binds_nested_workspaces_and_holds_the_lifecycle_lock() {
     owned_workspace(&config, "other");
     let environment = Environments::new(config.clone());
     let scope = environment
-        .bind_instance_directory(&config.workspaces.join("review/app/src"))
+        .bind_instance_directory(&config.workspaces.join("blank/review/app/src"))
         .unwrap();
     for start in [false, true] {
         let (instance, lock) = environment.admit_instance_self(&scope, start).unwrap();
@@ -74,7 +74,7 @@ fn instance_control_binds_nested_workspaces_and_holds_the_lifecycle_lock() {
     assert_eq!(instructions.namespace, config.namespace);
     assert_eq!(
         instructions.workspace,
-        config.workspaces.join("review").display().to_string()
+        config.workspaces.join("blank/review").display().to_string()
     );
     assert_eq!(
         instructions.file,
@@ -129,7 +129,7 @@ fn instance_control_rejects_deleted_recreated_and_symlinked_workspaces() {
     templates::create(&config, "blank").unwrap();
     owned_workspace(&config, "review");
     let environment = Environments::new(config.clone());
-    let path = config.workspaces.join("review");
+    let path = config.workspaces.join("blank/review");
     let scope = environment.bind_instance_directory(&path).unwrap();
     runtime_db::remove(&config, "review", &[runtime_db::Kind::Ownership]).unwrap();
     assert_guidance_scope_error(&environment, &scope, &config, "ownership record missing");
@@ -175,7 +175,7 @@ fn instance_guidance_rejects_workspace_replacement_during_the_read() {
         templates::create(&config, "blank").unwrap();
         owned_workspace(&config, "review");
         let environment = Environments::new(config.clone());
-        let path = config.workspaces.join("review");
+        let path = config.workspaces.join("blank/review");
         let scope = environment.bind_instance_directory(&path).unwrap();
         let file = config.instance_instructions();
         fs::remove_file(&file).unwrap();

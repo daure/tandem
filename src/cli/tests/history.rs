@@ -16,7 +16,7 @@ fn fixture(discoverable: bool) -> (Fixture, Server) {
         )
         .unwrap();
     let server = Server::start();
-    let workspace = fixture.home.join("workspaces/review");
+    let workspace = fixture.home.join("workspaces/blank/review");
     server.session("ses_old", workspace.to_str().unwrap(), None);
     if discoverable {
         let daemon = fixture.home.join("daemons/test");
@@ -46,7 +46,11 @@ fn default_on_cleanup_runs_for_creation_and_recreation_but_preserves_existing_in
     assert_eq!(server.data.lock().unwrap().deleted, ["ses_old"]);
     server.session(
         "ses_new",
-        fixture.home.join("workspaces/review").to_str().unwrap(),
+        fixture
+            .home
+            .join("workspaces/blank/review")
+            .to_str()
+            .unwrap(),
         None,
     );
     success(create(&fixture));
@@ -83,7 +87,12 @@ fn active_history_blocks_client_launch_and_cleanup_is_retried_after_it_becomes_i
     let output = fixture.run(&["new-instance", "review", "-t", "blank", "-o"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("conversations are active"));
-    assert!(!fixture.home.join("workspaces/review/AGENTS.md").exists());
+    assert!(
+        !fixture
+            .home
+            .join("workspaces/blank/review/AGENTS.md")
+            .exists()
+    );
     assert!(!fixture.home.join("opened").exists());
     assert!(server.data.lock().unwrap().deleted.is_empty());
     server.data.lock().unwrap().busy = false;

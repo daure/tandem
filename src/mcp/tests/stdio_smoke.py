@@ -151,7 +151,7 @@ def main():
                 assert len(inventory) == 1, inventory
                 assert inventory[0]["summary"]["status"] == "stopped", inventory
                 assert all(service["summary"]["status"] == "stopped" for service in inventory[0]["services"]), inventory
-                assert Path(directory, "workspaces", "review").is_dir()
+                assert Path(directory, "workspaces", "website", "review").is_dir()
             print("Stdio handshake, object tool payloads, editable instructions and confirmation passed" + ("; live route and cross-process discovery passed." if options.live else "."))
         finally:
             client.close()

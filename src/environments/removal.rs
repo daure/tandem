@@ -243,7 +243,12 @@ impl<F: FnMut(Command, Duration, Option<Progress>) -> Result<String, String>> Re
         }
         if instance.is_some_and(|instance| {
             instance.project != self.config.project(name)
-                || Path::new(&instance.workspace) != self.config.workspaces.join(name)
+                || !super::workspace::matches(
+                    self.config,
+                    &instance.template,
+                    name,
+                    Path::new(&instance.workspace),
+                )
         }) {
             return Err(format!(
                 "inconsistent project or workspace ownership for {name}"
@@ -304,23 +309,5 @@ impl<F: FnMut(Command, Duration, Option<Progress>) -> Result<String, String>> Re
 }
 
 pub(super) fn validate_workspace(config: &Config, name: &str) -> Result<(), String> {
-    let path = config.workspaces.join(name);
-    match fs::symlink_metadata(&path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.to_string()),
-        Ok(metadata) if !metadata.file_type().is_dir() => {
-            return Err(format!("workspace {name} must be a real directory"));
-        }
-        Ok(_) => {}
-    }
-    let root = fs::canonicalize(&config.workspaces).map_err(|error| error.to_string())?;
-    if root != config.workspaces
-        || fs::canonicalize(&path)
-            .map_err(|error| error.to_string())?
-            .parent()
-            != Some(root.as_path())
-    {
-        return Err(format!("workspace {name} escapes the workspace root"));
-    }
-    Ok(())
+    super::workspace::validate(config, &super::workspace::existing(config, name)?)
 }

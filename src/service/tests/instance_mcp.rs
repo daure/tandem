@@ -51,7 +51,9 @@ fn workspace(service: &AppService, name: &str) -> Arc<InstanceScope> {
     Arc::new(
         service
             .environments
-            .bind_instance_directory(&service.environments.config.workspaces.join(name))
+            .bind_instance_directory(std::path::Path::new(
+                &service.environments.workspace(name).unwrap(),
+            ))
             .unwrap(),
     )
 }
@@ -70,7 +72,7 @@ fn readiness_pings_follow_fresh_settings_and_preserve_the_workspace() {
         .block_on(service.create_template("blank".into()))
         .unwrap();
     let scope = workspace(&service, "review");
-    let path = service.environments.config.workspaces.join("review");
+    let path = service.environments.config.workspaces.join("blank/review");
     std::fs::write(path.join("result.txt"), "deliverable").unwrap();
     let receipt = service
         .runtime
@@ -162,7 +164,7 @@ fn purge_preserves_checkpoints_and_reuses_historical_acceptance_reports() {
         .environments
         .config
         .workspaces
-        .join("manual")
+        .join("blank/manual")
         .exists()
     {
         assert!(
@@ -307,6 +309,7 @@ fn purge_preserves_checkpoints_and_reuses_historical_acceptance_reports() {
             .environments
             .config
             .workspaces
+            .join("blank")
             .join(&acceptance.instance)
             .exists()
     );
@@ -355,6 +358,7 @@ fn purge_preserves_checkpoints_and_reuses_historical_acceptance_reports() {
             .environments
             .config
             .workspaces
+            .join("blank")
             .join(&acceptance.instance)
             .exists()
     );

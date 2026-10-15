@@ -9,6 +9,10 @@ use crate::store::{
 };
 
 impl RuleStore {
+    pub(crate) fn retained_workspace(&self, id: i64) -> Result<Option<AcceptanceWorkspace>, Error> {
+        Ok(self.workspaces(&*self.events.connection()?)?.remove(&id))
+    }
+
     pub(crate) fn retained_sessions(&self) -> Result<Vec<crate::store::opencode::Session>, Error> {
         Ok(self
             .workspaces(&*self.events.connection()?)?

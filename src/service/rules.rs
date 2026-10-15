@@ -516,7 +516,9 @@ impl AppService {
                 )?;
                 let scope = self
                     .environments
-                    .bind_instance_directory(&config.workspaces.join(&acceptance.instance))?;
+                    .bind_instance_directory(std::path::Path::new(
+                        &self.environments.workspace(&acceptance.instance)?,
+                    ))?;
                 let Some((instance, _lock)) =
                     self.environments.admit_instance_observation(&scope)?
                 else {

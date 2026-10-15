@@ -52,7 +52,7 @@ esac
             .block_on(service.wait_operation(&operation.id))
             .unwrap();
         assert_eq!(ready.state, OperationState::Succeeded, "{:?}", ready.error);
-        fs::write(config.workspaces.join("shared/keep.txt"), "user work").unwrap();
+        fs::write(config.workspaces.join("other/shared/keep.txt"), "user work").unwrap();
     }
     let mut rule = definition("inspect");
     rule.target_instance = Some("shared".into());
@@ -133,7 +133,7 @@ fn named_targets_reuse_other_templates_and_retain_only_their_conversation() {
         original.operation.id
     );
     assert_eq!(
-        fs::read_to_string(config.workspaces.join("shared/keep.txt")).unwrap(),
+        fs::read_to_string(config.workspaces.join("other/shared/keep.txt")).unwrap(),
         "user work"
     );
     let instance = service
@@ -203,11 +203,11 @@ fn named_targets_reuse_other_templates_and_retain_only_their_conversation() {
             .unwrap()
     );
     fs::rename(
-        config.workspaces.join("shared"),
-        config.workspaces.join("previous"),
+        config.workspaces.join("other/shared"),
+        config.workspaces.join("other/previous"),
     )
     .unwrap();
-    fs::create_dir(config.workspaces.join("shared")).unwrap();
+    fs::create_dir(config.workspaces.join("other/shared")).unwrap();
     assert!(
         !crate::environments::rules::acceptance_workspace_matches(config, &instance, &launched)
             .unwrap()
@@ -274,7 +274,7 @@ fn missing_named_targets_create_once_and_later_matches_reuse_the_exact_name() {
         "blank"
     );
     assert_eq!(launches(&service), 2);
-    assert!(!config.workspaces.join("shared-2").exists());
+    assert!(!config.workspaces.join("blank/shared-2").exists());
 }
 
 #[test]

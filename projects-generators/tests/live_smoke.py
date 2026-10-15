@@ -77,7 +77,7 @@ class Smoke:
             assert f"About {template.title()}" in body
             assert url == f"{self.origin}/{instance}/web/about/", url
         for repo in FIXTURES[template]["repos"]:
-            clone = self.root / ".tandem/workspaces" / instance / repo
+            clone = self.root / ".tandem/workspaces" / template / instance / repo
             assert clone.stat().st_uid == os.getuid()
             assert git(clone, "remote", "get-url", "origin") == str(self.root / repo)
             assert git(clone, "status", "--porcelain") == ""
@@ -107,7 +107,7 @@ class Smoke:
         self.api("guestbook-one", "greeting", method="PUT", body={"message": "Hello from one"})
         assert self.api("guestbook-two", "greeting")["message"] == "Hello, world!"
         self.api("guestbook-one", "greeting", method="PUT", body={"message": ""}, status=400)
-        clone = self.root / ".tandem/workspaces/guestbook-one/guestbook"
+        clone = self.root / ".tandem/workspaces/guestbook/guestbook-one/guestbook"
         git(clone, "switch", "-c", "local-edits")
         config = clone / "backend/config.json"
         payload = json.loads(config.read_text())
@@ -146,7 +146,7 @@ class Smoke:
         manifest_path.write_text(json.dumps(broken_manifest))
         try:
             self.start("postcard", "postcard-broken", expected="failed", timeout=15)
-            assert not (self.root / ".tandem/workspaces/postcard-broken/postcard").exists()
+            assert not (self.root / ".tandem/workspaces/postcard/postcard-broken/postcard").exists()
         finally:
             manifest_path.write_text(original_manifest)
         for template, setting in [("greetings", "FAIL_MIGRATION"),
@@ -185,7 +185,7 @@ class Smoke:
                 time.sleep(0.2)
                 operation = self.client.tool("get_operation", {"id": operation["id"]})
             assert operation["state"] == "succeeded", operation
-            assert not (self.root / ".tandem/workspaces" / name).exists()
+            assert not (self.root / ".tandem/workspaces" / template / name).exists()
             subprocess.run(["docker", "image", "inspect", f"{namespace}-{name}-api"],
                            check=True, capture_output=True, timeout=10)
         print("Reused instance names build the selected template with retained image tags.", flush=True)
@@ -240,12 +240,12 @@ class Smoke:
                                 env={**os.environ, **environment}, capture_output=True, text=True, timeout=90)
         assert result.returncode == 0, result.stderr
         assert not record_path.exists()
-        assert not (self.root / ".tandem/workspaces" / name).exists()
+        assert not Path(record["expected"]["workspace"]).exists()
         assert not any(activity["name"] == name for activity in self.client.tool("list_instances")["activities"])
 
     def check_minimal(self, template, name):
         instance = next(instance for instance in self.client.tool("list_instances")["instances"] if instance["name"] == name)
-        workspace = self.root / ".tandem/workspaces" / name
+        workspace = Path(instance["workspace"])
         guidance = (workspace / "AGENTS.md").read_text()
         assert "## HTTP URLs" not in guidance
         if template == "guidance-only":

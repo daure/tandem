@@ -30,7 +30,7 @@ fn damaged_workspace() -> Fixture {
     record["activity"]["finished"] = true.into();
     fixture.set_runtime_record("review", "journal", &record);
     fs::write(
-        fixture.home.join("workspaces/review/notes.md"),
+        fixture.home.join("workspaces/website/review/notes.md"),
         "workspace notes",
     )
     .unwrap();
@@ -49,7 +49,7 @@ fn deletion_recovers_owned_workspaces_when_the_runtime_kind_is_missing() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!fixture.home.join("workspaces/review").exists());
+    assert!(!fixture.home.join("workspaces/website/review").exists());
     assert!(fixture.runtime_record("review", "journal").is_none());
     assert!(fixture.runtime_record("review", "ownership").is_none());
     assert_eq!(
@@ -67,7 +67,7 @@ fn purge_closes_clients_before_docker_discovery_even_when_docker_is_unavailable(
     fs::write(presence.join("client.json"), json!({
         "pid": std::process::id(),
         "observed_at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
-        "id": "ses_one", "title": "Review", "directory": fixture.home.join("workspaces/review"),
+        "id": "ses_one", "title": "Review", "directory": fixture.home.join("workspaces/website/review"),
         "server": "", "activity": "idle", "zellij_session": "main", "pane_id": 7
     }).to_string()).unwrap();
     fs::write(
@@ -91,7 +91,12 @@ esac
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(fixture.home.join("workspaces/review/notes.md").exists());
+    assert!(
+        fixture
+            .home
+            .join("workspaces/website/review/notes.md")
+            .exists()
+    );
 }
 
 #[test]
@@ -120,7 +125,7 @@ fn cleanup_recovery_preserves_work_when_ownership_or_docker_evidence_is_unavaila
                 fixture.set_runtime_record("review", "journal", &record);
             }
             "symlinked-workspace" => {
-                let workspace = fixture.home.join("workspaces/review");
+                let workspace = fixture.home.join("workspaces/website/review");
                 let preserved = fixture.home.join("preserved-workspace");
                 fs::rename(&workspace, &preserved).unwrap();
                 std::os::unix::fs::symlink(preserved, workspace).unwrap();
@@ -130,7 +135,7 @@ fn cleanup_recovery_preserves_work_when_ownership_or_docker_evidence_is_unavaila
         let output = fixture.run(&["delete-instance", "review"]);
         assert!(!output.status.success(), "{failure}");
         assert_eq!(
-            fs::read_to_string(fixture.home.join("workspaces/review/notes.md")).unwrap(),
+            fs::read_to_string(fixture.home.join("workspaces/website/review/notes.md")).unwrap(),
             "workspace notes"
         );
         assert!(fixture.runtime_record("review", "journal").is_some());

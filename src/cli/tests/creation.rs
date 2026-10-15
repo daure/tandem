@@ -216,7 +216,7 @@ fn opencode_receives_seed_files_and_guidance_before_repository_and_service_start
         fs::write(
             fixture.bin.join("git"),
             format!(
-                "#!/bin/sh\ncase \" $* \" in *' clone '*) test -f \"$TANDEM_HOME/opened\" || exit 29; test -f \"$TANDEM_HOME/workspaces/review/seed.txt\" || exit 30;; esac\nexec '{}' \"$@\"\n",
+                "#!/bin/sh\ncase \" $* \" in *' clone '*) test -f \"$TANDEM_HOME/opened\" || exit 29; test -f \"$TANDEM_HOME/workspaces/website/review/seed.txt\" || exit 30;; esac\nexec '{}' \"$@\"\n",
                 git_path.trim().replace('\'', "'\\''"),
             ),
         )
@@ -235,7 +235,7 @@ fn opencode_receives_seed_files_and_guidance_before_repository_and_service_start
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let workspace = fixture.home.join("workspaces/review");
+        let workspace = fixture.home.join("workspaces/website/review");
         assert_eq!(
             fs::read_to_string(workspace.join("seed.txt")).unwrap(),
             "seed content"
@@ -280,7 +280,12 @@ fn initial_prompts_reach_the_opencode_client_as_literal_text() {
         fs::read_to_string(fixture.home.join("opened-parameters")).unwrap(),
         prompt
     );
-    assert!(!fixture.home.join("workspaces/review/injected").exists());
+    assert!(
+        !fixture
+            .home
+            .join("workspaces/website/review/injected")
+            .exists()
+    );
 }
 
 #[test]
@@ -295,11 +300,16 @@ fn creation_without_opencode_prepares_the_workspace_without_opening_a_client() {
     assert!(
         fixture
             .home
-            .join("workspaces/review/app/file.txt")
+            .join("workspaces/website/review/app/file.txt")
             .is_file()
     );
     assert!(!fixture.home.join("opened").exists());
-    assert!(fixture.home.join("workspaces/review/AGENTS.md").is_file());
+    assert!(
+        fixture
+            .home
+            .join("workspaces/website/review/AGENTS.md")
+            .is_file()
+    );
 }
 
 #[test]
@@ -336,7 +346,7 @@ fn repository_failures_preserve_the_early_client_and_block_container_startup() {
             assert!(
                 fixture
                     .home
-                    .join("workspaces/review/app/file.txt")
+                    .join("workspaces/website/review/app/file.txt")
                     .is_file()
             );
         }
@@ -361,7 +371,10 @@ fn opencode_opens_a_prepared_workspace_without_repositories() {
     );
     assert_eq!(
         fs::read_to_string(fixture.home.join("opened")).unwrap(),
-        format!("{}\n", fixture.home.join("workspaces/review").display())
+        format!(
+            "{}\n",
+            fixture.home.join("workspaces/website/review").display()
+        )
     );
 }
 
@@ -386,8 +399,13 @@ fn workspace_guidance_failure_blocks_client_repository_and_container_startup() {
     );
     assert!(!fixture.home.join("opened").exists());
     assert!(!fixture.home.join("started").exists());
-    assert!(!fixture.home.join("workspaces/review/app").exists());
-    assert!(!fixture.home.join("workspaces/review/AGENTS.md").exists());
+    assert!(!fixture.home.join("workspaces/website/review/app").exists());
+    assert!(
+        !fixture
+            .home
+            .join("workspaces/website/review/AGENTS.md")
+            .exists()
+    );
 }
 
 #[test]
@@ -406,13 +424,13 @@ fn client_guidance_edits_are_preserved_during_repository_and_service_preparation
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        fs::read_to_string(fixture.home.join("workspaces/review/AGENTS.md")).unwrap(),
+        fs::read_to_string(fixture.home.join("workspaces/website/review/AGENTS.md")).unwrap(),
         "Client guidance\n"
     );
     assert!(
         fixture
             .home
-            .join("workspaces/review/app/file.txt")
+            .join("workspaces/website/review/app/file.txt")
             .is_file()
     );
     assert!(fixture.home.join("started").is_file());
@@ -441,7 +459,8 @@ fn an_updated_binary_uses_its_bundled_template_for_new_instances_and_preserves_e
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let text = fs::read_to_string(fixture.home.join("workspaces/review/AGENTS.md")).unwrap();
+    let text =
+        fs::read_to_string(fixture.home.join("workspaces/website/review/AGENTS.md")).unwrap();
     assert!(text.starts_with("# review\n"));
     assert!(
         text.contains("docker compose -p 'cli-test-review' exec -T -w CODE_PATH SERVICE COMMAND")
@@ -472,7 +491,7 @@ fn startup_failure_is_reported_after_early_open_and_preserves_checkout() {
     assert!(
         fixture
             .home
-            .join("workspaces/review/app/file.txt")
+            .join("workspaces/website/review/app/file.txt")
             .is_file()
     );
 }
@@ -495,7 +514,7 @@ fn opencode_launch_failure_reports_a_ready_instance_and_preserves_its_workspace(
     assert!(
         fixture
             .home
-            .join("workspaces/review/app/file.txt")
+            .join("workspaces/website/review/app/file.txt")
             .is_file()
     );
 }
@@ -555,7 +574,7 @@ fn headless_delete_returns_before_deletion_finishes() {
     }
 }
 
-const DOCKER: &str = r#"#!/bin/sh
+const DOCKER: &str = r##"#!/bin/sh
 printf '%s\n' "$*" >> "$TANDEM_HOME/docker-calls"
 case "$1" in
   ps)
@@ -595,6 +614,8 @@ case "$1" in
           done
         fi
         if [ "$FAIL_START" = 1 ]; then printf 'fixture startup failed\n' >&2; exit 23; fi
+        sed "s#\"io.tandem.workspace\":\"[^\"]*\"#\"io.tandem.workspace\":\"$TANDEM_WORKSPACE\"#" "$TANDEM_HOME/inspect.json" > "$TANDEM_HOME/inspect-next.json"
+        mv "$TANDEM_HOME/inspect-next.json" "$TANDEM_HOME/inspect.json"
         touch "$TANDEM_HOME/started"
         ;;
       *) printf 'unexpected Compose command\n' >&2; exit 24;;
@@ -602,4 +623,4 @@ case "$1" in
     ;;
   *) printf 'unexpected Docker command\n' >&2; exit 25;;
 esac
-"#;
+"##;

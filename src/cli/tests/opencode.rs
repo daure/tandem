@@ -86,7 +86,7 @@ fn opencode_requires_zellij_and_enabled_integration_before_provisioning() {
             }),
             "{error}"
         );
-        assert!(!fixture.home.join("workspaces/review").exists());
+        assert!(!fixture.home.join("workspaces/website/review").exists());
         assert!(!fixture.home.join("opened").exists());
     }
 }
@@ -133,7 +133,7 @@ fn model_and_variant_selections_reach_the_detached_creation_client() {
         let mut expected = vec![
             fixture
                 .home
-                .join("workspaces/review")
+                .join("workspaces/website/review")
                 .to_str()
                 .unwrap()
                 .to_owned(),
@@ -161,7 +161,7 @@ fn invalid_session_selection_blocks_instance_creation() {
         args.extend(options);
         let output = fixture.run(&args);
         assert!(!output.status.success());
-        assert!(!fixture.home.join("workspaces/review").exists());
+        assert!(!fixture.home.join("workspaces/website/review").exists());
         assert!(!fixture.home.join("opened").exists());
     }
 }
@@ -170,7 +170,7 @@ fn invalid_session_selection_blocks_instance_creation() {
 fn a_fresh_cli_reuses_the_shared_server_and_stacks_in_the_observed_instance_tab() {
     let fixture = Fixture::new();
     let server = Server::start();
-    let workspace = fixture.home.join("workspaces/review");
+    let workspace = fixture.home.join("workspaces/website/review");
     let presence = fixture.home.join("state/tandem/opencode");
     fs::create_dir_all(&presence).unwrap();
     fs::write(

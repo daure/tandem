@@ -10,6 +10,7 @@ Building requires Rust and the sibling `../tuicore` package. Service templates r
 Engine and Docker Compose v2 or newer; container images are pulled on first use. Repository-only
 templates require Linux and host Git but their lifecycle does not require Docker.
 Blank and guidance-only templates prepare a workspace folder without Git or Docker.
+New instance workspaces use `<TANDEM_HOME>/workspaces/<template>/<instance>/`; existing flat workspaces keep their paths.
 
 ```bash
 cargo run                   # TUI

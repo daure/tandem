@@ -71,7 +71,7 @@ def main():
             wait_for(lambda text: "Stop ui-review?" in text)
             terminal.send("\x13")
             wait_for(lambda text: "stop_instance / ui-review · succeeded" in text)
-            assert Path(directory, "workspaces", "ui-review").is_dir()
+            assert Path(directory, "workspaces", "website", "ui-review").is_dir()
             print("Real TUI template allocation, info dialog, tree expansion, create, browser route, and stop passed.\n")
             print(tree)
             terminal.send("\x11")

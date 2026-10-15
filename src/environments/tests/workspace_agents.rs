@@ -151,6 +151,7 @@ fn rendered_compose(
         config,
         &template,
         &instance.name,
+        instance.workspace.clone().into(),
         serde_json::to_string(&model).unwrap().replace('$', "$$"),
     );
     runtime_db::save(

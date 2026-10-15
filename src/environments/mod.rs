@@ -32,6 +32,7 @@ pub(crate) mod state_stream;
 mod stats;
 mod template_files;
 mod templates;
+pub(crate) mod workspace;
 mod workspace_agents;
 mod workspace_template;
 
@@ -467,17 +468,14 @@ impl Environments {
     }
     pub fn workspace(&self, name: &str) -> Result<String, String> {
         validate_instance_name(name)?;
-        let root = fs::canonicalize(&self.config.workspaces).map_err(|error| error.to_string())?;
-        let workspace = self.config.workspaces.join(name);
+        let workspace = workspace::existing(&self.config, name)?;
+        workspace::validate(&self.config, &workspace)?;
         let metadata = fs::symlink_metadata(&workspace)
             .map_err(|error| format!("workspace {name}: {error}"))?;
         if !metadata.file_type().is_dir() {
             return Err(format!("workspace {name} must be a real directory"));
         }
         let workspace = fs::canonicalize(&workspace).map_err(|error| error.to_string())?;
-        if workspace.parent() != Some(root.as_path()) {
-            return Err(format!("workspace {name} escapes the workspace root"));
-        }
         Ok(workspace.display().to_string())
     }
 
@@ -724,10 +722,8 @@ impl Environments {
             name: operation.name.clone(),
             template: template.clone(),
             template_directory: self.config.templates.join(template).display().to_string(),
-            workspace: self
-                .config
-                .workspaces
-                .join(&operation.name)
+            workspace: workspace::resolve(&self.config, template, &operation.name)
+                .ok()?
                 .display()
                 .to_string(),
             project: self.config.project(&operation.name),

@@ -101,7 +101,7 @@ pub(super) fn record_launch(
         description: description.into(),
         template: snapshot.template.clone(),
         template_directory: snapshot.directory.display().to_string(),
-        workspace: config.workspaces.join(&snapshot.name).display().to_string(),
+        workspace: snapshot.workspace.display().to_string(),
         project: config.project(&snapshot.name),
         services,
         ..Default::default()

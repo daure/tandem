@@ -130,14 +130,30 @@ impl Providers {
 
     pub(crate) fn delete_created_instance(
         &self,
-        instance: &str,
-        operation: &str,
+        acceptance: &Acceptance,
+        workspace: Option<&str>,
         before_deletion: &crate::environments::BeforeDeletion<'_>,
     ) -> Result<(), String> {
+        let operation = acceptance
+            .operation_id
+            .as_deref()
+            .ok_or("instance startup identity missing")?;
+        let workspace = workspace.map(Path::new);
+        if let Some(path) = workspace
+            && !crate::environments::workspace::matches(
+                &self.config,
+                acceptance.template(),
+                &acceptance.instance,
+                path,
+            )
+        {
+            return Err("retained workspace does not match instance ownership".into());
+        }
         lifecycle::delete_for_provider(
             &self.config,
-            instance,
+            &acceptance.instance,
             operation,
+            workspace,
             std::sync::Arc::new(|_| {}),
             before_deletion,
         )

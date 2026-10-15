@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn start(config: &Config, calls: &Arc<AtomicUsize>, fail: bool) -> Result<Instance, String> {
     let calls = Arc::clone(calls);
-    let expected = config.workspaces.join("review");
+    let expected = config.workspaces.join("local/review");
     lifecycle::start(
         config,
         "local",
@@ -54,7 +54,7 @@ fn failed_cleanup_blocks_creation_and_must_succeed_before_retry_proceeds() {
         "cleanup unavailable"
     );
     assert!(journal::recorded(&config, "review").unwrap().is_none());
-    assert!(!config.workspaces.join("review/AGENTS.md").exists());
+    assert!(!config.workspaces.join("local/review/AGENTS.md").exists());
     let retried = start(&config, &calls, false).unwrap();
     assert!(retried.runtime.workspace_ready);
     assert_eq!(calls.load(Ordering::Relaxed), 2);

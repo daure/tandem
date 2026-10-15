@@ -256,7 +256,11 @@ fn pending_instance_creation_is_visible_before_containers_exist() {
     assert!(snapshot.instances[0].pending);
     assert_eq!(
         snapshot.instances[0].workspace,
-        config.workspaces.join("review").display().to_string()
+        config
+            .workspaces
+            .join("website/review")
+            .display()
+            .to_string()
     );
 
     for description in ["Review environment", "Updated during startup", ""] {
@@ -601,6 +605,7 @@ fn compose_commands_expose_the_instance_name_as_the_branch_when_requested() {
         std::path::Path::new("/template"),
         std::path::Path::new("/template/compose.yaml"),
         "Feature-Branch",
+        &config.workspaces.join("website/Feature-Branch"),
         Some("Feature-Branch"),
     );
     let branch = command.get_envs().find_map(|(key, value)| {
@@ -610,6 +615,15 @@ fn compose_commands_expose_the_instance_name_as_the_branch_when_requested() {
     });
 
     assert_eq!(branch.as_deref(), Some("Feature-Branch"));
+    let workspace = command.get_envs().find_map(|(key, value)| {
+        (key == std::ffi::OsStr::new("TANDEM_WORKSPACE"))
+            .then_some(value)
+            .flatten()
+    });
+    assert_eq!(
+        workspace,
+        Some(config.workspaces.join("website/Feature-Branch").as_os_str())
+    );
 }
 
 #[test]

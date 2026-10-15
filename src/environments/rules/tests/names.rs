@@ -183,6 +183,7 @@ fn retries_require_matching_origin_and_template_when_resources_remain() {
         branch_instances: false,
         start_instance: false,
         preserve_opencode_history: false,
+        workspace: None,
         kind: crate::store::environments::StartupKind::Cold,
         started_at: 1,
         timeout: 60,
@@ -244,4 +245,47 @@ fn ledger_rejects_non_ascii_reserved_and_malformed_keys() {
             "{name:?}"
         );
     }
+}
+
+#[test]
+fn grouped_workspace_entries_reserve_names_without_scanning_flat_repositories() {
+    let (_home, config, connection) = fixture();
+    fs::create_dir(config.templates.join("blank")).unwrap();
+    fs::create_dir_all(config.workspaces.join("blank/Review")).unwrap();
+    fs::create_dir_all(config.workspaces.join("legacy/app")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO runtime_records VALUES ('foreign', 'legacy', 'ownership', ?1)",
+            [serde_json::json!({"workspace": config.workspaces.join("legacy")}).to_string()],
+        )
+        .unwrap();
+    assert_eq!(
+        find_available_name(&connection, &config, "review").unwrap(),
+        Some("review-2".into())
+    );
+    assert!(ensure_fresh(&connection, &config, "review").is_err());
+    assert_eq!(
+        find_available_name(&connection, &config, "blank").unwrap(),
+        Some("blank".into())
+    );
+    ensure_fresh(&connection, &config, "blank").unwrap();
+    assert_eq!(
+        find_available_name(&connection, &config, "app").unwrap(),
+        Some("app".into())
+    );
+    fs::remove_dir(config.templates.join("blank")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO runtime_records VALUES ('foreign', 'review', 'ownership', ?1)",
+            [
+                serde_json::json!({"workspace": config.workspaces.join("blank/Review")})
+                    .to_string(),
+            ],
+        )
+        .unwrap();
+    assert!(
+        workspace_entries(&connection, &config)
+            .unwrap()
+            .contains("review")
+    );
 }

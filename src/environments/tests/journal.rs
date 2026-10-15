@@ -141,8 +141,13 @@ fn rendered_launch_topology_is_read_without_using_edited_template_configuration(
     let model = json!({"name": app.project, "services": {"web": {"labels": labels, "deploy": {"replicas": 2}}}});
     fs::write(directory.join("tandem.json"), "{}").unwrap();
     let template = crate::environments::templates::get(&config, "website").unwrap();
-    let snapshot =
-        runtime_db::launch::Snapshot::new(&config, &template, "review", model.to_string());
+    let snapshot = runtime_db::launch::Snapshot::new(
+        &config,
+        &template,
+        "review",
+        app.workspace.clone().into(),
+        model.to_string(),
+    );
     runtime_db::save(
         &config,
         "review",

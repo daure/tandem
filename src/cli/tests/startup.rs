@@ -158,15 +158,20 @@ fn startup_uses_the_running_binary_after_its_executable_is_replaced() {
     assert!(
         fixture
             .home
-            .join("workspaces/review/app/file.txt")
+            .join("workspaces/website/review/app/file.txt")
             .is_file()
     );
-    assert!(fixture.home.join("workspaces/review/AGENTS.md").is_file());
+    assert!(
+        fixture
+            .home
+            .join("workspaces/website/review/AGENTS.md")
+            .is_file()
+    );
     let config: Value = serde_json::from_slice(
         &fs::read(
             fixture
                 .home
-                .join("workspaces/review/.opencode/opencode.json"),
+                .join("workspaces/website/review/.opencode/opencode.json"),
         )
         .unwrap(),
     )
@@ -209,7 +214,12 @@ fn startup_survives_client_exit_hangup_and_kill_and_reconnects_without_reexecuti
         });
         let completed = reopened.tool("get_operation", json!({"id": operation["id"]}));
         assert_eq!(completed["state"], "succeeded", "{completed}");
-        assert!(fixture.home.join("workspaces/review/app/file.txt").exists());
+        assert!(
+            fixture
+                .home
+                .join("workspaces/website/review/app/file.txt")
+                .exists()
+        );
         assert_eq!(
             fs::read_to_string(fixture.home.join("docker-calls"))
                 .unwrap()
@@ -230,7 +240,7 @@ fn requested_client_launch_and_cloning_survive_the_initiating_cli_exit() {
         .spawn()
         .unwrap();
     wait_until(|| fixture.home.join("opening").exists());
-    let workspace = fixture.home.join("workspaces/review");
+    let workspace = fixture.home.join("workspaces/website/review");
     assert!(workspace.is_dir());
     assert!(!workspace.join("app").exists());
     client.kill().unwrap();

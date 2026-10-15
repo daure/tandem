@@ -20,7 +20,7 @@ pub(in crate::environments) struct Snapshot {
     pub name: String,
     pub template: String,
     pub directory: PathBuf,
-    workspace: PathBuf,
+    pub workspace: PathBuf,
     project: String,
     namespace: String,
     pub source: String,
@@ -32,6 +32,7 @@ impl Snapshot {
         config: &Config,
         template: &Template,
         name: &str,
+        workspace: PathBuf,
         source: String,
     ) -> Self {
         Self {
@@ -39,7 +40,7 @@ impl Snapshot {
             name: name.into(),
             template: template.name.clone(),
             directory: PathBuf::from(&template.directory),
-            workspace: config.workspaces.join(name),
+            workspace,
             project: config.project(name),
             namespace: config.namespace.clone(),
             source,
@@ -78,7 +79,12 @@ impl Snapshot {
         if self.version != 1
             || !self.name.eq_ignore_ascii_case(name)
             || self.directory != config.templates.join(&self.template)
-            || self.workspace != config.workspaces.join(&self.name)
+            || !crate::environments::workspace::matches(
+                config,
+                &self.template,
+                &self.name,
+                &self.workspace,
+            )
             || self.project != config.project(&self.name)
             || self.namespace != config.namespace
             || self.source.len() > 262_144

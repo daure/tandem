@@ -43,7 +43,7 @@ include: ['${TANDEM_WORKSPACE}/app/infra.yaml']
         services[3].url.as_deref(),
         Some("http://localhost:9876/review/web/")
     );
-    assert!(!config.workspaces.join("review").exists());
+    assert!(!config.workspaces.join("website/review").exists());
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn startup_publishes_service_preview_before_external_commands_and_workspace_prep
     assert_eq!(instance.services.len(), 1);
     assert_eq!(instance.services[0].name, "web");
     assert_eq!(instance.services[0].summary.status, Status::Waiting);
-    assert!(!config.workspaces.join("review").exists());
+    assert!(!config.workspaces.join("website/review").exists());
     assert!(journal::recorded(&config, "review").unwrap().is_none());
 }
 

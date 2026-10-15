@@ -24,7 +24,12 @@ fn checkpoints_survive_independent_purge_for_accepted_and_manual_instances() {
                 json!(null)
             }
         );
-        assert!(fixture.home.join("workspaces").join(name).is_dir());
+        let workspace = fixture
+            .home
+            .join("workspaces")
+            .join(if name == "reader" { "blank" } else { "website" })
+            .join(name);
+        assert!(workspace.is_dir());
         assert!(
             management.tool("list_rules", json!({}))["reports"]
                 .as_object()
@@ -41,7 +46,7 @@ fn checkpoints_survive_independent_purge_for_accepted_and_manual_instances() {
             )["cleanup_state"]
                 == "purged"
         });
-        assert!(!fixture.home.join("workspaces").join(name).exists());
+        assert!(!workspace.exists());
         let memory = management.tool("get_memory", json!({"memory_id":checkpoint["memory_id"]}));
         assert_eq!(memory["fields"]["findings"], json!(["Retry amplification"]));
         let matches = management.tool(

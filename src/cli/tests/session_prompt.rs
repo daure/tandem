@@ -140,7 +140,7 @@ fn prompts_resolve_owned_sessions_reopen_exact_history_and_never_resend_uncertai
                 .status
                 .success()
         );
-        let directory = fixture.home.join("workspaces/review");
+        let directory = fixture.home.join("workspaces/website/review");
         fs::write(directory.join("app/file.txt"), "Uncommitted work").unwrap();
         let startup = fixture.runtime_record("review", "startup");
         let server = Server::start(&fixture.home, &directory, result);
@@ -257,7 +257,7 @@ fn session_prompts_reject_external_ambiguous_and_unowned_targets_before_sending_
         let directory = if blocked == "external" {
             fixture.source.clone()
         } else {
-            fixture.home.join("workspaces/review")
+            fixture.home.join("workspaces/website/review")
         };
         let server = Server::start(&fixture.home, &directory, "queued");
         server.presence(&fixture, &directory, "client.json");
@@ -297,7 +297,7 @@ fn session_listing_discovers_instance_ids_history_and_external_sessions_without_
             .status
             .success()
     );
-    let directory = fixture.home.join("workspaces/review");
+    let directory = fixture.home.join("workspaces/website/review");
     let startup = fixture.runtime_record("review", "startup");
     let server = Server::start(&fixture.home, &directory, "listing");
     let mut external = server.presence(&fixture, &directory, "client.json");
@@ -409,7 +409,7 @@ fn session_listing_reports_partial_observation_and_rejects_disabled_or_unknown_t
             .status
             .success()
     );
-    let directory = fixture.home.join("workspaces/review");
+    let directory = fixture.home.join("workspaces/website/review");
     let server = Server::start(&fixture.home, &directory, "listing-unavailable");
     server.presence(&fixture, &directory, "client.json");
     let output = fixture.run(&["list-sessions", "--instance", "review", "--json"]);

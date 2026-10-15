@@ -61,7 +61,7 @@ fn instance_creation_builds_the_selected_template_images() {
 #[test]
 fn stopping_starting_and_restarting_preserve_workspace_changes_and_report_completion() {
     let fixture = running_fixture();
-    let checkout = fixture.home.join("workspaces/review/app");
+    let checkout = fixture.home.join("workspaces/website/review/app");
     fs::write(checkout.join("file.txt"), "Local edits").unwrap();
     let rendered = fixture.home.join("runtime/cli-test/review/compose.json");
 
@@ -137,7 +137,7 @@ fn restart_targets_long_running_containers_and_skips_setup_jobs() {
 #[test]
 fn lifecycle_command_failures_exit_nonzero_and_preserve_workspace_data() {
     let fixture = running_fixture();
-    let data = fixture.home.join("workspaces/review/data.txt");
+    let data = fixture.home.join("workspaces/website/review/data.txt");
     fs::write(&data, "Keep data").unwrap();
     for (command, flag, expected) in [
         ("start-instance", "FAIL_START", "fixture startup failed"),
@@ -264,7 +264,7 @@ fn workspace_start_and_stop_preserve_files_without_docker_and_restart_reports_no
     fs::write(fixture.home.join("templates/website/tandem.json"), "{}").unwrap();
     fs::write(fixture.bin.join("docker"), "#!/bin/sh\nexit 99\n").unwrap();
     success(fixture.run(&["new-instance", "scratch", "-t", "website"]));
-    let data = fixture.home.join("workspaces/scratch/notes.txt");
+    let data = fixture.home.join("workspaces/website/scratch/notes.txt");
     fs::write(&data, "Keep notes").unwrap();
     success(fixture.run(&["stop-instance", "scratch"]));
     success(fixture.run(&["start-instance", "scratch"]));

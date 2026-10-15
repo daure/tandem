@@ -58,7 +58,10 @@ pub(in crate::environments) fn backfill_name(
     Ok(())
 }
 
-fn workspace_entries(config: &Config) -> Result<HashSet<String>, Error> {
+fn workspace_paths(
+    connection: &Connection,
+    config: &Config,
+) -> Result<Vec<std::path::PathBuf>, Error> {
     let root = &config.workspaces;
     let metadata = fs::symlink_metadata(root).map_err(storage)?;
     let canonical = fs::canonicalize(root).map_err(storage)?;
@@ -68,16 +71,34 @@ fn workspace_entries(config: &Config) -> Result<HashSet<String>, Error> {
             "workspaces require a real contained directory".into(),
         ));
     }
-    fs::read_dir(root)
-        .map_err(storage)?
-        .map(|entry| {
-            Ok(entry
-                .map_err(storage)?
-                .file_name()
-                .to_string_lossy()
-                .to_ascii_lowercase())
-        })
-        .collect()
+    let recorded = crate::environments::runtime_db::workspace_paths_from(connection)
+        .map_err(Error::Storage)?;
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(root).map_err(storage)? {
+        let entry = entry.map_err(storage)?;
+        let path = entry.path();
+        let grouped = !recorded.contains(&path)
+            && (recorded
+                .iter()
+                .any(|workspace| workspace.parent() == Some(path.as_path()))
+                || config.templates.join(entry.file_name()).is_dir());
+        if grouped && entry.file_type().map_err(storage)?.is_dir() {
+            for child in fs::read_dir(&path).map_err(storage)? {
+                paths.push(child.map_err(storage)?.path());
+            }
+        } else {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+fn workspace_entries(connection: &Connection, config: &Config) -> Result<HashSet<String>, Error> {
+    Ok(workspace_paths(connection, config)?
+        .iter()
+        .filter_map(|path| path.file_name())
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .collect())
 }
 
 fn storage(error: std::io::Error) -> Error {
@@ -98,7 +119,7 @@ pub(in crate::environments) fn find_available_name(
     base: &str,
 ) -> Result<Option<String>, Error> {
     validate_instance_name(base).map_err(Error::Invalid)?;
-    let entries = workspace_entries(config)?;
+    let entries = workspace_entries(connection, config)?;
     for number in 1..=1024 {
         let candidate = if number == 1 {
             base.to_owned()
@@ -144,7 +165,8 @@ pub(super) fn ensure_fresh(
 ) -> Result<(), Error> {
     validate_instance_name(name).map_err(Error::Invalid)?;
     let key = name.to_ascii_lowercase();
-    if workspace_entries(config)?.contains(&key) || runtime_occupied(connection, &key)? {
+    if workspace_entries(connection, config)?.contains(&key) || runtime_occupied(connection, &key)?
+    {
         return Err(Error::Conflict(
             "assigned instance name is already in use; inspect before retrying".into(),
         ));
@@ -161,23 +183,22 @@ pub(super) fn ensure_retry(
 ) -> Result<(), Error> {
     validate_instance_name(name).map_err(Error::Invalid)?;
     let key = name.to_ascii_lowercase();
-    let workspace = workspace_entries(config)?.contains(&key);
-    if workspace && fs::symlink_metadata(config.workspaces.join(name)).is_err() {
+    let paths = workspace_paths(connection, config)?;
+    let matching: Vec<_> = paths
+        .iter()
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|entry| entry.to_string_lossy().eq_ignore_ascii_case(name))
+        })
+        .collect();
+    let workspace = !matching.is_empty();
+    if matching
+        .iter()
+        .any(|path| !crate::environments::workspace::matches(config, template, name, path))
+    {
         return Err(Error::Conflict(
-            "assigned workspace uses a different case; inspect before retrying".into(),
+            "assigned workspace uses a different case or template; inspect before retrying".into(),
         ));
-    }
-    // An additional case variant is foreign even when the exact workspace also exists.
-    if workspace {
-        for entry in fs::read_dir(&config.workspaces).map_err(storage)? {
-            let entry = entry.map_err(storage)?;
-            let entry_name = entry.file_name();
-            if entry_name.to_string_lossy().eq_ignore_ascii_case(name) && entry_name != name {
-                return Err(Error::Conflict(
-                    "assigned workspace uses a different case; inspect before retrying".into(),
-                ));
-            }
-        }
     }
     let foreign: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM runtime_records WHERE lower(name) = ?1 AND namespace != ?2)",

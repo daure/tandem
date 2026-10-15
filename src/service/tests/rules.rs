@@ -320,6 +320,7 @@ fn acceptance_recreation_requires_confirmation_and_preserves_the_original_dispat
             .environments
             .config
             .workspaces
+            .join("blank")
             .join(&acceptance.instance)
             .is_dir()
     );
@@ -344,17 +345,14 @@ fn acceptance_recreation_requires_confirmation_and_preserves_the_original_dispat
     }
     crate::environments::providers::Providers::new(&service.environments.config)
         .unwrap()
-        .delete_created_instance(
-            &acceptance.instance,
-            acceptance.operation_id.as_deref().unwrap(),
-            &|_, _| Ok(()),
-        )
+        .delete_created_instance(&acceptance, None, &|_, _| Ok(()))
         .unwrap();
     assert!(
         !service
             .environments
             .config
             .workspaces
+            .join("blank")
             .join(&acceptance.instance)
             .exists()
     );
@@ -741,6 +739,7 @@ fn missing_live_rule_destinations_fail_before_provisioning() {
             .environments
             .config
             .workspaces
+            .join(acceptance.template())
             .join(&acceptance.instance)
             .exists()
     );

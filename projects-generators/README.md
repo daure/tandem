@@ -228,7 +228,7 @@ projects/
     templates/              # one Git repository for both template catalogs
       instances/<template>/ # Compose and/or manifest recipes with tandem-agents.md
       providers/<source>/   # slack, jira, datadog, github: Dockerfile, src/, sample.json, provider.json
-    workspaces/<instance>/  # independent writable clones of the relevant repos
+    workspaces/<template>/<instance>/ # independent writable clones of the relevant repos
 ```
 
 `projects-generators/` is the tracked source of fixture recipes and app assets. Edit it to change

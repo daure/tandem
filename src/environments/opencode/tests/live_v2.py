@@ -27,7 +27,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='tandem-v2-live-') as temporary:
         root = Path(temporary)
         home = root / 'tandem'
-        workspace = home / 'workspaces/toolbar'
+        workspace = home / 'workspaces/blank/toolbar'
         config = root / 'config/opencode'
         config.mkdir(parents=True)
         password = secrets.token_urlsafe(32)

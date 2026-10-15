@@ -75,7 +75,7 @@ elif 'new-tab' in args or 'new-pane' in args:
                         "template": "blank", "name": "invalid", "confirmed": True, **selection,
                     }})
                     self.assertTrue(result.get("isError"), result)
-                    self.assertFalse((home / "workspaces/invalid").exists())
+                    self.assertFalse((home / "workspaces/blank/invalid").exists())
                     self.assertFalse(command.exists())
             finally:
                 client.close()
@@ -147,7 +147,7 @@ if sys.argv[-3:] == ['config', '--format', 'json']:
                 self.assertEqual(operation["state"], "failed")
                 self.assertIn("timed out", operation["error"])
                 self.assertLess(elapsed, 7, "Each Docker probe must consume the same startup budget")
-                self.assertTrue((root / "home/workspaces/review").is_dir())
+                self.assertTrue((root / "home/workspaces/website/review").is_dir())
             finally:
                 client.close()
             self.assertTrue(client.process.stdin.closed)

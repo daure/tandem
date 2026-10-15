@@ -42,6 +42,11 @@ pub(crate) fn launch(
         branch_instances: startup.branch_instances,
         start_instance: startup.start_instance,
         preserve_opencode_history: startup.preserve_opencode_history,
+        workspace: startup.workspace.clone().or_else(|| {
+            previous
+                .as_ref()
+                .and_then(|record| record.workspace.clone())
+        }),
         kind: environments.startup_kind(&operation.id).unwrap_or_default(),
         started_at: journal::now(),
         timeout,

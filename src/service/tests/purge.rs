@@ -13,7 +13,7 @@ fn purge_operations_close_clients_before_removing_workspaces() {
     for action in ["delete_instance", "delete_template", "batch"] {
         let mut service = AppService::for_tests();
         let home = service.environments.config.home.clone();
-        let workspace = service.environments.config.workspaces.join("review");
+        let workspace = service.environments.config.workspaces.join("local/review");
         let observer = Observer {
             presence: home.join("presence"),
             daemons: home.join("daemons"),

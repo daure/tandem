@@ -74,6 +74,7 @@ fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_own
     store.update(&acceptance, false).unwrap();
     let directory = config
         .workspaces
+        .join("blank")
         .join(&acceptance.instance)
         .display()
         .to_string();

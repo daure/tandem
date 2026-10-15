@@ -63,6 +63,7 @@ pub(crate) fn command(
     directory: &Path,
     compose: &Path,
     name: &str,
+    workspace: &Path,
     branch: Option<&str>,
 ) -> Command {
     let mut cmd = docker();
@@ -81,7 +82,7 @@ pub(crate) fn command(
     .arg(compose)
     .current_dir(directory)
     .env("TANDEM_INSTANCE", name)
-    .env("TANDEM_WORKSPACE", config.workspaces.join(name))
+    .env("TANDEM_WORKSPACE", workspace)
     .env("TANDEM_ORIGIN", config.origin());
     if let Some(branch) = branch {
         cmd.env("TANDEM_BRANCH", branch);
@@ -105,11 +106,13 @@ pub(crate) fn render(
     timeout: Duration,
 ) -> Result<Rendered, String> {
     let directory = Path::new(&template.directory);
+    let workspace = super::workspace::resolve(config, &template.name, name)?;
     let mut cmd = command(
         config,
         directory,
         Path::new(&template.compose_file),
         name,
+        &workspace,
         branch,
     );
     cmd.args(["config", "--format", "json"]);
@@ -121,7 +124,7 @@ pub(crate) fn render(
         .map_err(|error| error.to_string())?
         .replace('$', "$$");
     let services = expected_services(config, template, name, &model);
-    let snapshot = runtime_db::launch::Snapshot::new(config, template, name, text);
+    let snapshot = runtime_db::launch::Snapshot::new(config, template, name, workspace, text);
     journal::record_launch(config, &snapshot, services.clone(), description)?;
     let rendered =
         runtime_db::launch::materialize(config, name)?.ok_or("launch snapshot missing")?;
@@ -212,6 +215,7 @@ pub(crate) fn decorate(
             return Err(format!("metadata references unknown service {expected}"));
         }
     }
+    let workspace = super::workspace::resolve(config, &template.name, name)?;
     for (service_name, service) in services.iter_mut() {
         validate_name(service_name)?;
         let service = service.as_object_mut().ok_or("invalid Compose service")?;
@@ -256,10 +260,7 @@ pub(crate) fn decorate(
             (DESCRIPTION, description.into()),
             (TEMPLATE, template.name.clone()),
             (DIRECTORY, template.directory.clone()),
-            (
-                WORKSPACE,
-                config.workspaces.join(name).display().to_string(),
-            ),
+            (WORKSPACE, workspace.display().to_string()),
             (
                 ROLE,
                 if template.manifest.one_shots.contains(service_name) {

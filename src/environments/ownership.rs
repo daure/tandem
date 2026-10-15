@@ -27,18 +27,22 @@ fn expected(
     template: &str,
     directory: &Path,
     name: &str,
+    workspace: &Path,
 ) -> Result<Owner, String> {
     validate_name(template)?;
     validate_instance_name(name)?;
     if directory != config.templates.join(template) {
         return Err("template directory does not match instance ownership".into());
     }
+    if !super::workspace::matches(config, template, name, workspace) {
+        return Err("workspace does not match instance ownership".into());
+    }
     Ok(Owner {
         namespace: config.namespace.clone(),
         template: template.into(),
         directory: directory.into(),
         instance: name.into(),
-        workspace: config.workspaces.join(name),
+        workspace: workspace.into(),
     })
 }
 
@@ -48,7 +52,8 @@ pub(super) fn record(
     directory: &Path,
     name: &str,
 ) -> Result<(), String> {
-    let owner = expected(config, template, directory, name)?;
+    let workspace = super::workspace::resolve(config, template, name)?;
+    let owner = expected(config, template, directory, name, &workspace)?;
     if let Some(text) = runtime_db::load(config, name, Kind::Ownership)? {
         let existing: Owner = serde_json::from_str(&text).map_err(|error| error.to_string())?;
         if existing != owner {
@@ -70,6 +75,7 @@ pub(super) fn verify(config: &Config, instance: &Instance) -> Result<(), String>
         &instance.template,
         Path::new(&instance.template_directory),
         &instance.name,
+        Path::new(&instance.workspace),
     )?;
     let text = runtime_db::load(config, &instance.name, Kind::Ownership)?.ok_or_else(|| {
         format!(
@@ -96,7 +102,14 @@ pub(super) fn instances(
     let mut names = BTreeSet::new();
     for (key, text) in runtime_db::list(config, Kind::Ownership)? {
         let owner: Owner = serde_json::from_str(&text).map_err(|error| error.to_string())?;
-        if owner != expected(config, &owner.template, &owner.directory, &owner.instance)?
+        if owner
+            != expected(
+                config,
+                &owner.template,
+                &owner.directory,
+                &owner.instance,
+                &owner.workspace,
+            )?
             || owner.instance.to_ascii_lowercase() != key
         {
             return Err("conflicting instance ownership record".into());
@@ -124,8 +137,36 @@ pub(super) fn import_legacy(
         }
         owner.workspace = config.workspaces.join(name);
     }
-    if owner != expected(config, template, &config.templates.join(template), name)? {
+    if owner
+        != expected(
+            config,
+            template,
+            &config.templates.join(template),
+            name,
+            &config.workspaces.join(name),
+        )?
+    {
         return Err(format!("conflicting legacy ownership for {name}"));
     }
     serde_json::to_string(&owner).map_err(|error| error.to_string())
+}
+
+pub(super) fn workspace(config: &Config, name: &str) -> Result<Option<(String, PathBuf)>, String> {
+    let Some(text) = runtime_db::load(config, name, Kind::Ownership)? else {
+        return Ok(None);
+    };
+    let owner: Owner = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    if owner.instance != name
+        || owner
+            != expected(
+                config,
+                &owner.template,
+                &owner.directory,
+                &owner.instance,
+                &owner.workspace,
+            )?
+    {
+        return Err("conflicting instance ownership record".into());
+    }
+    Ok(Some((owner.template, owner.workspace)))
 }

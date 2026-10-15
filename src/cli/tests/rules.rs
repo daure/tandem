@@ -122,7 +122,7 @@ fn dispatch(start_instance: bool) {
                 .clone();
             let workspace = fixture
                 .home
-                .join("workspaces")
+                .join("workspaces/website")
                 .join(success["instance"].as_str().unwrap());
             assert!(workspace.join("app/file.txt").is_file());
             assert!(workspace.join("AGENTS.md").is_file());
@@ -187,7 +187,7 @@ fn dispatch(start_instance: bool) {
     fs::write(presence.join("rule.json"), json!({
         "pid": std::process::id(), "observed_at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
         "id": "ses_rule_fixture", "title": "Fixture", "activity": "idle", "server": "",
-        "directory": fixture.home.join("workspaces").join(success["instance"].as_str().unwrap()),
+        "directory": fixture.home.join("workspaces/website").join(success["instance"].as_str().unwrap()),
         "zellij_session": "main", "pane_id": 100
     }).to_string()).unwrap();
     loop {
@@ -256,7 +256,7 @@ fn dispatch(start_instance: bool) {
     command.current_dir(
         fixture
             .home
-            .join("workspaces")
+            .join("workspaces/website")
             .join(success["instance"].as_str().unwrap()),
     );
     let mut agent = super::startup::Client::with_command(command);
@@ -292,7 +292,7 @@ fn dispatch(start_instance: bool) {
     assert!(
         !fixture
             .home
-            .join("workspaces")
+            .join("workspaces/website")
             .join(success["instance"].as_str().unwrap())
             .exists()
     );

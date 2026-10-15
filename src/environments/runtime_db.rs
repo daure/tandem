@@ -93,6 +93,27 @@ fn revision(transaction: &Transaction<'_>, config: &Config) -> rusqlite::Result<
     Ok(())
 }
 
+pub(super) fn workspace_paths(config: &Config) -> Result<Vec<PathBuf>, String> {
+    workspace_paths_from(&open(config)?)
+}
+
+pub(super) fn workspace_paths_from(connection: &Connection) -> Result<Vec<PathBuf>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT DISTINCT CASE WHEN kind = 'journal'
+             THEN json_extract(payload, '$.expected.workspace')
+             ELSE json_extract(payload, '$.workspace') END
+         FROM runtime_records WHERE kind IN ('ownership', 'journal', 'launch')",
+        )
+        .map_err(|error| error.to_string())?;
+    let paths = statement
+        .query_map([], |row| row.get::<_, Option<String>>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(paths.into_iter().flatten().map(PathBuf::from).collect())
+}
+
 pub(super) fn save(config: &Config, name: &str, kind: Kind, payload: &str) -> Result<(), String> {
     save_many(config, name, &[(kind, payload)])
 }

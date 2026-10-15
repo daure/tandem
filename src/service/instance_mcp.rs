@@ -316,7 +316,7 @@ impl AppService {
         }
         let scope = self
             .environments
-            .bind_instance_directory(&self.environments.config.workspaces.join(name))?;
+            .bind_instance_directory(std::path::Path::new(&self.environments.workspace(name)?))?;
         let instance = self.environments.verify_instance_scope(&scope)?;
         if scope.identity(&self.environments.config)? != record.workspace_identity {
             return Err("conclusion workspace was replaced".into());

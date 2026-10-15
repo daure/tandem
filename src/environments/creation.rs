@@ -8,6 +8,7 @@ type BeforeCreation = Box<dyn FnOnce(&str, Instant) -> Result<(), String> + Send
 pub(crate) struct Startup {
     pub start_instance: bool,
     pub preserve_opencode_history: bool,
+    pub workspace: Option<std::path::PathBuf>,
     pub origin_operation_id: Option<String>,
     pub branch_instances: bool,
     pub description: Option<String>,
@@ -26,6 +27,7 @@ impl Default for Startup {
         Self {
             start_instance: true,
             preserve_opencode_history: false,
+            workspace: None,
             origin_operation_id: None,
             branch_instances: false,
             description: None,
@@ -74,7 +76,12 @@ impl Environments {
         let (instance, _) = lifecycle::managed_instance(&self.config, name, deadline)?;
         let template = templates::get(&self.config, &instance.template)?;
         if instance.template_directory != template.directory
-            || instance.workspace != self.config.workspaces.join(name).display().to_string()
+            || !super::workspace::matches(
+                &self.config,
+                &instance.template,
+                name,
+                std::path::Path::new(&instance.workspace),
+            )
             || instance.workspace_only != template.workspace_only()
         {
             return Err(
@@ -128,7 +135,12 @@ impl Environments {
         }
         let (instance, _) = lifecycle::managed_instance(&self.config, name, deadline)?;
         if instance.template != template
-            || instance.workspace != self.config.workspaces.join(name).display().to_string()
+            || !super::workspace::matches(
+                &self.config,
+                &instance.template,
+                name,
+                std::path::Path::new(&instance.workspace),
+            )
         {
             return Err("instance name belongs to another template or workspace".into());
         }

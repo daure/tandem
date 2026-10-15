@@ -1,6 +1,7 @@
 # Using Tandem
 
 A template is a shared development recipe; an instance has its own name and workspace.
+Use the returned `workspace` path: new workspaces use `workspaces_root/<template>/<instance>`, while existing flat paths remain valid.
 Read `core_guidance` together with this editable guidance for placement and cleanup decisions.
 
 ## Templates
