@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::rules::reports::ReportInput;
 use crate::store::{events::Batch, rules::Definition};
 
 #[test]
@@ -14,6 +15,10 @@ fn worker_entry() {
         .collect();
     AppService::run_conclusion_worker(
         id.parse().unwrap(),
+        std::env::var("TANDEM_TEST_CONCLUSION_RECORD")
+            .unwrap()
+            .parse()
+            .unwrap(),
         &std::env::var("TANDEM_TEST_CONCLUSION_NAME").unwrap(),
         descriptors.try_into().unwrap(),
     )
@@ -25,6 +30,7 @@ fn report() -> ReportInput {
         title: "Inspected the incident".into(),
         summary: "Verified the retry fix".into(),
         markdown: "# Investigation\n\nThe timeout was reproduced and the retry verified.\n".into(),
+        ..Default::default()
     }
 }
 
@@ -127,7 +133,7 @@ fn readiness_pings_follow_fresh_settings_and_preserve_the_workspace() {
 }
 
 #[test]
-fn conclusion_purges_owned_workspaces_and_saves_linked_acceptance_reports() {
+fn purge_preserves_checkpoints_and_reuses_historical_acceptance_reports() {
     let service = AppService::for_tests();
     service
         .runtime
@@ -139,17 +145,18 @@ fn conclusion_purges_owned_workspaces_and_saves_linked_acceptance_reports() {
         .block_on(service.create_template("blank".into()))
         .unwrap();
     let unlinked = workspace(&service, "manual");
+    let manual_memory = service
+        .runtime
+        .block_on(service.remember(unlinked.clone(), report()))
+        .unwrap();
     let receipt = service
         .runtime
-        .block_on(service.conclude_instance(unlinked, report()))
+        .block_on(service.purge_instance(unlinked))
         .unwrap();
-    assert_eq!(
-        receipt,
-        ConclusionReceipt::Unreported {
-            instance: "manual".into(),
-            cleanup_state: CleanupState::Pending,
-        }
-    );
+    assert_eq!(receipt.instance, "manual");
+    assert_eq!(receipt.acceptance_id, None);
+    assert_eq!(receipt.cleanup_state, CleanupState::Pending);
+    let manual_id = receipt.conclusion_id;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     while service
         .environments
@@ -165,6 +172,19 @@ fn conclusion_purges_owned_workspaces_and_saves_linked_acceptance_reports() {
         std::thread::sleep(std::time::Duration::from_millis(30));
     }
     assert!(service.rules.store.snapshot().unwrap().reports.is_empty());
+    let saved = service
+        .runtime
+        .block_on(service.get_conclusion(manual_id))
+        .unwrap();
+    assert!(saved.report.is_none());
+    assert_eq!(
+        service
+            .runtime
+            .block_on(service.get_memory(manual_memory.memory_id))
+            .unwrap()
+            .markdown,
+        report().markdown
+    );
     service
         .rules
         .store
@@ -174,9 +194,13 @@ fn conclusion_purges_owned_workspaces_and_saves_linked_acceptance_reports() {
                 description: String::new(),
                 script: "fn matches(event) { true }".into(),
                 template: "blank".into(),
+                target_instance: None,
+                session_name: None,
+                delivery_mode: Default::default(),
                 model: "openai/test".into(),
                 variant: None,
                 initial_prompt: "Inspect {{event.summary}}".into(),
+                follow_up_prompt: None,
                 enabled: true,
                 start_instance: false,
                 focus_pane: true,
@@ -214,16 +238,48 @@ fn conclusion_purges_owned_workspaces_and_saves_linked_acceptance_reports() {
             .id,
     );
     service.rules.store.update(&acceptance, false).unwrap();
+    let checkpoint = service
+        .runtime
+        .block_on(service.remember(scope.clone(), report()))
+        .unwrap();
+    assert_eq!(checkpoint.acceptance_id, Some(acceptance.id));
+    assert_eq!(
+        checkpoint.workspace_identity,
+        scope.identity(&service.environments.config).unwrap()
+    );
+    assert_eq!(
+        service.rules.store.snapshot().unwrap().acceptances,
+        vec![acceptance.clone()]
+    );
+    assert!(service.rules.store.snapshot().unwrap().reports.is_empty());
+    assert!(
+        !service
+            .rules
+            .store
+            .reported_acceptances()
+            .unwrap()
+            .contains(&acceptance.id)
+    );
+    let historical = service
+        .rules
+        .store
+        .save_conclusion(
+            &acceptance.instance,
+            &scope.identity(&service.environments.config).unwrap(),
+            Some(acceptance.id),
+            Some(&report()),
+        )
+        .unwrap();
     let receipt = service
         .runtime
-        .block_on(service.conclude_instance(scope.clone(), report()))
+        .block_on(service.purge_instance(scope.clone()))
         .unwrap();
-    let ConclusionReceipt::Reported(receipt) = receipt else {
-        panic!("linked conclusion must save its report");
-    };
-    assert_eq!(receipt.acceptance_id, acceptance.id);
-    assert_eq!(receipt.event_sequence, acceptance.event_sequence);
+    assert_eq!(receipt.conclusion_id, historical.conclusion_id);
+    assert_eq!(receipt.memory_id, historical.memory_id);
+    assert_eq!(receipt.acceptance_id, Some(acceptance.id));
     assert_eq!(receipt.cleanup_state, CleanupState::Pending);
+    let final_memory = receipt.memory_id.unwrap();
+    assert_ne!(final_memory, checkpoint.memory_id);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     loop {
         let saved = service
@@ -269,15 +325,31 @@ fn conclusion_purges_owned_workspaces_and_saves_linked_acceptance_reports() {
     assert!(
         service
             .runtime
-            .block_on(service.conclude_instance(scope, report()))
+            .block_on(service.purge_instance(scope))
             .is_err()
     );
     let replacement = workspace(&service, &acceptance.instance);
     let error = service
         .runtime
-        .block_on(service.conclude_instance(replacement, report()))
+        .block_on(service.purge_instance(replacement.clone()))
         .unwrap_err();
     assert!(error.contains("another acceptance lineage"), "{error}");
+    assert!(
+        service
+            .runtime
+            .block_on(service.remember(replacement, report()))
+            .is_err()
+    );
+    service
+        .delete_events(crate::store::events::Deletion::Acceptance(acceptance.id))
+        .blocking_recv()
+        .unwrap()
+        .unwrap();
+    for id in [checkpoint.memory_id, final_memory] {
+        let memory = service.runtime.block_on(service.get_memory(id)).unwrap();
+        assert_eq!(memory.details.acceptance_id, Some(acceptance.id));
+        assert_eq!(memory.markdown, report().markdown);
+    }
     assert!(
         service
             .environments

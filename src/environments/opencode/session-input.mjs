@@ -33,7 +33,8 @@ export function rejectFreshSession(api, error) {
 
 export async function promptFreshSession(api, input, signal) {
   const outcome = receipt(api)
-  if (input.identity_receipt != null) outcome.creation_outcome = "not_created"
+  const tracked = input.identity_receipt != null || input.create_id != null
+  if (tracked) outcome.creation_outcome = "not_created"
   let creating = false
   const options = { throwOnError: true, signal }
   try {
@@ -41,16 +42,17 @@ export async function promptFreshSession(api, input, signal) {
     const { model, variant } = await selectModel(api, input.directory, input.model, input.variant, options)
     signal.throwIfAborted()
     creating = true
-    if (input.identity_receipt != null) outcome.creation_outcome = "uncertain"
-    const result = await api.client.session.create({ directory: input.directory, ...(model ? { model } : {}), ...(input.agent ? { agent: input.agent } : {}) }, options)
+    if (tracked) outcome.creation_outcome = "uncertain"
+    const result = await api.client.session.create({ directory: input.directory, ...(model ? { model } : {}), ...(input.agent ? { agent: input.agent } : {}), ...(input.create_id ? { id: input.create_id } : {}), ...(input.title ? { title: input.title } : {}) }, options)
     outcome.session_id = result.data?.id ?? null
     if (!outcome.session_id) throw new Error("Session creation returned no session")
-    if (input.identity_receipt != null) outcome.creation_outcome = "created"
+    if (input.create_id && outcome.session_id !== input.create_id) throw new Error("Session creation returned a different identity")
+    if (tracked) outcome.creation_outcome = "created"
     await recordIdentity(input, outcome)
     signal.throwIfAborted()
     await applyInstructions(api, outcome.session_id, input.directory, input.instructions, options)
     signal.throwIfAborted()
-    focusSession(api, outcome.session_id)
+    if (input.focus !== false) focusSession(api, outcome.session_id)
     signal.throwIfAborted()
     if (input.initial_prompt == null) return outcome
     outcome.prompt_outcome = "uncertain"
@@ -60,9 +62,10 @@ export async function promptFreshSession(api, input, signal) {
       ...(model ? { model: { providerID: model.providerID, modelID: model.id } } : {}),
       ...(variant ? { variant } : {}),
       ...(input.agent ? { agent: input.agent } : {}),
+      ...(input.create_id ? { delivery: input.when_busy === "queue" ? "queue" : "steer", resume: true } : {}),
     }, options)
     if (response?.error) throw new Error("OpenCode refused initial prompt submission")
-    outcome.prompt_outcome = "submitted"
+    outcome.prompt_outcome = input.create_id && input.when_busy === "queue" ? "queued" : "submitted"
   } catch {
     outcome.error = outcome.prompt_outcome === "uncertain"
       ? "Prompt delivery may be uncertain; inspect this conversation before retrying"
@@ -130,7 +133,7 @@ export async function promptExistingSession(api, input, signal) {
       if (await api.client.session.busy(session, options)) throw new Error("Conversation is still awaiting work or an answer")
     }
     signal.throwIfAborted()
-    focusSession(api, input.sessionID, true)
+    if (input.focus !== false) focusSession(api, input.sessionID, true)
     await applyInstructions(api, input.sessionID, input.directory, input.instructions, options)
     const hasModelOverride = input.model != null || input.variant != null
     if (input.agent != null) {
@@ -155,7 +158,7 @@ export async function promptExistingSession(api, input, signal) {
     }
     signal.throwIfAborted()
     outcome.prompt_outcome = "uncertain"
-    const delivery = input.when_busy === "interrupt" ? "steer" : "queue"
+    const delivery = ["interrupt", "steer"].includes(input.when_busy) ? "steer" : "queue"
     const response = await api.client.session.promptAsync({
       sessionID: input.sessionID, parts: [{ type: "text", text: input.initial_prompt }], delivery, resume: true,
     }, options)

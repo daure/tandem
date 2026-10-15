@@ -53,29 +53,36 @@ def workspace_fixture(binary):
 
 
 def smoke(binary):
-    with workspace_fixture(binary) as (home, _, client):
+    with workspace_fixture(binary) as (home, environment, client):
         tools = client.request("tools/list", {})["tools"]
         fields = {
             "start_self": set(), "stop_self": set(), "get_instructions": set(),
             "update_repositories": set(),
             "ping": set(),
-            "conclude": {"title", "summary", "markdown"},
+            "purge": set(),
+            "remember": {"title", "summary", "markdown", "fields", "labels", "links"},
+            "search_memories": {"query", "labels", "links", "instance", "after", "before", "fields", "limit", "offset"},
+            "get_memory": {"memory_id"},
+            "close": {"sessions", "zellij_tab"},
+            "search_conclusions": {"search_strings"}, "get_conclusion": {"conclusion_id"},
             "search_events": {"search_strings"}, "get_event_report": {"acceptance_id"},
         }
         assert {tool["name"] for tool in tools} == set(fields), tools
-        policy = "Ignore `conclude` unless explicitly instructed to call it."
+        policy = "Use `purge` only when explicitly instructed."
         instructions = client.tool("get_instructions")
         assert policy in instructions["core_guidance"], instructions
         assert policy in instructions["markdown"], instructions
         assert policy in (home / "workspaces/review/AGENTS.md").read_text()
-        description = next(tool["description"] for tool in tools if tool["name"] == "conclude")
+        description = next(tool["description"] for tool in tools if tool["name"] == "purge")
         assert "Ignore unless explicitly instructed" in description, description
-        assert "cleanup needs do not authorize conclude" in description, description
         for tool in tools:
             assert tool["inputSchema"].get("additionalProperties") is False, tool
             expected = fields[tool["name"]]
             assert set(tool["inputSchema"].get("properties", {})) == expected, tool
-            assert set(tool["inputSchema"].get("required", [])) == expected, tool
+            required = set() if tool["name"] in ("close", "search_memories") else expected
+            if tool["name"] == "remember":
+                required = {"title", "summary"}
+            assert set(tool["inputSchema"].get("required", [])) == required, tool
             assert "outputSchema" not in tool, tool
         data = home / "workspaces/review/result.txt"
         data.write_text("retained deliverable")
@@ -88,6 +95,26 @@ def smoke(binary):
             assert data.read_text() == "retained deliverable"
             assert sibling.read_text() == "sibling deliverable"
         assert client.process.poll() is None
+        checkpoint = client.tool("remember", {
+            "title": "Connection pool investigation", "summary": "Verified retry pressure",
+            "fields": {"cause": "Retries exhaust the pool", "verified": True},
+            "labels": ["Backend"], "links": [{"label": "PR", "url": "https://example.com/pull/42"}],
+        })
+        assert checkpoint["instance"] == "review", checkpoint
+        assert checkpoint["acceptance_id"] is None, checkpoint
+        memory_id = checkpoint["memory_id"]
+        results = client.tool("search_memories", {"query": "retry pool", "fields": {"verified": True}})
+        assert [item["memory_id"] for item in results["memories"]] == [memory_id], results
+        assert data.read_text() == "retained deliverable"
+        manager = Client(binary, environment)
+        try:
+            matches = manager.tool("search_memories", {"labels": ["BACKEND"]})
+            assert matches["memories"][0]["memory_id"] == memory_id, matches
+            memory = manager.tool("get_memory", {"memory_id": memory_id})
+            assert memory["fields"]["verified"] is True, memory
+            assert memory["markdown"] == "", memory
+        finally:
+            manager.close()
 
 
 if __name__ == "__main__":

@@ -13,6 +13,9 @@ use std::{
 #[path = "rule_throttle.rs"]
 mod throttle_tests;
 
+#[path = "rule_sessions.rs"]
+mod session_tests;
+
 pub(super) fn rule(name: &str) -> Rule {
     Rule {
         definition: Definition {
@@ -20,9 +23,13 @@ pub(super) fn rule(name: &str) -> Rule {
             description: format!("{name} event handler"),
             script: "fn matches(event) { event.profile == \"message\" }".into(),
             template: "website".into(),
+            target_instance: None,
+            session_name: None,
+            delivery_mode: Default::default(),
             model: "openai/test".into(),
             variant: None,
             initial_prompt: "Inspect {{event.data.text}}".into(),
+            follow_up_prompt: None,
             enabled: false,
             start_instance: true,
             focus_pane: true,
@@ -95,13 +102,18 @@ pub(super) fn acceptance(rule: Rule, id: i64, sequence: i64) -> Acceptance {
         accepted_at: "2026-10-03T12:00:00Z".into(),
         instance: format!("event-{id}"),
         session_id: Some(format!("ses_{id}")),
+        session_server: None,
+        prompt_outcome: None,
         pane: None,
         operation_id: Some(format!("operation-{id}")),
+        target_workspace_identity: None,
         launch_started_at: Some("2026-10-03T12:00:00Z".into()),
         status: DispatchStatus::Launched,
         error: None,
         rule,
         resolved_prompt: Some("Inspect the event".into()),
+        resolved_follow_up_prompt: None,
+        resolved_settings: None,
         resolved_description: None,
     }
 }
@@ -1127,7 +1139,7 @@ fn prompt_template_errors_appear_below_the_prompt_and_clear_when_corrected() {
         );
         finish_autosaves(&mut app);
         app.tick(Duration::ZERO, AnimationSettings::default());
-        let area = Rect::new(0, 0, 130, 40);
+        let area = Rect::new(0, 0, 130, 60);
         let mut layout = tuicore::LayoutCtx::new();
         layout.with_overlay_bounds(area, |ctx| app.layout(area, ctx));
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();

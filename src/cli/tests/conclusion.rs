@@ -1,6 +1,12 @@
 use super::startup::Client;
 use super::*;
 
+#[path = "instance_close.rs"]
+mod closing;
+
+#[path = "memories.rs"]
+mod memories;
+
 fn fixture() -> Fixture {
     let fixture = Fixture::new();
     assert!(
@@ -42,7 +48,7 @@ fn fixture() -> Fixture {
         "rule": rule, "resolved_prompt": "Inspect"
     });
     connection.execute("INSERT INTO rule_acceptances(attempt_id, rule_name, payload) VALUES (1, 'inspect', ?1)", [acceptance.to_string()]).unwrap();
-    // Conclusion closes associated clients even with observation disabled.
+    // Purge closes associated clients even with observation disabled.
     connection.execute("INSERT INTO app_settings(key, value) VALUES ('integrations.opencode', 'false') ON CONFLICT(key) DO UPDATE SET value='false'", []).unwrap();
     fs::rename(fixture.bin.join("zellij"), fixture.bin.join("zellij-base")).unwrap();
     fs::write(fixture.bin.join("zellij"), ZELLIJ).unwrap();
@@ -82,7 +88,7 @@ fn wait_for(mut condition: impl FnMut() -> bool) {
 }
 
 #[test]
-fn scoped_conclusion_survives_mcp_kill_and_retains_searchable_reports_after_resource_purge() {
+fn scoped_purge_survives_mcp_kill_and_preserves_memory_after_resource_deletion() {
     let fixture = fixture();
     let mut agent = client(&fixture, "review");
     let catalog = agent.request("tools/list", json!({}));
@@ -96,59 +102,70 @@ fn scoped_conclusion_survives_mcp_kill_and_retains_searchable_reports_after_reso
     assert_eq!(
         names,
         [
-            "conclude",
+            "close",
+            "get_conclusion",
             "get_event_report",
             "get_instructions",
+            "get_memory",
             "ping",
+            "purge",
+            "remember",
+            "search_conclusions",
             "search_events",
+            "search_memories",
             "start_self",
             "stop_self",
             "update_repositories"
         ]
     );
-    let injection = agent.request_raw("tools/call", json!({"name": "conclude", "arguments": {"title": "Other", "summary": "Other", "markdown": "Other", "name": "reader"}}));
+    let injection = agent.request_raw(
+        "tools/call",
+        json!({"name": "purge", "arguments": {"name": "reader"}}),
+    );
     assert_eq!(injection["error"]["code"], -32602);
-    let receipt = agent.tool("conclude", input());
+    let memory = agent.tool("remember", input());
+    let receipt = agent.tool("purge", json!({}));
     assert_eq!(receipt["acceptance_id"], 1);
     assert_eq!(receipt["cleanup_state"], "pending");
     wait_for(|| fixture.home.join("closing").exists());
     let mut reader = client(&fixture, "reader");
     assert_eq!(
-        reader.tool("get_event_report", json!({"acceptance_id": 1}))["markdown"],
+        reader.tool("get_memory", json!({"memory_id": memory["memory_id"]}))["markdown"],
         input()["markdown"]
     );
     assert!(fixture.home.join("workspaces/review").is_dir());
     agent.close(Some(libc::SIGKILL));
     fs::write(fixture.home.join("release-close"), "").unwrap();
     wait_for(|| {
-        reader.tool("get_event_report", json!({"acceptance_id": 1}))["cleanup_state"] == "purged"
+        reader.tool(
+            "get_conclusion",
+            json!({"conclusion_id": receipt["conclusion_id"]}),
+        )["cleanup_state"]
+            == "purged"
     });
     assert!(!fixture.home.join("workspaces/review").exists());
     assert!(fixture.home.join("workspaces/reader").is_dir());
     assert!(fixture.runtime_record("review", "journal").is_none());
     assert!(fixture.runtime_record("review", "startup").is_none());
-    let results = reader.tool(
-        "search_events",
-        json!({"search_strings": ["not matched", "HIDDEN TIMEOUT", "incident"]}),
-    )["reports"]
-        .clone();
+    let results =
+        reader.tool("search_memories", json!({"query": "HIDDEN TIMEOUT"}))["memories"].clone();
     assert_eq!(results.as_array().unwrap().len(), 1);
     assert_eq!(results[0]["title"], "Incident resolved");
     assert_eq!(results[0]["summary"], "Verified service recovery");
     let mut management = Client::with_command(fixture.command(&["mcp"]));
     assert_eq!(
-        management.tool("get_event_report", json!({"acceptance_id": 1}))["markdown"],
+        management.tool("get_memory", json!({"memory_id": memory["memory_id"]}))["markdown"],
         input()["markdown"]
     );
     assert_eq!(
-        management.tool("list_rules", json!({}))["reports"]["1"]["cleanup_state"],
+        management.tool(
+            "get_conclusion",
+            json!({"conclusion_id": receipt["conclusion_id"]})
+        )["cleanup_state"],
         "purged"
     );
     assert_eq!(
-        management.tool(
-            "search_event_reports",
-            json!({"search_strings": ["hidden timeout"]})
-        )["reports"][0]["acceptance_id"],
+        management.tool("search_memories", json!({"query": "hidden timeout"}))["memories"][0]["acceptance_id"],
         1
     );
     assert!(results[0].get("markdown").is_none());
@@ -162,11 +179,10 @@ fn scoped_conclusion_survives_mcp_kill_and_retains_searchable_reports_after_reso
             .unwrap()
             .contains("close-pane --pane-id terminal_100")
     );
-    let unlinked = reader.tool("conclude", input());
-    assert_eq!(
-        unlinked,
-        json!({"instance": "reader", "cleanup_state": "pending"})
-    );
+    let unlinked = reader.tool("purge", json!({}));
+    assert_eq!(unlinked["instance"], "reader");
+    assert_eq!(unlinked["cleanup_state"], "pending");
+    assert!(unlinked["conclusion_id"].as_i64().unwrap() > 0);
     reader.close(Some(libc::SIGKILL));
     wait_for(|| {
         !fixture.home.join("workspaces/reader").exists()
@@ -176,19 +192,83 @@ fn scoped_conclusion_survives_mcp_kill_and_retains_searchable_reports_after_reso
     assert!(fixture.runtime_record("reader", "journal").is_none());
     assert!(fixture.runtime_record("reader", "startup").is_none());
     assert_eq!(
-        management.tool(
-            "search_event_reports",
-            json!({"search_strings": ["incident"]})
-        )["reports"]
+        management.tool("search_memories", json!({"query": "incident"}))["memories"]
             .as_array()
             .unwrap()
             .len(),
         1
     );
+    assert_eq!(
+        management.tool(
+            "get_conclusion",
+            json!({"conclusion_id": unlinked["conclusion_id"]})
+        )["report"],
+        serde_json::Value::Null
+    );
 }
 
 #[test]
-fn unlinked_conclusion_preserves_resources_on_close_failure_and_survives_retry_disconnection() {
+fn purge_supports_acceptances_and_manual_instances_and_reuses_cleanup_on_retry() {
+    let fixture = fixture();
+    fs::write(fixture.home.join("release-close"), "").unwrap();
+    fs::write(fixture.home.join("fail-close"), "").unwrap();
+    let mut agent = client(&fixture, "review");
+    let mut management = Client::with_command(fixture.command(&["mcp"]));
+    let receipt = agent.tool("purge", json!({}));
+    assert_eq!(receipt["acceptance_id"], 1);
+    wait_for(|| {
+        management.tool(
+            "get_conclusion",
+            json!({"conclusion_id": receipt["conclusion_id"]}),
+        )["cleanup_state"]
+            == "failed"
+    });
+    let no_report = management.request(
+        "tools/call",
+        json!({"name":"get_event_report", "arguments":{"acceptance_id":1}}),
+    );
+    assert_eq!(no_report["isError"], true);
+    fs::remove_file(fixture.home.join("fail-close")).unwrap();
+    let retry = agent.tool("purge", json!({}));
+    assert_eq!(retry["conclusion_id"], receipt["conclusion_id"]);
+    wait_for(|| {
+        management.tool(
+            "get_conclusion",
+            json!({"conclusion_id": receipt["conclusion_id"]}),
+        )["cleanup_state"]
+            == "purged"
+    });
+    assert_eq!(
+        management.tool(
+            "get_conclusion",
+            json!({"conclusion_id": receipt["conclusion_id"]})
+        )["report"],
+        serde_json::Value::Null
+    );
+    let mut reader = client(&fixture, "reader");
+    let manual = reader.tool("purge", json!({}));
+    assert_eq!(manual["acceptance_id"], serde_json::Value::Null);
+    wait_for(|| {
+        management.tool(
+            "get_conclusion",
+            json!({"conclusion_id": manual["conclusion_id"]}),
+        )["cleanup_state"]
+            == "purged"
+    });
+    let mut command = fixture.command(&["mcp"]);
+    command.env("TANDEM_NAMESPACE", "other");
+    let mut other = Client::with_command(command);
+    assert_eq!(
+        other.request(
+            "tools/call",
+            json!({"name":"get_conclusion", "arguments":{"conclusion_id": manual["conclusion_id"]}})
+        )["isError"],
+        true
+    );
+}
+
+#[test]
+fn unlinked_purge_preserves_resources_on_close_failure_and_survives_retry_disconnection() {
     let fixture = fixture();
     let connection = rusqlite::Connection::open(fixture.home.join("settings.sqlite3")).unwrap();
     connection
@@ -198,10 +278,10 @@ fn unlinked_conclusion_preserves_resources_on_close_failure_and_survives_retry_d
     fs::write(fixture.home.join("release-close"), "").unwrap();
     let mut agent = client(&fixture, "review");
     let mut reader = client(&fixture, "reader");
-    assert_eq!(
-        agent.tool("conclude", input()),
-        json!({"instance": "review", "cleanup_state": "pending"})
-    );
+    let memory = agent.tool("remember", input());
+    let receipt = agent.tool("purge", json!({}));
+    assert_eq!(receipt["instance"], "review");
+    assert_eq!(receipt["cleanup_state"], "pending");
     wait_for(|| {
         String::from_utf8_lossy(
             &fixture
@@ -210,6 +290,16 @@ fn unlinked_conclusion_preserves_resources_on_close_failure_and_survives_retry_d
         )
         .contains("fixture closure failed")
     });
+    let retained = reader.tool(
+        "get_conclusion",
+        json!({"conclusion_id": receipt["conclusion_id"]}),
+    );
+    assert_eq!(retained["report"], serde_json::Value::Null);
+    assert_eq!(retained["cleanup_state"], "failed");
+    assert_eq!(
+        reader.tool("search_memories", json!({"query": "hidden timeout"}))["memories"][0]["memory_id"],
+        memory["memory_id"]
+    );
     assert!(
         fixture
             .home
@@ -230,7 +320,7 @@ fn unlinked_conclusion_preserves_resources_on_close_failure_and_survives_retry_d
     fs::remove_file(fixture.home.join("fail-close")).unwrap();
     fs::remove_file(fixture.home.join("release-close")).unwrap();
     fs::remove_file(fixture.home.join("closing")).unwrap();
-    agent.tool("conclude", input());
+    agent.tool("purge", json!({}));
     wait_for(|| fixture.home.join("closing").exists());
     agent.close(Some(libc::SIGKILL));
     fs::write(fixture.home.join("release-close"), "").unwrap();
@@ -289,11 +379,7 @@ fn instance_guidance_is_scoped_reread_and_preserved_across_restarts() {
     );
     let file = fixture.home.join("instance-instructions.md");
     assert_eq!(guidance["file"], file.display().to_string());
-    fs::write(
-        &file,
-        "# Local policy\nPreserve evidence before concluding.\n",
-    )
-    .unwrap();
+    fs::write(&file, "# Local policy\nPreserve evidence before purge.\n").unwrap();
     assert_eq!(
         agent.tool("get_instructions", json!({}))["markdown"],
         fs::read_to_string(&file).unwrap()
@@ -312,57 +398,9 @@ fn instance_guidance_is_scoped_reread_and_preserved_across_restarts() {
     assert_eq!(error["isError"], true);
 }
 
-#[test]
-fn failed_client_closure_preserves_the_report_and_resources_and_identical_retry_completes() {
-    let fixture = fixture();
-    fs::write(fixture.home.join("fail-close"), "").unwrap();
-    fs::write(fixture.home.join("release-close"), "").unwrap();
-    let mut agent = client(&fixture, "review");
-    let mut reader = client(&fixture, "reader");
-    agent.tool("conclude", input());
-    wait_for(|| {
-        reader.tool("get_event_report", json!({"acceptance_id": 1}))["cleanup_state"] == "failed"
-    });
-    let saved = reader.tool("get_event_report", json!({"acceptance_id": 1}));
-    assert!(
-        saved["cleanup_error"]
-            .as_str()
-            .unwrap()
-            .contains("fixture closure failed")
-    );
-    assert_eq!(saved["markdown"], input()["markdown"]);
-    assert!(
-        fixture
-            .home
-            .join("workspaces/review/app/file.txt")
-            .is_file()
-    );
-    assert!(
-        !fs::read_to_string(fixture.home.join("docker-calls"))
-            .unwrap()
-            .contains("rm --force")
-    );
-    let mut replacement = input();
-    replacement["title"] = json!("Replacement");
-    let error = agent.request(
-        "tools/call",
-        json!({"name": "conclude", "arguments": replacement}),
-    );
-    assert_eq!(error["isError"], true);
-    fs::remove_file(fixture.home.join("fail-close")).unwrap();
-    agent.tool("conclude", input());
-    wait_for(|| {
-        reader.tool("get_event_report", json!({"acceptance_id": 1}))["cleanup_state"] == "purged"
-    });
-    let completed = reader.tool("get_event_report", json!({"acceptance_id": 1}));
-    assert_eq!(completed["reported_at"], saved["reported_at"]);
-    assert_eq!(completed["markdown"], saved["markdown"]);
-    assert!(!fixture.home.join("workspaces/review").exists());
-}
-
 const ZELLIJ: &str = r#"#!/bin/sh
 case "$*" in
-  *close-pane*)
+  *close-pane*|*close-tab*)
     printf '%s\n' "$*" >> "$TANDEM_HOME/zellij-calls"
     test -d "$TANDEM_HOME/workspaces/review" || exit 1
     touch "$TANDEM_HOME/closing"

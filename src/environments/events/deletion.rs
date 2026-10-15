@@ -115,8 +115,9 @@ impl EventStore {
             })?);
         }
         let mut acceptances = transaction.prepare(
-            "SELECT a.id FROM rule_acceptances a JOIN event_attempts p ON p.id = a.attempt_id
-             JOIN rule_acceptance_reports r ON r.acceptance_id = a.id
+            "SELECT DISTINCT a.id FROM rule_acceptances a JOIN event_attempts p ON p.id = a.attempt_id
+             JOIN (SELECT acceptance_id, cleanup_state FROM rule_acceptance_reports
+                   UNION SELECT acceptance_id, cleanup_state FROM instance_conclusions) r ON r.acceptance_id = a.id
              WHERE p.event_sequence IN (SELECT sequence FROM event_deletion_targets)
              AND (?1 IS NULL OR a.id = ?1) AND r.cleanup_state IN ('pending', 'purging') ORDER BY a.id",
         )?;
@@ -156,7 +157,8 @@ fn ensure_deletion_allowed(
         "SELECT EXISTS(SELECT 1 FROM rule_acceptances a JOIN event_attempts p ON p.id = a.attempt_id
          WHERE p.event_sequence IN (SELECT sequence FROM event_deletion_targets)
           AND (?1 IS NULL OR a.id = ?1)
-          AND NOT EXISTS (SELECT 1 FROM rule_acceptance_reports r WHERE r.acceptance_id = a.id)
+           AND NOT EXISTS (SELECT 1 FROM rule_acceptance_reports r WHERE r.acceptance_id = a.id)
+           AND NOT EXISTS (SELECT 1 FROM instance_conclusions c WHERE c.acceptance_id = a.id)
           AND json_extract(a.payload, '$.status') IN ('provisioning', 'launching'))",
         [acceptance],
         |row| row.get(0),

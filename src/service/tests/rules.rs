@@ -4,6 +4,9 @@ use crate::store::events::{Batch, Deletion};
 #[path = "dispatch_history.rs"]
 mod history;
 
+#[path = "rule_targets.rs"]
+mod targets;
+
 impl AppService {
     pub(crate) fn set_rule_session_for_tests(&mut self, current: &str) {
         use std::os::unix::fs::PermissionsExt;
@@ -32,9 +35,13 @@ fn definition(name: &str) -> Definition {
         description: "Fixture rule".into(),
         script: "fn matches(event) { true }".into(),
         template: "blank".into(),
+        target_instance: None,
+        session_name: None,
+        delivery_mode: Default::default(),
         model: "openai/test".into(),
         variant: None,
         initial_prompt: "Inspect {{event.data.text}}".into(),
+        follow_up_prompt: None,
         enabled: true,
         start_instance: true,
         focus_pane: true,
@@ -612,6 +619,7 @@ fn reported_acceptances_preserve_dispatch_history_and_require_cleanup_retry() {
                 title: "Investigation ended".into(),
                 summary: "Saved evidence".into(),
                 markdown: "# Evidence\nThe work ended before dispatch reconciliation.\n".into(),
+                ..Default::default()
             },
         )
         .unwrap();

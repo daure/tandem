@@ -6,9 +6,11 @@ use super::events::Event;
 
 mod instance;
 mod prompt;
+mod settings;
 pub(crate) use instance::{
     InstanceOverrides, default_instance_description, resolve_instance_hooks,
 };
+pub(crate) use settings::{ResolvedSettings, is_template};
 pub(crate) mod reports;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -18,12 +20,25 @@ pub(crate) struct Definition {
     #[serde(default)]
     pub description: String,
     pub script: String,
+    /// Handler template name or a Handlebars expression over event fields.
     pub template: String,
+    /// Exact instance name or Handlebars expression; reuse it or create it from the template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_instance: Option<String>,
+    /// Reuse a conversation bound to this name within the target instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
+    #[serde(default)]
+    pub delivery_mode: DeliveryMode,
+    /// provider/model selector or a Handlebars expression over event fields.
     pub model: String,
-    /// Optional model-specific thinking variant; omitted leaves OpenCode's default selection.
+    /// Thinking variant or Handlebars expression; omitted or rendered empty uses the model default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
     pub initial_prompt: String,
+    /// Prompt for an existing named conversation; omission uses the initial prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_up_prompt: Option<String>,
     #[serde(default)]
     pub enabled: bool,
     #[serde(default = "super::environments::Instance::default_start_instance")]
@@ -42,6 +57,25 @@ pub(crate) struct Rule {
     pub definition: Definition,
     pub revision: i64,
     pub zellij_session: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DeliveryMode {
+    #[default]
+    Queue,
+    Steer,
+    Interrupt,
+}
+
+impl DeliveryMode {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Queue => "Queue",
+            Self::Steer => "Steer",
+            Self::Interrupt => "Interrupt",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -66,13 +100,23 @@ pub(crate) struct Acceptance {
     pub accepted_at: String,
     pub instance: String,
     pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_server: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_outcome: Option<super::opencode::PromptOutcome>,
     pub pane: Option<super::opencode::Pane>,
     pub operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_workspace_identity: Option<String>,
     pub launch_started_at: Option<String>,
     pub status: DispatchStatus,
     pub error: Option<String>,
     pub rule: Rule,
     pub resolved_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_follow_up_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_settings: Option<ResolvedSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_description: Option<String>,
 }
@@ -144,7 +188,11 @@ impl AcceptanceWorkspace {
 pub(crate) struct Preview {
     pub matched: bool,
     pub resolved_prompt: Option<String>,
+    pub resolved_follow_up_prompt: Option<String>,
     pub template: String,
+    pub target_instance: Option<String>,
+    pub session_name: Option<String>,
+    pub delivery_mode: DeliveryMode,
     pub model: String,
     pub variant: Option<String>,
     pub instance_name: Option<String>,
@@ -200,11 +248,22 @@ fn compile(engine: &rhai::Engine, script: &str) -> Result<rhai::AST, String> {
 
 pub(crate) fn validate(definition: &Definition) -> Result<(), String> {
     super::environments::validate_name(&definition.name)?;
-    super::environments::validate_name(&definition.template)?;
+    settings::validate_sources(definition)?;
+    if let Some(name) = &definition.session_name {
+        if definition.target_instance.is_none() {
+            return Err("session_name requires target_instance".into());
+        }
+        if name.trim() != name
+            || name.is_empty()
+            || name.len() > 200
+            || name.chars().any(char::is_control)
+        {
+            return Err("session_name must contain 1 to 200 bytes without edge whitespace or control characters".into());
+        }
+    }
     if definition.description.len() > 1000 || definition.description.chars().any(char::is_control) {
         return Err("description must be at most 1000 bytes without control characters".into());
     }
-    definition.session_launch().validate()?;
     if definition.script.len() > 32_768
         || definition.initial_prompt.trim().is_empty()
         || definition.initial_prompt.contains('\0')
@@ -215,7 +274,11 @@ pub(crate) fn validate(definition: &Definition) -> Result<(), String> {
         );
     }
     compile(&engine(), &definition.script)?;
-    validate_prompt(&definition.initial_prompt)
+    validate_prompt(&definition.initial_prompt)?;
+    if let Some(prompt) = &definition.follow_up_prompt {
+        validate_prompt(prompt).map_err(|error| format!("follow-up prompt: {error}"))?;
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_prompt(source: &str) -> Result<(), String> {

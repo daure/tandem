@@ -221,7 +221,7 @@ impl App {
             tuicore::DialogAction::new("Cancel").hotkey(tuicore::KeySpec::plain('c')).on_trigger(|| Msg::Close),
         ]).host(Flex::column().child("warning", Paragraph::new(format!(
             "Recreate {} from {}?\nThis creates a fresh workspace; deleted files, uncommitted changes and runtime data are not restored.\nSaved conversations are preserved. The original rule prompt is not resent.",
-            target.acceptance.instance, target.acceptance.rule.definition.template)), FlexItem::fit_content()));
+            target.acceptance.instance, target.acceptance.template())), FlexItem::fit_content()));
         self.intent = None;
         self.open_compact(Box::new(modal), ctx);
     }

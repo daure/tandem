@@ -67,6 +67,7 @@ impl EventStore {
                 .execute_batch(include_str!("../../migrations/0009_event_acceptance.sql"))?;
         }
         transaction.execute_batch(include_str!("../../migrations/0010_rules.sql"))?;
+        transaction.execute_batch(include_str!("../../migrations/0022_rule_sessions.sql"))?;
         let catalog_presence: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('event_rules') WHERE name = 'catalog_present')",
             [],
@@ -82,6 +83,17 @@ impl EventStore {
             "../../migrations/0015_acceptance_workspaces.sql"
         ))?;
         transaction.execute_batch(include_str!("../../migrations/0016_acceptance_reports.sql"))?;
+        transaction.execute_batch(include_str!(
+            "../../migrations/0020_instance_conclusions.sql"
+        ))?;
+        let memories: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memories')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !memories {
+            transaction.execute_batch(include_str!("../../migrations/0021_memories.sql"))?;
+        }
         transaction.execute_batch(include_str!("../../migrations/0005_runtime_records.sql"))?;
         transaction.execute_batch(include_str!(
             "../../migrations/0017_rule_instance_names.sql"

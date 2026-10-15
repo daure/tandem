@@ -40,7 +40,8 @@ Presentation layers adapt input and output. `AppService` is the sole application
 
 ## State ownership
 
-`tandem mcp-instance` is a separate stdio adapter exposing instance-local Start, Stop, repository updates and Conclude through
+`tandem mcp-instance` is a separate stdio adapter exposing instance-local Start, Stop, repository updates,
+Close, Remember and Purge through
 `AppService`. Binding resolves its working directory against namespace-owned journal and ownership
 records and holds an open workspace-directory descriptor. Each mutation compares the live directory's
 device/inode with that pinned descriptor under the instance lock; lock ownership transfers through
@@ -69,24 +70,57 @@ without containers; topology completeness and observation time distinguish unkno
 The surface has no caller-selected lifecycle target and is not a host-process sandbox. Preparation
 seeds workspace configuration in syntax supported by OpenCode V1 and V2, with explicit Tandem settings,
 preserving existing root and `.opencode` JSON/JSONC configuration. Configuring the surface grants
-these lifecycle capabilities; guidance treats Conclude as instruction-only, independently of task
-completion or cleanup needs. Stopping services remains independent of event-task completion. Conclude
-controls any owned bound instance. A retained acceptance must uniquely match its template and originating
-startup lineage; mismatched or ambiguous records fail closed. Linked conclusions commit an immutable
-acceptance-owned report; unlinked conclusions skip report persistence. Both transfer the instance lock,
-rule-worker lease and conclusion lease to a detached worker. Reportless workers use acceptance ID zero
+these lifecycle capabilities; guidance treats Purge as instruction-only, independently of task
+completion or cleanup needs. Stopping services remains independent of event-task completion. Purge
+controls any owned bound instance without creating memory. A retained acceptance must uniquely match its
+template and originating startup lineage; mismatched or ambiguous records fail closed.
+Namespace-scoped `instance_conclusions` retains each workspace identity, optional acceptance link,
+optional report and cleanup outcome independently of instance resources. Admission creates cleanup
+records or reuses saved records and their optional historical reports. Cleanup outcomes update conclusions
+and linked reports atomically. Saved report contents remain immutable across retries. Manual-instance
+history survives name reuse; linked history cascades with acceptance deletion. Admission transfers the instance lock,
+rule-worker lease and conclusion lease to a detached worker. Unlinked workers use acceptance ID zero
 internally and an instance-keyed conclusion lease; they verify the instance remains unlinked before purge.
 The worker closes associated clients regardless of the observation setting and
 purges owned resources through the existing deletion contract. Client closure may interrupt the MCP
-reply; linked reports retain cleanup state and failure details, and a lost conclusion lease projects an
-interrupted outcome. Unlinked outcomes use instance inspection and retained lifecycle activities.
-Identical saved reports allow cleanup retry; different report contents conflict.
-Reported acceptances retain dispatch history and are excluded from dispatch admission and retries.
+reply; conclusion records retain cleanup state and failure details with or without an acceptance.
+A lost conclusion lease projects an interrupted outcome.
+Concluded acceptances retain dispatch history and are excluded from dispatch admission and retries.
 Namespace-scoped report search matches any case-insensitive literal substring in title, summary or
 Markdown and returns acceptance summaries; report retrieval uses the acceptance ID. Report storage
 is independent of instance state and cascades only with acceptance/event/provider history deletion.
 Management MCP exposes report search and retrieval through the same service contract. Rule snapshots
 include report summaries and observed cleanup outcomes; Events and rule histories expose full-report reads.
+
+`remember` writes immutable checkpoints under the pinned workspace's instance lock. It records instance,
+opaque workspace incarnation, optional acceptance provenance, timestamp and generated ID without writing
+conclusion/report state or changing dispatch eligibility. Memory content requires title and summary plus
+Markdown, nonempty custom JSON fields, or both; labels and named HTTP(S) links support discovery.
+Validated records are bounded to 1 MiB serialized JSON, 16 levels and 4096 values, with at most 32 labels
+and 32 links. Labels are trimmed/lowercased/deduplicated; URLs are canonicalized and reject credentials.
+Links are never fetched. Acceptance and conclusion IDs are historical values without foreign keys;
+memories survive instance, acceptance, event and provider deletion. Legacy reports are backfilled once
+in the schema transaction. Each checkpoint call creates a record; uncertain replies require inspection
+before retrying. `purge` uses detached conclusion cleanup without creating memory and can reuse an
+existing conclusion report on cleanup retry.
+
+SQLite FTS5 indexes title, labels, summary, Markdown, fields and links atomically with inserts.
+Namespace-scoped search compiles bounded plain words into quoted AND prefixes with English Porter
+stemming and Unicode case/accent folding; prefixes apply to normalized tokens. BM25 weights title/labels/summary above body, breaking ties
+by newest ID; queryless browsing uses newest ID. Exact AND filters cover normalized labels, canonical
+URLs, instance, inclusive RFC3339 date bounds and typed top-level JSON field values. Results are paged
+(20 default, 100 maximum, offset at most 10000) with matching snippets and a continuation flag. Full
+records use ID lookup through `AppService` on both MCP surfaces. Memories are evidence, not authority.
+
+Instance Close accepts optional session selection (`none`, `current`, `all`) and an independent
+Zellij-tab flag. Admission rejects no-ops and resolves fresh caller metadata to one client attachment.
+It validates workspace ownership and every requested tab member before transferring the instance lock
+and a bounded closure plan to a detached worker. The worker revalidates the pinned workspace and
+attachments, uses authenticated native-tab control for session closure, and targets Zellij tabs by stable
+ID only after verifying every member. Unrelated or unverifiable panes block tab closure. Workspace,
+containers, shared servers and conversation history remain; attachment closure does not certify execution
+interruption. Receipts confirm admission; diagnostics retain partial failures. Instance and management
+MCP expose namespace-scoped conclusion search and reads, including reportless cleanup outcomes.
 
 Instance repository updates run on a blocking service worker under the pinned workspace's instance
 lock. The current owned template supplies declared targets; each checkout requires a real contained
@@ -382,6 +416,14 @@ Handlebars prompt rendering, and independent per-rule/per-attempt acceptances. S
 host I/O. Prompt templates use strict field interpolation and literal event text without HTML
 escaping. Rendering bounds output to 64 KiB, nesting to 32 levels, and template evaluations to 50,000;
 budgeted block execution also bounds empty loops and inline-partial recursion.
+Handler template, target instance, model and variant use the same bounded Handlebars renderer.
+Acceptance creation validates and pins concrete settings beside the immutable source definition;
+dispatch, lineage checks, retries and recreation use the resolved template/model selections. Invalid
+settings fail evaluation before acceptance allocation. An empty rendered variant selects the model
+default; required routing/model values retain domain validation without catalog choice allowlists.
+Both prompts render at acceptance and remain pinned. Fresh conversations use the initial prompt;
+existing named sessions use the optional follow-up prompt, falling back to initial when omitted.
+Confirmed-deletion replacements use the initial prompt.
 `environments/rules` owns shared definitions in `templates/rules/<name>/rule.json` and namespace-local
 activation, saved session metadata, optimistic revisions, cached definitions, pinned evaluations, acceptances,
 dispatch admission history, and assignment feedback in SQLite. A shared catalog lock precedes write
@@ -411,7 +453,8 @@ deleting a deferred evaluation cancels its action.
 Throttle state survives process restarts and remains independent of dispatch admission.
 
 `service/rules` owns authorization, previews, recovery, and dispatch. Previews use a read transaction
-and the prospective acceptance ID; resolved names are advisory and reserve nothing. Fresh dispatch
+and the prospective acceptance ID; fresh names are advisory and explicit targets are fixed. Previews
+reserve nothing. Fresh dispatch
 rechecks name availability under the case-normalized instance lock. Retries verify the originating
 operation and template before using retained resources; reservations confer no resource ownership.
 Activation verifies that a live Zellij session exists. Saved session names are legacy metadata.
@@ -421,7 +464,7 @@ resurrectable sessions; short listings hide that status. Missing live destinatio
 pre-launch error. Pinned rule definitions remain immutable; the launch receipt records the actual pane.
 A private namespace file lease serializes background cycles across TUI and owned event-sidecar
 processes. Admission permits four
-active actions and ten starts per minute, counting retries. Each action provisions a fresh instance
+active actions and ten starts per minute, counting retries. Fresh-instance actions provision
 through the existing detached startup contract. Successful preparation and requested service readiness
 gate model/prompt launch; each pinned rule revision owns its default-on service-start and pane-focus
 flags. Background launches use Zellij's no-focus creation and skip navigation, preserving all clients'
@@ -431,6 +474,29 @@ without automatic resend. Observed exact workspace/pane linkage records the sess
 outcome, which does not certify prompt delivery or task completion. Confirmed pre-launch retries keep
 the assigned instance; replay intentionally creates new actions. Assignment and its originating-provider
 notification commit together. The sidecar polls automation independently of open UI/MCP clients.
+
+An optional rule `target_instance` overrides the name hook with an exact, unsuffixed name. Dispatch
+takes its nonblocking instance lock before consuming admission quota; busy lifecycle work defers it.
+An owned, prepared namespace-local workspace is reused regardless of template, without provisioning
+or service changes. An absent target uses the pinned template and service-start flag. Foreign runtime
+records and unowned paths fail closed. Target launches pin the workspace device, inode and startup
+origin before the durable launch marker. Observation and retained history verify this identity and
+link only the acceptance's conversation. Shared-target acceptances confer no exclusive instance
+ownership for conclusions, provider deletion or historical recreation; explicit lifecycle operations
+control those workspaces.
+
+Optional `session_name` requires a target and binds an exact namespace-local name to its workspace
+incarnation, OpenCode server and session ID in `rule_named_sessions`. The instance lock spans lookup,
+client preparation and delivery. Native V2 creation uses a durably reserved ID and custom title;
+subsequent deliveries verify that ID and workspace rather than matching editable titles. Bindings survive
+restarts and event deletion. Confirmed absence replaces ready bindings; uncertain creation remains
+reserved until its exact identity is recovered. Workspace replacement receives a new binding.
+`delivery_mode` selects Queue (default), Steer or Interrupt for named sessions. The authenticated
+companion attaches current guidance and applies the rule's model before input; Interrupt stops execution
+before steering. A durable acceptance launch marker precedes the request. Receipts retain exact server,
+session and prompt outcome, distinguishing queue admission, submission, unsent input and uncertainty.
+Interrupted dispatch never resends automatically. Retained histories match both server and session ID.
+TUI Settings expose the name and delivery selector; rule and acceptance rows project their saved values.
 
 Default acceptance names include the event sequence and durable acceptance ID within the instance-name
 length limit. Custom names receive numeric collision suffixes. Names and resolved descriptions remain

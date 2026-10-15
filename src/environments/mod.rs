@@ -13,6 +13,7 @@ mod executable;
 pub(crate) mod gateway;
 mod host_resources;
 mod inspection;
+pub(crate) mod instance_close;
 mod instance_mcp;
 mod journal;
 mod lifecycle;
@@ -51,7 +52,7 @@ use crate::store::environments::{
 use command::Progress;
 use config::Config;
 pub(crate) use creation::Startup;
-pub(crate) use instance_mcp::InstanceScope;
+pub(crate) use instance_mcp::{InstanceScope, workspace_identity};
 
 pub(crate) type BeforeDeletion<'a> = dyn Fn(&str, Instant) -> Result<(), String> + 'a;
 

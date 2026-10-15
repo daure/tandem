@@ -13,13 +13,28 @@ use crate::app::Msg;
 pub(super) struct PromptField {
     field: FormField<TextareaInput<Msg>, Msg>,
     draft: Rc<RefCell<Draft>>,
+    kind: PromptKind,
+}
+
+pub(super) enum PromptKind {
+    Initial,
+    FollowUp,
 }
 
 impl PromptField {
-    pub(super) fn new(input: TextareaInput<Msg>, draft: Rc<RefCell<Draft>>) -> Self {
+    pub(super) fn new(
+        input: TextareaInput<Msg>,
+        draft: Rc<RefCell<Draft>>,
+        kind: PromptKind,
+    ) -> Self {
+        let label = match kind {
+            PromptKind::Initial => "Initial prompt",
+            PromptKind::FollowUp => "Follow-up prompt (blank uses initial prompt)",
+        };
         let mut field = Self {
-            field: FormField::new("Initial prompt", input),
+            field: FormField::new(label, input),
             draft,
+            kind,
         };
         field.sync_error();
         field
@@ -27,10 +42,12 @@ impl PromptField {
 
     fn sync_error(&mut self) -> bool {
         let draft = self.draft.borrow();
-        let error = draft
-            .prompt_error
-            .as_deref()
-            .and_then(|error| error.lines().next());
+        let error = match self.kind {
+            PromptKind::Initial => &draft.prompt_error,
+            PromptKind::FollowUp => &draft.follow_up_prompt_error,
+        }
+        .as_deref()
+        .and_then(|error| error.lines().next());
         if self.field.error() == error {
             return false;
         }

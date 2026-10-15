@@ -61,7 +61,10 @@ fn tab_actions_use_the_exact_client_and_preserve_the_zellij_pane() {
             let target = Pane { session: "main".into(), id: 7, tab_id: 99, tab_name: "stale".into() };
             let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 if focus { observer.jump("ses_background", &target, "other").await.map(|_| None) }
-                else if close { observer.close("ses_background", &target).await.map(|_| None) }
+                else if close {
+                    let plan = observer.plan_instance_close(directory, "ses_background", &crate::store::opencode::closing::CloseInput { sessions: crate::store::opencode::closing::Sessions::Current, zellij_tab: false }).await?;
+                    observer.execute_instance_close(directory, plan).await.map(|_| None)
+                }
                 else { observer.new_session_tab(directory, "other", Some(&target), Some("Services won't start automatically")).await }
             }).await.unwrap();
             controller.await.unwrap();

@@ -54,7 +54,7 @@ impl EventStore {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let reported = connection
-            .prepare("SELECT acceptance_id FROM rule_acceptance_reports")?
+            .prepare("SELECT acceptance_id FROM rule_acceptance_reports UNION SELECT acceptance_id FROM instance_conclusions WHERE acceptance_id IS NOT NULL")?
             .query_map([], |row| row.get::<_, i64>(0))?
             .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
         if rows.iter().any(|row| {

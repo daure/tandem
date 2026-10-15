@@ -108,7 +108,7 @@ pub(super) fn project(
     let mut rows = Vec::new();
     let instances = super::super::rows::from_snapshot_with_operations(&context.inventory, &[])
         .into_iter()
-        .filter_map(|row| Some(((row.instance.clone()?, row.template.clone()), row)))
+        .filter_map(|row| Some((row.instance.clone()?, row)))
         .collect::<HashMap<_, _>>();
     let acceptances = rules
         .acceptances
@@ -129,10 +129,11 @@ pub(super) fn project(
                     context,
                     show_saved,
                     instances
-                        .get(&(
-                            acceptance.instance.clone(),
-                            acceptance.rule.definition.template.clone(),
-                        ))
+                        .get(&acceptance.instance)
+                        .filter(|row| {
+                            acceptance.rule.definition.target_instance.is_some()
+                                || row.template == acceptance.template()
+                        })
                         .cloned(),
                 )
                 .with_report(rules.reports.get(&acceptance.id)),

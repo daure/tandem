@@ -1,6 +1,7 @@
 use super::*;
 mod actions;
 mod attachments;
+mod closing;
 mod destinations;
 mod events;
 mod folders;

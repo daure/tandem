@@ -12,15 +12,41 @@ use crate::store::{
 use crate::store::rules::DispatchStatus;
 
 pub(super) mod catalog;
+mod conclusions;
 mod evaluation;
+mod memories;
 pub(super) mod names;
 mod reports;
+mod sessions;
 mod workspaces;
 
 #[derive(Clone)]
 pub(crate) struct RuleStore {
     events: EventStore,
     config: Config,
+}
+
+pub(crate) fn acceptance_workspace_matches(
+    config: &Config,
+    instance: &crate::store::environments::Instance,
+    acceptance: &Acceptance,
+) -> Result<bool, String> {
+    if instance.name != acceptance.instance {
+        return Ok(false);
+    }
+    if acceptance.rule.definition.target_instance.is_some() {
+        return match &acceptance.target_workspace_identity {
+            Some(identity) => Ok(super::workspace_identity(config, instance)? == *identity),
+            None => Ok(false),
+        };
+    }
+    Ok(instance.template == acceptance.template()
+        && super::startup::belongs_to(
+            config,
+            &instance.name,
+            &instance.template,
+            acceptance.operation_id.as_deref(),
+        )?)
 }
 
 pub(super) fn queue_attempt(
@@ -103,8 +129,13 @@ impl RuleStore {
         let base = overrides
             .custom_name
             .unwrap_or_else(|| rules::instance_name(&definition.name, sequence, id));
-        let name = names::find_available_name(&transaction, &self.config, &base)?
-            .ok_or_else(|| Error::Conflict("instance name candidates exhausted (1024)".into()))?;
+        let name = if let Some(target) = &definition.target_instance {
+            target.clone()
+        } else {
+            names::find_available_name(&transaction, &self.config, &base)?.ok_or_else(|| {
+                Error::Conflict("instance name candidates exhausted (1024)".into())
+            })?
+        };
         let description = overrides.custom_description.unwrap_or_else(|| {
             rules::default_instance_description(&definition.name, event_summary)
         });
@@ -154,6 +185,7 @@ impl RuleStore {
              WHERE e.namespace = ?1
                AND json_extract(a.payload, '$.status') IN ('queued', 'provisioning', 'launching')
                AND NOT EXISTS (SELECT 1 FROM rule_acceptance_reports r WHERE r.acceptance_id = a.id)
+               AND NOT EXISTS (SELECT 1 FROM instance_conclusions c WHERE c.acceptance_id = a.id)
              ORDER BY a.id ASC",
         )?;
         statement
@@ -310,6 +342,8 @@ impl RuleStore {
         let previous: Acceptance = decode(&previous)?;
         if previous.instance != acceptance.instance
             || previous.resolved_description != acceptance.resolved_description
+            || previous.resolved_settings != acceptance.resolved_settings
+            || previous.resolved_follow_up_prompt != acceptance.resolved_follow_up_prompt
             || previous.attempt_id != acceptance.attempt_id
             || previous.rule_name != acceptance.rule_name
         {

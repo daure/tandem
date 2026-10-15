@@ -233,6 +233,15 @@ impl Observer {
         self.close_matching_pane(None, Some(directory), pane).await
     }
 
+    pub(super) async fn close_empty_client(
+        &self,
+        directory: &str,
+        pane: &Pane,
+    ) -> Result<(), String> {
+        self.close_matching_pane(Some(""), Some(directory), pane)
+            .await
+    }
+
     async fn close_matching_pane(
         &self,
         session_id: Option<&str>,
@@ -541,7 +550,7 @@ impl Observer {
             }))
     }
 
-    async fn launch_panel(
+    pub(super) async fn launch_panel(
         &self,
         directory: &str,
         name: &str,

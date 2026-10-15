@@ -260,24 +260,27 @@ fn dispatch(start_instance: bool) {
             .join(success["instance"].as_str().unwrap()),
     );
     let mut agent = super::startup::Client::with_command(command);
-    let report = json!({"title":"Fixture inspected", "summary":"Literal prompt verified", "markdown":"# Evidence\nThe fixture completed."});
+    let memory = agent.tool("remember", json!({"title":"Fixture inspected", "summary":"Literal prompt verified", "markdown":"# Evidence\nThe fixture completed."}));
     let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let result = agent.request(
-            "tools/call",
-            json!({"name":"conclude", "arguments": report}),
-        );
+    let receipt = loop {
+        let result = agent.request("tools/call", json!({"name":"purge", "arguments": {}}));
         if result.to_string().contains("rule dispatch is busy") {
             assert!(Instant::now() < deadline, "{result}");
             thread::sleep(Duration::from_millis(20));
             continue;
         }
         assert_ne!(result["isError"], true, "{result}");
-        break;
-    }
+        break serde_json::from_str::<serde_json::Value>(
+            result["content"][0]["text"].as_str().unwrap(),
+        )
+        .unwrap();
+    };
     let mut management = super::startup::Client::with_command(fixture.command(&["mcp"]));
     loop {
-        let saved = management.tool("get_event_report", json!({"acceptance_id": success["id"]}));
+        let saved = management.tool(
+            "get_conclusion",
+            json!({"conclusion_id": receipt["conclusion_id"]}),
+        );
         if saved["cleanup_state"] == "purged" {
             break;
         }
@@ -294,10 +297,7 @@ fn dispatch(start_instance: bool) {
             .exists()
     );
     assert_eq!(
-        management.tool(
-            "search_event_reports",
-            json!({"search_strings":["fixture completed"]})
-        )["reports"][0]["acceptance_id"],
-        success["id"]
+        management.tool("get_memory", json!({"memory_id":memory["memory_id"]}))["markdown"],
+        "# Evidence\nThe fixture completed."
     );
 }

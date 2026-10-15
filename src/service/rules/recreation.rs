@@ -82,6 +82,9 @@ impl AppService {
             .iter()
             .find(|row| row.id == id)
             .ok_or("Acceptance is unavailable")?;
+        if acceptance.rule.definition.target_instance.is_some() {
+            return Err("shared target instances require explicit instance creation; event history cannot recreate them".into());
+        }
         if store
             .provider_deleting(acceptance.event_sequence)
             .map_err(|error| error.to_string())?
@@ -134,7 +137,7 @@ impl AppService {
             .transpose()?;
         let (existing, lock) = self
             .environments
-            .admit_new_instance(&acceptance.instance, &acceptance.rule.definition.template)?;
+            .admit_new_instance(&acceptance.instance, acceptance.template())?;
         if existing.is_some()
             || startup::read(&self.environments.config, &acceptance.instance)?.is_some()
         {
@@ -152,7 +155,7 @@ impl AppService {
             .ok_or("Acceptance has no verifiable instance lineage; inspect before recreating")?;
         let operation = self.environments.begin_instance(
             &acceptance.instance,
-            acceptance.rule.definition.template.clone(),
+            acceptance.template().to_owned(),
             Some(&description),
         )?;
         let operation = self.schedule_operation(

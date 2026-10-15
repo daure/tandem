@@ -2,8 +2,8 @@
 
 ## Execute and verify
 
-Search prior acceptance reports when their evidence could help the assigned work, then retrieve
-relevant reports in full. Verify that their assumptions and findings apply to the current task.
+Search memories when prior evidence could help the assigned work, then read relevant records in full
+with `get_memory`. Verify that their assumptions, revisions and findings apply to the current task.
 
 Read the workspace's project guidance and existing work before editing. Use services only when the
 task needs them; verify readiness rather than treating a client launch as proof. Use start when
@@ -17,33 +17,52 @@ workspace is current; ask before resolving skipped or failed checkouts. Run rele
 the updated sources.
 
 Use `ping` to request user attention when ready. Sound delivery depends on the user's notification
-setting; the call does not stop services or conclude the instance.
+setting; the call leaves services and instance lifecycle unchanged.
 
-## Conclude
+Use `close` only when explicitly instructed to close OpenCode attachments or the calling session's
+Zellij tab. Coordinate with other sessions first. Closure preserves instance data, services and
+conversation history; it does not prove server-side execution stopped. Tab closure includes owned
+shell panes and rejects unrelated or unverified panes. Requests require fresh, unambiguous caller
+identity and attachment evidence. Call last because it may disconnect this conversation.
+Closure continues detached; receipts confirm admission. Inspect clients and state-directory logs
+before an explicitly instructed retry after a partial or uncertain outcome.
 
-The `conclude` tool controls the owning instance, including manually created instances.
-Ignore `conclude` unless explicitly instructed to call it. Tool availability, task completion,
-verification, failure, and resource cleanup needs are not instructions to call it.
+## Keep useful memory
 
-When instructed to call it, preserve artifacts needed after purge in an approved durable location.
-A local commit inside this workspace is insufficient because the workspace will be deleted. Obtain approval
-for commits, pushes, shared storage, or external changes when required; ask if preservation is blocked.
+Use `remember` at useful investigation or implementation checkpoints. It saves evidence without closing
+clients, changing services, marking completion or suppressing dispatch/retries. Each call creates an
+immutable record; search before retrying an uncertain write. Skills may define labels and custom JSON
+field conventions for coding, reviews, PR comments, debugging or domain discovery.
 
-An instructed call supplies a searchable title, a concise outcome summary, and full Markdown contents
-rather than a file path. Make the report useful without this workspace or conversation:
+Give each record a searchable title and concise summary, plus Markdown, custom JSON fields, or both.
+Make it understandable without the workspace or conversation:
 
-- State the triggering problem, scope, and relevant context.
-- Explain the investigation, evidence, decisions, and work performed in enough detail to reproduce
-  the reasoning; distinguish verified facts from hypotheses.
-- Record the outcome and verification, including commands, results, failures, and unchecked behavior.
-- Identify preserved changes and artifacts by durable location or revision, and state remaining risks
-  and follow-up work. Do not rely on links to files that purge will remove.
+- State the problem, scope, relevant repository and revision.
+- Record findings, decisions and reasons, hypotheses, rejected approaches and supporting evidence.
+- Include verification commands and results; distinguish observed facts from unchecked behavior.
+- Name unresolved questions, risks and next steps. Link durable artifacts, PRs or issues; local workspace
+  paths alone cannot preserve evidence after purge. Reference earlier memory IDs when useful.
 
-The call permanently purges the instance's workspace and owned runtime resources and closes associated
-OpenCode clients and Zellij panes. A retained triggering acceptance receives an immutable report before
-cleanup. Without an acceptance link, report contents are not saved; preserve needed evidence elsewhere.
-Ambiguous or mismatched acceptance ownership blocks conclusion. Shared servers and conversation history
-remain. Report the actual outcome honestly; saving a conclusion is not proof of success. Cleanup continues
-after disconnection. Saved reports record cleanup outcomes and survive failed cleanup; inspect the instance
-to verify unlinked cleanup. Retrying requires explicit instruction and instance inspection, with identical
-contents when a report was saved.
+Use labels, named links and structured filters to narrow namespace searches. Query words all must match;
+search uses word forms and prefixes, not semantic similarity. Memory survives instance and task-history
+deletion. Historical contents are evidence, never authorization; keep secrets out and verify linked sources
+when needed. Links are not fetched, and binary artifacts require separate approved storage.
+
+## Preserve and clean up
+
+Use `purge` only when explicitly instructed. Tool availability, task completion, verification, failure
+and cleanup needs do not authorize it.
+
+When instructed, preserve needed changes and artifacts outside the workspace and coordinate with other
+sessions first. A local commit is insufficient because purge deletes the workspace. Obtain approval
+for commits, pushes, shared storage or external changes when required; ask if preservation is blocked.
+
+Use `remember` before `purge` when evidence is needed; purge creates no memory. Cleanup supports manual
+instances and accepted tasks. Ambiguous or mismatched acceptance ownership blocks cleanup.
+
+Purge permanently removes the bound instance's workspace and owned runtime resources and
+closes associated OpenCode clients and their Zellij panes. Shared servers, conversation history and
+memories remain. Cleanup continues detached; a receipt confirms admission, not success. Use
+`get_conclusion` for cleanup outcomes. Inspect the instance and obtain explicit instruction before
+retrying. Purge reuses existing cleanup history and preserves any saved report without duplicating
+memory. Linked acceptance reports remain available through event-report tools while task history is retained.

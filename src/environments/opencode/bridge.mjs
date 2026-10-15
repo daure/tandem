@@ -66,8 +66,8 @@ const plugin = {
           if (!result.data) throw new Error("OpenCode has no default model")
           return { providerID: result.data.providerID, id: result.data.id }
         },
-        async create({ directory, model, agent }, options) {
-          return { data: await context.client.session.create({ location: { directory }, ...(model ? { model } : {}), ...(agent ? { agent } : {}) }, options) }
+        async create({ directory, model, agent, id, title }, options) {
+          return { data: await context.client.session.create({ location: { directory }, ...(model ? { model } : {}), ...(agent ? { agent } : {}), ...(id ? { id } : {}), ...(title ? { title } : {}) }, options) }
         },
         get: (sessionID, options) => context.client.session.get({ sessionID }, options),
         async busy(session, options) {
@@ -330,6 +330,7 @@ async function serveTabs(api, disposed) {
       }
       const input = JSON.parse(body)
       const { directory, sessionID, instructions } = input
+      if (input.focus != null && typeof input.focus !== "boolean") return reject(400, "Invalid focus selection")
       if (instructions != null && typeof instructions !== "string") return reject(400, "Invalid session instructions")
       if (prompting) {
         if (typeof directory !== "string" || directory !== api.state.path.directory || !api.state.ready) {
@@ -351,9 +352,12 @@ async function serveTabs(api, disposed) {
         if (existing) {
           if (typeof sessionID !== "string" || !/^[a-zA-Z0-9_]{1,127}$/.test(sessionID)) return reply(400, { error: "Invalid session identity" })
           input.when_busy ??= "queue"
-          if (!["queue", "interrupt", "abort"].includes(input.when_busy)) return reply(400, { error: "Invalid busy-session policy" })
+          if (!["queue", "steer", "interrupt", "abort"].includes(input.when_busy)) return reply(400, { error: "Invalid busy-session policy" })
           return reply(200, await promptExistingSession(api, input, signal))
         }
+        if (input.create_id != null && (typeof input.create_id !== "string" || !/^ses_[a-zA-Z0-9_]{1,120}$/.test(input.create_id))) return reject(400, "Invalid requested session identity")
+        if (input.title != null && (typeof input.title !== "string" || !input.title.trim() || Buffer.byteLength(input.title) > 200 || /\p{Cc}/u.test(input.title))) return reject(400, "Invalid session title")
+        if (input.when_busy != null && !["queue", "steer", "interrupt"].includes(input.when_busy)) return reject(400, "Invalid delivery mode")
         return reply(200, await promptFreshSession(api, input, signal))
       }
       if (closing) {
@@ -436,6 +440,7 @@ async function serveTabs(api, disposed) {
     receipt: {
       server: `http://127.0.0.1:${server.address().port}`, token,
       prompted_sessions: true, session_prompts: Boolean(api.client?.session?.get), session_tabs: Boolean(api.tabs?.enabled()),
+      named_rule_sessions: Boolean(api.client?.session?.get && api.client?.session?.attachInstructions),
     },
     close: () => new Promise((resolve) => {
       server.close(resolve)

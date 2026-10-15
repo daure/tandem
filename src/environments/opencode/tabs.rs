@@ -14,6 +14,8 @@ pub(super) struct Control {
     pub(super) session_prompts: bool,
     #[serde(default)]
     pub(super) session_tabs: bool,
+    #[serde(default)]
+    pub(super) named_rule_sessions: bool,
 }
 
 pub(super) enum CloseOutcome {

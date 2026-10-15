@@ -7,9 +7,13 @@ fn definition(name: &str, script: &str) -> Definition {
         description: "Fixture".into(),
         script: script.into(),
         template: "blank".into(),
+        target_instance: None,
+        session_name: None,
+        delivery_mode: Default::default(),
         model: "openai/test".into(),
         variant: None,
         initial_prompt: "Inspect {{event.data.text}}".into(),
+        follow_up_prompt: None,
         enabled: true,
         start_instance: true,
         focus_pane: true,
@@ -62,6 +66,7 @@ fn dispatch_work_is_oldest_first_namespace_scoped_and_excludes_terminal_or_repor
                         title: "Completed inspection".into(),
                         summary: "Dispatch belongs to conclusion cleanup".into(),
                         markdown: "Inspection completed.".into(),
+                        ..Default::default()
                     },
                 )
                 .unwrap();

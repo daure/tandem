@@ -5,10 +5,10 @@ use crate::store::opencode::{
     Pane, PromptOutcome, PromptedSession, Session, SessionPrompt, WhenBusy,
 };
 
-struct PromptClient {
-    pane: Pane,
-    control: Control,
-    server: String,
+pub(crate) struct PromptClient {
+    pub(super) pane: Pane,
+    pub(super) control: Control,
+    pub(crate) server: String,
 }
 
 impl Observer {
@@ -149,7 +149,7 @@ impl Observer {
         .await
     }
 
-    async fn prompt_client(
+    pub(super) async fn prompt_client(
         &self,
         directory: &str,
         current: &str,
@@ -199,7 +199,7 @@ impl Observer {
         .map_err(|error| error.to_string())
     }
 
-    async fn send_prompt(
+    pub(super) async fn send_prompt(
         &self,
         client: PromptClient,
         current: &str,
@@ -214,6 +214,10 @@ impl Observer {
         let directory = body["directory"]
             .as_str()
             .ok_or("OpenCode prompt directory is missing")?;
+        let focus = body["focus"].as_bool().unwrap_or(true);
+        let expected_id = target_id
+            .or_else(|| body["create_id"].as_str())
+            .map(str::to_owned);
         let panes = self.list_panes(&pane.session).await?;
         let actual = panes
             .iter()
@@ -258,7 +262,9 @@ impl Observer {
             .await;
         let mut outcome = match response.and_then(|value| {
             let receipt = parse_receipt(value, &server)?;
-            if target_id.is_some_and(|id| receipt.0.as_deref() != Some(id)) {
+            if expected_id.as_deref().is_some_and(|id| {
+                (target_id.is_some() || receipt.0.is_some()) && receipt.0.as_deref() != Some(id)
+            }) {
                 return Err("OpenCode returned a different conversation identity".into());
             }
             Ok(receipt)
@@ -282,7 +288,8 @@ impl Observer {
                 )),
             },
         };
-        if outcome.session_id.is_some()
+        if focus
+            && outcome.session_id.is_some()
             && let Err(error) = self
                 .focus_pane(current, &outcome.pane, actual.is_floating)
                 .await
@@ -295,7 +302,7 @@ impl Observer {
         Ok(outcome)
     }
 
-    async fn wait_prompt_control(
+    pub(super) async fn wait_prompt_control(
         &self,
         directory: &str,
         pane: &Pane,

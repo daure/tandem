@@ -115,6 +115,15 @@ test("interrupt stops active work before applying overrides and sends steering i
   assert.equal(instance.calls.at(-1)[1].delivery, "steer")
 })
 
+test("steering guides running work without interrupting or moving client focus", async (t) => {
+  const instance = await client(t, { running: true })
+  const response = await instance.request({ when_busy: "steer", focus: false, instructions: "Services are stopped" })
+  assert.equal(response.status, 200)
+  assert.equal((await response.json()).prompt_outcome, "submitted")
+  assert.deepEqual(instance.calls.map(([action]) => action), ["instructions", "prompt"])
+  assert.equal(instance.calls.at(-1)[1].delivery, "steer")
+})
+
 test("existing prompt failures retain identity without resending or creating conversations", async (t) => {
   for (const stage of ["identity", "agent", "switchModel", "interrupt", "prompt"]) {
     await t.test(stage, async (t) => {

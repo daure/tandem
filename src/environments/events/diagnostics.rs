@@ -127,8 +127,7 @@ impl EventStore {
         match super::super::startup::read(&self.config, &acceptance.instance) {
             Ok(Some(record))
                 if record.origin_operation_id() == operation
-                    && record.operation.template.as_deref()
-                        == Some(&acceptance.rule.definition.template) =>
+                    && record.operation.template.as_deref() == Some(acceptance.template()) =>
             {
                 let mut budget = LOG_BYTE_LIMIT;
                 let mut truncated = false;

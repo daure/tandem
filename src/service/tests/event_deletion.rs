@@ -18,9 +18,13 @@ fn accepted_events(service: &AppService) -> (String, Vec<Acceptance>) {
                 description: String::new(),
                 script: "fn matches(event) { true }".into(),
                 template: "blank".into(),
+                target_instance: None,
+                session_name: None,
+                delivery_mode: Default::default(),
                 model: "openai/test".into(),
                 variant: None,
                 initial_prompt: "Inspect {{event.summary}}".into(),
+                follow_up_prompt: None,
                 enabled: true,
                 start_instance: false,
                 focus_pane: true,
@@ -149,42 +153,53 @@ fn event_deletion_refuses_only_the_affected_busy_event_and_preserves_bulk_atomic
 
 #[test]
 fn event_deletion_preserves_acceptance_history_during_conclusion_cleanup() {
-    let service = AppService::for_tests();
-    let (_token, acceptances) = accepted_events(&service);
-    let busy = &acceptances[0];
-    let _conclusion = crate::environments::conclusion::reserve(
-        &service.environments.config,
-        busy.id,
-        &busy.instance,
-    )
-    .unwrap();
-    service
-        .rules
-        .store
-        .save_report(
+    for report in [
+        None,
+        Some(crate::store::rules::reports::ReportInput {
+            title: "Completed inspection".into(),
+            summary: "Retained evidence".into(),
+            markdown: "# Evidence\nThe inspection is complete.\n".into(),
+            ..Default::default()
+        }),
+    ] {
+        let service = AppService::for_tests();
+        let (_token, acceptances) = accepted_events(&service);
+        let busy = &acceptances[0];
+        let _conclusion = crate::environments::conclusion::reserve(
+            &service.environments.config,
             busy.id,
-            &crate::store::rules::reports::ReportInput {
-                title: "Completed inspection".into(),
-                summary: "Retained evidence".into(),
-                markdown: "# Evidence\nThe inspection is complete.\n".into(),
-            },
+            &busy.instance,
         )
         .unwrap();
-    for target in [
-        Deletion::Event(busy.event_sequence),
-        Deletion::Acceptance(busy.id),
-        Deletion::All,
-    ] {
-        let error = delete(&service, target).unwrap_err();
-        assert!(matches!(error, Error::Conflict(_)));
-        assert!(error.to_string().contains("conclusion is busy"));
-        assert_eq!(service.rules.store.acceptance(busy.id).unwrap(), *busy);
-        assert!(service.rules.store.event_report(busy.id).is_ok());
+        service
+            .rules
+            .store
+            .save_conclusion(
+                &busy.instance,
+                "workspace-identity",
+                Some(busy.id),
+                report.as_ref(),
+            )
+            .unwrap();
+        for target in [
+            Deletion::Event(busy.event_sequence),
+            Deletion::Acceptance(busy.id),
+            Deletion::All,
+        ] {
+            let error = delete(&service, target).unwrap_err();
+            assert!(matches!(error, Error::Conflict(_)));
+            assert!(error.to_string().contains("conclusion is busy"));
+            assert_eq!(service.rules.store.acceptance(busy.id).unwrap(), *busy);
+            assert_eq!(
+                service.rules.store.event_report(busy.id).is_ok(),
+                report.is_some()
+            );
+        }
+        assert_eq!(
+            delete(&service, Deletion::Event(acceptances[1].event_sequence)).unwrap(),
+            1
+        );
     }
-    assert_eq!(
-        delete(&service, Deletion::Event(acceptances[1].event_sequence)).unwrap(),
-        1
-    );
 }
 
 #[test]
@@ -203,6 +218,7 @@ fn reported_work_can_delete_history_after_cleanup_even_when_dispatch_is_historic
                 title: "Inspection complete".into(),
                 summary: "Verified work".into(),
                 markdown: "# Evidence\nVerified".into(),
+                ..Default::default()
             },
         )
         .unwrap();

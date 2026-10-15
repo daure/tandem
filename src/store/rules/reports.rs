@@ -1,34 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ReportInput {
-    pub title: String,
-    pub summary: String,
-    /// Full Markdown contents, not a workspace file path.
-    pub markdown: String,
-}
-
-impl ReportInput {
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        for (name, text, limit) in [
-            ("title", self.title.as_str(), 500),
-            ("summary", self.summary.as_str(), 8_192),
-            ("markdown", self.markdown.as_str(), 1_048_576),
-        ] {
-            if text.trim().is_empty() || text.len() > limit || text.contains('\0') {
-                return Err(format!(
-                    "{name} must contain 1 to {limit} bytes without NUL"
-                ));
-            }
-        }
-        if self.title.chars().any(char::is_control) {
-            return Err("title must not contain control characters".into());
-        }
-        Ok(())
-    }
-}
+pub(crate) use crate::store::memories::MemoryInput as ReportInput;
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -52,13 +25,26 @@ pub(crate) struct ReportSummary {
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(untagged)]
-pub(crate) enum ConclusionReceipt {
-    Reported(ReportSummary),
-    Unreported {
-        instance: String,
-        cleanup_state: CleanupState,
-    },
+pub(crate) struct ConclusionReceipt {
+    pub conclusion_id: i64,
+    #[serde(default)]
+    pub memory_id: Option<i64>,
+    pub instance: String,
+    pub acceptance_id: Option<i64>,
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    pub admitted_at: String,
+    pub cleanup_state: CleanupState,
+    pub cleanup_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct Conclusion {
+    #[serde(flatten)]
+    pub details: ConclusionReceipt,
+    pub report: Option<ReportInput>,
+    #[serde(skip)]
+    pub workspace_identity: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

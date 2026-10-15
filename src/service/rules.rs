@@ -11,6 +11,8 @@ use tokio::sync::oneshot;
 mod developer;
 mod history;
 mod recreation;
+mod sessions;
+mod target;
 
 use super::AppService;
 use crate::{
@@ -158,9 +160,11 @@ impl AppService {
                     return Err("confirmation_required: enabling or editing an enabled rule authorizes automatic template execution and model prompts for future events".into());
                 }
                 rules::validate(&definition)?;
-                let template = service.environments.get_template(&definition.template)?;
-                if let Some(error) = template.error {
-                    return Err(error);
+                if !rules::is_template(&definition.template) {
+                    let template = service.environments.get_template(&definition.template)?;
+                    if let Some(error) = template.error {
+                        return Err(error);
+                    }
                 }
                 let destination = destination
                     .filter(|value| !value.is_empty())
@@ -214,10 +218,20 @@ impl AppService {
                     &record.received_at,
                 );
                 let matched = rules::matches(&definition, &input)?;
+                let settings = matched
+                    .then(|| definition.resolve_settings(&input))
+                    .transpose()?;
+                let mut resolved = definition.clone();
+                if let Some(settings) = settings {
+                    resolved.template = settings.template;
+                    resolved.target_instance = settings.target_instance;
+                    resolved.model = settings.model;
+                    resolved.variant = settings.variant;
+                }
                 let identity = matched
                     .then(|| {
                         store.preview_instance_identity(
-                            &definition,
+                            &resolved,
                             &input,
                             sequence,
                             &record.event.summary,
@@ -230,12 +244,27 @@ impl AppService {
                     resolved_prompt: matched
                         .then(|| rules::render_prompt(&definition.initial_prompt, &input))
                         .transpose()?,
-                    template: definition.template,
-                    model: definition.model,
-                    variant: definition.variant,
+                    resolved_follow_up_prompt: if matched {
+                        definition
+                            .follow_up_prompt
+                            .as_deref()
+                            .map(|source| {
+                                rules::render_prompt(source, &input)
+                                    .map_err(|error| format!("follow-up prompt: {error}"))
+                            })
+                            .transpose()?
+                    } else {
+                        None
+                    },
+                    template: resolved.template,
+                    target_instance: resolved.target_instance.clone(),
+                    session_name: definition.session_name,
+                    delivery_mode: definition.delivery_mode,
+                    model: resolved.model,
+                    variant: resolved.variant,
                     instance_name: identity.as_ref().map(|(name, _)| name.clone()),
                     instance_description: identity.map(|(_, description)| description),
-                    name_is_advisory: matched,
+                    name_is_advisory: matched && definition.target_instance.is_none(),
                 })
             })
             .await
@@ -277,6 +306,8 @@ impl AppService {
                 if acceptance.status != DispatchStatus::Failed
                     || acceptance.launch_started_at.is_some()
                     || acceptance.resolved_prompt.is_none()
+                    || (acceptance.rule.definition.follow_up_prompt.is_some()
+                        && acceptance.resolved_follow_up_prompt.is_none())
                 {
                     return Err("only confirmed pre-launch failures can be retried; uncertain launches require inspection and explicit replay".into());
                 }
@@ -336,13 +367,20 @@ impl AppService {
         if store.provider_deleting(acceptance.event_sequence)? {
             return Ok(());
         }
-        if acceptance.status == DispatchStatus::Queued {
+        let targeted = acceptance.status == DispatchStatus::Queued
+            && acceptance.rule.definition.target_instance.is_some();
+        if acceptance.status == DispatchStatus::Queued && !targeted {
             if *available == 0 || !store.admit_dispatch(acceptance.id)? {
                 return Ok(());
             }
             *available -= 1;
         }
-        if let Err(error) = self.advance_dispatch(&mut acceptance) {
+        let result = if targeted {
+            self.advance_target_dispatch(&mut acceptance, available)
+        } else {
+            self.advance_dispatch(&mut acceptance)
+        };
+        if let Err(error) = result {
             acceptance.status = if acceptance.launch_started_at.is_some() {
                 DispatchStatus::Uncertain
             } else {
@@ -365,10 +403,9 @@ impl AppService {
                 self.runtime
                     .handle()
                     .block_on(self.opencode.observer.resolve_rule_destination())?;
-                let (existing, lock) = self.environments.admit_new_instance(
-                    &acceptance.instance,
-                    &acceptance.rule.definition.template,
-                )?;
+                let (existing, lock) = self
+                    .environments
+                    .admit_new_instance(&acceptance.instance, acceptance.template())?;
                 if existing.is_some() && acceptance.operation_id.is_none() {
                     return Err("assigned instance name is already owned; dispatch requires a fresh instance".into());
                 }
@@ -379,43 +416,19 @@ impl AppService {
                     None => store.ensure_fresh_instance_name(&acceptance.instance),
                     Some(origin) => store.ensure_retry_instance_name(
                         &acceptance.instance,
-                        &acceptance.rule.definition.template,
+                        acceptance.template(),
                         origin,
                     ),
                 }
                 .map_err(|error| error.to_string())?;
-                let description = acceptance.instance_description();
-                let operation = self.environments.begin_instance(
-                    &acceptance.instance,
-                    acceptance.rule.definition.template.clone(),
-                    Some(&description),
-                )?;
-                acceptance
-                    .operation_id
-                    .get_or_insert_with(|| operation.id.clone());
-                acceptance.status = DispatchStatus::Provisioning;
-                store
-                    .update(acceptance, true)
-                    .map_err(|error| error.to_string())?;
-                self.schedule_operation(
-                    operation,
-                    600,
-                    Startup {
-                        origin_operation_id: acceptance.operation_id.clone(),
-                        start_instance: acceptance.rule.definition.start_instance,
-                        instance_lock: Some(lock),
-                        description: Some(description),
-                        ..Default::default()
-                    },
-                );
+                self.begin_rule_instance(acceptance, lock)?;
             }
             DispatchStatus::Provisioning => {
                 let record = startup::read(config, &acceptance.instance)?
                     .ok_or("startup admission was interrupted; inspect the assigned instance before retrying")?
                     .observe(config)?;
                 if acceptance.operation_id.as_deref() != Some(record.origin_operation_id())
-                    || record.operation.template.as_deref()
-                        != Some(&acceptance.rule.definition.template)
+                    || record.operation.template.as_deref() != Some(acceptance.template())
                 {
                     return Err("assigned instance has a different startup operation; inspect before retrying".into());
                 }
@@ -437,6 +450,36 @@ impl AppService {
                     .handle()
                     .block_on(self.opencode.observer.resolve_rule_destination())?;
                 let workspace = self.environments.workspace(&acceptance.instance)?;
+                let _target_lock = if acceptance.rule.definition.target_instance.is_some() {
+                    let Some((instance, lock)) =
+                        self.environments.admit_rule_target(&acceptance.instance)?
+                    else {
+                        return Ok(());
+                    };
+                    let instance = instance.ok_or("target instance ownership is missing")?;
+                    if !startup::belongs_to(
+                        config,
+                        &instance.name,
+                        &instance.template,
+                        acceptance.operation_id.as_deref(),
+                    )? {
+                        return Err("target instance startup lineage changed before launch".into());
+                    }
+                    acceptance.target_workspace_identity =
+                        Some(crate::environments::workspace_identity(config, &instance)?);
+                    Some(lock)
+                } else {
+                    None
+                };
+                if acceptance.rule.definition.session_name.is_some() {
+                    let instance = self.environments.session_instance(&acceptance.instance)?;
+                    return self.launch_named_rule_session(
+                        acceptance,
+                        &instance,
+                        &destination,
+                        false,
+                    );
+                }
                 acceptance.status = DispatchStatus::Launching;
                 acceptance.launch_started_at = Some(chrono::Utc::now().to_rfc3339());
                 store
@@ -447,7 +490,7 @@ impl AppService {
                         &workspace,
                         &acceptance.instance,
                         &destination,
-                        &acceptance.rule.definition,
+                        &acceptance.launch_definition(),
                         acceptance
                             .resolved_prompt
                             .as_deref()
@@ -465,6 +508,9 @@ impl AppService {
                     .map_err(|error| error.to_string())?;
             }
             DispatchStatus::Launching => {
+                if acceptance.rule.definition.session_name.is_some() {
+                    return Err("Named conversation delivery was interrupted; inspect the session before replaying. The prompt will not be sent again".into());
+                }
                 let pane = acceptance.pane.as_ref().ok_or(
                     "session launch was interrupted with an uncertain outcome; it will not be sent again",
                 )?;
@@ -476,11 +522,8 @@ impl AppService {
                 else {
                     return Ok(());
                 };
-                if !startup::belongs_to(
-                    config,
-                    &instance.name,
-                    &instance.template,
-                    acceptance.operation_id.as_deref(),
+                if !crate::environments::rules::acceptance_workspace_matches(
+                    config, &instance, acceptance,
                 )? {
                     return Err("assigned workspace belongs to another acceptance lineage".into());
                 }

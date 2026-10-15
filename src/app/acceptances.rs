@@ -56,7 +56,8 @@ impl Target {
             .into_iter()
             .find(|row| {
                 row.instance.as_deref() == Some(&acceptance.instance)
-                    && row.template == acceptance.rule.definition.template
+                    && (acceptance.rule.definition.target_instance.is_some()
+                        || row.template == acceptance.template())
             });
         Self::with_instance(acceptance, history, context, show_saved, instance)
     }
@@ -106,6 +107,12 @@ impl Target {
                     observed.sessions.push(saved.clone());
                 }
             }
+        }
+        if acceptance.rule.definition.session_name.is_some() {
+            observed.to_mut().sessions.retain(|session| {
+                acceptance.session_id.as_deref() == Some(session.id.as_str())
+                    && acceptance.session_server.as_deref() == Some(session.server.as_str())
+            });
         }
         let conversations = workspace.as_deref().map_or_else(Vec::new, |directory| {
             super::opencode::acceptance_rows(acceptance.id, directory, &observed, show_saved)
@@ -161,7 +168,8 @@ impl Target {
             Command::Report => self.report.is_some(),
             Command::Instance | Command::PurgeInstance | Command::Routes => self.instance.is_some(),
             Command::CreateInstance => {
-                self.instance.is_none()
+                self.acceptance.rule.definition.target_instance.is_none()
+                    && self.instance.is_none()
                     && self.available
                     && self.report.as_ref().is_none_or(|report| {
                         !matches!(
@@ -241,6 +249,19 @@ impl Target {
                 muted,
             ),
         ];
+        if let Some(name) = &self.acceptance.rule.definition.session_name {
+            header.push(Span::styled(
+                format!(
+                    " · Session {} · {}",
+                    clean(name),
+                    self.acceptance.rule.definition.delivery_mode.label()
+                ),
+                muted,
+            ));
+        }
+        if let Some(outcome) = self.acceptance.prompt_outcome {
+            header.push(Span::styled(format!(" · Prompt {outcome:?}"), muted));
+        }
         if self.instance.is_none() {
             header.push(Span::styled(format!(" · {}", self.missing), muted));
         }

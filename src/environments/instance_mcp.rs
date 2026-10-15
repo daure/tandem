@@ -24,6 +24,30 @@ pub(crate) struct InstanceScope {
     workspace: File,
 }
 
+impl InstanceScope {
+    pub(crate) fn identity(&self, config: &Config) -> Result<String, String> {
+        let metadata = self
+            .workspace
+            .metadata()
+            .map_err(|error| error.to_string())?;
+        let origin = startup::read(config, &self.name)?
+            .map(|record| record.origin_operation_id().to_owned())
+            .unwrap_or_default();
+        Ok(format!("{}:{}:{origin}", metadata.dev(), metadata.ino()))
+    }
+}
+
+pub(crate) fn workspace_identity(config: &Config, instance: &Instance) -> Result<String, String> {
+    let metadata = fs::symlink_metadata(&instance.workspace).map_err(|error| error.to_string())?;
+    if !metadata.is_dir() {
+        return Err("instance workspace must be a real directory".into());
+    }
+    let origin = startup::read(config, &instance.name)?
+        .map(|record| record.origin_operation_id().to_owned())
+        .unwrap_or_default();
+    Ok(format!("{}:{}:{origin}", metadata.dev(), metadata.ino()))
+}
+
 impl Environments {
     pub(crate) fn record_instance_ping(
         &self,
@@ -332,7 +356,13 @@ pub(super) fn prepare_config(config: &Config, workspace: &Path) -> Result<(), St
             "tandem-instance_start_self": "allow",
             "tandem-instance_stop_self": "allow",
             "tandem-instance_update_repositories": "allow",
-            "tandem-instance_conclude": "allow",
+            "tandem-instance_remember": "allow",
+            "tandem-instance_search_memories": "allow",
+            "tandem-instance_get_memory": "allow",
+            "tandem-instance_purge": "allow",
+            "tandem-instance_close": "allow",
+            "tandem-instance_search_conclusions": "allow",
+            "tandem-instance_get_conclusion": "allow",
             "tandem-instance_search_events": "allow",
             "tandem-instance_get_event_report": "allow"
         }

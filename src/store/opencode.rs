@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) mod closing;
 pub(crate) mod conversation;
 pub(crate) mod listing;
 pub(crate) mod observation;

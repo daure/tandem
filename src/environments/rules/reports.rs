@@ -1,4 +1,6 @@
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+#[cfg(test)]
+use rusqlite::TransactionBehavior;
+use rusqlite::{OptionalExtension, params};
 
 use super::{RuleStore, decode};
 use crate::store::{
@@ -36,7 +38,8 @@ impl RuleStore {
         let connection = self.events.connection()?;
         connection
             .prepare(
-                "SELECT r.acceptance_id FROM rule_acceptance_reports r
+                 "SELECT r.acceptance_id FROM (SELECT acceptance_id FROM rule_acceptance_reports
+                  UNION SELECT acceptance_id FROM instance_conclusions WHERE acceptance_id IS NOT NULL) r
                  JOIN rule_acceptances a ON a.id=r.acceptance_id
                  JOIN event_attempts p ON p.id=a.attempt_id JOIN events e ON e.sequence=p.event_sequence
                  WHERE e.namespace=?1",
@@ -62,10 +65,14 @@ impl RuleStore {
             })?
             .map(|row| decode::<Acceptance>(&row?))
             .collect::<Result<Vec<_>, Error>>()?;
+        let rows: Vec<_> = rows
+            .into_iter()
+            .filter(|row| row.rule.definition.target_instance.is_none())
+            .collect();
         if rows.is_empty() {
             return Ok(None);
         }
-        if rows.len() != 1 || rows[0].rule.definition.template != instance.template {
+        if rows.len() != 1 || rows[0].template() != instance.template {
             return Err(Error::Conflict(
                 "workspace must belong to exactly one retained event acceptance".into(),
             ));
@@ -90,10 +97,23 @@ impl RuleStore {
         Ok(rows.into_iter().next())
     }
 
+    #[cfg(test)]
     pub(crate) fn save_report(&self, id: i64, input: &ReportInput) -> Result<Report, Error> {
         input.validate().map_err(Error::Invalid)?;
         let mut connection = self.events.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let report = self.save_report_in(&transaction, id, input)?;
+        transaction.commit()?;
+        Ok(report)
+    }
+
+    pub(super) fn save_report_in(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        id: i64,
+        input: &ReportInput,
+    ) -> Result<Report, Error> {
+        let markdown = input.rendered_markdown();
         let existing = transaction
             .query_row(
                 &format!("{REPORT_SELECT} AND a.id = ?2"),
@@ -104,7 +124,7 @@ impl RuleStore {
         if let Some(existing) = existing {
             if existing.details.title != input.title
                 || existing.details.summary != input.summary
-                || existing.markdown != input.markdown
+                || existing.markdown != markdown
             {
                 return Err(Error::Conflict(
                     "acceptance already has a different report; saved reports are immutable".into(),
@@ -127,17 +147,17 @@ impl RuleStore {
         transaction.execute(
             "INSERT INTO rule_acceptance_reports(acceptance_id, title, summary, markdown, reported_at, cleanup_state)
              VALUES (?1, ?2, ?3, ?4, ?5, 'pending') ON CONFLICT(acceptance_id) DO UPDATE SET cleanup_state='pending', cleanup_error=NULL",
-            params![id, input.title, input.summary, input.markdown, chrono::Utc::now().to_rfc3339()],
+            params![id, input.title, input.summary, markdown, chrono::Utc::now().to_rfc3339()],
         )?;
         let report = transaction.query_row(
             &format!("{REPORT_SELECT} AND a.id = ?2"),
             params![self.config.namespace, id],
             read_report,
         )?;
-        transaction.commit()?;
         Ok(report)
     }
 
+    #[cfg(test)]
     pub(crate) fn set_report_cleanup(
         &self,
         id: i64,

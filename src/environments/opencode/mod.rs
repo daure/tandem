@@ -1,4 +1,5 @@
 pub(crate) mod cleanup;
+pub(crate) mod closing;
 mod conversation;
 mod discovery;
 pub(crate) mod events;
@@ -9,6 +10,7 @@ mod prompted;
 mod purge;
 mod resources;
 mod rule_destination;
+mod rule_sessions;
 mod server;
 mod sessions;
 mod tabs;

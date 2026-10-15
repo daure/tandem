@@ -101,6 +101,17 @@ impl RuleStore {
                     transaction.commit()?;
                     return Ok(());
                 }
+                let settings = match rule.definition.resolve_settings(&input) {
+                    Ok(settings) => settings,
+                    Err(error) => {
+                        transaction.execute(
+                            "UPDATE rule_evaluations SET outcome = 'failed', error = ?3 WHERE attempt_id = ?1 AND rule_name = ?2",
+                            params![attempt, name, error],
+                        )?;
+                        transaction.commit()?;
+                        return Ok(());
+                    }
+                };
                 transaction.execute("INSERT INTO rule_acceptances(attempt_id, rule_name, payload) VALUES (?1, ?2, '')", params![attempt, name])?;
                 let id = transaction.last_insert_rowid();
                 let overrides = rules::resolve_instance_hooks(&rule.definition, &input)
@@ -108,8 +119,13 @@ impl RuleStore {
                 let base = overrides
                     .custom_name
                     .unwrap_or_else(|| rules::instance_name(name, sequence, id));
-                let Some(instance) = names::reserve_name(&transaction, &self.config, &base, id)?
-                else {
+                let instance = if let Some(target) = &settings.target_instance {
+                    names::backfill_name(&transaction, target, &self.config.namespace, None)?;
+                    Some(target.clone())
+                } else {
+                    names::reserve_name(&transaction, &self.config, &base, id)?
+                };
+                let Some(instance) = instance else {
                     transaction.execute("DELETE FROM rule_acceptances WHERE id = ?1", [id])?;
                     transaction.execute("UPDATE rule_evaluations SET outcome = 'failed', error = 'instance name candidates exhausted (1024)' WHERE attempt_id = ?1 AND rule_name = ?2", params![attempt, name])?;
                     transaction.commit()?;
@@ -119,6 +135,16 @@ impl RuleStore {
                     .custom_description
                     .unwrap_or_else(|| rules::default_instance_description(name, &event.summary));
                 let prompt = rules::render_prompt(&rule.definition.initial_prompt, &input);
+                let follow_up = rule
+                    .definition
+                    .follow_up_prompt
+                    .as_deref()
+                    .map(|source| {
+                        rules::render_prompt(source, &input)
+                            .map_err(|error| format!("follow-up prompt: {error}"))
+                    })
+                    .transpose();
+                let error = prompt.as_ref().err().or(follow_up.as_ref().err()).cloned();
                 let timestamp = now.to_rfc3339();
                 let acceptance = Acceptance {
                     id,
@@ -130,17 +156,22 @@ impl RuleStore {
                     accepted_at: timestamp.clone(),
                     instance,
                     session_id: None,
+                    session_server: None,
+                    prompt_outcome: None,
                     pane: None,
                     operation_id: None,
+                    target_workspace_identity: None,
                     launch_started_at: None,
-                    status: if prompt.is_ok() {
+                    status: if error.is_none() {
                         DispatchStatus::Queued
                     } else {
                         DispatchStatus::Failed
                     },
-                    error: prompt.as_ref().err().cloned(),
+                    error,
                     rule,
                     resolved_prompt: prompt.ok(),
+                    resolved_follow_up_prompt: follow_up.ok().flatten(),
+                    resolved_settings: Some(settings),
                     resolved_description: Some(description),
                 };
                 transaction.execute(

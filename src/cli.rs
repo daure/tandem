@@ -22,6 +22,8 @@ pub struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     #[command(hide = true)]
+    InstanceCloseWorker { name: String, instance_fd: i32 },
+    #[command(hide = true)]
     OpencodeCleanupWorker { result_fd: i32 },
     #[command(hide = true)]
     ProviderSidecarWorker {
@@ -53,6 +55,7 @@ enum Commands {
     #[command(hide = true)]
     ConclusionWorker {
         acceptance_id: i64,
+        conclusion_id: i64,
         name: String,
         instance_fd: i32,
         rules_fd: i32,
@@ -342,14 +345,20 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             lease_fd,
         }) => crate::service::AppService::run_startup_worker(&name, &id, instance_fd, lease_fd)
             .map_err(Into::into),
+        Some(Commands::InstanceCloseWorker { name, instance_fd }) => {
+            crate::service::AppService::run_instance_close_worker(&name, instance_fd)
+                .map_err(Into::into)
+        }
         Some(Commands::ConclusionWorker {
             acceptance_id,
+            conclusion_id,
             name,
             instance_fd,
             rules_fd,
             completion_fd,
         }) => crate::service::AppService::run_conclusion_worker(
             acceptance_id,
+            conclusion_id,
             &name,
             [instance_fd, rules_fd, completion_fd],
         )

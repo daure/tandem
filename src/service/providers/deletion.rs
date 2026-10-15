@@ -74,6 +74,9 @@ impl AppService {
         deletion.remove_collector()?;
         let mut instances = std::collections::BTreeSet::new();
         for acceptance in &deletion.acceptances {
+            if acceptance.rule.definition.target_instance.is_some() {
+                continue;
+            }
             let Some(operation) = &acceptance.operation_id else {
                 continue;
             };

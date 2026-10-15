@@ -145,6 +145,52 @@ fn mcp_provider_deletion_requires_approval_and_purges_only_its_owned_resources_a
 }
 
 #[test]
+fn provider_deletion_preserves_named_target_workspaces_and_conversations() {
+    let (fixture, server) = fixture();
+    let connection = rusqlite::Connection::open(fixture.home.join("settings.sqlite3")).unwrap();
+    let payload: String = connection
+        .query_row(
+            "SELECT payload FROM rule_acceptances WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut acceptance: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    acceptance["rule"]["definition"]["target_instance"] = json!("review");
+    connection
+        .execute(
+            "UPDATE rule_acceptances SET payload=?1 WHERE id=1",
+            [acceptance.to_string()],
+        )
+        .unwrap();
+    let mut client = Client::with_command(fixture.command(&["mcp"]));
+    let result = delete_when_idle(&mut client);
+    assert_ne!(result["isError"], true, "{result}");
+    assert!(fixture.home.join("workspaces/review").is_dir());
+    assert!(fixture.runtime_record("review", "startup").is_some());
+    assert!(server.data.lock().unwrap().deleted.is_empty());
+    assert!(
+        server
+            .data
+            .lock()
+            .unwrap()
+            .sessions
+            .contains_key("ses_provider")
+    );
+    assert!(!fixture.home.join("templates/providers/message").exists());
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM rule_acceptances WHERE id=1",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
 fn provider_cleanup_keeps_acceptance_ownership_through_scoped_start_and_legacy_startup_records() {
     for legacy in [false, true] {
         let (fixture, _server) = fixture();

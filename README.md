@@ -510,7 +510,7 @@ instance startup, prompt delivery, and task completion have separate outcomes. A
 to automatic rule processing. `r` replays any retained event as a new pending attempt while preserving
 its original event ID and history. Replay requires approval to evaluate current enabled rule revisions;
 use it to apply newly created or enabled rules to earlier events. Each replay can trigger the same rule
-again with a fresh instance. The row shows `Accepted · 3 rules` for three matches in
+again using its configured instance and conversation policy. The row shows `Accepted · 3 rules` for three matches in
 the latest attempt. The **Acceptances** details tab lists each rule, timestamp, attempt, assigned
 instance, session, and dispatch outcome. Schema upgrades require existing Tandem clients and
 sidecars to be stopped; retained processing history keeps its identities and timestamps.
@@ -668,7 +668,7 @@ error before launch; start a session and retry the acceptance. Automatic-executi
 `d` opens a bottom-docked dialog with **Accepted events**,
 **Script**, and **Settings** tabs. Valid field edits save automatically while the dialog stays open;
 invalid input stays editable with a save error. Script uses Rust highlighting for Rhai syntax;
-Initial prompt uses Glimmer highlighting for Handlebars syntax.
+Initial prompt and Follow-up prompt use Glimmer highlighting for Handlebars syntax.
 Settings includes **Focus new pane**, enabled by default. Turn it off to launch accepted work in
 the background while preserving every Zellij client's focus. This toggle saves without pausing
 the rule and applies to future acceptances; retained acceptances keep their pinned choice on retry.
@@ -692,7 +692,7 @@ Conversation children use Enter to open or focus their OpenCode session or pane.
 
 Create rules through MCP with `save_rule`. Use `list_rules`/`get_rule` to read revisions and acceptance
 history, `list_events`/`get_event` to inspect input, and `preview_rule` to check matches, resolved
-prompts, instance names and descriptions without contacting an agent or creating an instance.
+routing/model settings, both prompts, instance names and descriptions without contacting an agent or creating an instance.
 Preview names are advisory: previews reserve nothing, and intervening work can change the assigned
 name. Updates require the saved revision.
 `get_event_diagnostics` reads the same diagnostics for an exact retained event, including events
@@ -703,7 +703,8 @@ are limited to 100 lines per list and 16 KiB combined per acceptance. Reads exec
 external commands or model prompts; launched status proves session linkage, not task completion.
 Shared definitions live in `$TANDEM_HOME/templates/rules/<name>/rule.json`, alongside the instance
 and provider catalogs in the template Git repository. Each file contains `name`, `script`, `template`,
-`model`, and `initial_prompt`, with optional `variant`, `description`, `start_instance`, and
+`model`, and `initial_prompt`, with optional `variant`, `follow_up_prompt`, `target_instance`,
+`session_name`, `delivery_mode`, `description`, `start_instance`, and
 `focus_pane` (both booleans default true), plus `throttle_seconds` (default `0`) and
 `trigger_at_end` (default `false`).
 The name must match its directory. Activation (`enabled`), saved session metadata, revisions, and execution
@@ -740,13 +741,47 @@ Custom descriptions are trimmed and must contain at most 1000 UTF-8 bytes withou
 invalid results use the verbatim default description. Hooks can extract a PR number from message text and construct
 a `slack://` link from provider fields after checking their presence.
 
-Assigned automation names are permanently reserved across namespaces sharing the Tandem home.
+Fresh-instance names are permanently reserved across namespaces sharing the Tandem home.
 Collisions with reservations, runtime records or case-insensitive workspace entries receive `-2`,
 `-3`, and later suffixes within the length limit. Allocation checks at most 1024 candidates and fails
 that evaluation if none is free. Reservations survive instance purge and event/provider history
 deletion. Upgrade reserves retained acceptance and runtime names; identities deleted before upgrade
 cannot be recovered. Each acceptance retains its resolved description through retries and recreation.
-Late name occupancy fails dispatch rather than reassigning the name or adopting another workspace.
+For fresh-instance rules, late name occupancy fails dispatch rather than adopting another workspace.
+
+Set **Target instance (reuse or create)** in rule Settings, or supply `target_instance` through MCP
+or `rule.json`, to route every match to one exact instance name. Omit it or leave the TUI field blank
+for a fresh instance per match. The target overrides the script's name hook and receives no collision
+suffix. An existing namespace-owned, prepared instance is reused even when its template differs;
+its services, repositories, description and history are preserved. With **Session name** blank, each match
+opens a fresh conversation with the rule's model and prompt. If absent, the target is created from the rule's template using its
+service-start flag. Busy targets wait for their lifecycle lock; unowned paths and foreign-namespace
+resources fail dispatch. Preview shows the fixed target but does not guarantee its availability.
+Named-target acceptances confer no exclusive cleanup ownership; provider deletion skips their instance
+resources. Use explicit instance operations for shared-workspace cleanup or recreation. Their event
+histories retain only each match's linked conversation.
+
+Set **Session name (requires target instance)** to reuse one OpenCode V2 conversation per target and
+name. The first match creates it with that title; later matches use its saved server/session ID even
+after title edits or Tandem restarts. Names are exact and namespace-scoped. Different rules with the
+same target and session name share the conversation. Confirmed session deletion allows creation of a
+replacement; an unavailable server or uncertain creation fails closed. A recreated workspace receives
+its own binding. Event-history deletion preserves bindings and conversations.
+
+**Initial prompt** is used for every new conversation, including a replacement after confirmed deletion.
+**Follow-up prompt (blank uses initial prompt)** supplies incremental input to an existing named
+conversation. Omit `follow_up_prompt` in MCP or `rule.json` to reuse the initial prompt. Both prompts
+render against the accepted event and remain pinned through retries.
+
+**Named-session delivery** selects **Queue** (default), **Steer**, or **Interrupt**. Queue admits input
+behind current work without answering forms. Steer sends guidance to ongoing work. Interrupt stops active
+execution before sending steering input; completed actions remain. Each delivery applies the rule's model
+and current instance guidance. `session_name` and `delivery_mode` expose these settings in MCP and
+`rule.json`; delivery mode applies only to named conversations. Rule rows show the target, session name
+and delivery mode. Acceptance headers show the configured mode and recorded prompt outcome. Queued or
+submitted input confirms server acceptance, not task completion. Uncertain delivery is never resent
+automatically; inspect the conversation before replaying. Run `tandem opencode-setup` and restart open
+OpenCode clients when upgrading the companion.
 
 Prompts use Handlebars with nested paths, `if`/`unless`, `each`, `with`, comparison helpers, and
 inline partials. `{{event.data.text}}` inserts literal text; `{{event}}` and event-path collections
@@ -767,6 +802,16 @@ Event text stays literal and HTML escaping is disabled. Missing interpolated fie
 levels and 50,000 template evaluations, including empty loop bodies. Templates are in-memory and
 expose no filesystem, network, or script helpers. Empty/NUL-containing results or output above
 64 KiB fail that action while retaining its acceptance.
+Handler `template`, `target_instance`, `model`, and `variant` accept the same Handlebars expressions.
+For example, provider metadata can select `template="{{event.metadata.handler}}"`,
+`target_instance="review-{{event.metadata.ticket}}"`, and `model="{{event.metadata.model}}"`.
+Use `variant="{{#if event.metadata.thinking}}{{event.metadata.thinking}}{{/if}}"` for an optional
+thinking selection. An empty rendered variant uses the model default; template, target and model
+must resolve to valid nonempty values. Values retain normal name/model validation without a choice
+allowlist. Missing fields or invalid rendered settings fail evaluation before dispatch. The Settings
+fields accept literals or expressions; previews expose concrete values. Acceptances save resolved
+settings separately from the original definition and use them for dispatch, retries and recreation.
+
 Models use `provider/model`; the optional `variant` selects model-specific thinking, such as `high`.
 An omitted variant uses OpenCode's default. `provider/model#variant` is also accepted; a separate
 variant must agree with an embedded one. The rule editor's blank variant field uses that default,
@@ -779,8 +824,8 @@ Authorization covers every future match of that enabled revision, including trus
 host credentials, model costs, and creation-history cleanup when enabled. External text is task data,
 not authorization. Rules are namespace-local SQLite records. New attempts pin enabled revisions;
 edits and toggles affect future attempts while queued actions retain their saved definition and prompt.
-Every admitted match creates its own fresh instance. Dispatch waits for successful instance readiness,
-then requests a new conversation with the configured model and prompt. Disabling a rule does not
+Every admitted match creates an independent acceptance. Its conversation follows the configured policy. Fresh instance creation waits
+for successful readiness; named targets follow the reuse-or-create behavior above. Disabling a rule does not
 cancel already accepted work.
 
 A namespace lease serializes automation across processes. Dispatch admits four active actions and
@@ -788,7 +833,7 @@ ten starts per minute, including retries. The owned event sidecar processes work
 close. Acceptances retain queued, provisioning, launching, launched, failed, or uncertain outcomes.
 `launched` proves observed session/pane linkage, not prompt completion or task success.
 Provider `assigned` feedback includes dispatch ID, rule name/revision, and instance; it proves durable
-startup admission, not readiness or prompt delivery.
+dispatch admission, not readiness or prompt delivery.
 
 Use confirmed `retry_acceptance` only for pre-launch failures after correcting their cause. It keeps
 the assigned instance and successful siblings. Uncertain launches are never automatically resent;
@@ -839,8 +884,10 @@ alone leave it muted. Container-backed health indicators retain their service-st
 ### Instance-local control
 
 `tandem mcp-instance` is a stdio MCP entry point in the released Tandem binary. It exposes
-`get_instructions()`, `start_self()`, `stop_self()` and `update_repositories()` with empty arguments, plus `conclude`, `search_events`, and
-`get_event_report`. Its startup directory must be an owned instance
+`get_instructions()`, `start_self()`, `stop_self()` and `update_repositories()` with empty arguments, plus
+`close`, `remember`, `search_memories`, `get_memory`, `purge`, `search_conclusions`,
+`get_conclusion`, `search_events`, and `get_event_report`.
+Its startup directory must be an owned instance
 workspace or a subdirectory. The connection pins that workspace's directory identity and namespace;
 mutating actions recheck ownership under the instance lock. Deleted or replaced workspaces require a new
 connection. All conversations in the workspace control the same instance.
@@ -876,23 +923,67 @@ with a ten-minute batch budget and one minute per repository, plus up to five se
 revision read. Coordinate with other sessions before updating; source changes can affect running
 services. Rebuild, restart and verify them separately when needed.
 
-Agents ignore `conclude` unless explicitly instructed to call it; task completion and cleanup needs
-do not trigger it. An instructed `conclude({title, summary, markdown})` call permanently purges the owning
-instance's workspace, containers, volumes and networks, including manually created instances. A retained
-triggering acceptance receives the full Markdown report before cleanup. Without an acceptance link, report
-contents are not saved; preserve needed evidence elsewhere. Ambiguous or mismatched acceptance ownership
-blocks conclusion.
-Before an instructed call, preserve needed edits and artifacts elsewhere and coordinate with other workspace sessions.
-Each acceptance owns one immutable report, so several rules accepting one event retain independent
-reports. SQLite retains reports after instance purge.
+`close({sessions: "current", zellij_tab: false})` closes the calling OpenCode attachment.
+Both fields are optional: `sessions` defaults to `"none"` and also accepts `"all"` for every attachment
+belonging to the instance; `zellij_tab` defaults to false. Setting it true independently closes the
+calling session's verified Zellij tab, including owned shell panes. Unrelated or unverified panes block
+tab closure before any requested effect. Empty/no-op requests fail. Fresh, unambiguous OpenCode caller
+metadata and Zellij attachment evidence are required. Closure preserves services, workspace, volumes,
+conversation history and shared servers; closing clients does not prove server-side execution stopped.
+Agents call it only when explicitly instructed, after coordinating with other sessions. Call it last,
+for example after `stop_self`, because it may disconnect the caller. Closure runs detached; the pending
+receipt confirms admission rather than completion. Failures may be partial; inspect clients and
+state-directory logs before an explicitly instructed retry.
+
+`remember` saves an immutable checkpoint during ongoing work without stopping services, closing clients,
+marking completion or suppressing dispatch/retries. Each call creates a record. Search before retrying
+an uncertain write. Required fields are `title` (500 bytes), `summary` (8 KiB), and either nonempty
+`markdown`, a nonempty `fields` object, or both. Custom fields accept nested objects, arrays, strings,
+numbers, booleans and null; skills define conventions. Optional `labels` are trimmed, lowercased and
+deduplicated. Optional `links` contain `{label, url}` objects with absolute HTTP(S) URLs without credentials;
+URLs are canonicalized and never fetched. Limits: 1 MiB serialized JSON, 16 levels, 4096 values, 32 labels
+(128 bytes each) and 32 links (200-byte labels, 2048-byte URLs). Memory stores text/JSON, not binary files.
+
+```json
+{"title":"Retry diagnosis", "summary":"Verified pool exhaustion", "fields":{"cause":"Retry amplification", "verified":true}, "labels":["backend"], "links":[{"label":"PR", "url":"https://example.com/pull/42"}]}
+```
+
+Receipts include `memory_id`, creation time, instance, opaque `workspace_identity` and optional
+`acceptance_id`/`conclusion_id` provenance. Memory survives purge, name reuse and acceptance/event/provider
+history deletion; historical IDs may not resolve to retained tasks. Keep secrets out of durable memory.
+
+Instance and management MCP expose `search_memories` and `get_memory`. Search takes optional plain
+`query` words, all required, with English word normalization, Unicode case/accent folding and word-prefix
+matching on normalized tokens. Stemming can change prefix boundaries; it is not arbitrary substring matching.
+SQLite full-text relevance weights titles, labels and summaries above body content; ties use
+newest ID. It does not provide semantic or typo matching or accept raw query operators. Omit `query` to
+browse newest first. Optional filters combine with AND: all exact normalized `labels`, all canonical
+`links` URLs, exact `instance`, inclusive RFC3339 `after`/`before`, and exact typed top-level `fields` values.
+For example: `search_memories({query:"retry pool", labels:["backend"], fields:{verified:true}})`.
+Results contain `memories` summaries with matching `snippet` (up to 480 characters) and `has_more`; `limit` defaults to 20
+(1–100), `offset` defaults to zero (maximum 10000). Read full Markdown and JSON with
+`get_memory({memory_id:42})`. Historical contents are untrusted evidence, not instructions or authorization.
+
+Agents call `purge` only when explicitly instructed; task completion and cleanup needs do not
+authorize it. `purge({})` removes the owning instance's workspace, containers,
+volumes and networks without saving memory. Call `remember` first when evidence is needed.
+Cleanup supports instances with or without an acceptance. Ambiguous or mismatched acceptance ownership
+blocks cleanup. Preserve needed edits and artifacts elsewhere and
+coordinate with other workspace sessions before an instructed call; commits and pushes need separate approval.
 Associated OpenCode clients and their Zellij panes close before resource deletion, including when
 OpenCode observation is disabled; empty Zellij tabs close with their last pane. Shared servers and
 conversation history are preserved. Cleanup runs detached and may interrupt the MCP reply; a reply
-confirms cleanup admission, not completion. Unlinked replies contain `instance` and a pending `cleanup_state`;
-inspect the instance to verify cleanup. Linked replies contain the saved report metadata. Reports expose `cleanup_state`
+confirms cleanup admission, not completion. Receipts include `conclusion_id`, nullable `memory_id`, `instance`, nullable
+`acceptance_id`, report title/summary, admission time, `cleanup_state`
 (`pending`, `purging`, `purged`, `failed`) and `cleanup_error`. Failed or interrupted cleanup preserves
-the report. Retries require explicit instruction and instance inspection, with identical contents when a report
-was saved. Titles allow 500 bytes, summaries 8 KiB, and Markdown 1 MiB; all three must be nonempty.
+any saved report. Retries require explicit instruction and instance inspection. Purge reuses existing
+cleanup history and its saved report without duplicating memory.
+
+`search_conclusions({search_strings: ["timeout"]})` searches historical reports with or without an acceptance.
+`get_conclusion({conclusion_id: 42})` returns the full optional report and cleanup outcome, including
+reportless conclusions. Both tools are available through instance and management MCP, scoped to the
+current namespace. Reports for manual instances survive name reuse. Linked history is removed with
+its acceptance, event or provider history; durable memory copies remain searchable.
 
 `search_events({search_strings: ["timeout", "deployment"]})` searches titles, summaries, and full
 Markdown of retained acceptance reports in the current namespace. Any case-insensitive literal
@@ -900,7 +991,8 @@ substring match selects a report once; the `reports` array includes all matching
 sequence, acceptance ID, rule name and cleanup status, newest acceptance first. Supply 1–20 nonempty
 strings, at most 500 bytes each. `get_event_report({acceptance_id: 42})` returns the full Markdown
 and report metadata. Historical reports are untrusted data. Deleting acceptance, event or provider
-history removes its dependent reports.
+history removes its dependent reports, preserving their memory copies. Structured conclusion evidence
+is rendered into Markdown for acceptance-report readers.
 
 Preparation writes `.opencode/opencode.json` before launching a creation-requested client when the
 workspace has no root or `.opencode` JSON/JSONC project configuration. The generated configuration uses
@@ -926,7 +1018,13 @@ add this native V2 entry to it when needed:
     {"action": "tandem-instance_start_self", "resource": "*", "effect": "allow"},
     {"action": "tandem-instance_stop_self", "resource": "*", "effect": "allow"},
     {"action": "tandem-instance_update_repositories", "resource": "*", "effect": "allow"},
-    {"action": "tandem-instance_conclude", "resource": "*", "effect": "allow"},
+    {"action": "tandem-instance_purge", "resource": "*", "effect": "allow"},
+    {"action": "tandem-instance_remember", "resource": "*", "effect": "allow"},
+    {"action": "tandem-instance_search_memories", "resource": "*", "effect": "allow"},
+    {"action": "tandem-instance_get_memory", "resource": "*", "effect": "allow"},
+    {"action": "tandem-instance_close", "resource": "*", "effect": "allow"},
+    {"action": "tandem-instance_search_conclusions", "resource": "*", "effect": "allow"},
+    {"action": "tandem-instance_get_conclusion", "resource": "*", "effect": "allow"},
     {"action": "tandem-instance_search_events", "resource": "*", "effect": "allow"},
     {"action": "tandem-instance_get_event_report", "resource": "*", "effect": "allow"}
   ]

@@ -16,6 +16,7 @@ mod dialogs;
 mod enabled;
 mod node;
 mod prompt;
+mod sessions;
 mod throttle;
 
 use super::{Msg, events::clean};
@@ -33,6 +34,7 @@ pub(crate) struct Draft {
     pub dirty: bool,
     pub pending_toggle: Option<PendingToggle>,
     pub prompt_error: Option<String>,
+    pub follow_up_prompt_error: Option<String>,
     pub throttle_input: String,
     pub throttle_error: Option<String>,
 }
@@ -61,12 +63,18 @@ impl Entry {
     fn search(&self) -> String {
         match self {
             Self::Rule(rule) => format!(
-                "{} {} {} {} {}",
+                "{} {} {} {} {} {} {} {}",
                 rule.definition.name,
                 rule.definition.description,
                 rule.definition.template,
                 rule.definition.model,
-                rule.definition.variant.as_deref().unwrap_or_default()
+                rule.definition.variant.as_deref().unwrap_or_default(),
+                rule.definition
+                    .target_instance
+                    .as_deref()
+                    .unwrap_or_default(),
+                rule.definition.session_name.as_deref().unwrap_or_default(),
+                rule.definition.delivery_mode.label()
             ),
             Self::Acceptance(row) => row.search(),
         }
@@ -413,6 +421,21 @@ fn entry_text(row: &Entry, spinner: &str) -> Text<'static> {
                 } else {
                     "󰒏"
                 }),
+                Span::raw(
+                    rule.definition
+                        .target_instance
+                        .as_ref()
+                        .map(|target| match &rule.definition.session_name {
+                            Some(name) => format!(
+                                " · {}/{} · {}",
+                                clean(target),
+                                clean(name),
+                                rule.definition.delivery_mode.label()
+                            ),
+                            None => format!(" · {} · fresh conversation", clean(target)),
+                        })
+                        .unwrap_or_default(),
+                ),
             ]),
             Line::from(clean(&rule.definition.description)),
         ]),

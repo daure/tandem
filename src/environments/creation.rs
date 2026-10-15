@@ -42,6 +42,28 @@ impl Default for Startup {
 }
 
 impl Environments {
+    pub(crate) fn admit_rule_target(
+        &self,
+        name: &str,
+    ) -> Result<Option<(Option<Instance>, gateway::Lock)>, String> {
+        validate_instance_name(name)?;
+        let Some(lock) = gateway::try_lock(&self.config, &format!("instance-{name}"))? else {
+            return Ok(None);
+        };
+        let instance = journal::recorded(&self.config, name)?;
+        let instance = match instance {
+            Some(instance) if instance.runtime.workspace_ready => {
+                let scope =
+                    self.bind_instance_directory(std::path::Path::new(&instance.workspace))?;
+                let instance = self.verify_instance_scope(&scope)?;
+                self.prepare_workspace_open(&instance.workspace, name)?;
+                Some(self.session_instance(name)?)
+            }
+            _ => None,
+        };
+        Ok(Some((instance, lock)))
+    }
+
     pub(crate) fn admit_instance_start(
         &self,
         name: &str,

@@ -7,14 +7,69 @@ pub(crate) fn definition(name: &str, script: &str) -> Definition {
         description: "Inspect matching events".into(),
         script: script.into(),
         template: "blank".into(),
+        target_instance: None,
+        session_name: None,
+        delivery_mode: Default::default(),
         model: "openai/test-model".into(),
         variant: None,
         initial_prompt: "Inspect {{event.data.text}} from {{event.provider}}".into(),
+        follow_up_prompt: None,
         enabled: true,
         start_instance: true,
         focus_pane: true,
         throttle_seconds: 0,
         trigger_at_end: false,
+    }
+}
+
+#[test]
+fn named_targets_require_valid_instance_names_and_default_to_fresh_instances() {
+    let mut rule = definition("inspect", "fn matches(event) { true }");
+    let value = serde_json::to_value(&rule).unwrap();
+    assert!(value.get("target_instance").is_none());
+    assert!(
+        serde_json::from_value::<Definition>(value)
+            .unwrap()
+            .target_instance
+            .is_none()
+    );
+    for name in ["shared-review", "Review-82"] {
+        rule.target_instance = Some(name.into());
+        validate(&rule).unwrap();
+    }
+    for name in ["", "../review", "review with spaces", &"a".repeat(41)] {
+        rule.target_instance = Some(name.into());
+        assert!(validate(&rule).is_err(), "{name}");
+    }
+}
+
+#[test]
+fn named_sessions_require_a_target_and_preserve_delivery_modes_and_legacy_defaults() {
+    let mut rule = definition("inspect", "fn matches(event) { true }");
+    let mut legacy = serde_json::to_value(&rule).unwrap();
+    legacy.as_object_mut().unwrap().remove("delivery_mode");
+    let legacy: Definition = serde_json::from_value(legacy).unwrap();
+    assert_eq!(legacy.delivery_mode, DeliveryMode::Queue);
+    assert!(legacy.session_name.is_none());
+    rule.session_name = Some("PR triage 日本語".into());
+    assert_eq!(
+        validate(&rule).unwrap_err(),
+        "session_name requires target_instance"
+    );
+    rule.target_instance = Some("review".into());
+    for mode in [
+        DeliveryMode::Queue,
+        DeliveryMode::Steer,
+        DeliveryMode::Interrupt,
+    ] {
+        rule.delivery_mode = mode;
+        validate(&rule).unwrap();
+        let value = serde_json::to_value(&rule).unwrap();
+        assert_eq!(serde_json::from_value::<Definition>(value).unwrap(), rule);
+    }
+    for name in ["", " triage", "triage ", "triage\n", &"x".repeat(201)] {
+        rule.session_name = Some(name.into());
+        assert!(validate(&rule).is_err(), "{name:?}");
     }
 }
 

@@ -9,8 +9,8 @@ pub(super) fn lease(id: i64) -> String {
     format!("conclusion-{id}")
 }
 
-fn worker_lease(id: i64, name: &str) -> String {
-    // Zero identifies cleanup without an acceptance-owned report.
+pub(super) fn worker_lease(id: i64, name: &str) -> String {
+    // Zero identifies instances without a retained acceptance.
     if id == 0 {
         format!("conclusion-instance-{name}")
     } else {
@@ -25,6 +25,7 @@ pub(crate) fn reserve(config: &Config, id: i64, name: &str) -> Result<gateway::L
 pub(crate) fn launch(
     config: &Config,
     id: i64,
+    conclusion_id: i64,
     name: &str,
     instance_lock: gateway::Lock,
     rule_lease: File,
@@ -45,6 +46,7 @@ pub(crate) fn launch(
     command.args([
         "conclusion-worker",
         &id.to_string(),
+        &conclusion_id.to_string(),
         name,
         &descriptors[0].to_string(),
         &descriptors[1].to_string(),
@@ -58,6 +60,7 @@ pub(crate) fn launch(
             "--ignored",
         ])
         .env("TANDEM_TEST_CONCLUSION_ID", id.to_string())
+        .env("TANDEM_TEST_CONCLUSION_RECORD", conclusion_id.to_string())
         .env("TANDEM_TEST_CONCLUSION_NAME", name)
         .env(
             "TANDEM_TEST_CONCLUSION_FDS",

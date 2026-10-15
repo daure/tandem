@@ -278,7 +278,7 @@ fn workspace_mcp_configuration_pins_environment_and_preserves_user_configuration
         value["permission"]["tandem-instance_update_repositories"],
         "allow"
     );
-    assert_eq!(value["permission"]["tandem-instance_conclude"], "allow");
+    assert_eq!(value["permission"]["tandem-instance_purge"], "allow");
     assert_eq!(
         value["permission"]["tandem-instance_search_events"],
         "allow"

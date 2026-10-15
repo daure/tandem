@@ -489,3 +489,31 @@ test("prompted sessions reject mismatched workspaces and invalid input before cr
   }
   assert.deepEqual(client.calls, [])
 })
+
+test("named rule sessions create the reserved identity and title before delivering without focus", async (t) => {
+  const client = await tabClient(t, { providerID: "openai", modelID: "test" })
+  client.context.client.session.create = async (input) => { client.calls.push(["create", input]); return { id: input.id } }
+  client.context.client.session.prompt = async (input) => { client.calls.push(["prompt", input]) }
+  const response = await client.request({ directory: "/work/review", create_id: "ses_reserved", title: "PR triage 日本語",
+    when_busy: "queue", focus: false, instructions: "Services are stopped", initial_prompt: "Review this event" }, undefined, "/sessions")
+  assert.equal(response.status, 200)
+  const outcome = await response.json()
+  assert.equal(outcome.session_id, "ses_reserved")
+  assert.equal(outcome.creation_outcome, "created")
+  assert.equal(outcome.prompt_outcome, "queued")
+  assert.deepEqual(client.calls, [
+    ["create", { location: { directory: "/work/review" }, model: { providerID: "openai", id: "test" }, id: "ses_reserved", title: "PR triage 日本語" }],
+    ["instructions", { sessionID: "ses_reserved", key: "tandem.services", value: "Services are stopped" }],
+    ["prompt", { sessionID: "ses_reserved", text: "Review this event", delivery: "queue", resume: true }],
+  ])
+})
+
+test("a mismatched reserved identity blocks rule input", async (t) => {
+  const client = await tabClient(t, { providerID: "openai", modelID: "test" })
+  client.context.client.session.prompt = () => assert.fail("mismatched identities cannot receive rule input")
+  const response = await client.request({ directory: "/work/review", create_id: "ses_reserved", title: "triage", initial_prompt: "Review" }, undefined, "/sessions")
+  const outcome = await response.json()
+  assert.equal(outcome.prompt_outcome, "not_submitted")
+  assert.equal(outcome.creation_outcome, "uncertain")
+  assert.equal(client.calls.length, 1)
+})

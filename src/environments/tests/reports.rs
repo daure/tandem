@@ -26,9 +26,13 @@ fn fixture() -> (
                     description: String::new(),
                     script: "fn matches(event) { true }".into(),
                     template: "blank".into(),
+                    target_instance: None,
+                    session_name: None,
+                    delivery_mode: Default::default(),
                     model: "openai/test".into(),
                     variant: None,
                     initial_prompt: "Inspect {{event.summary}}".into(),
+                    follow_up_prompt: None,
                     enabled: true,
                     start_instance: false,
                     focus_pane: true,
@@ -59,6 +63,7 @@ fn input(title: &str) -> ReportInput {
         title: title.into(),
         summary: "Fixed deployment".into(),
         markdown: "# Evidence\nÜberprüfung found 100%_literal and a retry issue.\n".into(),
+        ..Default::default()
     }
 }
 
@@ -112,7 +117,24 @@ fn sibling_acceptance_reports_are_durable_searchable_and_namespace_scoped() {
             Some("client closure failed"),
         )
         .unwrap();
+    rules.events.connection().unwrap().execute_batch(
+        "DROP TRIGGER memories_insert; DROP TRIGGER memories_delete; DROP TABLE memory_search; DROP TABLE memories;",
+    ).unwrap();
     let restarted = RuleStore::open(&config).unwrap();
+    let memories = restarted
+        .search_memories(crate::store::memories::MemorySearch {
+            query: Some("deployment".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(memories.memories.len(), 2);
+    for memory in &memories.memories {
+        assert!(memory.details.workspace_identity.is_empty());
+        assert_eq!(
+            restarted.memory(memory.details.memory_id).unwrap().markdown,
+            input("").markdown
+        );
+    }
     for strings in [
         vec!["DEPLOYMENT"],
         vec!["überPRÜFUNG"],
@@ -189,6 +211,14 @@ fn sibling_acceptance_reports_are_durable_searchable_and_namespace_scoped() {
     events
         .delete(Deletion::Event(acceptances[0].event_sequence))
         .unwrap();
+    assert_eq!(
+        restarted
+            .search_memories(crate::store::memories::MemorySearch::default())
+            .unwrap()
+            .memories
+            .len(),
+        2
+    );
     assert!(
         restarted
             .search_reports(vec!["evidence".into()])

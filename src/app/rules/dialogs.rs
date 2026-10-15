@@ -32,6 +32,7 @@ impl App {
                     dirty: false,
                     pending_toggle: None,
                     prompt_error: None,
+                    follow_up_prompt_error: None,
                 }))
             });
         let rule = draft.borrow().rule.clone();
@@ -39,6 +40,11 @@ impl App {
             .service
             .validate_rule_prompt(&rule.definition.initial_prompt)
             .err();
+        draft.borrow_mut().follow_up_prompt_error = rule
+            .definition
+            .follow_up_prompt
+            .as_deref()
+            .and_then(|source| self.service.validate_rule_prompt(source).err());
         let script_draft = draft.clone();
         let script = TextareaInput::new()
             .value(&rule.definition.script)
@@ -63,6 +69,20 @@ impl App {
                 Msg::RuleDraftChanged(model_draft.clone())
             });
         let template_draft = draft.clone();
+        let target_draft = draft.clone();
+        let target = TextInput::new()
+            .value(
+                rule.definition
+                    .target_instance
+                    .as_deref()
+                    .unwrap_or_default(),
+            )
+            .placeholder("Blank creates a new instance per match")
+            .on_change(move |value| {
+                target_draft.borrow_mut().rule.definition.target_instance =
+                    (!value.is_empty()).then_some(value);
+                Msg::RuleDraftChanged(target_draft.clone())
+            });
         let variant_draft = draft.clone();
         let variant = TextInput::new()
             .value(rule.definition.variant.as_deref().unwrap_or_default())
@@ -86,8 +106,31 @@ impl App {
                 prompt_draft.borrow_mut().rule.definition.initial_prompt = value;
                 Msg::RuleDraftChanged(prompt_draft.clone())
             });
+        let follow_up_draft = draft.clone();
+        let follow_up = TextareaInput::new()
+            .value(
+                rule.definition
+                    .follow_up_prompt
+                    .as_deref()
+                    .unwrap_or_default(),
+            )
+            .language(Language::Glimmer)
+            .min_rows(3)
+            .on_change(move |value| {
+                follow_up_draft
+                    .borrow_mut()
+                    .rule
+                    .definition
+                    .follow_up_prompt = (!value.trim().is_empty()).then_some(value);
+                Msg::RuleDraftChanged(follow_up_draft.clone())
+            });
         let settings = tuicore::ScrollContainer::vertical(
             Flex::column()
+                .child(
+                    "event-template-help",
+                    tuicore::Paragraph::new("Handler template, target instance, model and variant accept {{event.…}} expressions. Follow-up input is used when reusing a named session."),
+                    FlexItem::fit_content(),
+                )
                 .child(
                     "enabled",
                     super::enabled::SettingsToggle::enabled(draft.clone()),
@@ -129,6 +172,16 @@ impl App {
                     FlexItem::fit_content(),
                 )
                 .child(
+                    "target-instance",
+                    FormField::new("Target instance (reuse or create)", target),
+                    FlexItem::fit_content(),
+                )
+                .child(
+                    "session-settings",
+                    super::sessions::settings(draft.clone()),
+                    FlexItem::fit_content(),
+                )
+                .child(
                     "model",
                     FormField::new("Session model", model),
                     FlexItem::fit_content(),
@@ -140,7 +193,12 @@ impl App {
                 )
                 .child(
                     "prompt",
-                    super::prompt::PromptField::new(prompt, draft.clone()),
+                    super::prompt::PromptField::new(prompt, draft.clone(), super::prompt::PromptKind::Initial),
+                    FlexItem::fit_content(),
+                )
+                .child(
+                    "follow-up-prompt",
+                    super::prompt::PromptField::new(follow_up, draft.clone(), super::prompt::PromptKind::FollowUp),
                     FlexItem::fit_content(),
                 ),
         );
@@ -189,6 +247,12 @@ impl App {
                 .service
                 .validate_rule_prompt(&draft.rule.definition.initial_prompt)
                 .err();
+            draft.follow_up_prompt_error = draft
+                .rule
+                .definition
+                .follow_up_prompt
+                .as_deref()
+                .and_then(|source| self.service.validate_rule_prompt(source).err());
         }
         if draft.borrow().throttle_error.is_some() {
             self.rule_invalid_drafts
@@ -317,6 +381,7 @@ impl App {
         if !draft.dirty
             && draft.throttle_error.is_none()
             && draft.prompt_error.is_none()
+            && draft.follow_up_prompt_error.is_none()
             && draft.rule == draft.saved
         {
             self.rule_invalid_drafts
@@ -350,7 +415,10 @@ impl App {
                     let mut paused = draft.saved.clone();
                     paused.definition.enabled = false;
                     paused
-                } else if draft.prompt_error.is_some() || draft.throttle_error.is_some() {
+                } else if draft.prompt_error.is_some()
+                    || draft.follow_up_prompt_error.is_some()
+                    || draft.throttle_error.is_some()
+                {
                     draft.dirty = false;
                     continue;
                 } else {
@@ -409,7 +477,7 @@ impl App {
         let mut description = format!("{action} {} rules?", rules.len());
         if enabled {
             description
-                .push_str(" Each match prepares a new instance and launches a model session.");
+                .push_str(" Each match uses its configured instance and conversation. Named sessions may queue, steer or interrupt work.");
         }
         let modal = dialogs::dialog(&format!("{action} all rules"))
             .actions([

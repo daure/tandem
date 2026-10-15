@@ -159,6 +159,14 @@ impl HelperDef for JsonValue {
 }
 
 pub(super) fn render(source: &str, event: &Value) -> Result<String, String> {
+    let result = render_value(source, event)?;
+    if result.trim().is_empty() {
+        return Err("resolved prompt must contain text without NUL characters".into());
+    }
+    Ok(result)
+}
+
+pub(super) fn render_value(source: &str, event: &Value) -> Result<String, String> {
     let template = compile(source)?;
     let mut registry = Handlebars::new();
     registry.set_strict_mode(true);
@@ -185,7 +193,7 @@ pub(super) fn render(source: &str, event: &Value) -> Result<String, String> {
             _ => error.to_string(),
         })?;
     let result = output.into_string().map_err(|error| error.to_string())?;
-    if result.trim().is_empty() || result.contains('\0') {
+    if result.contains('\0') {
         return Err("resolved prompt must contain text without NUL characters".into());
     }
     Ok(result)
