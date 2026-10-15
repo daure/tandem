@@ -328,6 +328,13 @@ observation and navigation without changing externally owned servers or panes. A
 folder cleanup continues through its result. Companion installation is an
 explicit CLI operation; user-owned OpenCode configuration is preserved.
 
+The V2 companion's footer health dot and instance commands consume the namespace's shared state stream.
+They match exact server/session identity to the published owning instance. The companion starts a leased state server when absent,
+independent of the client's lifetime. Disconnects preserve stale state and disable controls. Lifecycle
+menus open an instance-scoped MCP connection before selection, pinning the workspace through confirmation
+and mutation. Session changes invalidate the menu target; lost responses remain uncertain without retry.
+HTTP(S) route opening uses the client's browser and the published service URLs without readiness claims.
+
 The observer samples known client PIDs through Linux `/proc` on its blocking worker. CPU deltas
 require matching process start times; missing processes are evicted and failed readings retain
 stale provenance. Domain projections deduplicate PIDs and aggregate client usage by conversation,

@@ -4,6 +4,7 @@ import { isAbsolute, join } from "node:path"
 import { createServer } from "node:http"
 import { randomBytes } from "node:crypto"
 import { applyInstructions, promptExistingSession, promptFreshSession, rejectFreshSession, selectModel } from "./session-input.mjs"
+import { setupToolbar } from "./toolbar.mjs"
 
 // Runs in each TUI, not in the shared server: route and terminal identity are client-local.
 const plugin = {
@@ -110,7 +111,12 @@ const plugin = {
       },
     }
     await plugin.tui(api, context.options)
-    return () => dispose?.()
+    let stopToolbar
+    if (context.ui.slot) {
+      try { stopToolbar = await setupToolbar(context, server) }
+      catch (error) { context.ui.toast.show({ title: "Tandem toolbar", message: error.message, variant: "error" }) }
+    }
+    return async () => { stopToolbar?.(); await dispose?.() }
   },
   async tui(api, options = {}) {
     let initialPrompt = process.env.TANDEM_INITIAL_PROMPT

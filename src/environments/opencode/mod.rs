@@ -976,6 +976,21 @@ pub(crate) fn install(home: &Path) -> Result<String, String> {
     {
         return Err("OpenCode companion directory escapes TANDEM_HOME".into());
     }
+    for (name, content) in [
+        ("toolbar.mjs", include_bytes!("toolbar.mjs").as_slice()),
+        (
+            "toolbar-transport.mjs",
+            include_bytes!("toolbar-transport.mjs").as_slice(),
+        ),
+        (
+            "toolbar-view.mjs",
+            include_bytes!("toolbar-view.mjs").as_slice(),
+        ),
+    ] {
+        super::config::private_file(&directory.join(name), false)
+            .and_then(|mut file| file.write_all(content))
+            .map_err(|error| error.to_string())?;
+    }
     super::config::private_file(&directory.join("session-input.mjs"), false)
         .and_then(|mut file| file.write_all(include_bytes!("session-input.mjs")))
         .map_err(|error| error.to_string())?;
@@ -984,6 +999,13 @@ pub(crate) fn install(home: &Path) -> Result<String, String> {
         .map_err(|error| error.to_string())?;
     super::config::private_file(&directory.join("tui.js"), false)
         .and_then(|mut file| file.write_all(b"export { default } from './bridge.mjs'\n"))
+        .map_err(|error| error.to_string())?;
+    let settings = serde_json::to_vec(&serde_json::json!({
+        "binary": super::executable::installed()?
+    }))
+    .map_err(|error| error.to_string())?;
+    super::config::private_file(&directory.join("companion.json"), false)
+        .and_then(|mut file| file.write_all(&settings))
         .map_err(|error| error.to_string())?;
     Ok(format!(
         "Add this directory to the plugins array in your OpenCode cli.json (V1: bridge.mjs in tui.json), then reopen OpenCode clients:\n{}",

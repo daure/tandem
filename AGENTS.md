@@ -45,9 +45,10 @@ python3 src/environments/opencode/tests/live.py
 ```
 
 Requires Linux with Python 3, OpenCode (verified with 1.18.29 and 2.0.22), and Zellij 0.45 or later on `PATH`.
+V2 checks require `target/debug/tandem` from `cargo build --bin tandem` and create a temporary workspace-only instance.
 It starts temporary servers and terminal clients with isolated configuration, sends no model
 prompts, and cleans up its test resources. Passing checks cover companion loading, conversation
-switches, exact stacked-pane focus, and client-close detection.
+switches, the scoped instance toolbar, exact stacked-pane focus, and client-close detection.
 
 Keep this check explicitly opt-in and outside routine test commands, CI, builds, installation,
 and release workflows. Python is a development prerequisite for this check, not a Tandem runtime

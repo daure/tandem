@@ -21,12 +21,14 @@ from live import wait_for
 def main():
     binary = os.environ.get('OPENCODE_V2_TEST_BINARY') or shutil.which('opencode')
     zellij = shutil.which('zellij')
+    tandem = str(Path(__file__).resolve().parents[4] / 'target/debug/tandem')
     assert binary and zellij
+    assert Path(tandem).is_file(), 'Build tandem before running the V2 live check'
     with tempfile.TemporaryDirectory(prefix='tandem-v2-live-') as temporary:
         root = Path(temporary)
-        workspace = root / 'workspace'
+        home = root / 'tandem'
+        workspace = home / 'workspaces/toolbar'
         config = root / 'config/opencode'
-        workspace.mkdir()
         config.mkdir(parents=True)
         password = secrets.token_urlsafe(32)
         env = {'PATH': os.environ['PATH'], 'HOME': str(root), 'LANG': 'C.UTF-8', 'TERM': 'xterm-256color',
@@ -34,18 +36,23 @@ def main():
                'XDG_STATE_HOME': str(root / 'state'), 'XDG_CACHE_HOME': str(root / 'cache'),
                'OPENCODE_CONFIG_DIR': str(config), 'OPENCODE_PASSWORD': password,
                'OPENCODE_DISABLE_PROJECT_CONFIG': '1', 'OPENCODE_DISABLE_MODELS_FETCH': '1',
-               'OPENCODE_CONFIG_CONTENT': '{"update":"disable"}', 'OPENCODE_DISABLE_FFF': '1'}
-        package = Path(os.environ.get('TANDEM_V2_PLUGIN_DIR', str(root / 'companion')))
+               'OPENCODE_CONFIG_CONTENT': '{"update":"disable"}', 'OPENCODE_DISABLE_FFF': '1',
+               'TANDEM_HOME': str(home), 'TANDEM_NAMESPACE': f'tandem-live-{os.getpid()}'}
+        template = home / 'templates/blank'
+        template.mkdir(parents=True)
+        (template / 'tandem.json').write_text('{}')
+        subprocess.run([tandem, 'new-instance', 'toolbar', '-t', 'blank', '--start-instance', 'false'],
+                       cwd=root, env=env, capture_output=True, check=True, timeout=30)
+        package = Path(os.environ.get('TANDEM_V2_PLUGIN_DIR', str(home / 'opencode-plugin')))
         if 'TANDEM_V2_PLUGIN_DIR' not in os.environ:
-            package.mkdir()
-            shutil.copyfile(Path(__file__).resolve().parents[1] / 'bridge.mjs', package / 'bridge.mjs')
-            shutil.copyfile(Path(__file__).resolve().parents[1] / 'session-input.mjs', package / 'session-input.mjs')
-            (package / 'tui.js').write_text("export { default } from './bridge.mjs'\n")
+            subprocess.run([tandem, 'opencode-setup'], cwd=root, env=env,
+                           capture_output=True, check=True, timeout=15)
         control = root / 'control'
         control.mkdir()
         route_file = root / 'route.json'
         tabs_file = root / 'tabs.json'
         tab_ids_file = root / 'tab-ids.json'
+        footer_file = root / 'footer.json'
         (control / 'tui.js').write_text('''import { readFile, writeFile } from "node:fs/promises"
 export default { id: "test.route", setup(ctx) {
   let previous = "", stopped = false
@@ -54,11 +61,19 @@ export default { id: "test.route", setup(ctx) {
     try {
       await writeFile(ctx.options.tabs, JSON.stringify(ctx.ui.tabs.list().length))
       await writeFile(ctx.options.ids, JSON.stringify(ctx.ui.tabs.list().map(tab => tab.sessionID)))
+      const bounds = id => {
+        const node = ctx.renderer.root.findDescendantById(id)
+        return node && { x: node.x, y: node.y, width: node.width, height: node.height }
+      }
+      await writeFile(ctx.options.footer, JSON.stringify({
+        dot: bounds("tandem.instance.health"), location: bounds("prompt.footer.location"),
+      }))
       const value = await readFile(ctx.options.file, "utf8")
       if (!stopped && value !== previous) {
         previous = value
         const action = JSON.parse(value)
-        if (action.close) ctx.ui.tabs.close(action.close)
+        if (action.clearDialog) ctx.ui.dialog.clear()
+        else if (action.close) ctx.ui.tabs.close(action.close)
         else if (action.move) ctx.ui.tabs.move(...action.move)
         else ctx.ui.router.navigate(action)
       }
@@ -67,7 +82,7 @@ export default { id: "test.route", setup(ctx) {
   return () => { stopped = true; clearInterval(timer) }
 } }
 ''')
-        (config / 'cli.json').write_text(json.dumps({'plugins': [str(package), {'package': str(control), 'options': {'file': str(route_file), 'tabs': str(tabs_file), 'ids': str(tab_ids_file)}}],
+        (config / 'cli.json').write_text(json.dumps({'plugins': [{'package': str(package), 'options': {'autoStartState': False}}, {'package': str(control), 'options': {'file': str(route_file), 'tabs': str(tabs_file), 'ids': str(tab_ids_file), 'footer': str(footer_file)}}],
                                                     'tabs': {'mode': 'on'}}))
         zconfig = root / 'zellij.kdl'
         zconfig.write_text('default_shell "/bin/sh"\npane_frames true\n')
@@ -75,10 +90,13 @@ export default { id: "test.route", setup(ctx) {
         terminal = None
         master = None
         created = False
+        state_server = None
         with (root / 'server.log').open('w+') as log:
             server = subprocess.Popen([binary, 'serve', '--hostname', '127.0.0.1', '--port', '0'],
                                       cwd=workspace, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
             try:
+                state_server = subprocess.Popen([tandem, 'serve-state'], cwd=workspace, env=env,
+                                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 def address():
                     log.seek(0)
                     for line in log:
@@ -114,14 +132,14 @@ export default { id: "test.route", setup(ctx) {
                         pass
                 threading.Thread(target=drain, daemon=True).start()
 
-                def zj(*arguments):
+                def zj(*arguments, strip=True):
                     result = subprocess.run([zellij, '--session', name, *arguments], cwd=workspace, env=env,
                                             capture_output=True, text=True, timeout=10)
                     unchanged = result.returncode == 2 and (arguments[:2] in (('action', 'hide-floating-panes'), ('action', 'show-floating-panes'))
                         or arguments[:2] == ('action', 'focus-pane-id') and 'already focused' in result.stderr)
                     if result.returncode and not unchanged:
                         raise RuntimeError(result.stderr)
-                    return result.stdout.strip()
+                    return result.stdout.strip() if strip else result.stdout
 
                 wait_for(lambda: len(zj('action', 'list-clients').splitlines()) > 1)
                 pane = zj('action', 'new-pane', '--stacked', '--name', '', '--cwd', str(workspace), '--',
@@ -140,6 +158,38 @@ export default { id: "test.route", setup(ctx) {
                 assert record['activity'] == 'idle'
                 assert password not in json.dumps(record)
                 print('PASS: V2 loads the companion package and publishes exact session/pane/server identity')
+                def screen():
+                    return zj('action', 'dump-screen', '--pane-id', pane, strip=False)
+
+                try:
+                    wait_for(lambda: '● ' in screen())
+                except AssertionError:
+                    print(screen())
+                    raise
+                def footer():
+                    return json.loads(footer_file.read_text())
+                layout = wait_for(lambda: footer() if footer().get('dot') and footer().get('location') else None)
+                dot, location = layout['dot'], layout['location']
+                assert dot['width'] == 2 and dot['height'] == 1, layout
+                assert dot['y'] == location['y'] and location['x'] == dot['x'] + 2, layout
+                assert 'commands' in screen()
+                zj('action', 'write', '--pane-id', pane, '24')
+                zj('action', 'write', '--pane-id', pane, str(ord('i')))
+                wait_for(lambda: 'Purge instance' in screen())
+                assert 'Start services' not in screen() and 'Stop services' not in screen()
+                route_file.write_text(json.dumps({'clearDialog': True}))
+                wait_for(lambda: 'Purge instance' not in screen())
+                outside_directory = root / 'outside'
+                outside_directory.mkdir()
+                outside = api('/api/session', {'title': 'Outside Tandem', 'location': {'directory': str(outside_directory)}})['data']['id']
+                route_file.write_text(json.dumps({'type': 'session', 'sessionID': outside}))
+                wait_for(lambda: receipt(outside))
+                wait_for(lambda: not footer().get('dot'))
+                route_file.write_text(json.dumps({'close': outside}))
+                api(f'/api/session/{outside}', method='DELETE')
+                route_file.write_text(json.dumps({'type': 'session', 'sessionID': first}))
+                wait_for(lambda: receipt(first) and footer().get('dot'))
+                print('PASS: the health dot takes two columns beside the native footer, Ctrl+X I opens actions, and the dot hides outside Tandem')
                 route_file.write_text(json.dumps({'type': 'session', 'sessionID': second}))
                 wait_for(lambda: receipt(second))
                 assert not receipt(first)
@@ -148,7 +198,7 @@ export default { id: "test.route", setup(ctx) {
                 def native_order(record):
                     tabs = record.get('tabs', []) + ([record] if record['id'] else [])
                     return [tab['id'] for tab in sorted(tabs, key=lambda tab: tab['tab_index'])]
-                before_tabs = len(native_order(receipt(second)))
+                before_tabs = wait_for(lambda: len(native_order(receipt(second))))
                 before_panes = json.loads(zj('action', 'list-panes', '--all', '--json'))
                 control_receipt = receipt(second)['tab_control']
                 def tab_action(path, body):
@@ -306,6 +356,13 @@ export default { id: "test.route", setup(ctx) {
                 except subprocess.TimeoutExpired:
                     server.kill()
                     server.wait()
+                if state_server:
+                    state_server.terminate()
+                    try:
+                        state_server.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        state_server.kill()
+                        state_server.wait()
 
 
 if __name__ == '__main__':

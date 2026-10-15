@@ -328,6 +328,37 @@ The prompt travels as a literal environment value; avoid including secrets.
 CLI success confirms requested preparation/readiness and pane launch, not prompt delivery or model completion.
 The companion reports submission failures in the new client and does not retry uncertain requests.
 
+In OpenCode V2, the companion shows an instance-health dot in a two-column cell before the footer's
+workspace path for conversations associated with Tandem. The dot uses the shared health color;
+stale observations are amber and stopped instances are muted. Press **Ctrl+X, I** for instance actions
+or **Ctrl+X, R** for routes with the default leader. These bindings follow the configured leader and
+take precedence over image attachments and session redo while the corresponding Tandem command is
+available. Remap `tandem.instance.actions` and `tandem.instance.routes` in OpenCode's CLI keybindings.
+The command palette also exposes **Tandem: Instance actions** and **Tandem: Open instance route**.
+Start reapplies the trusted template; Stop preserves workspace data.
+The menu omits Start when all expected services are running and Stop for stopped, not-started, or
+completed instances. Selections are checked against the latest observed state before execution.
+Workspace-only instances offer Purge without service controls. Purge requires confirmation and can
+close the current client; saved conversation history and memories remain.
+
+The instance controls require enabled Tandem OpenCode integration. `opencode-setup` records its own
+executable path for requests; direct source loading falls back to `tandem` on `PATH`.
+It subscribes to the shared state stream and starts a detached `tandem serve-state` if unavailable;
+that process keeps observing after the client closes. Disconnects retain an amber dot and disable
+controls until observation recovers. Lifecycle requests bind the workspace before opening the menu;
+session switches and workspace replacement invalidate the selection. Uncertain replies are not retried.
+Routes open their published HTTP(S) URLs in the local browser; listing a route does not certify readiness.
+On Linux, routes use the scheme's default desktop browser through `gtk-launch` to request foreground
+activation. When the handler or GTK launcher is unavailable, they use `xdg-open`; desktop focus policy
+still controls activation. A failed launch is not retried through another opener unless GTK is missing.
+Native Windows route opening uses Windows PowerShell's `Start-Process` with the registered HTTP(S)
+handler; the URL is passed as environment data rather than PowerShell source. macOS uses `open`.
+
+Companion plugin options `tandemBinary`, `tandemHome`, and `tandemNamespace` select another local
+executable or scope. Home and namespace default to the workspace's configured `tandem-instance`
+MCP environment, then the client's inherited environment. Set `autoStartState: false` when managing
+`serve-state` yourself. The instance controls share the companion's loopback-server requirement.
+
 Open a prompted conversation in an existing instance with:
 
 ```bash
