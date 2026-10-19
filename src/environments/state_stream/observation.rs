@@ -10,6 +10,7 @@ use crate::store::{
     environments::{Instance, RuntimeInventory},
     state_stream,
 };
+use rusqlite::TransactionBehavior;
 
 #[derive(Deserialize, Serialize)]
 struct InventoryObservation {
@@ -19,6 +20,22 @@ struct InventoryObservation {
 }
 
 impl Store {
+    pub(crate) fn save_opencode_observation(
+        &self,
+        snapshot: &crate::store::opencode::Snapshot,
+    ) -> Result<std::collections::BTreeMap<(String, String), Option<String>>, String> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let mut snapshot = snapshot.clone();
+        let edits = self.edits_in(&transaction)?;
+        snapshot.apply_session_edits(&edits);
+        self.save_observation_in(&transaction, "opencode", &snapshot)?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(edits)
+    }
+
     pub(crate) fn preserve_failed_inventory(
         &self,
         mut inventory: RuntimeInventory,

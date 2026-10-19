@@ -19,6 +19,7 @@ pub(super) async fn run(
     generation: u64,
     signal: Arc<Signal>,
     shared: Option<Arc<crate::environments::state_stream::Store>>,
+    rules: Option<Arc<super::super::rules::Integration>>,
 ) {
     let _lease = if let Some(store) = &shared {
         let mut revision = 0;
@@ -218,7 +219,14 @@ pub(super) async fn run(
             }
         }
         if flags & REMOTE == 0 && !local {
-            save_shared(&integration, generation, shared.as_ref(), _lease.as_ref()).await;
+            save_shared(
+                &integration,
+                generation,
+                shared.as_ref(),
+                _lease.as_ref(),
+                rules.as_ref(),
+            )
+            .await;
             continue;
         }
         let mut result = tokio::time::timeout(
@@ -247,7 +255,14 @@ pub(super) async fn run(
             return;
         }
         publish(&integration, generation, result);
-        save_shared(&integration, generation, shared.as_ref(), _lease.as_ref()).await;
+        save_shared(
+            &integration,
+            generation,
+            shared.as_ref(),
+            _lease.as_ref(),
+            rules.as_ref(),
+        )
+        .await;
     }
 }
 
@@ -256,11 +271,12 @@ async fn save_shared(
     generation: u64,
     store: Option<&Arc<crate::environments::state_stream::Store>>,
     lease: Option<&Arc<crate::environments::gateway::Lock>>,
+    rules: Option<&Arc<super::super::rules::Integration>>,
 ) {
     let (Some(store), Some(owner)) = (store, integration.upgrade()) else {
         return;
     };
-    let snapshot = {
+    let mut snapshot = {
         let state = owner
             .state
             .lock()
@@ -271,15 +287,39 @@ async fn save_shared(
         state.retention.visible_snapshot(&state.snapshot)
     };
     drop(owner);
+    let deleted = snapshot.observation.deleted_sessions.clone();
     let store = store.clone();
     let lease = lease.cloned();
+    let rules = rules.cloned();
     match tokio::task::spawn_blocking(move || {
         let _lease = lease;
-        store.save_observation("opencode", &snapshot)
+        super::sessions::persist_deletions(
+            &snapshot.observation.deleted_sessions,
+            &store,
+            rules.as_deref(),
+        )?;
+        snapshot.observation.deleted_sessions.clear();
+        store.save_opencode_observation(&snapshot)
     })
     .await
     {
-        Ok(Ok(())) => {}
+        Ok(Ok(edits)) => {
+            if let Some(owner) = integration.upgrade() {
+                let mut state = owner
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if state.generation == generation {
+                    state.snapshot.apply_session_edits(&edits);
+                    state.session_edits.extend(edits);
+                    state
+                        .snapshot
+                        .observation
+                        .deleted_sessions
+                        .retain(|key| !deleted.contains(key));
+                }
+            }
+        }
         result => crate::diagnostics::record_error(
             "cannot share OpenCode observation",
             &std::io::Error::other(format!("{result:?}")),
@@ -309,6 +349,14 @@ pub(super) fn publish(
     state.initial_observation_complete = true;
     match result {
         Ok(mut snapshot) => {
+            state.session_edits.extend(
+                snapshot
+                    .observation
+                    .deleted_sessions
+                    .iter()
+                    .cloned()
+                    .map(|key| (key, None)),
+            );
             state.forgotten_directories.retain(|directory| {
                 !snapshot
                     .clients

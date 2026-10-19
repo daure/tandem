@@ -235,9 +235,13 @@ Daemon port records require an IPv4 loopback listener or a fresh client receipt 
 Saved idle history alone does not trigger requests to stopped servers. The liveness check discovers listener
 changes, so retained records become observable when their server starts and release subscriptions
 when it stops without dependent work. Dormant records remain owned by their launcher.
-Observation skips definitely missing directories without fresh clients or unfinished work, even
-when their shared server listens. Filesystem access errors retain uncertainty. Failed directory
-status reads preserve cached conversations subject to verification retention.
+Directory reads skip definitely missing directories without fresh clients or unfinished work, even
+when their shared server listens. Saved identities can be checked directly on listening servers.
+Filesystem access errors retain uncertainty. Failed directory-status reads preserve cached
+conversations subject to verification retention.
+Known sessions receive bounded identity checks independently of directory-status failures and the
+recent-history window. Confirmed server-side absence records deletion markers and removes retained
+conversation links; failed identity reads preserve uncertainty.
 
 The bundled OpenCode TUI companion runs in each client and publishes its current route and open
 session tabs with PID, heartbeat, server, and Zellij identity. Native reactive computations track

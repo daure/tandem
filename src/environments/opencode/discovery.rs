@@ -4,6 +4,27 @@ use super::{Observer, Presence, transport::local_server};
 use crate::store::opencode::{Activity, Session};
 
 impl Observer {
+    pub(super) fn observation_inventory(
+        &self,
+        sessions: &[Session],
+    ) -> (Vec<Presence>, BTreeMap<String, BTreeSet<String>>) {
+        let listening = listening_ports();
+        let (presences, mut servers) = self.inventory_with_sessions_at_ports(sessions, &listening);
+        for session in sessions {
+            if !self.excluded.sessions.contains(&session.id)
+                && !self.excluded.servers.contains(&session.server)
+                && let Some(server) = local_server(&session.server)
+                && reqwest::Url::parse(&server)
+                    .ok()
+                    .and_then(|url| url.port())
+                    .is_some_and(|port| listening.contains(&port))
+            {
+                servers.entry(server).or_default();
+            }
+        }
+        (presences, servers)
+    }
+
     pub(super) fn inventory_with_sessions(
         &self,
         sessions: &[Session],

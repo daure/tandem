@@ -549,11 +549,20 @@ impl Store {
         kind: &str,
         snapshot: &impl serde::Serialize,
     ) -> Result<(), String> {
+        self.save_observation_in(&*self.connection()?, kind, snapshot)
+    }
+
+    fn save_observation_in(
+        &self,
+        connection: &rusqlite::Connection,
+        kind: &str,
+        snapshot: &impl serde::Serialize,
+    ) -> Result<(), String> {
         let payload = serde_json::to_string(snapshot).map_err(|error| error.to_string())?;
         if payload.len() > state_stream::MAX_FRAME_BYTES {
             return Err("shared observation exceeds 16 MiB".into());
         }
-        self.connection()?.execute("INSERT INTO state_observations(namespace, kind, payload) VALUES (?1, ?2, ?3) ON CONFLICT(namespace, kind) DO UPDATE SET payload = excluded.payload, revision = revision + 1 WHERE payload <> excluded.payload", params![self.config.namespace, kind, payload]).map_err(|error| error.to_string())?;
+        connection.execute("INSERT INTO state_observations(namespace, kind, payload) VALUES (?1, ?2, ?3) ON CONFLICT(namespace, kind) DO UPDATE SET payload = excluded.payload, revision = revision + 1 WHERE payload <> excluded.payload", params![self.config.namespace, kind, payload]).map_err(|error| error.to_string())?;
         Ok(())
     }
 

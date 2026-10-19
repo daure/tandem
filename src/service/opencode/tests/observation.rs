@@ -9,6 +9,113 @@ use std::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[test]
+fn shared_deletion_markers_override_inflight_observations() {
+    let service = crate::service::AppService::for_tests();
+    let integration = Arc::downgrade(&service.opencode);
+    let session = crate::store::opencode::Session {
+        server: "http://127.0.0.1:4199".into(),
+        id: "ses_old".into(),
+        ..Default::default()
+    };
+    service
+        .state_stream
+        .apply_session_edits(&std::collections::BTreeMap::from([(
+            (session.server.clone(), session.id.clone()),
+            None,
+        )]))
+        .unwrap();
+    publish(
+        &integration,
+        0,
+        Ok(Snapshot {
+            sessions: vec![session],
+            ..Default::default()
+        }),
+    );
+    service.runtime.block_on(save_shared(
+        &integration,
+        0,
+        Some(&service.state_stream),
+        None,
+        Some(&service.rules),
+    ));
+    assert!(service.opencode_snapshot().sessions.is_empty());
+}
+
+#[test]
+fn confirmed_deletions_remain_pending_until_shared_persistence_succeeds() {
+    let service = crate::service::AppService::for_tests();
+    let integration = Arc::downgrade(&service.opencode);
+    let deleted: (String, String) = ("http://127.0.0.1:4199".into(), "ses_old".into());
+    let session = crate::store::opencode::Session {
+        server: deleted.0.clone(),
+        id: deleted.1.clone(),
+        directory: "/work/missing".into(),
+        ..Default::default()
+    };
+    service
+        .state_stream
+        .associate_origin(&session, "missing", Some("slack://message/1"))
+        .unwrap();
+    let mut observed = Snapshot::default();
+    observed
+        .observation
+        .deleted_sessions
+        .insert(deleted.clone());
+    publish(&integration, 0, Ok(observed));
+    let connection =
+        rusqlite::Connection::open(service.config_for_tests().home.join("state-stream.sqlite3"))
+            .unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_edits BEFORE INSERT ON state_session_edits BEGIN SELECT RAISE(FAIL, 'read only state'); END;").unwrap();
+    service.runtime.block_on(save_shared(
+        &integration,
+        0,
+        Some(&service.state_stream),
+        None,
+        Some(&service.rules),
+    ));
+    assert!(
+        service
+            .opencode_snapshot()
+            .observation
+            .deleted_sessions
+            .contains(&deleted)
+    );
+    assert_eq!(service.state_stream.retained_sessions().unwrap().len(), 1);
+    connection
+        .execute_batch("DROP TRIGGER reject_edits")
+        .unwrap();
+    service.runtime.block_on(save_shared(
+        &integration,
+        0,
+        Some(&service.state_stream),
+        None,
+        Some(&service.rules),
+    ));
+    assert!(
+        service
+            .opencode_snapshot()
+            .observation
+            .deleted_sessions
+            .is_empty()
+    );
+    assert!(service.state_stream.retained_sessions().unwrap().is_empty());
+    assert_eq!(
+        service.state_stream.session_edits().unwrap().get(&deleted),
+        Some(&None)
+    );
+    publish(
+        &integration,
+        0,
+        Ok(Snapshot {
+            sessions: vec![session],
+            ..Default::default()
+        }),
+    );
+    assert!(service.opencode_snapshot().sessions.is_empty());
+}
+
+#[test]
 fn initial_observation_completes_on_empty_results_or_failure_and_resets_per_generation() {
     let owner = Arc::new(Integration::new());
     let integration = Arc::downgrade(&owner);
@@ -65,7 +172,7 @@ esac
         let settings = Arc::new(crate::service::settings::Settings::open(root.path().join("settings.sqlite3")).unwrap());
         let owner = Arc::new(Integration::new());
         let signal = Arc::new(Signal::default());
-        let worker = tokio::spawn(run(observer, Arc::downgrade(&owner), settings, 0, Arc::clone(&signal), None));
+        let worker = tokio::spawn(run(observer, Arc::downgrade(&owner), settings, 0, Arc::clone(&signal), None, None));
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 if !owner.state.lock().unwrap().snapshot.sessions.is_empty() { break; }
@@ -184,7 +291,7 @@ fn live_events_refresh_state_and_idle_sampling_does_not_query_the_server() {
         owner.observer = observer.clone();
         let owner = Arc::new(owner);
         let signal = Arc::new(Signal::default());
-        let worker = tokio::spawn(run(observer, Arc::downgrade(&owner), settings, 0, Arc::clone(&signal), None));
+        let worker = tokio::spawn(run(observer, Arc::downgrade(&owner), settings, 0, Arc::clone(&signal), None, None));
         let wait = |activity| {
             let owner = Arc::clone(&owner);
             async move {

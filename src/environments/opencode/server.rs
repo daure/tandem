@@ -15,7 +15,6 @@ pub(super) struct Observation {
     pub approvals: BTreeSet<String>,
     pub approval_directories: BTreeSet<String>,
     pub failed_status: BTreeSet<String>,
-    pub failed_history: BTreeSet<String>,
     pub sessions: BTreeMap<String, RemoteSession>,
     pub deleted: BTreeSet<String>,
     pub errors: Vec<Failure>,
@@ -29,7 +28,6 @@ pub(super) async fn observe(
 ) -> Observation {
     let mut observation = Observation {
         failed_status: directories.clone(),
-        failed_history: directories.clone(),
         ..Default::default()
     };
     let result = tokio::time::timeout(Duration::from_secs(2), async {
@@ -84,10 +82,6 @@ pub(super) async fn observe(
                 }
             }
         }
-        if observation.failed_status.len() == directories.len() {
-            return Ok::<(), String>(());
-        }
-
         let mut history_tasks = tokio::task::JoinSet::new();
         for directory in directories {
             let mut path = reqwest::Url::parse("http://localhost/experimental/session")
@@ -107,8 +101,7 @@ pub(super) async fn observe(
         }
         while let Some(result) = history_tasks.join_next().await {
             match result {
-                Ok((directory, Ok(sessions))) => {
-                    observation.failed_history.remove(&directory);
+                Ok((_, Ok(sessions))) => {
                     for session in sessions {
                         observation.sessions.insert(session.id.clone(), session);
                     }
@@ -117,12 +110,8 @@ pub(super) async fn observe(
                     observation
                         .errors
                         .push(Failure::directory(server, &directory, error));
-                    observation.failed_history.insert(directory);
                 }
                 Err(error) => {
-                    observation
-                        .failed_history
-                        .extend(directories.iter().cloned());
                     observation
                         .errors
                         .push(Failure::server(server, error.to_string()));
@@ -132,24 +121,30 @@ pub(super) async fn observe(
         candidates.extend(observation.statuses.keys().cloned());
         candidates.extend(observation.questions.iter().cloned());
         candidates.extend(observation.approvals.iter().cloned());
+        let mut candidates = candidates
+            .into_iter()
+            .filter(|id| valid_id(id) && !observation.sessions.contains_key(id))
+            .collect::<Vec<_>>()
+            .into_iter();
         let mut session_tasks = tokio::task::JoinSet::new();
-        for id in candidates.into_iter().filter(|id| valid_id(id)) {
-            if observation.sessions.contains_key(&id) {
-                continue;
+        loop {
+            while session_tasks.len() < 16 {
+                let Some(id) = candidates.next() else { break };
+                let client = client.clone();
+                let server = server.to_owned();
+                session_tasks.spawn(async move {
+                    let result = transport::get_optional::<RemoteSession>(
+                        &client,
+                        &server,
+                        &format!("/session/{id}"),
+                    )
+                    .await;
+                    (id, result)
+                });
             }
-            let client = client.clone();
-            let server = server.to_owned();
-            session_tasks.spawn(async move {
-                let result = transport::get_optional::<RemoteSession>(
-                    &client,
-                    &server,
-                    &format!("/session/{id}"),
-                )
-                .await;
-                (id, result)
-            });
-        }
-        while let Some(result) = session_tasks.join_next().await {
+            let Some(result) = session_tasks.join_next().await else {
+                break;
+            };
             match result {
                 Ok((_, Ok(Some(session)))) => {
                     observation.sessions.insert(session.id.clone(), session);
@@ -167,7 +162,7 @@ pub(super) async fn observe(
                 }
             }
         }
-        Ok(())
+        Ok::<(), String>(())
     })
     .await;
     match result {

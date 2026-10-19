@@ -258,6 +258,7 @@ impl Observer {
             .collect::<BTreeSet<_>>();
         let previous_resources = previous.resources;
         let mut unfinished_sessions = previous.observation.unfinished_sessions;
+        let mut deleted_sessions = previous.observation.deleted_sessions;
         for session in &previous.sessions {
             if matches!(session.activity, Activity::Busy | Activity::AwaitingAnswer)
                 || session.approval_pending == Some(true)
@@ -271,14 +272,13 @@ impl Observer {
             }
         }
         let previous_sessions = previous.sessions.clone();
-        let (presences, servers) = tokio::task::spawn_blocking(move || {
-            observer.inventory_with_sessions(&previous_sessions)
-        })
-        .await
-        .map_err(|error| error.to_string())?;
+        let (presences, servers) =
+            tokio::task::spawn_blocking(move || observer.observation_inventory(&previous_sessions))
+                .await
+                .map_err(|error| error.to_string())?;
         directories.extend(presences.iter().map(|presence| presence.directory.clone()));
         let client = transport::client()?;
-        let servers_for_questions = servers.keys().cloned().collect::<BTreeSet<_>>();
+        let question_directories = servers.clone();
         let previous_panes: BTreeMap<_, _> = previous
             .sessions
             .iter()
@@ -329,6 +329,12 @@ impl Observer {
                 .iter()
                 .filter(|presence| local_server(&presence.server).as_ref() == Some(&server))
                 .map(|presence| presence.id.clone())
+                .chain(
+                    sessions
+                        .values()
+                        .filter(|session| session.server == server)
+                        .map(|session| session.id.clone()),
+                )
                 .collect();
             let client = client.clone();
             // Unfinished servers stay stale even if their worker fails.
@@ -353,16 +359,11 @@ impl Observer {
             let failed_status = failed_status_directories.entry(server.clone()).or_default();
             *failed_status = observation.failed_status;
             errors.extend(observation.errors);
-            sessions.retain(|id, session| {
-                session.server != server
-                    || failed_status.contains(&session.directory)
-                    || observation.failed_history.contains(&session.directory)
-                    || observation.sessions.contains_key(id)
-            });
             for id in observation.deleted {
                 if !observed_sessions.contains(&id) {
                     sessions.remove(&id);
                 }
+                deleted_sessions.insert((server.clone(), id.clone()));
                 deleted.insert(id);
             }
             for (_, item) in observation.sessions {
@@ -733,7 +734,16 @@ impl Observer {
         let mut questions: Vec<_> = sessions
             .values()
             .filter(|_| remote)
-            .filter(|session| servers_for_questions.contains(&session.server))
+            .filter(|session| {
+                question_directories
+                    .get(&session.server)
+                    .is_some_and(|directories| {
+                        directories.iter().any(|directory| {
+                            Path::new(&session.directory).starts_with(directory)
+                                || Path::new(directory).starts_with(&session.directory)
+                        })
+                    })
+            })
             .filter(|session| question_refresh.contains(&session.id) || !session.question_observed)
             .filter(|session| !session.saved())
             .map(|session| {
@@ -844,6 +854,7 @@ impl Observer {
                 missing_directories,
                 verified_panes,
                 unfinished_sessions,
+                deleted_sessions,
                 failures: errors,
             },
         };

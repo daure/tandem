@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde_json::json;
 
 use super::Store;
@@ -73,6 +73,20 @@ impl Store {
             }
         }
         let effective = self.edits_in(&transaction)?;
+        let observation: Option<String> = transaction
+            .query_row(
+                "SELECT payload FROM state_observations WHERE namespace = ?1 AND kind = 'opencode'",
+                [&self.config.namespace],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| error.to_string())?;
+        if let Some(payload) = observation {
+            let mut observed: crate::store::opencode::Snapshot =
+                serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+            observed.apply_session_edits(&effective);
+            self.save_observation_in(&transaction, "opencode", &observed)?;
+        }
         if let Some(sessions) = snapshot.sessions["sessions"].as_array_mut() {
             sessions.retain_mut(|session| {
                 let key = (

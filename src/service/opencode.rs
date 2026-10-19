@@ -232,6 +232,7 @@ impl super::AppService {
             generation,
             signal,
             Some(self.state_stream.clone()),
+            Some(self.rules.clone()),
         )));
     }
 

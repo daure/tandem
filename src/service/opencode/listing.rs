@@ -5,6 +5,10 @@ use crate::store::{
     opencode::{Activity, listing::SessionListing},
 };
 
+#[cfg(test)]
+#[path = "tests/reconciliation.rs"]
+mod tests;
+
 impl super::super::AppService {
     pub(crate) async fn list_sessions(
         &self,
@@ -89,12 +93,31 @@ impl super::super::AppService {
         if !self.opencode_enabled() {
             return Err("OpenCode integration is disabled".into());
         }
+        let store = self.state_stream.clone();
+        let rules = self.rules.clone();
+        let confirmed = snapshot.observation.deleted_sessions.clone();
+        self.runtime
+            .spawn_blocking(move || {
+                super::sessions::persist_deletions(&confirmed, &store, Some(&rules))
+            })
+            .await
+            .map_err(|error| error.to_string())??;
         {
-            let state = self
+            let mut state = self
                 .opencode
                 .state
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
+            state.session_edits.extend(
+                snapshot
+                    .observation
+                    .deleted_sessions
+                    .iter()
+                    .cloned()
+                    .map(|key| (key, None)),
+            );
+            let edits = state.session_edits.clone();
+            super::sessions::apply_edits(&mut state.snapshot, &edits);
             super::sessions::apply_edits(&mut snapshot, &state.session_edits);
             super::sessions::apply_forgotten(&mut snapshot, &state.forgotten_directories);
             super::sessions::apply_forgotten(&mut snapshot, &state.clearing_directories);

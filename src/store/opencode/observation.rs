@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Client, Session, Snapshot};
 
@@ -10,6 +10,8 @@ pub(crate) struct Evidence {
     pub missing_directories: BTreeSet<String>,
     pub verified_panes: BTreeSet<PaneKey>,
     pub unfinished_sessions: BTreeSet<String>,
+    #[serde(default)]
+    pub deleted_sessions: BTreeSet<(String, String)>,
     pub failures: Vec<Failure>,
 }
 
@@ -66,6 +68,17 @@ impl Failure {
 }
 
 impl Snapshot {
+    pub fn apply_session_edits(&mut self, edits: &BTreeMap<(String, String), Option<String>>) {
+        self.sessions.retain_mut(|session| {
+            match edits.get(&(session.server.clone(), session.id.clone())) {
+                Some(Some(title)) => session.title.clone_from(title),
+                Some(None) => return false,
+                None => {}
+            }
+            true
+        });
+    }
+
     pub fn missing_directory(&self, directory: &str) -> bool {
         self.observation.missing_directories.contains(directory)
     }

@@ -245,12 +245,12 @@ fn live_clients_and_unfinished_work_keep_disconnect_warnings_until_dormant() {
 fn deleted_inactive_directories_do_not_require_observation_on_a_live_server() {
     let root = tempfile::tempdir().unwrap();
     let observer = observer(root.path());
-    let server = Server::start();
-    server.busy.store(false, Ordering::Relaxed);
     let workspace = root.path().join("workspace");
     fs::create_dir(&workspace).unwrap();
     let deleted = root.path().join("deleted");
     let deleted_directory = deleted.to_str().unwrap();
+    let server = Server::start_in(deleted_directory);
+    server.busy.store(false, Ordering::Relaxed);
     let daemon = observer.daemons.join("station");
     fs::create_dir_all(daemon.join("dirs")).unwrap();
     fs::write(daemon.join("port"), server.url.rsplit(':').next().unwrap()).unwrap();
@@ -265,7 +265,7 @@ fn deleted_inactive_directories_do_not_require_observation_on_a_live_server() {
     runtime.block_on(async {
         let previous = Snapshot {
             sessions: vec![Session {
-                id: "ses_deleted".into(),
+                id: "ses_background".into(),
                 directory: deleted_directory.into(),
                 server: server.url.clone(),
                 activity: Activity::Idle,
@@ -297,14 +297,14 @@ fn deleted_inactive_directories_do_not_require_observation_on_a_live_server() {
                 snapshot
                     .observation
                     .unfinished_sessions
-                    .contains("ses_deleted"),
+                    .contains("ses_background"),
                 matches!(activity, Activity::Busy | Activity::AwaitingAnswer)
             );
             assert!(
                 snapshot
                     .sessions
                     .iter()
-                    .any(|session| session.id == "ses_deleted" && session.stale)
+                    .any(|session| session.id == "ses_background" && session.stale)
             );
         }
         let mut approval = previous.clone();

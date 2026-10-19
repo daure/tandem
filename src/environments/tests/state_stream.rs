@@ -2,6 +2,9 @@ use std::{collections::BTreeMap, fs};
 
 use serde_json::{Value, json};
 
+#[path = "state_stream_observation.rs"]
+mod observation;
+
 use crate::{
     environments::{config::Config, runtime_db, state_stream::Store},
     store::{

@@ -21,6 +21,8 @@ pub struct Data {
     pub busy: bool,
     pub awaiting_answer: bool,
     pub status_failure: bool,
+    pub history_failure: bool,
+    pub session_failure: bool,
     pub delete_failure: bool,
     pub delete_failure_for: Option<String>,
     pub delete_lies: bool,
@@ -164,6 +166,7 @@ fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static st
             json!({"data": if data.awaiting_answer { json!([{"sessionID":"ses_old"}]) } else { json!([]) }}),
         ),
         "/api/permission/request" => ("200 OK", json!({"data":[]})),
+        "/api/session" if data.history_failure => ("500 Internal Server Error", json!({})),
         "/api/session" => {
             let limit = query("limit")
                 .and_then(|value| value.parse::<usize>().ok())
@@ -183,9 +186,13 @@ fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static st
                 .filter(|session| {
                     directory.as_ref().is_none_or(|directory| {
                         data.unfiltered_list || session["directory"] == *directory
-                    }) && parent
-                        .as_ref()
-                        .is_none_or(|parent| session["parentID"] == *parent)
+                    }) && parent.as_ref().is_none_or(|parent| {
+                        if parent == "null" {
+                            session["parentID"].is_null()
+                        } else {
+                            session["parentID"] == *parent
+                        }
+                    })
                 })
                 .cloned()
                 .map(native)
@@ -245,6 +252,9 @@ fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static st
             if method == "PATCH" && data.sessions.contains_key(id) {
                 return ("204 No Content", Value::Null);
             }
+            if data.session_failure {
+                return ("500 Internal Server Error", json!({}));
+            }
             match data.sessions.get(id) {
                 Some(session) => ("200 OK", json!({"data":native(session.clone())})),
                 None => ("404 Not Found", json!({})),
@@ -256,6 +266,7 @@ fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static st
 fn respond(data: &mut Data, method: &str, path: &str, directory: &str) -> (&'static str, Value) {
     match path {
         "/global/health" => ("200 OK", json!({"healthy": true})),
+        "/experimental/session" if data.history_failure => ("500 Internal Server Error", json!({})),
         "/experimental/session" => (
             "200 OK",
             json!(
@@ -312,6 +323,9 @@ fn respond(data: &mut Data, method: &str, path: &str, directory: &str) -> (&'sta
                     remove_tree(data, id);
                 }
                 return ("200 OK", json!(true));
+            }
+            if data.session_failure {
+                return ("500 Internal Server Error", json!({}));
             }
             match data.sessions.get(id) {
                 Some(session) => ("200 OK", session.clone()),

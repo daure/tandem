@@ -10,14 +10,28 @@ pub(super) fn apply_edits(
     snapshot: &mut Snapshot,
     edits: &BTreeMap<(String, String), Option<String>>,
 ) {
-    snapshot.sessions.retain_mut(|session| {
-        match edits.get(&(session.server.clone(), session.id.clone())) {
-            Some(Some(title)) => session.title.clone_from(title),
-            Some(None) => return false,
-            None => {}
-        }
-        true
-    });
+    snapshot.apply_session_edits(edits);
+}
+
+pub(super) fn persist_deletions(
+    deleted: &BTreeSet<(String, String)>,
+    store: &crate::environments::state_stream::Store,
+    rules: Option<&super::super::rules::Integration>,
+) -> Result<(), String> {
+    let edits = deleted
+        .iter()
+        .cloned()
+        .map(|key| (key, None))
+        .collect::<BTreeMap<_, _>>();
+    if edits.is_empty() {
+        return Ok(());
+    }
+    if let Some(rules) = rules {
+        rules
+            .update_opencode_history(&edits)
+            .map_err(|error| error.to_string())?;
+    }
+    store.apply_session_edits(&edits)
 }
 
 pub(super) fn apply_forgotten(snapshot: &mut Snapshot, forgotten: &BTreeSet<String>) {

@@ -9,6 +9,7 @@ mod history;
 pub(crate) mod history_server;
 mod purge;
 mod questions;
+mod reconciliation;
 mod sessions;
 mod startup;
 mod tabs;
@@ -166,8 +167,20 @@ impl Server {
                         {"info":{"id":"msg_4","role":"assistant","agent":"tracer","providerID":"openai","modelID":"gpt-5.6-sol","variant":"high","time":{"created":4}},"parts":[{"type":"text","text":"Latest answer"}]}
                     ])
                 } else if request.contains("GET /session/") {
-                    status = "404 Not Found";
-                    json!({"name":"NotFoundError"})
+                    let id = request
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap()
+                        .trim_start_matches("/session/");
+                    if !removed.lock().unwrap().contains(id)
+                        && matches!(id, "ses_busy" | "ses_idle" | "ses_background" | "ses_saved")
+                    {
+                        let subdirectory = matches!(id, "ses_busy" | "ses_idle");
+                        json!({"id":id,"title":"Same title","directory":if subdirectory { format!("{directory}/repo") } else { directory.clone() },"time":{"updated":1}})
+                    } else {
+                        status = "404 Not Found";
+                        json!({"name":"NotFoundError"})
+                    }
                 } else {
                     json!({"healthy":true})
                 };
