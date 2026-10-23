@@ -23,7 +23,7 @@ from pathlib import Path
 import sys
 args = sys.argv[1:]
 if 'list-sessions' in args:
-    print('main')
+    print('main' if '--short' in args else 'main [Created 1s ago]')
 elif 'list-panes' in args:
     print(json.dumps([{'id': 100, 'is_plugin': False, 'exited': False, 'tab_id': 9, 'tab_name': 'review'}]))
 elif 'new-tab' in args or 'new-pane' in args:
@@ -48,11 +48,14 @@ elif 'new-tab' in args or 'new-pane' in args:
                 })
                 self.assertEqual(operation["state"], "succeeded")
                 self.assertFalse(command.exists())
+                guidance = "This is a workspace-only instance; no service containers are configured. Work locally and ask the user if additional services are needed."
+                instructions = "Keep 'literal' instructions; $(touch injected)\n{{unchanged}} 日本語"
                 for index, (selection, model, variant) in enumerate([
                     ({}, "", ""),
                     ({"model": "openai/test"}, "openai/test", ""),
                     ({"model": "openai/test", "variant": "high"}, "openai/test#high", "high"),
                     ({"variant": "high"}, "", "high"),
+                    ({"agent_instructions": instructions}, "", ""),
                 ]):
                     with self.subTest(selection=selection):
                         operation = client.tool("create_instance", {
@@ -64,9 +67,16 @@ elif 'new-tab' in args or 'new-pane' in args:
                         self.assertIn(f"TANDEM_SESSION_MODEL={model}", args)
                         self.assertIn(f"TANDEM_SESSION_VARIANT={variant}", args)
                         self.assertIn("TANDEM_INITIAL_PROMPT=Inspect literal 'text'", args)
+                        expected = guidance + "\n\n" + instructions if "agent_instructions" in selection else guidance
+                        self.assertIn(f"TANDEM_SESSION_INSTRUCTIONS={expected}", args)
+                        self.assertNotIn(instructions, (home / f"workspaces/blank/review-{index}/AGENTS.md").read_text())
                         command.unlink()
                 for selection in [
                     {"model": "openai/test"},
+                    {"agent_instructions": instructions},
+                    {"opencode": True, "agent_instructions": ""},
+                    {"opencode": True, "agent_instructions": "text\0text"},
+                    {"opencode": True, "agent_instructions": "x" * 65537},
                     {"opencode": True, "model": "invalid"},
                     {"opencode": True, "variant": ""},
                     {"opencode": True, "model": "openai/test#fast", "variant": "high"},

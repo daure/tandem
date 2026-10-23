@@ -12,6 +12,7 @@ mod questions;
 mod reconciliation;
 mod sessions;
 mod startup;
+mod tab_launch;
 mod tabs;
 mod v2;
 use serde_json::json;
@@ -232,7 +233,7 @@ case "$*" in
     fi
     case "$*" in
       *--short*) printf 'main\n' ;;
-      *) printf 'main [Created 1s ago] (current)\n' ;;
+      *) printf 'main [Created 1s ago] (current)\nother [Created 2s ago]\n' ;;
     esac ;;
   *list-panes*) [ ! -f "$root/fail-panes" ] || exit 1; cat "$root/panes.json" ;;
   *new-tab*) printf '9\n' ;;

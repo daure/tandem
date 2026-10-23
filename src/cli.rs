@@ -118,6 +118,12 @@ enum Commands {
         #[arg(
             long,
             requires = "opencode",
+            help = "Extra literal instructions for the new OpenCode session, attached before the initial prompt"
+        )]
+        agent_instructions: Option<String>,
+        #[arg(
+            long,
+            requires = "opencode",
             help = "OpenCode provider/model; omitted uses its default"
         )]
         model: Option<String>,
@@ -427,6 +433,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             name,
             template,
             opencode,
+            agent_instructions,
             model,
             variant,
             description,
@@ -448,6 +455,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                         prompt,
                         model,
                         variant,
+                        agent_instructions,
                     }),
                     description,
                     start_instance,
@@ -524,6 +532,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                         prompt: Some(initial_prompt),
                         model,
                         variant,
+                        agent_instructions: None,
                     },
                     agent,
                 },
@@ -549,6 +558,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                         prompt: Some(prompt),
                         model,
                         variant,
+                        agent_instructions: None,
                     },
                     agent,
                 },

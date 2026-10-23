@@ -175,6 +175,8 @@ struct CreateInstanceInput {
     opencode: bool,
     /// Optional literal initial prompt; requires opencode=true.
     initial_prompt: Option<String>,
+    /// Extra literal session instructions, up to 64 KiB of nonblank text without NUL; attached before initial input. Requires opencode=true.
+    agent_instructions: Option<String>,
     /// Optional provider/model selection; requires opencode=true. Omitted uses OpenCode's default.
     model: Option<String>,
     /// Optional model-specific thinking variant; requires opencode=true. Omitted uses OpenCode's default.
@@ -487,7 +489,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Validate and save a shared Rhai rule with namespace-local activation. matches(event) returns a boolean over profile, data, metadata, provider and shared context. template, target_instance, model, variant and prompts accept Handlebars event expressions with paths, if/each and inline partials; {{event}} or {{json event}} inserts JSON. Text is unescaped; missing fields fail rendering. target_instance reuses an exact instance regardless of template, or creates it. With a target, session_name reuses a bound V2 conversation independently of its title; delivery_mode selects queue (default), steer or interrupt. New conversations use initial_prompt; existing named conversations use follow_up_prompt, falling back to initial_prompt when omitted. Enabling/editing an enabled revision requires confirmed=true and a live Zellij session, authorizing every future match. Dispatch selects the newest running Zellij session by creation time; exited sessions are excluded. Edits apply prospectively; acceptances retain their resolved settings and prompts."
+        description = "Validate and save a shared Rhai rule with namespace-local activation. matches(event) returns a boolean over profile, data, metadata, provider and shared context. Define optional instance_name(event) and instance_description(event) string functions in script to customize fresh-instance identity; missing, invalid or failed results fall back independently. target_instance overrides the name hook and preserves an existing target's description. Use preview_rule to inspect resolved names and descriptions. template, target_instance, model, variant and prompts accept Handlebars event expressions with paths, if/each and inline partials; {{event}} or {{json event}} inserts JSON. Text is unescaped; missing fields fail rendering. target_instance reuses an exact instance regardless of template, or creates it. With a target, session_name reuses a bound V2 conversation independently of its title; delivery_mode selects queue (default), steer or interrupt. New conversations use initial_prompt; existing named conversations use follow_up_prompt, falling back to initial_prompt when omitted. Enabling/editing an enabled revision requires confirmed=true and a live Zellij session, authorizing every future match. Dispatch selects the newest running Zellij session by creation time; exited sessions are excluded. Edits apply prospectively; acceptances retain their resolved settings and prompts."
     )]
     async fn save_rule(
         &self,
@@ -506,7 +508,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Preview a Rhai predicate, resolved routing/model settings, both prompts and instance identity against a retained event. Evaluation is bounded and pure; reserves no names and creates no instance or agent contact."
+        description = "Preview a Rhai predicate, resolved routing/model settings, both prompts and instance identity against a retained event. script may define optional instance_name(event) and instance_description(event) string functions; inspect their resolved instance_name and instance_description in the result. Fresh-instance names are advisory; target_instance overrides the name hook. Evaluation is bounded and pure; reserves no names and creates no instance or agent contact."
     )]
     async fn preview_rule(
         &self,
@@ -667,9 +669,15 @@ impl McpServer {
         Parameters(input): Parameters<CreateInstanceInput>,
     ) -> Result<Json<Operation>, String> {
         if !input.opencode
-            && (input.initial_prompt.is_some() || input.model.is_some() || input.variant.is_some())
+            && (input.initial_prompt.is_some()
+                || input.agent_instructions.is_some()
+                || input.model.is_some()
+                || input.variant.is_some())
         {
-            return Err("initial_prompt, model and variant require opencode=true".into());
+            return Err(
+                "initial_prompt, agent_instructions, model and variant require opencode=true"
+                    .into(),
+            );
         }
         let operation = self.service.submit_instance_creation(
             &input.name,
@@ -681,6 +689,7 @@ impl McpServer {
                 prompt: input.initial_prompt,
                 model: input.model,
                 variant: input.variant,
+                agent_instructions: input.agent_instructions,
             }),
         )?;
         if input.wait {
@@ -704,6 +713,7 @@ impl McpServer {
                     prompt: Some(input.initial_prompt),
                     model: input.model,
                     variant: input.variant,
+                    agent_instructions: None,
                 },
                 agent: input.agent,
             },
@@ -729,6 +739,7 @@ impl McpServer {
                     prompt: Some(input.prompt),
                     model: input.model,
                     variant: input.variant,
+                    agent_instructions: None,
                 },
                 agent: input.agent,
             },

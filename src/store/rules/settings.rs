@@ -42,6 +42,7 @@ pub(super) fn validate_sources(definition: &Definition) -> Result<(), String> {
             .clone()
             .filter(|value| !is_template(value)),
         prompt: None,
+        agent_instructions: None,
     }
     .validate()
 }
@@ -76,6 +77,7 @@ impl Definition {
             model: Some(settings.model.clone()),
             variant: settings.variant.clone(),
             prompt: None,
+            agent_instructions: None,
         }
         .validate()
         .map_err(|error| format!("session model/thinking variant: {error}"))?;

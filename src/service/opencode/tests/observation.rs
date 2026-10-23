@@ -262,6 +262,8 @@ fn live_events_refresh_state_and_idle_sampling_does_not_query_the_server() {
                         json!({"data":if active.load(Ordering::SeqCst) { json!({"ses_one":{"type":"running"}}) } else { json!({}) }})
                     } else if request.starts_with("GET /api/session?") {
                         json!({"data":[{"id":"ses_one","title":"Live session","location":{"directory":directory},"time":{"updated":1}}]})
+                    } else if request.starts_with("GET /api/session/ses_one ") {
+                        json!({"data":{"id":"ses_one","title":"Live session","location":{"directory":directory},"time":{"updated":1}}})
                     } else {
                         json!({"data":[]})
                     }.to_string();

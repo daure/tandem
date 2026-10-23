@@ -21,10 +21,14 @@ class DistributionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             installer = Path(directory) / "tandem-installer.sh"
             installer.write_text('''install() {
+    for _bin_name in $_bins; do
+        ensure mv "$_install_temp/$_bin_name" "$_install_dir"
+    done
     ignore rm -rf "$_install_temp" "$_lib_install_temp"
 
     say "everything's installed!"
 }
+download_binary_and_run_installer "$@" || exit 1
 ''')
             command = ["python3", str(ROOT / "scripts/prepare_installer.py"), str(installer)]
             first = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=10)

@@ -19,6 +19,12 @@ pub(crate) struct Definition {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    /// Rhai source defining matches(event) -> bool. Optional instance_name(event) -> string
+    /// and instance_description(event) -> string customize fresh-instance identity; missing,
+    /// invalid or failed hook results fall back independently. Names are sanitized to lowercase
+    /// ASCII and limited to 40 characters, with numeric collision suffixes. Descriptions are
+    /// trimmed and limited to 1000 UTF-8 bytes without controls. target_instance overrides the name
+    /// hook and preserves an existing target's description. Use preview_rule to inspect results.
     pub script: String,
     /// Handler template name or a Handlebars expression over event fields.
     pub template: String,
@@ -295,6 +301,7 @@ impl Definition {
             model: Some(self.model.clone()),
             variant: self.variant.clone(),
             prompt: None,
+            agent_instructions: None,
         }
     }
 }

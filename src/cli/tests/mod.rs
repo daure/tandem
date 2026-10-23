@@ -72,7 +72,7 @@ fn new_instance_accepts_long_short_and_mixed_options() {
 
 #[test]
 fn session_options_require_opencode() {
-    for flag in ["--model", "--variant", "--origin"] {
+    for flag in ["--model", "--variant", "--origin", "--agent-instructions"] {
         assert!(
             parse(&[
                 "tandem",

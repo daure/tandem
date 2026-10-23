@@ -1,6 +1,33 @@
 use super::*;
 
 #[test]
+fn session_agent_instructions_require_bounded_nonblank_text_without_nul() {
+    for instructions in [
+        "".into(),
+        " \n\t".into(),
+        "text\0text".into(),
+        "é".repeat(32_769),
+    ] {
+        let launch = Launch {
+            agent_instructions: Some(instructions),
+            ..Default::default()
+        };
+        assert_eq!(
+            launch.validate(),
+            Err(
+                "agent_instructions must contain 1 to 65536 bytes of nonblank text without NUL"
+                    .into()
+            )
+        );
+    }
+    let launch = Launch {
+        agent_instructions: Some("é".repeat(32_768)),
+        ..Default::default()
+    };
+    assert_eq!(launch.validate(), Ok(()));
+}
+
+#[test]
 fn counts_overlap_without_counting_multiple_panes_twice() {
     let pane = Pane {
         session: "main".into(),

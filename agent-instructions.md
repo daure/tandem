@@ -136,6 +136,25 @@ Read `core_guidance` together with this editable guidance for placement and clea
   template, target and model must resolve to valid nonempty values. Resolution checks syntax and domain
   constraints, not an allowed-choice list. Each acceptance pins concrete settings and both prompts
   separately from its original rule definition; retries use those saved values.
+- Customize fresh-instance identity with optional Rhai `instance_name(event)` and
+  `instance_description(event)` functions in the rule's `script`. Both return strings:
+
+  ```rhai
+  fn matches(event) { event.profile == "message" }
+  fn instance_name(event) { "review-" + event.sequence.to_string() }
+  fn instance_description(event) { "Review event " + event.event_id }
+  ```
+
+  Missing, invalid or failed hook results fall back independently. Custom names are sanitized to
+  lowercase ASCII and limited to 40 characters; custom descriptions must fit 1000 UTF-8 bytes without
+  controls. Defaults remain verbatim and use `<rule>-<sequence>-a<acceptance-id>` and
+  `<rule>: <event summary>`. `target_instance` overrides the name hook and preserves an existing
+  target's description. Preview both values with `preview_rule` before enabling the rule.
+  Fresh-instance names stay reserved across namespaces sharing a Tandem home, including after purge
+  or history deletion; collisions receive numeric suffixes. Upgrade can reserve only retained
+  identities. Fresh-instance preview names are advisory; explicit targets are fixed. Previews reserve
+  nothing. Use the acceptance's assigned name for instance operations; retries and recreation retain
+  its resolved description. Fresh-instance rules fail on late occupancy rather than adopting another workspace.
 - Create disabled rules, inspect retained event input, and preview matches, resolved routing/model
   settings, both prompts, instance names and descriptions before
   authorizing an enabled revision. Authorization covers all its future matches: trusted template code,
@@ -168,17 +187,6 @@ Read `core_guidance` together with this editable guidance for placement and clea
   sending guidance and does not undo completed actions. Each delivery applies the rule's model and instance
   guidance. Queue/submission receipts mean server acceptance, not task completion. Inspect uncertain
   delivery before explicit replay; Tandem does not resend it automatically.
-  Optional Rhai `instance_name(event)` and
-  `instance_description(event)` hooks return strings and fall back independently on missing, invalid
-  or failed results. Custom names are sanitized to lowercase ASCII and limited to 40 characters;
-  custom descriptions must fit 1000 UTF-8 bytes without controls. Defaults remain verbatim and use
-  `<rule>-<sequence>-a<acceptance-id>` and
-  `<rule>: <event summary>`. Fresh-instance names stay reserved across namespaces sharing a
-  Tandem home, including after purge or history deletion; collisions receive numeric suffixes.
-  Upgrade can reserve only retained identities. Fresh-instance preview names are advisory;
-  explicit targets are fixed. Previews reserve nothing.
-  Use the acceptance's assigned name for instance operations; retries and recreation retain its
-  resolved description. Fresh-instance rules fail on late occupancy rather than adopting another workspace.
   Rule edits and toggles affect future attempts.
   Disabling does not cancel queued or deferred actions. Prompts use Handlebars: `{{event.data.text}}`,
   `{{#if event.data.thread}}`, and `{{#each event.attachments}}` support paths, optional fields, and loops. `{{event}}` or
@@ -310,7 +318,9 @@ Read `core_guidance` together with this editable guidance for placement and clea
   services or waiting for their readiness. The instance retains its service execution kind and can
   be started later. The default is true.
 - New OpenCode sessions receive service-state instructions before initial input.
-  Instance creation opens a client only when requested. V2 inherits the client's selected model and
+  Instance creation opens a client only when requested. Use `agent_instructions` when creating an
+  instance to append session-specific guidance before initial input; workspace `AGENTS.md` and other
+  sessions remain unchanged. V2 inherits the client's selected model and
   variant unless overridden; an explicit model without a variant uses that model's default variant.
   Client launch and initial input require approval for the task and
   model costs, plus an enabled integration and a current Zellij session.

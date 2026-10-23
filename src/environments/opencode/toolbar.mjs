@@ -26,7 +26,7 @@ export function instanceView(state, server, sessionID) {
     instance,
     stale,
     label: stale ? "Stale" : instance.workspace_only ? "Workspace only" : instance.summary.label,
-    severity: stale ? "warning" : instance.summary.severity,
+    severity: stale ? "warning" : instance.summary.status === "running" ? "success" : instance.summary.severity,
     services: instance.workspace_only ? "" : `${instance.summary.running}/${instance.summary.expected} services running`,
     routes: instance.services.filter((service) => service.url).map((service) => ({ title: service.name, value: service.url, description: service.url })),
     disabled: Boolean(stale || instance.pending || instance.summary.busy),

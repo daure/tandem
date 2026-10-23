@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 
 pub(super) fn client_command(command: &[String]) -> Vec<String> {
     // Check inside the pane: Zellij's PATH can differ from Tandem's environment.
@@ -136,6 +137,12 @@ impl Observer {
         pane: &Pane,
         floating: bool,
     ) -> Result<(), String> {
+        let source = if current != pane.session {
+            self.resolve_launch_session(current).await?
+        } else {
+            current.to_owned()
+        };
+        let current = source.as_str();
         if current != pane.session {
             self.set_floating_visibility(&pane.session, pane.tab_id, floating)
                 .await?;
@@ -563,6 +570,12 @@ impl Observer {
             Some(pane) => self.live_destination(pane).await?,
             None => None,
         };
+        let source = if destination.is_none() {
+            self.resolve_launch_session(current).await?
+        } else {
+            current.to_owned()
+        };
+        let current = source.as_str();
         let target_session = destination
             .as_ref()
             .map_or(current, |pane| pane.session.as_str());
@@ -610,18 +623,29 @@ impl Observer {
                 .trim()
                 .parse::<u32>()
                 .map_err(|_| "Zellij did not return the new OpenCode tab ID")?;
-            let panes = self.list_panes(target_session).await?;
-            let candidates = panes
-                .iter()
-                .filter(|pane| pane.tab_id == tab_id && !pane.is_plugin && !pane.exited)
-                .collect::<Vec<_>>();
+            // Zellij can return the tab ID before registering its terminal pane.
+            let candidates = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    let candidates = self
+                        .list_panes(target_session)
+                        .await?
+                        .into_iter()
+                        .filter(|pane| pane.tab_id == tab_id && !pane.is_plugin && !pane.exited)
+                        .collect::<Vec<_>>();
+                    if !candidates.is_empty() {
+                        return Ok::<_, String>(candidates);
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await
+            .map_err(|_| "Cannot identify the new OpenCode pane")??;
             let actual = if let [pane] = candidates.as_slice() {
-                *pane
+                pane
             } else {
                 let command = command.join(" ");
                 let mut matching = candidates
                     .iter()
-                    .copied()
                     .filter(|pane| pane.terminal_command.as_deref() == Some(command.as_str()));
                 let pane = matching
                     .next()

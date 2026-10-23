@@ -157,6 +157,7 @@ fn template_tools_return_object_payloads_and_mutations_require_confirmation() {
                 name: "review".into(),
                 opencode: false,
                 initial_prompt: None,
+                agent_instructions: None,
                 model: None,
                 variant: None,
                 confirmed: false,

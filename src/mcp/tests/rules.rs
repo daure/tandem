@@ -2,6 +2,23 @@ use super::*;
 use rmcp::handler::server::wrapper::Parameters;
 
 #[test]
+fn rule_tools_expose_instance_identity_hooks_in_descriptions_and_script_schemas() {
+    let server = McpServer::new(AppService::for_tests());
+    for name in ["save_rule", "preview_rule"] {
+        let tool = &server.tool_router.map[name].attr;
+        let description = tool.description.as_deref().unwrap();
+        let schema = serde_json::to_string(&tool.input_schema).unwrap();
+        for hook in ["instance_name(event)", "instance_description(event)"] {
+            assert!(
+                description.contains(hook),
+                "{name} description omits {hook}"
+            );
+            assert!(schema.contains(hook), "{name} input schema omits {hook}");
+        }
+    }
+}
+
+#[test]
 fn rule_tools_round_trip_definitions_preview_retained_events_and_enforce_authorization() {
     let service = AppService::for_tests();
     let server = McpServer::new(service.clone());

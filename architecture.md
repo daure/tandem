@@ -238,7 +238,10 @@ when it stops without dependent work. Dormant records remain owned by their laun
 Directory reads skip definitely missing directories without fresh clients or unfinished work, even
 when their shared server listens. Saved identities can be checked directly on listening servers.
 Filesystem access errors retain uncertainty. Failed directory-status reads preserve cached
-conversations subject to verification retention.
+conversations subject to verification retention. V2 reads server-wide activity once per reconciliation
+and uses database-only history and identity endpoints for saved sessions. Form and permission reads
+are limited to fresh client attachments and foreground execution because those session endpoints
+initialize location services. Detached inactive history does not authorize location initialization.
 Known sessions receive bounded identity checks independently of directory-status failures and the
 recent-history window. Confirmed server-side absence records deletion markers and removes retained
 conversation links; failed identity reads preserve uncertainty.
@@ -255,7 +258,9 @@ client pane. Server processes are shared across directories and do not own clien
 Fresh receipts and live panes
 establish attachment and authorize navigation or closure of that exact pane. Observed conversations
 can be resumed in their recorded directory on their loopback server, including external workspaces.
-New clients target an instance workspace or an observed directory. Prepared instance workspaces receive
+New clients target an instance workspace or an observed directory. Fresh Zellij tabs use the inherited
+session while it is live, otherwise the newest live session; resolution precedes client creation.
+Focus switches also resolve a live source session. Prepared instance workspaces receive
 validated guidance preparation, while external directories remain outside Tandem provisioning.
 The TUI's new-session action reuses a V2 client through an authenticated loopback companion endpoint
 advertised in its private presence receipt. The companion focuses the first open idle tab in native
@@ -274,6 +279,9 @@ Creation requests persist a default-on service-start flag. Prepare-only requests
 repository and Compose preparation while skipping Compose up, gateway startup and readiness waits.
 New instance sessions receive state-aware guidance before initial input; session opening leaves container
 state unchanged. V2 uses durable session instruction entries. V1 appends synthetic no-reply context.
+CLI and MCP creation requests carry optional literal `agent_instructions` through the detached launch
+request. The service appends them to session guidance before delivery, independently of task input
+and workspace `AGENTS.md`.
 Prompted conversations in existing instances use a dedicated CLI/management MCP service operation.
 Admission validates retained ownership and the workspace under an instance lock held through delivery.
 An authenticated companion creates a fresh session, attaches guidance, then submits literal task input.
@@ -310,7 +318,7 @@ owned panes from the external aggregate. With integration enabled, instance purg
 clients under the instance lock after ownership validation and before resource deletion. Verified local
 ownership records allow client closure before Docker inspection. Group pane closures run concurrently;
 fresh receipts authorize exact-pane closure and live pane inventory verifies completion. Closure
-failures preserve that instance's resources. Version-specific server status and directory-scoped forms/questions
+failures preserve that instance's resources. Version-specific server status and scoped forms/questions
 establish activity. Awaiting an answer pauses busy timing and triggers completion feedback once on
 the transition from busy. Titles are presentation data.
 Session rename and confirmed deletion run through the service on authenticated local server APIs.

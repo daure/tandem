@@ -15,10 +15,22 @@ pub(crate) struct Launch {
     pub prompt: Option<String>,
     pub model: Option<String>,
     pub variant: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_instructions: Option<String>,
 }
 
 impl Launch {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        if let Some(instructions) = &self.agent_instructions
+            && (instructions.trim().is_empty()
+                || instructions.len() > 65_536
+                || instructions.contains('\0'))
+        {
+            return Err(
+                "agent_instructions must contain 1 to 65536 bytes of nonblank text without NUL"
+                    .into(),
+            );
+        }
         if let Some(model) = &self.model {
             let (provider, path) = model
                 .split_once('/')
@@ -64,6 +76,13 @@ impl Launch {
             Some(variant) if !model.contains('#') => format!("{model}#{variant}"),
             _ => model.clone(),
         })
+    }
+
+    pub(crate) fn session_instructions(&self, guidance: &str) -> String {
+        match &self.agent_instructions {
+            Some(instructions) => format!("{guidance}\n\n{instructions}"),
+            None => guidance.to_owned(),
+        }
     }
 }
 

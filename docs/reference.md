@@ -254,6 +254,7 @@ Origin-aware instance launches and JSON receipts require the current companion; 
 tandem new-instance review --template website
 tandem new-instance review -t website --opencode
 tandem new-instance review -t website -o "Explain this project"
+tandem new-instance review -t website -o "Review the changes" --agent-instructions "Run the tests before reporting results"
 tandem new-instance review -t website -o --model openai/gpt-6.1-sol-fast --variant high
 tandem new-instance review -t website --start-instance=false
 tandem start-instance review
@@ -303,6 +304,10 @@ the V2 client's selected model and variant intact when omitted. A variant-only s
 client's selected model. An explicit model without a variant uses that model's default variant.
 MCP `create_instance` accepts the same selection through `opencode=true`, `model`, `variant`, and
 optional `initial_prompt`. Its default prepares an instance without launching OpenCode.
+CLI `--agent-instructions` and MCP `agent_instructions` append literal session-specific guidance to
+Tandem's service-state instructions before initial input. They require `--opencode`/`opencode=true`
+and accept up to 64 KiB of nonblank UTF-8 text without NUL. Instructions can accompany a blank
+session; they leave workspace `AGENTS.md` and other sessions unchanged.
 CLI client launches use an observed instance pane's tab for a stacked pane, otherwise Tandem creates
 an instance-named tab. The TUI's **New OpenCode session** opens a session tab in an existing V2 client;
 without a tab-capable client, it uses this pane placement and launch logic.
@@ -1339,13 +1344,15 @@ Turning it off hides the integration rows, counts, and actions and cancels Tande
 and navigation tasks. Existing OpenCode servers, conversations, panes, and workspace commands
 remain under their current owners. Re-enable it to request a fresh observation.
 
-The release shell installer installs the companion after placing the Tandem binary and prints the
-OpenCode plugin directory. It then restarts the installing user's active `tandem-mcp.service` with
-`systemctl --user try-restart`. The user-owned unit must launch the installed Tandem binary;
-installation preserves its configuration and enablement. Absent or stopped services are skipped.
-An unavailable user service manager produces a manual-restart warning; restart failure fails the installer.
-Restart interrupts existing global MCP connections. Clients must reconnect; inspect interrupted tool
-calls before retrying them. Instance-scoped stdio servers and open TUIs retain their own lifetimes.
+The release shell installer lists outdated processes from its destination installation and asks before
+stopping them. This includes TUIs, `serve-state`, watchers, global MCP and instance-scoped MCP servers.
+Declining or lacking an interactive terminal aborts before binary replacement. Approval allows forced
+termination of unresponsive processes. Associated user services stop before replacement and start after
+the binary and companion are installed, preserving their configuration and enablement. Installation
+fails if a restart fails or an outdated process remains. Separate installations and development
+checkouts remain independent. Reopen stopped TUIs and reconnect MCP clients; inspect interrupted tool
+calls before retrying them. For source installations, run `cargo build --release --locked` followed by
+`sh scripts/install.sh`; direct `cargo install` and manual binary copies bypass this policy.
 Reopen OpenCode clients to load the refreshed companion. For source builds or manual refreshes, install it with:
 
 ```bash

@@ -21,6 +21,8 @@ pub struct Data {
     pub busy: bool,
     pub awaiting_answer: bool,
     pub status_failure: bool,
+    pub form_failure: bool,
+    pub permission_failure: bool,
     pub history_failure: bool,
     pub session_failure: bool,
     pub delete_failure: bool,
@@ -32,6 +34,7 @@ pub struct Data {
     pub interrupted: Vec<String>,
     pub interrupt_failure: bool,
     pub interrupt_lies: bool,
+    pub requests: Vec<String>,
 }
 
 pub struct Server {
@@ -93,6 +96,7 @@ impl Server {
                     .map(|(_, value)| value.into_owned())
                     .unwrap_or_default();
                 let mut data = shared.lock().unwrap();
+                data.requests.push(path.to_owned());
                 if method == "PATCH" {
                     let id = url
                         .path()
@@ -203,6 +207,9 @@ fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static st
                 json!({"data": found.iter().skip(offset).take(limit).collect::<Vec<_>>(), "cursor": {"next":next}}),
             )
         }
+        path if path.ends_with("/permission") && data.permission_failure => {
+            ("503 Service Unavailable", json!({}))
+        }
         path if path.ends_with("/permission") => (
             "200 OK",
             json!({"data":if data.approval { json!([{"sessionID":"ses_old"}]) } else { json!([]) }}),
@@ -215,6 +222,9 @@ fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static st
                 .unwrap();
             assert_eq!(query("resume").as_deref(), Some("false"));
             interrupt(data, id)
+        }
+        path if path.ends_with("/form") && data.form_failure => {
+            ("503 Service Unavailable", json!({}))
         }
         path if path.ends_with("/form") => (
             "200 OK",

@@ -1,7 +1,7 @@
 use super::*;
 
 impl Observer {
-    async fn live_rule_destinations(&self) -> Result<Vec<String>, String> {
+    async fn live_zellij_sessions(&self) -> Result<Vec<String>, String> {
         // Short output hides EXITED status; reverse orders the newest session first.
         let sessions = zellij(
             &self.zellij,
@@ -31,7 +31,7 @@ impl Observer {
     }
 
     pub(crate) async fn resolve_rule_destination(&self) -> Result<String, String> {
-        self.live_rule_destinations()
+        self.live_zellij_sessions()
             .await?
             .into_iter()
             .next()
@@ -42,7 +42,7 @@ impl Observer {
 
     pub(crate) async fn validate_rule_destination(&self, name: &str) -> Result<(), String> {
         if self
-            .live_rule_destinations()
+            .live_zellij_sessions()
             .await?
             .iter()
             .any(|session| session == name)
@@ -53,5 +53,15 @@ impl Observer {
                 "Rule destination unavailable: Zellij session {name:?} is not live"
             ))
         }
+    }
+
+    pub(super) async fn resolve_launch_session(&self, current: &str) -> Result<String, String> {
+        let sessions = self.live_zellij_sessions().await?;
+        sessions
+            .iter()
+            .find(|session| session.as_str() == current)
+            .or_else(|| sessions.first())
+            .cloned()
+            .ok_or_else(|| "OpenCode destination unavailable: no live Zellij session; start a session and retry".into())
     }
 }

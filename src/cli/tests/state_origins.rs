@@ -36,6 +36,7 @@ impl Companion {
         }).to_string()).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
+        let session_request = fixture.home.join("session-request.json");
         let worker = thread::spawn(move || {
             let mut sessions = Vec::<serde_json::Value>::new();
             while !stopped.load(Ordering::Acquire) {
@@ -73,6 +74,7 @@ impl Companion {
                 let response = match path.as_str() {
                     "/sessions" if error == Some(PREFLIGHT_REFUSAL) => json!({"session_id":null,"server":server,"prompt_outcome":"not_submitted","creation_outcome":"not_created","error":PREFLIGHT_REFUSAL}),
                     "/sessions" => {
+                        fs::write(&session_request, body.to_string()).unwrap();
                         let id = format!("ses_created_{}", sessions.len() + 1);
                         sessions.push(json!({"id":id,"title":format!("Conversation {id}"),"location":{"directory":directory},"time":{"created":1,"updated":2}}));
                         if let Some(path) = body["identity_receipt"].as_str() {
@@ -104,6 +106,44 @@ impl Companion {
             stop,
             thread: Some(worker),
         }
+    }
+}
+
+#[test]
+fn creation_receipts_preserve_agent_instructions_for_new_and_existing_instances() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.home.join("templates/website/compose.yaml")).unwrap();
+    fs::write(fixture.home.join("templates/website/tandem.json"), "{}").unwrap();
+    let _companion = Companion::start(&fixture);
+    let instructions = "Check 'this' literally; $(touch injected)\n{{unchanged}} 日本語";
+    for prompt in [None, Some("Inspect the workspace")] {
+        let mut args = vec!["new-instance", "review", "-t", "website", "--opencode"];
+        args.extend(prompt);
+        args.extend(["--agent-instructions", instructions, "--json"]);
+        let output = fixture.run(&args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            receipt["session_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("ses_created_")
+        );
+        let request: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(fixture.home.join("session-request.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            request["instructions"],
+            format!(
+                "This is a workspace-only instance; no service containers are configured. Work locally and ask the user if additional services are needed.\n\n{instructions}"
+            )
+        );
+        assert_eq!(request["initial_prompt"], json!(prompt));
     }
 }
 

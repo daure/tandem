@@ -14,6 +14,7 @@ pub(in crate::service) async fn open_correlated_session(
     store: &Arc<crate::environments::state_stream::Store>,
     origin: Option<&str>,
 ) -> Result<PromptedSession, String> {
+    let instructions = launch.session_instructions(instructions);
     let input = SessionPrompt {
         launch: launch.clone(),
         agent: None,
@@ -35,7 +36,7 @@ pub(in crate::service) async fn open_correlated_session(
             name,
             &integration.current_zellij,
             &input,
-            instructions,
+            &instructions,
             identity.to_str(),
         )
         .await

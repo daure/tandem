@@ -317,6 +317,7 @@ impl Observer {
         directories.extend(known_directories.iter().cloned());
         let mut errors = Vec::new();
         let mut failed_status_directories = BTreeMap::<String, BTreeSet<String>>::new();
+        let mut failed_questions = BTreeSet::new();
         let mut observed_sessions = BTreeSet::new();
         let mut deleted = BTreeSet::new();
         let mut question_refresh = BTreeSet::new();
@@ -325,10 +326,14 @@ impl Observer {
             if !remote {
                 continue;
             }
-            let candidates = presences
+            let attached: BTreeSet<_> = presences
                 .iter()
                 .filter(|presence| local_server(&presence.server).as_ref() == Some(&server))
                 .map(|presence| presence.id.clone())
+                .collect();
+            let candidates = attached
+                .iter()
+                .cloned()
                 .chain(
                     sessions
                         .values()
@@ -340,7 +345,8 @@ impl Observer {
             // Unfinished servers stay stale even if their worker fails.
             failed_status_directories.insert(server.clone(), directories.clone());
             server_tasks.spawn(async move {
-                let result = server::observe(client, &server, &directories, candidates).await;
+                let result =
+                    server::observe(client, &server, &directories, candidates, attached).await;
                 (server, directories, result)
             });
         }
@@ -358,6 +364,7 @@ impl Observer {
         for (server, (directories, observation)) in observations {
             let failed_status = failed_status_directories.entry(server.clone()).or_default();
             *failed_status = observation.failed_status;
+            failed_questions.extend(observation.failed_questions);
             errors.extend(observation.errors);
             for id in observation.deleted {
                 if !observed_sessions.contains(&id) {
@@ -377,7 +384,8 @@ impl Observer {
                 {
                     continue;
                 }
-                let status_failed = failed_status.contains(&item.directory);
+                let status_failed =
+                    failed_status.contains(&item.directory) || failed_questions.contains(&item.id);
                 let activity = if status_failed {
                     Activity::Unknown
                 } else if observation.questions.contains(&item.id) {
@@ -393,10 +401,9 @@ impl Observer {
                 let mut candidate = Session {
                     id: item.id.clone(),
                     title: clean(&item.title),
-                    approval_pending: observation
-                        .approval_directories
-                        .contains(&item.directory)
-                        .then(|| observation.approvals.contains(&item.id)),
+                    approval_pending: (observation.approval_directories.contains(&item.directory)
+                        && !observation.failed_approvals.contains(&item.id))
+                    .then(|| observation.approvals.contains(&item.id)),
                     directory: item.directory,
                     server: server.clone(),
                     activity,
@@ -586,9 +593,10 @@ impl Observer {
                 }
                 continue;
             }
-            let status_failed = local_server(&presence.server)
-                .and_then(|server| failed_status_directories.get(&server))
-                .is_some_and(|directories| directories.contains(&presence.directory));
+            let status_failed = failed_questions.contains(&presence.id)
+                || local_server(&presence.server)
+                    .and_then(|server| failed_status_directories.get(&server))
+                    .is_some_and(|directories| directories.contains(&presence.directory));
             let pane = attached_pane(&presence);
             let session = sessions
                 .entry(presence.id.clone())

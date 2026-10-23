@@ -219,7 +219,7 @@ async function toolbarFixture(t, dependencies = {}) {
     } } } }] } },
     data: { session: { get: () => ({ location: { directory: target.workspace } }) } },
     theme: {
-      text: { muted: "grey", feedback: { success: { base: "green" }, warning: { base: "amber" }, error: { base: "red" } } },
+      text: { muted: "grey", feedback: { info: { base: "blue" }, success: { base: "green" }, warning: { base: "amber" }, error: { base: "red" } } },
     },
     keymap: { layer: (factory) => { commands = factory().commands } },
     ui: {
@@ -345,8 +345,11 @@ test("the footer dot follows instance health and hides outside its session", asy
   const dot = ui.footer.children()
   assert.equal(dot.props.content, "● ")
   assert.equal(dot.props.width, 2)
-  for (const [severity, color] of [["success", "green"], ["error", "red"], ["muted", "grey"]]) {
-    state.instances.get("review").summary.severity = severity
+  for (const [status, severity, color] of [
+    ["healthy", "success", "green"], ["starting", "info", "blue"], ["stopping", "info", "blue"],
+    ["stopped", "muted", "grey"], ["failed", "error", "red"], ["running", "info", "green"],
+  ]) {
+    Object.assign(state.instances.get("review").summary, { status, severity })
     ui.publish(state)
     assert.equal(dot.props.fg, color)
   }

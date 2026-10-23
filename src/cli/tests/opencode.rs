@@ -150,11 +150,54 @@ fn model_and_variant_selections_reach_the_detached_creation_client() {
 }
 
 #[test]
+fn agent_instructions_reach_new_and_existing_instance_clients_as_session_only_literal_text() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.home.join("templates/website/compose.yaml")).unwrap();
+    fs::write(fixture.home.join("templates/website/tandem.json"), "{}").unwrap();
+    let guidance = "This is a workspace-only instance; no service containers are configured. Work locally and ask the user if additional services are needed.";
+    let instructions = "Use 'literal' \"instructions\"; $(touch injected)\n{{unchanged}} 日本語";
+    for prompt in [None, Some("Inspect the workspace")] {
+        let mut args = vec!["new-instance", "review", "-t", "website", "-o"];
+        args.extend(prompt);
+        args.extend(["--agent-instructions", instructions]);
+        let output = fixture.run(&args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.home.join("opened-instructions")).unwrap(),
+            format!("{guidance}\n\n{instructions}")
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.home.join("opened-parameters")).unwrap(),
+            prompt.unwrap_or_default()
+        );
+        let workspace = fixture.home.join("workspaces/website/review");
+        assert!(!workspace.join("injected").exists());
+        assert!(
+            !fs::read_to_string(workspace.join("AGENTS.md"))
+                .unwrap()
+                .contains(instructions)
+        );
+    }
+    let output = fixture.run(&["new-instance", "review", "-t", "website", "-o"]);
+    assert!(output.status.success());
+    assert_eq!(
+        fs::read_to_string(fixture.home.join("opened-instructions")).unwrap(),
+        guidance
+    );
+}
+
+#[test]
 fn invalid_session_selection_blocks_instance_creation() {
     for options in [
         vec!["--model", "invalid"],
         vec!["--variant", ""],
         vec!["--model", "openai/test#fast", "--variant", "high"],
+        vec!["--agent-instructions", ""],
+        vec!["--agent-instructions", " \n\t"],
     ] {
         let fixture = Fixture::new();
         let mut args = vec!["new-instance", "review", "-t", "website", "-o"];

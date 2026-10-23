@@ -231,6 +231,7 @@ pub(in crate::service) async fn launch_workspace_opencode(
     instructions: Option<&str>,
 ) -> Result<(), String> {
     validate_launch(settings, integration)?;
+    let instructions = launch.session_instructions(instructions.unwrap_or_default());
     let snapshot = tokio::time::timeout(
         Duration::from_secs(15),
         integration
@@ -252,7 +253,7 @@ pub(in crate::service) async fn launch_workspace_opencode(
             current,
             destination.as_ref(),
             launch,
-            instructions,
+            Some(&instructions),
         )
         .await
         .map(|_| ())
