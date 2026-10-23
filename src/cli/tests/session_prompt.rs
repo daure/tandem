@@ -77,7 +77,8 @@ impl Server {
                     "/api/session/ses_existing" => json!({"data":remote("ses_existing", &directory)}),
                     "/api/session/ses_external" => json!({"data":remote("ses_external", directory.parent().unwrap())}),
                     "/api/session/active" => json!({"data":{"ses_existing":{}}}),
-                    path if path.starts_with("/api/form?") || path.starts_with("/api/permission/request?") => json!({"data":[]}),
+                    "/api/session/ses_existing/form" | "/api/session/ses_existing/permission"
+                    | "/api/session/ses_external/form" | "/api/session/ses_external/permission" => json!({"data":[]}),
                     path if path.starts_with("/api/session?") => json!({"data":[
                         remote("ses_existing", &directory),
                         remote("ses_saved", &directory.join("app")),
@@ -419,12 +420,7 @@ fn session_listing_reports_partial_observation_and_rejects_disabled_or_unknown_t
     assert_eq!(listing["sessions"][0]["stale"], true);
     assert_eq!(listing["sessions"][0]["availability"], "unverified");
     assert_eq!(listing["sessions"][0]["activity"], "unknown");
-    assert!(
-        listing["observation_error"]
-            .as_str()
-            .unwrap()
-            .contains("observation unavailable")
-    );
+    assert_eq!(listing["observation_error"], format!("{}: 503", server.url));
     let output = fixture.run(&["list-sessions", "--instance", "absent", "--json"]);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
