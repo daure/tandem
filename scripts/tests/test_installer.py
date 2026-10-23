@@ -39,7 +39,7 @@ download_binary_and_run_installer "$@" || exit 1
 
 class InstallerTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="tandem-upgrade-", dir="/tmp/opencode")
+        self.temp = tempfile.TemporaryDirectory(prefix="tandem-upgrade-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.destination, self.stage = self.root / "install path", self.root / "stage"
