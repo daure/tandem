@@ -1,5 +1,6 @@
 import os
 import json
+import fcntl
 from pathlib import Path
 import tempfile
 import time
@@ -147,6 +148,7 @@ if sys.argv[-3:] == ['config', '--format', 'json']:
                            "TANDEM_GATEWAY_PORT": "9886", "XDG_STATE_HOME": str(root / "state")}
             environment.pop("TANDEM_INSTRUCTIONS_FILE", None)
             client = Client(BINARY, environment)
+            operation = None
             try:
                 template = client.tool("create_template", {"name": "website"})
                 (Path(template["directory"]) / "compose.yaml").write_text("services:\n  web:\n    image: nginx\n")
@@ -160,6 +162,18 @@ if sys.argv[-3:] == ['config', '--format', 'json']:
                 self.assertTrue((root / "home/workspaces/website/review").is_dir())
             finally:
                 client.close()
+                if operation is not None:
+                    lease = root / "home/locks" / f"startup-{operation['id']}"
+                    with lease.open("rb") as lock:
+                        deadline = time.monotonic() + 10
+                        while True:
+                            try:
+                                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                break
+                            except BlockingIOError:
+                                if time.monotonic() >= deadline:
+                                    self.fail("Startup worker must exit before fixture cleanup")
+                                time.sleep(0.05)
             self.assertTrue(client.process.stdin.closed)
             self.assertTrue(client.process.stdout.closed)
 
