@@ -337,6 +337,16 @@ fn new_session_selects_the_destination_tab_and_focuses_its_exact_new_pane() {
 fn zellij_accepts_only_the_requested_focus_and_visibility_noops() {
     let root = tempfile::tempdir().unwrap();
     let observer = observer(root.path());
+    fs::write(
+        &observer.zellij,
+        r#"#!/bin/sh
+root=$(dirname "$0")
+cat "$root/stderr" >&2
+read -r status < "$root/status"
+exit "$status"
+"#,
+    )
+    .unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     for (action, target, status, error, succeeds) in [
         (
@@ -371,11 +381,8 @@ fn zellij_accepts_only_the_requested_focus_and_visibility_noops() {
         ("show-floating-panes", "", 2, "", true),
         ("hide-floating-panes", "", 1, "Tab not found", false),
     ] {
-        fs::write(
-            &observer.zellij,
-            format!("#!/bin/sh\nprintf '%s\\n' '{error}' >&2\nexit {status}\n"),
-        )
-        .unwrap();
+        fs::write(root.path().join("stderr"), error).unwrap();
+        fs::write(root.path().join("status"), format!("{status}\n")).unwrap();
         let result = runtime.block_on(zellij(
             &observer.zellij,
             &["action".into(), action.into(), target.into()],
