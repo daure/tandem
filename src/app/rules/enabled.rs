@@ -65,6 +65,22 @@ impl SettingsToggle {
         }
     }
 
+    pub(super) fn open_client(draft: Rc<RefCell<Draft>>) -> Self {
+        let changed = draft.clone();
+        let value: fn(&Draft) -> bool = |draft| match draft.pending_toggle {
+            Some(PendingToggle::OpenClient(open)) => open,
+            _ => draft.rule.definition.open_client,
+        };
+        let toggle = Toggle::new("Open client")
+            .checked(value(&draft.borrow()))
+            .on_change(move |open| Msg::RuleDraftOpenClient(changed.clone(), open));
+        Self {
+            toggle,
+            draft,
+            value,
+        }
+    }
+
     pub(super) fn trigger_at_end(draft: Rc<RefCell<Draft>>) -> Self {
         let changed = draft.clone();
         let value: fn(&Draft) -> bool = |draft| match draft.pending_toggle {

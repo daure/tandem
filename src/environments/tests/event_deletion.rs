@@ -23,6 +23,7 @@ fn rule(name: &str) -> Definition {
         enabled: true,
         start_instance: false,
         focus_pane: true,
+        open_client: true,
         throttle_seconds: 0,
         trigger_at_end: false,
     }

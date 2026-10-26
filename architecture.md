@@ -478,7 +478,7 @@ and the prospective acceptance ID; fresh names are advisory and explicit targets
 reserve nothing. Fresh dispatch
 rechecks name availability under the case-normalized instance lock. Retries verify the originating
 operation and template before using retained resources; reservations confer no resource ownership.
-Activation verifies that a live Zellij session exists. Saved session names are legacy metadata.
+Activation with client opening verifies that a live Zellij session exists. Saved session names are legacy metadata.
 Dispatch resolves the newest live session by creation time before preparation and before its
 durable launch marker, including on confirmed retries. Full, unformatted Zellij listings exclude exited,
 resurrectable sessions; short listings hide that status. Missing live destinations produce a retained
@@ -518,6 +518,14 @@ before steering. A durable acceptance launch marker precedes the request. Receip
 session and prompt outcome, distinguishing queue admission, submission, unsent input and uncertainty.
 Interrupted dispatch never resends automatically. Retained histories match both server and session ID.
 TUI Settings expose the name and delivery selector; rule and acceptance rows project their saved values.
+
+Rules and fresh-conversation requests in existing instances default to `open_client=true`. Clientless requests use
+an available local V2 server for the workspace, rejecting ambiguous destinations without launching
+clients or invoking Zellij. Creation takes identity from the server response; the service commits its
+state-stream binding before attaching guidance and admitting input. Receipts retain exact server/session
+identity and delivery uncertainty independently of panes. Named conversations retain their bindings and
+delivery modes in either launch mode. Replay optionally pins a client-opening override for its attempt
+without changing saved rules. Clientless acceptances retain only their exact conversation in history.
 
 Default acceptance names include the event sequence and durable acceptance ID within the instance-name
 length limit. Custom names receive numeric collision suffixes. Names and resolved descriptions remain

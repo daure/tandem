@@ -110,7 +110,7 @@ struct SaveRuleInput {
     definition: crate::store::rules::Definition,
     /// Omit for creation; updates require the revision returned by get_rule/list_rules.
     expected_revision: Option<i64>,
-    /// Legacy saved session metadata; defaults to Tandem's current session. Dispatch selects the newest live Zellij session automatically.
+    /// Legacy saved session metadata; defaults to Tandem's current session. Client-opening dispatch selects the newest live Zellij session automatically.
     zellij_session: Option<String>,
     /// Approval for automatic trusted template execution and model prompts whenever this enabled revision matches.
     #[serde(default)]
@@ -135,6 +135,8 @@ struct ReplayEventInput {
     sequence: i64,
     /// Stable identity for this deliberate replay; repeated requests return the same processing attempt.
     request_id: String,
+    /// Override client opening for this replay's acceptances; omission uses each rule's setting.
+    open_client: Option<bool>,
     #[serde(default)]
     confirmed: bool,
 }
@@ -206,12 +208,15 @@ struct NewInstanceSessionInput {
     name: String,
     /// Literal initial task input, up to 64 KiB of nonblank text.
     initial_prompt: String,
-    /// Optional provider/model, optionally followed by #variant; omitted inherits the client's selection.
+    /// Optional provider/model, optionally followed by #variant; omitted uses the client selection or server default in clientless mode.
     model: Option<String>,
     /// Optional thinking variant; inherits the client's variant with an inherited model, otherwise uses the model default.
     variant: Option<String>,
     /// Optional OpenCode agent ID; omitted uses OpenCode's default agent.
     agent: Option<String>,
+    /// Open a client (default true); false uses an available V2 server without a client or Zellij.
+    #[serde(default = "default_wait")]
+    open_client: bool,
     /// Approval for this task input and model costs.
     #[serde(default)]
     confirmed: bool,
@@ -489,7 +494,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Validate and save a shared Rhai rule with namespace-local activation. matches(event) returns a boolean over profile, data, metadata, provider and shared context. Define optional instance_name(event) and instance_description(event) string functions in script to customize fresh-instance identity; missing, invalid or failed results fall back independently. target_instance overrides the name hook and preserves an existing target's description. Use preview_rule to inspect resolved names and descriptions. template, target_instance, model, variant and prompts accept Handlebars event expressions with paths, if/each and inline partials; {{event}} or {{json event}} inserts JSON. Text is unescaped; missing fields fail rendering. target_instance reuses an exact instance regardless of template, or creates it. With a target, session_name reuses a bound V2 conversation independently of its title; delivery_mode selects queue (default), steer or interrupt. New conversations use initial_prompt; existing named conversations use follow_up_prompt, falling back to initial_prompt when omitted. Enabling/editing an enabled revision requires confirmed=true and a live Zellij session, authorizing every future match. Dispatch selects the newest running Zellij session by creation time; exited sessions are excluded. Edits apply prospectively; acceptances retain their resolved settings and prompts."
+        description = "Validate and save a shared Rhai rule with namespace-local activation. matches(event) returns a boolean over profile, data, metadata, provider and shared context. Define optional instance_name(event) and instance_description(event) string functions in script to customize fresh-instance identity; missing, invalid or failed results fall back independently. target_instance overrides the name hook and preserves an existing target's description. Use preview_rule to inspect resolved names and descriptions. template, target_instance, model, variant and prompts accept Handlebars event expressions with paths, if/each and inline partials; {{event}} or {{json event}} inserts JSON. Text is unescaped; missing fields fail rendering. target_instance reuses an exact instance regardless of template, or creates it. With a target, session_name reuses a bound V2 conversation independently of its title; delivery_mode selects queue (default), steer or interrupt. New conversations use initial_prompt; existing named conversations use follow_up_prompt, falling back to initial_prompt when omitted. open_client defaults true; false creates and prompts through an available V2 server without opening a client or Zellij tab. Enabling/editing an enabled revision requires confirmed=true, authorizing every future match. Client-opening dispatch requires Zellij and selects its newest running session by creation time; exited sessions are excluded. Edits apply prospectively; acceptances retain their resolved settings and prompts."
     )]
     async fn save_rule(
         &self,
@@ -571,7 +576,12 @@ impl McpServer {
     ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, String> {
         let attempt = self
             .service
-            .replay_event_request(input.sequence, input.request_id, input.confirmed)
+            .replay_event_request(
+                input.sequence,
+                input.request_id,
+                input.confirmed,
+                input.open_client,
+            )
             .await?;
         json_object(serde_json::json!({"attempt_id": attempt}))
     }
@@ -700,13 +710,13 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a fresh OpenCode conversation and submit a literal initial prompt in an existing owned instance. Requires task/model-cost approval and confirmed=true, enabled integration and Zellij. Uses a fresh tab in an available client or launches a client; preserves services, repositories and conversation history. Returns session/server identity and prompt_outcome (submitted, not_submitted or uncertain). Submitted means server acceptance, not model completion. Inspect uncertain outcomes before deliberate retry; requests are never automatically resent."
+        description = "Create a fresh OpenCode conversation and submit a literal initial prompt in an existing owned instance. Requires task/model-cost approval, confirmed=true and enabled integration. open_client=true (default) uses a fresh client tab or launches a client and requires Zellij. false uses an available V2 server directly, opening no client or Zellij tab; omitted model/agent use server defaults. Preserves services, repositories and history. Returns exact session/server identity, optional pane and prompt_outcome. Submitted means server acceptance, not completion. Inspect uncertainty before deliberate retry; requests are never automatically resent."
     )]
     async fn new_instance_session(
         &self,
         Parameters(input): Parameters<NewInstanceSessionInput>,
     ) -> Result<Json<serde_json::Map<String, serde_json::Value>>, String> {
-        let reply = self.service.prompt_instance_session(
+        let reply = self.service.prompt_instance_session_options(
             input.name,
             crate::store::opencode::SessionPrompt {
                 launch: crate::store::opencode::Launch {
@@ -718,6 +728,8 @@ impl McpServer {
                 agent: input.agent,
             },
             input.confirmed,
+            None,
+            input.open_client,
         )?;
         let outcome = reply
             .await

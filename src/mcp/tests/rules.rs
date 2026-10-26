@@ -182,6 +182,7 @@ fn rule_tools_round_trip_definitions_preview_retained_events_and_enforce_authori
         assert!(error.contains("confirmation_required"));
         let error = server
             .replay_event(Parameters(super::super::ReplayEventInput {
+                open_client: None,
                 sequence,
                 request_id: "replay".into(),
                 confirmed: false,

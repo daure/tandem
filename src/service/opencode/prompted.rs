@@ -59,15 +59,6 @@ pub(in crate::service) async fn open_correlated_session(
 }
 
 impl AppService {
-    pub(crate) fn prompt_instance_session(
-        &self,
-        name: String,
-        input: SessionPrompt,
-        confirmed: bool,
-    ) -> Result<tokio::sync::oneshot::Receiver<Result<PromptedSession, String>>, String> {
-        self.prompt_instance_session_with_origin(name, input, confirmed, None)
-    }
-
     pub(crate) fn prompt_instance_session_with_origin(
         &self,
         name: String,
@@ -75,12 +66,27 @@ impl AppService {
         confirmed: bool,
         origin: Option<String>,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<PromptedSession, String>>, String> {
+        self.prompt_instance_session_options(name, input, confirmed, origin, true)
+    }
+
+    pub(crate) fn prompt_instance_session_options(
+        &self,
+        name: String,
+        input: SessionPrompt,
+        confirmed: bool,
+        origin: Option<String>,
+        open_client: bool,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<PromptedSession, String>>, String> {
         crate::store::state_stream::validate_origin(origin.as_deref())?;
         if !confirmed {
             return Err("confirmation_required: approve the initial prompt and model costs".into());
         }
         input.validate()?;
-        self.validate_opencode_launch()?;
+        if open_client {
+            self.validate_opencode_launch()?;
+        } else if !self.opencode_enabled() {
+            return Err("OpenCode integration is disabled".into());
+        }
         let environments = Arc::clone(&self.environments);
         let settings = Arc::clone(&self.settings);
         let observer = self.opencode.observer.clone();
@@ -99,6 +105,26 @@ impl AppService {
                 let instructions = super::instance_guidance(environments, name.clone()).await?;
                 if !settings.opencode_enabled() {
                     return Err("OpenCode integration is disabled".into());
+                }
+                if !open_client {
+                    let session = crate::store::opencode::Session {
+                        directory: instance.workspace.clone(),
+                        server: observer.background_server(&instance.workspace).await?,
+                        ..Default::default()
+                    };
+                    return super::background::create_session(
+                        &observer,
+                        &store,
+                        &session,
+                        super::background::BackgroundPrompt {
+                            input: &input,
+                            instructions,
+                            delivery: crate::store::rules::DeliveryMode::Steer,
+                        },
+                        &name,
+                        origin.as_deref(),
+                    )
+                    .await;
                 }
                 let directory = instance.workspace.clone();
                 let instance_name = name.clone();

@@ -117,7 +117,7 @@ impl Store {
         };
         let session = json!({
             "session_id": id, "server": server, "instance": instance, "directory": directory,
-            "title": "", "activity": "unknown", "attached": true, "panes": [receipt.pane],
+            "title": "", "activity": "unknown", "attached": receipt.pane.is_some(), "panes": receipt.pane.iter().collect::<Vec<_>>(),
             "stale": true, "availability": "unverified", "origins": origin.iter().collect::<Vec<_>>()
         });
         self.bind(&transaction, session, origin.as_deref())?;

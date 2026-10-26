@@ -388,6 +388,10 @@ The JSON receipt includes session/server identity, pane identity and `prompt_out
 Requests are not idempotent; each invocation creates independent work. CLI failures return a nonzero
 status after printing any available receipt. Management MCP exposes the same operation as
 `new_instance_session` with task/model-cost approval and `confirmed=true`.
+Its `open_client` option defaults to true. Set it false to create and prompt through an available
+OpenCode V2 server without a client or Zellij tab. The receipt has `pane: null`; omitted model and
+agent use server defaults. The conversation appears in OpenCode's session list and Tandem's session
+history. An unavailable or ambiguous server fails before creation.
 
 Send follow-up input to an existing owned V2 conversation by session ID:
 
@@ -702,7 +706,7 @@ also toggles it. `.` opens its action menu with hotkey labels. The top-right `A`
 Single-rule activation and deactivation save immediately and report success or failure in a notification.
 Activation authorizes automatic execution. Bulk actions confirm eligible saved revisions with **Ok (o)**
 and **Cancel (c)**. A white pause icon marks inactive rules; a green play icon marks active rules.
-Activation and dispatch require a live Zellij session. Dispatch selects the newest running session
+Activation and dispatch with client opening require a live Zellij session. Dispatch selects the newest running session
 by creation time before preparation and again before launching, including on confirmed retries.
 Exited, resurrectable sessions are excluded. With no live session, the acceptance records a destination
 error before launch; start a session and retry the acceptance. Automatic-execution approval remains required.
@@ -710,9 +714,11 @@ error before launch; start a session and retry the acceptance. Automatic-executi
 **Script**, and **Settings** tabs. Valid field edits save automatically while the dialog stays open;
 invalid input stays editable with a save error. Script uses Rust highlighting for Rhai syntax;
 Initial prompt and Follow-up prompt use Glimmer highlighting for Handlebars syntax.
-Settings includes **Focus new pane**, enabled by default. Turn it off to launch accepted work in
-the background while preserving every Zellij client's focus. This toggle saves without pausing
-the rule and applies to future acceptances; retained acceptances keep their pinned choice on retry.
+Settings includes **Open client**, enabled by default. Turn it off to create and prompt conversations
+on an available V2 server without opening a client or Zellij tab. Named-session reuse and delivery
+modes apply in either mode. Clientless dispatch records the server's exact conversation identity.
+**Focus new pane**, enabled by default, controls focus when opening a client. Both toggles save
+without pausing the rule and apply to future acceptances; retained acceptances keep their pinned choices on retry.
 **Throttle seconds (0 = off)** accepts whole seconds and defaults to `0`.
 The **Trigger at end** toggle below it defaults off. With a positive duration, the first matching live evaluation
 starts a fixed window using the time of evaluation. It triggers immediately when the toggle is off,
@@ -745,8 +751,8 @@ external commands or model prompts; launched status proves session linkage, not 
 Shared definitions live in `$TANDEM_HOME/templates/rules/<name>/rule.json`, alongside the instance
 and provider catalogs in the template Git repository. Each file contains `name`, `script`, `template`,
 `model`, and `initial_prompt`, with optional `variant`, `follow_up_prompt`, `target_instance`,
-`session_name`, `delivery_mode`, `description`, `start_instance`, and
-`focus_pane` (both booleans default true), plus `throttle_seconds` (default `0`) and
+`session_name`, `delivery_mode`, `description`, `start_instance`, `open_client`, and
+`focus_pane` (all three booleans default true), plus `throttle_seconds` (default `0`) and
 `trigger_at_end` (default `false`).
 The name must match its directory. Activation (`enabled`), saved session metadata, revisions, and execution
 history live locally in `settings.sqlite3`; omit `enabled` from the file and set it through `save_rule`
@@ -872,7 +878,7 @@ cancel already accepted work.
 A namespace lease serializes automation across processes. Dispatch admits four active actions and
 ten starts per minute, including retries. The owned event sidecar processes work after TUI/MCP clients
 close. Acceptances retain queued, provisioning, launching, launched, failed, or uncertain outcomes.
-`launched` proves observed session/pane linkage, not prompt completion or task success.
+`launched` proves observed session linkage or accepted direct prompt delivery, not task completion or success.
 Provider `assigned` feedback includes dispatch ID, rule name/revision, and instance; it proves durable
 dispatch admission, not readiness or prompt delivery.
 
@@ -880,6 +886,8 @@ Use confirmed `retry_acceptance` only for pre-launch failures after correcting t
 the assigned instance and successful siblings. Uncertain launches are never automatically resent;
 inspect their workspace/pane before deliberately replaying. Confirmed `replay_event` uses current
 enabled rules under a fresh attempt. Reuse its `request_id` when resubmitting the same request.
+Its optional `open_client` override applies to that attempt's acceptances without changing saved rules;
+omission inherits each rule's setting. Reusing a request ID preserves the first attempt and its choices.
 Providers must exclude their own feedback-driven source updates to prevent automation loops.
 
 See [developer provider setup](../projects-generators/README.md#event-providers) for the four Docker

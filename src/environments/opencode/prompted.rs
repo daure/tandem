@@ -33,7 +33,7 @@ impl Observer {
                     None => return Ok(PromptedSession {
                         session_id: None,
                         server: None,
-                        pane,
+                        pane: Some(pane),
                         prompt_outcome: PromptOutcome::NotSubmitted,
                         creation_confirmed_absent: true,
                         error: Some("OpenCode companion unavailable; run tandem opencode-setup and reopen the client. Initial prompt was not submitted".into()),
@@ -123,7 +123,7 @@ impl Observer {
                 match self.wait_prompt_control(&session.directory, &pane, true).await? {
                     Some((control, server)) if server == session.server => PromptClient { pane, control, server },
                     _ => return Ok(PromptedSession {
-                        session_id: Some(session.id.clone()), server: Some(session.server.clone()), pane,
+                        session_id: Some(session.id.clone()), server: Some(session.server.clone()), pane: Some(pane),
                         prompt_outcome: PromptOutcome::NotSubmitted,
                         creation_confirmed_absent: false,
                         error: Some("OpenCode companion unavailable or server changed; prompt was not submitted. Run tandem opencode-setup and reopen the client".into()),
@@ -272,7 +272,7 @@ impl Observer {
             Ok((session_id, prompt_outcome, error, creation_confirmed_absent)) => PromptedSession {
                 session_id,
                 server: Some(server),
-                pane,
+                pane: Some(pane),
                 prompt_outcome,
                 error,
                 creation_confirmed_absent,
@@ -280,7 +280,7 @@ impl Observer {
             Err(error) => PromptedSession {
                 session_id: target_id.map(str::to_owned),
                 server: Some(server),
-                pane,
+                pane: Some(pane),
                 prompt_outcome: PromptOutcome::Uncertain,
                 creation_confirmed_absent: false,
                 error: Some(format!(
@@ -290,9 +290,8 @@ impl Observer {
         };
         if focus
             && outcome.session_id.is_some()
-            && let Err(error) = self
-                .focus_pane(current, &outcome.pane, actual.is_floating)
-                .await
+            && let Some(pane) = &outcome.pane
+            && let Err(error) = self.focus_pane(current, pane, actual.is_floating).await
         {
             outcome.error = Some(match outcome.error {
                 Some(previous) => format!("{previous}; {error}"),

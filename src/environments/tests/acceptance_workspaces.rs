@@ -36,6 +36,7 @@ fn acceptance_history_survives_inventory_removal_and_restart_and_obeys_event_own
                 enabled: true,
                 start_instance: false,
                 focus_pane: true,
+                open_client: true,
                 throttle_seconds: 0,
                 trigger_at_end: false,
             },

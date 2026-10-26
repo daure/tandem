@@ -42,12 +42,12 @@ fn receipt() -> PromptedSession {
     PromptedSession {
         session_id: Some("ses_test".into()),
         server: Some("http://127.0.0.1:4199".into()),
-        pane: Pane {
+        pane: Some(Pane {
             session: "main".into(),
             id: 100,
             tab_id: 9,
             tab_name: "Review".into(),
-        },
+        }),
         prompt_outcome: PromptOutcome::Submitted,
         error: None,
         creation_confirmed_absent: false,

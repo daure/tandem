@@ -33,6 +33,7 @@ pub(super) fn rule(name: &str) -> Rule {
             enabled: false,
             start_instance: true,
             focus_pane: true,
+            open_client: true,
             throttle_seconds: 0,
             trigger_at_end: false,
         },
@@ -1264,6 +1265,43 @@ fn focus_pane_toggle_preserves_activation_and_destination_and_rolls_back_failed_
             } else {
                 assert_eq!(draft.borrow().rule, original);
             }
+        }
+    }
+}
+
+#[test]
+fn open_client_toggle_preserves_activation_and_rolls_back_failed_saves() {
+    for succeeds in [false, true] {
+        let mut app = editor(true);
+        show_settings(&mut app);
+        let draft = app.rule_editor.as_ref().unwrap().clone();
+        let original = draft.borrow().saved.clone();
+        assert_setting(&mut app, "Open client", true);
+        if !succeeds {
+            app.service
+                .save_rule(
+                    original.definition.clone(),
+                    Some(original.revision),
+                    Some(original.zellij_session.clone()),
+                    true,
+                )
+                .blocking_recv()
+                .unwrap()
+                .unwrap();
+        }
+        settings_input(&mut app, "open-client", &[Key::Char(' ')]);
+        let (send, result) = delay_save(&mut app);
+        assert_eq!(result.is_ok(), succeeds);
+        app.tick(Duration::ZERO, AnimationSettings::default());
+        assert_setting(&mut app, "Open client", false);
+        send.send(result).unwrap();
+        assert!(app.poll_rule_save());
+        app.tick(Duration::ZERO, AnimationSettings::default());
+        assert_setting(&mut app, "Open client", !succeeds);
+        assert!(draft.borrow().rule.definition.enabled);
+        assert_eq!(draft.borrow().rule.zellij_session, original.zellij_session);
+        if !succeeds {
+            assert_eq!(draft.borrow().rule, original);
         }
     }
 }

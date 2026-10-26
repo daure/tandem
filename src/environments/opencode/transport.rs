@@ -157,6 +157,27 @@ pub(super) async fn raw_body(
     method: reqwest::Method,
     body: Option<serde_json::Value>,
 ) -> Result<Option<serde_json::Value>, String> {
+    body_request(client, server, path, method, body, false).await
+}
+
+pub(super) async fn mutate(
+    client: &reqwest::Client,
+    server: &str,
+    path: &str,
+    method: reqwest::Method,
+    body: serde_json::Value,
+) -> Result<Option<serde_json::Value>, String> {
+    body_request(client, server, path, method, Some(body), true).await
+}
+
+async fn body_request(
+    client: &reqwest::Client,
+    server: &str,
+    path: &str,
+    method: reqwest::Method,
+    body: Option<serde_json::Value>,
+    require_found: bool,
+) -> Result<Option<serde_json::Value>, String> {
     let server = local_server(server).ok_or("OpenCode server must be local HTTP")?;
     let mut request = client.request(method, format!("{server}{path}"));
     if let Some(body) = body {
@@ -175,6 +196,9 @@ pub(super) async fn raw_body(
         .await
         .map_err(|_| format!("{server}: unavailable"))?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
+        if require_found {
+            return Err(format!("{server}: 404"));
+        }
         return Ok(None);
     }
     if response.status() == reqwest::StatusCode::NO_CONTENT {

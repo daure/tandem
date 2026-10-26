@@ -454,6 +454,15 @@ impl EventStore {
     }
 
     pub(crate) fn replay(&self, sequence: i64, request_id: &str) -> Result<i64, Error> {
+        self.replay_options(sequence, request_id, None)
+    }
+
+    pub(crate) fn replay_options(
+        &self,
+        sequence: i64,
+        request_id: &str,
+        open_client: Option<bool>,
+    ) -> Result<i64, Error> {
         if request_id.is_empty() || request_id.len() > 200 {
             return Err(Error::Invalid(
                 "replay request ID must contain 1–200 bytes".into(),
@@ -475,6 +484,12 @@ impl EventStore {
         }
         super::rules::catalog::synchronize(&self.config, &transaction)?;
         let attempt = add_attempt(&transaction, sequence, true, Some(request_id), &now())?;
+        if let Some(open_client) = open_client {
+            transaction.execute(
+                "UPDATE rule_evaluations SET rule_snapshot = json_set(rule_snapshot, '$.definition.open_client', json(?2)) WHERE attempt_id = ?1",
+                params![attempt, if open_client { "true" } else { "false" }],
+            )?;
+        }
         self.notify(
             &transaction,
             &provider,

@@ -9,6 +9,7 @@ use crate::{
 };
 
 pub(super) mod actions;
+pub(super) mod background;
 mod guidance;
 mod listing;
 mod observation;

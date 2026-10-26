@@ -17,6 +17,7 @@ pub(crate) fn definition(name: &str, script: &str) -> Definition {
         enabled: true,
         start_instance: true,
         focus_pane: true,
+        open_client: true,
         throttle_seconds: 0,
         trigger_at_end: false,
     }
@@ -106,6 +107,19 @@ fn rule_pane_focus_defaults_on_and_preserves_explicit_background_selection() {
     let rule: Definition = serde_json::from_value(value).unwrap();
     assert!(!rule.focus_pane);
     assert_eq!(serde_json::to_value(rule).unwrap()["focus_pane"], false);
+}
+
+#[test]
+fn rule_client_opening_defaults_on_and_preserves_clientless_selection() {
+    let mut value =
+        serde_json::to_value(definition("inspect", "fn matches(event) { true }")).unwrap();
+    value.as_object_mut().unwrap().remove("open_client");
+    let rule: Definition = serde_json::from_value(value.clone()).unwrap();
+    assert!(rule.open_client);
+    value["open_client"] = json!(false);
+    let rule: Definition = serde_json::from_value(value).unwrap();
+    assert!(!rule.open_client);
+    assert_eq!(serde_json::to_value(rule).unwrap()["open_client"], false);
 }
 
 #[test]

@@ -159,11 +159,12 @@ impl AppService {
         sequence: i64,
         request_id: String,
         confirmed: bool,
+        open_client: Option<bool>,
     ) -> Result<i64, String> {
         if !confirmed {
             return Err("confirmation_required: replay evaluates current rules and can create fresh instances and model prompts".into());
         }
-        self.event_request(move |store| store.replay(sequence, &request_id))
+        self.event_request(move |store| store.replay_options(sequence, &request_id, open_client))
             .await
             .map_err(|error| error.to_string())
     }

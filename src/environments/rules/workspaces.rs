@@ -72,7 +72,9 @@ impl RuleStore {
             }
             workspace.directory = directory;
             for session in &observed.sessions {
-                let unrelated = if acceptance.rule.definition.session_name.is_some() {
+                let unrelated = if !acceptance.rule.definition.open_client
+                    || acceptance.rule.definition.session_name.is_some()
+                {
                     acceptance.session_id.as_deref() != Some(session.id.as_str())
                         || acceptance.session_server.as_deref() != Some(session.server.as_str())
                 } else {

@@ -59,10 +59,7 @@ impl AppService {
         if !self.opencode_enabled() {
             return Err("OpenCode integration is disabled".into());
         }
-        let destination = self
-            .runtime
-            .handle()
-            .block_on(self.opencode.observer.resolve_rule_destination())?;
+        let destination = self.rule_destination(acceptance)?;
         if let Some(origin) = &acceptance.operation_id {
             self.rules
                 .store
@@ -81,6 +78,9 @@ impl AppService {
             &self.environments.config,
             &instance,
         )?);
+        if !acceptance.rule.definition.open_client {
+            return self.launch_background_rule_session(acceptance, &instance, true);
+        }
         if acceptance.rule.definition.session_name.is_some() {
             return self.launch_named_rule_session(acceptance, &instance, &destination, true);
         }

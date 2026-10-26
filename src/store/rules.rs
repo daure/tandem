@@ -49,6 +49,9 @@ pub(crate) struct Definition {
     pub enabled: bool,
     #[serde(default = "super::environments::Instance::default_start_instance")]
     pub start_instance: bool,
+    /// Open an OpenCode client; false dispatches through an available V2 server without Zellij.
+    #[serde(default = "Definition::default_focus_pane")]
+    pub open_client: bool,
     /// Whether automatic acceptance launches focus their new OpenCode pane.
     #[serde(default = "Definition::default_focus_pane")]
     pub focus_pane: bool,
@@ -193,6 +196,7 @@ impl AcceptanceWorkspace {
 #[derive(Debug, Serialize)]
 pub(crate) struct Preview {
     pub matched: bool,
+    pub open_client: bool,
     pub resolved_prompt: Option<String>,
     pub resolved_follow_up_prompt: Option<String>,
     pub template: String,

@@ -10,6 +10,14 @@ fn fixture(existing: bool) -> AppService {
 }
 
 fn fixture_with_session(existing: bool, session: Option<&str>) -> AppService {
+    let mut rule = definition("inspect");
+    rule.target_instance = Some("shared".into());
+    rule.session_name = session.map(str::to_owned);
+    rule.script = "fn matches(event) { true } fn instance_name(event) { \"ignored\" }".into();
+    fixture_with_rule(existing, rule)
+}
+
+fn fixture_with_rule(existing: bool, rule: Definition) -> AppService {
     let mut service = AppService::for_tests();
     service
         .runtime
@@ -54,10 +62,6 @@ esac
         assert_eq!(ready.state, OperationState::Succeeded, "{:?}", ready.error);
         fs::write(config.workspaces.join("other/shared/keep.txt"), "user work").unwrap();
     }
-    let mut rule = definition("inspect");
-    rule.target_instance = Some("shared".into());
-    rule.session_name = session.map(str::to_owned);
-    rule.script = "fn matches(event) { true } fn instance_name(event) { \"ignored\" }".into();
     service.rules.store.save(rule, None, "main".into()).unwrap();
     let events = crate::environments::events::EventStore::open(&config).unwrap();
     let token = events.register_provider("sample").unwrap();
@@ -78,6 +82,9 @@ esac
 
 #[path = "rule_sessions.rs"]
 mod sessions;
+
+#[path = "rule_background.rs"]
+mod background;
 
 fn launches(service: &AppService) -> usize {
     fs::read_to_string(service.environments.config.home.join("target-calls"))

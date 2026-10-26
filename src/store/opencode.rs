@@ -182,7 +182,7 @@ impl PromptOutcome {
 pub(crate) struct PromptedSession {
     pub session_id: Option<String>,
     pub server: Option<String>,
-    pub pane: Pane,
+    pub pane: Option<Pane>,
     pub prompt_outcome: PromptOutcome,
     pub error: Option<String>,
     #[serde(skip)]

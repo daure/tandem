@@ -35,6 +35,11 @@ pub struct Data {
     pub interrupt_failure: bool,
     pub interrupt_lies: bool,
     pub requests: Vec<String>,
+    pub background_calls: Vec<(String, Value)>,
+    pub create_disconnect: bool,
+    pub prompt_disconnect: bool,
+    pub instruction_failure: bool,
+    pub create_wrong_directory: bool,
 }
 
 pub struct Server {
@@ -97,6 +102,23 @@ impl Server {
                     .unwrap_or_default();
                 let mut data = shared.lock().unwrap();
                 data.requests.push(path.to_owned());
+                if data.v2 && method == "POST" && path == "/api/session" {
+                    let id = payload["id"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| format!("ses_background_{}", data.sessions.len()));
+                    let session = json!({"id":id, "title":payload["title"].as_str().unwrap_or("Background task"),
+                        "directory":if data.create_wrong_directory { json!("/wrong/workspace") } else { payload["location"]["directory"].clone() }, "time":{"updated":1}});
+                    data.sessions.insert(id, session);
+                }
+                if data.v2 && matches!(method, "POST" | "PUT") {
+                    data.background_calls.push((path.into(), payload.clone()));
+                    if (path == "/api/session" && data.create_disconnect)
+                        || (path.ends_with("/prompt") && data.prompt_disconnect)
+                    {
+                        continue;
+                    }
+                }
                 if method == "PATCH" {
                     let id = url
                         .path()
@@ -112,7 +134,7 @@ impl Server {
                     }
                 }
                 let (status, body) = if data.v2 {
-                    respond_v2(&mut data, method, &url)
+                    respond_v2(&mut data, method, &url, &payload)
                 } else {
                     respond(&mut data, method, url.path(), &directory)
                 };
@@ -143,7 +165,12 @@ impl Server {
     }
 }
 
-fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static str, Value) {
+fn respond_v2(
+    data: &mut Data,
+    method: &str,
+    url: &reqwest::Url,
+    payload: &Value,
+) -> (&'static str, Value) {
     let query = |name| {
         url.query_pairs()
             .find(|(key, _)| key == name)
@@ -160,6 +187,10 @@ fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static st
     };
     match url.path() {
         "/api/info" => ("200 OK", json!({"version":"2.0.22"})),
+        "/api/model/default" => (
+            "200 OK",
+            json!({"data":{"providerID":"default-provider","id":"default-model","name":"Display only"}}),
+        ),
         "/api/session/active" if data.status_failure => ("503 Service Unavailable", json!({})),
         "/api/session/active" => (
             "200 OK",
@@ -170,6 +201,30 @@ fn respond_v2(data: &mut Data, method: &str, url: &reqwest::Url) -> (&'static st
             json!({"data": if data.awaiting_answer { json!([{"sessionID":"ses_old"}]) } else { json!([]) }}),
         ),
         "/api/permission/request" => ("200 OK", json!({"data":[]})),
+        "/api/session" if method == "POST" => {
+            let id = payload["id"]
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("ses_background_{}", data.sessions.len() - 1));
+            ("200 OK", json!({"data":native(data.sessions[&id].clone())}))
+        }
+        path if path.contains("/instructions/entries/") && data.instruction_failure => {
+            ("404 Not Found", json!({}))
+        }
+        path if path.contains("/instructions/entries/") || path.ends_with("/model") => {
+            ("204 No Content", Value::Null)
+        }
+        path if method == "POST" && path.ends_with("/prompt") => {
+            let id = path
+                .strip_prefix("/api/session/")
+                .unwrap()
+                .strip_suffix("/prompt")
+                .unwrap();
+            (
+                "200 OK",
+                json!({"data":{"sessionID":id,"id":"msg_background","delivery":payload["delivery"]}}),
+            )
+        }
         "/api/session" if data.history_failure => ("500 Internal Server Error", json!({})),
         "/api/session" => {
             let limit = query("limit")

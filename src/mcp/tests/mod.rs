@@ -53,6 +53,7 @@ fn prompted_sessions_require_task_approval_and_valid_literal_input() {
         ] {
             let error = server
                 .new_instance_session(Parameters(super::NewInstanceSessionInput {
+                    open_client: true,
                     name: "review".into(),
                     initial_prompt: prompt.into(),
                     model: None,

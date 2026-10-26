@@ -8,6 +8,7 @@ use std::{
 
 use tokio::sync::oneshot;
 
+mod background;
 mod developer;
 mod history;
 mod recreation;
@@ -173,9 +174,11 @@ impl AppService {
                     if !service.opencode_enabled() {
                         return Err("OpenCode integration is disabled".into());
                     }
-                    service.runtime.handle().block_on(
-                        service.opencode.observer.resolve_rule_destination(),
-                    )?;
+                    if definition.open_client {
+                        service.runtime.handle().block_on(
+                            service.opencode.observer.resolve_rule_destination(),
+                        )?;
+                    }
                     #[cfg(not(test))]
                     crate::environments::provider_sidecar::ensure(&service.environments.config)?;
                 }
@@ -241,6 +244,7 @@ impl AppService {
                     .map_err(|error| error.to_string())?;
                 Ok(Preview {
                     matched,
+                    open_client: definition.open_client,
                     resolved_prompt: matched
                         .then(|| rules::render_prompt(&definition.initial_prompt, &input))
                         .transpose()?,
@@ -400,9 +404,7 @@ impl AppService {
                 if !self.opencode_enabled() {
                     return Err("OpenCode integration is disabled".into());
                 }
-                self.runtime
-                    .handle()
-                    .block_on(self.opencode.observer.resolve_rule_destination())?;
+                self.rule_destination(acceptance)?;
                 let (existing, lock) = self
                     .environments
                     .admit_new_instance(&acceptance.instance, acceptance.template())?;
@@ -445,12 +447,9 @@ impl AppService {
                 if !self.opencode_enabled() {
                     return Err("OpenCode integration is disabled".into());
                 }
-                let destination = self
-                    .runtime
-                    .handle()
-                    .block_on(self.opencode.observer.resolve_rule_destination())?;
+                let destination = self.rule_destination(acceptance)?;
                 let workspace = self.environments.workspace(&acceptance.instance)?;
-                let _target_lock = if acceptance.rule.definition.target_instance.is_some() {
+                let target_lock = if acceptance.rule.definition.target_instance.is_some() {
                     let Some((instance, lock)) =
                         self.environments.admit_rule_target(&acceptance.instance)?
                     else {
@@ -471,6 +470,29 @@ impl AppService {
                 } else {
                     None
                 };
+                if !acceptance.rule.definition.open_client {
+                    let (instance, _session_lock) = if target_lock.is_some() {
+                        (
+                            self.environments.session_instance(&acceptance.instance)?,
+                            None,
+                        )
+                    } else {
+                        let (instance, lock) =
+                            self.environments.admit_session_open(&acceptance.instance)?;
+                        (instance, Some(lock))
+                    };
+                    if !startup::belongs_to(
+                        config,
+                        &instance.name,
+                        &instance.template,
+                        acceptance.operation_id.as_deref(),
+                    )? {
+                        return Err(
+                            "instance startup lineage changed before clientless delivery".into(),
+                        );
+                    }
+                    return self.launch_background_rule_session(acceptance, &instance, false);
+                }
                 if acceptance.rule.definition.session_name.is_some() {
                     let instance = self.environments.session_instance(&acceptance.instance)?;
                     return self.launch_named_rule_session(
@@ -508,6 +530,9 @@ impl AppService {
                     .map_err(|error| error.to_string())?;
             }
             DispatchStatus::Launching => {
+                if !acceptance.rule.definition.open_client {
+                    return Err("Clientless conversation delivery was interrupted; inspect server history before replaying. The prompt will not be sent again".into());
+                }
                 if acceptance.rule.definition.session_name.is_some() {
                     return Err("Named conversation delivery was interrupted; inspect the session before replaying. The prompt will not be sent again".into());
                 }
@@ -569,5 +594,15 @@ impl AppService {
             _ => {}
         }
         Ok(())
+    }
+
+    fn rule_destination(&self, acceptance: &Acceptance) -> Result<String, String> {
+        if acceptance.rule.definition.open_client {
+            self.runtime
+                .handle()
+                .block_on(self.opencode.observer.resolve_rule_destination())
+        } else {
+            Ok(String::new())
+        }
     }
 }

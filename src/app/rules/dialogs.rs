@@ -147,6 +147,11 @@ impl App {
                     FlexItem::fit_content(),
                 )
                 .child(
+                    "open-client",
+                    super::enabled::SettingsToggle::open_client(draft.clone()),
+                    FlexItem::fit_content(),
+                )
+                .child(
                     "throttle-settings",
                     Flex::column()
                         .child(
@@ -310,6 +315,15 @@ impl App {
         self.set_rule_draft_toggle(draft, PendingToggle::FocusPane(focus), ctx);
     }
 
+    pub(in crate::app) fn set_rule_draft_open_client(
+        &mut self,
+        draft: Rc<RefCell<Draft>>,
+        open: bool,
+        ctx: &mut EventCtx<Msg>,
+    ) {
+        self.set_rule_draft_toggle(draft, PendingToggle::OpenClient(open), ctx);
+    }
+
     pub(in crate::app) fn set_rule_draft_trigger_at_end(
         &mut self,
         draft: Rc<RefCell<Draft>>,
@@ -355,6 +369,10 @@ impl App {
             }
             PendingToggle::FocusPane(focus) => {
                 target.definition.focus_pane = focus;
+                Some(target.zellij_session)
+            }
+            PendingToggle::OpenClient(open) => {
+                target.definition.open_client = open;
                 Some(target.zellij_session)
             }
             PendingToggle::TriggerAtEnd(trigger) => {
@@ -539,6 +557,9 @@ impl App {
                         }
                         if matches!(toggle, Some(PendingToggle::FocusPane(_))) {
                             draft.rule.definition.focus_pane = rule.definition.focus_pane;
+                        }
+                        if matches!(toggle, Some(PendingToggle::OpenClient(_))) {
+                            draft.rule.definition.open_client = rule.definition.open_client;
                         }
                         if matches!(toggle, Some(PendingToggle::TriggerAtEnd(_))) {
                             draft.rule.definition.trigger_at_end = rule.definition.trigger_at_end;

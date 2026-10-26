@@ -102,7 +102,7 @@ impl AppService {
                 .finish_named_session(&binding, known)
                 .map_err(|error| error.to_string())?;
         }
-        acceptance.pane = Some(receipt.pane);
+        acceptance.pane = receipt.pane;
         acceptance.prompt_outcome = Some(receipt.prompt_outcome);
         acceptance.error = receipt.error;
         acceptance.status = match receipt.prompt_outcome {

@@ -44,6 +44,7 @@ pub(crate) enum PendingToggle {
     Enabled(bool),
     StartInstance(bool),
     FocusPane(bool),
+    OpenClient(bool),
     TriggerAtEnd(bool),
 }
 

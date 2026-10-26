@@ -180,6 +180,7 @@ pub(crate) enum Msg {
     RuleDraftEnabled(Rc<RefCell<rules::Draft>>, bool),
     RuleDraftStartInstance(Rc<RefCell<rules::Draft>>, bool),
     RuleDraftFocusPane(Rc<RefCell<rules::Draft>>, bool),
+    RuleDraftOpenClient(Rc<RefCell<rules::Draft>>, bool),
     RuleDraftTriggerAtEnd(Rc<RefCell<rules::Draft>>, bool),
     DiscardRuleDraft(Rc<RefCell<rules::Draft>>),
     FocusEvent(i64),
@@ -810,6 +811,9 @@ impl App {
             }
             Msg::RuleDraftFocusPane(draft, focus) => {
                 self.set_rule_draft_focus_pane(draft, focus, ctx);
+            }
+            Msg::RuleDraftOpenClient(draft, open) => {
+                self.set_rule_draft_open_client(draft, open, ctx);
             }
             Msg::RuleDraftTriggerAtEnd(draft, trigger) => {
                 self.set_rule_draft_trigger_at_end(draft, trigger, ctx);
