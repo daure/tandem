@@ -1,23 +1,23 @@
 # Tandem
 
-**Repeatable workspaces for you and your coding agents.**
+Template-based development workspaces for developers and coding agents.
 
 [![Release](https://img.shields.io/github/v/release/daure/tandem)](https://github.com/daure/tandem/releases/latest)
 [![Build](https://github.com/daure/tandem/actions/workflows/release.yml/badge.svg)](https://github.com/daure/tandem/actions/workflows/release.yml)
 
 [Install](#install) · [First workspace](#create-your-first-workspace) · [MCP](#connect-an-agent) · [Reference](docs/reference.md)
 
-Tandem turns editable templates into local development workspaces. Manage repositories, Docker Compose services, and OpenCode sessions through a keyboard-first TUI, CLI, or MCP.
+Manage repositories, Docker Compose services, and OpenCode sessions through a TUI, CLI, or MCP.
 
-## What you get
+## Features
 
-- **Repeatable environments:** create workspaces from shared repository, service, and guidance templates.
-- **A workspace overview:** inspect service health, resource usage, routes, and agent sessions.
-- **Agent workflows:** connect MCP clients or use event rules to route incoming work to OpenCode.
+- Reusable templates for repositories, services, and agent guidance.
+- Service health, resource usage, routes, and agent sessions in one view.
+- Event rules that route incoming work to OpenCode.
 
 ## Install
 
-Prebuilt binaries target **Ubuntu 24.04+ on x86_64**. Use a terminal with a [Nerd Font](https://www.nerdfonts.com/) for icons.
+**Ubuntu 24.04+, x86_64.** Use a [Nerd Font](https://www.nerdfonts.com/) for icons.
 
 ```sh
 installer="$(mktemp)"
@@ -29,21 +29,19 @@ export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
 tandem
 ```
 
-The installer also installs the OpenCode companion and prints its plugin configuration path.
-See [OpenCode setup and updates](docs/reference.md#opencode-integration) for configuration and client restarts.
+The installer includes the OpenCode companion and prints its configuration path. See [OpenCode setup](docs/reference.md#opencode-integration).
 
-Blank workspaces need neither Git nor Docker. Repository templates require Linux and host Git; service templates require Docker Engine and Compose v2+. OpenCode pane integration requires Zellij 0.45+ and the companion.
+Blank workspaces need no Git or Docker. Repository templates require Linux and Git; service templates require Docker Engine and Compose v2+. OpenCode panes require Zellij 0.45+ and the companion.
 
 ## Create your first workspace
 
-1. Open **Instances** and press `T` to create a template named `website`. A blank template starts with `tandem.json` containing `{}`.
-2. Select it, press `i`, and name the instance `review`. Confirm the dialog to prepare its workspace.
-3. Select the instance and press `d` to inspect its workspace path and generated agent guidance.
+1. Open **Instances**, press `T`, and create a template named `website`. Its `tandem.json` starts with `{}`.
+2. Select the template, press `i`, and name the instance `review`. Confirm to prepare the workspace.
+3. Select the instance and press `d` to inspect its path and agent guidance.
 
-These are the default bindings; the TUI shows your configured shortcuts.
-Add repositories or Compose services to the template when needed; see [template authoring](docs/reference.md#template-layout-and-routing).
+These are the default shortcuts. Add repositories and services through [template configuration](docs/reference.md#template-layout-and-routing).
 
-Once a template exists, the CLI can create and inspect instances too:
+With the template in place, use the CLI:
 
 ```sh
 tandem new-instance another-review --template website
@@ -51,8 +49,8 @@ tandem list-instances
 tandem inspect-instance another-review
 ```
 
-Only execute trusted templates: their scripts and containers use local host and Docker privileges.
-Stopping preserves workspace data; purging permanently deletes the instance's workspace and owned resources.
+Run only trusted templates; scripts and containers use host and Docker privileges.
+Stopping keeps data. Purging permanently deletes the workspace and owned resources.
 
 ## Connect an agent
 
@@ -65,20 +63,20 @@ Configure a local stdio MCP server:
 }
 ```
 
-Agents call `get_instructions` first. Tandem also provides an [instance-scoped MCP server](docs/reference.md#instance-local-control) for workspace-local operations.
+Agents call `get_instructions` first. Use [instance-scoped MCP](docs/reference.md#instance-local-control) for workspace-local operations.
 
 ## Documentation and contributing
 
-- [TUI controls and workspace lifecycle](docs/reference.md#quick-start)
+- [TUI and workspace lifecycle](docs/reference.md#quick-start)
 - [CLI commands](docs/reference.md#cli-instance-lifecycle) · [Configuration](docs/reference.md#configuration)
 - [Templates and routing](docs/reference.md#template-layout-and-routing)
 - [OpenCode integration](docs/reference.md#opencode-integration)
-- [Events and providers](docs/reference.md#events-and-developer-providers) · [Automation rules](docs/reference.md#event-rules)
+- [Events and providers](docs/reference.md#events-and-developer-providers) · [Rules](docs/reference.md#event-rules)
 - [Local state stream](docs/reference.md#local-state-stream-and-session-origins)
-- [Architecture](architecture.md) · [Verification](docs/reference.md#verification) · [Releasing](docs/reference.md#release)
-- [Report a bug or request a feature](https://github.com/daure/tandem/issues)
+- [Architecture](architecture.md) · [Verification](docs/reference.md#verification) · [Releases](docs/reference.md#release)
+- [Issues](https://github.com/daure/tandem/issues)
 
-Source builds require Rust and a sibling `../tuicore` checkout. Start with `cargo run`; see the [development fixtures](projects-generators/README.md) for sample applications.
+Build with Rust and a sibling `../tuicore` checkout: `cargo run`. See [development fixtures](projects-generators/README.md) for sample apps.
 
 ## License
 
