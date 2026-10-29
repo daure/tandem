@@ -1,13 +1,13 @@
 # Tandem
 
-Template-based development workspaces for developers and coding agents.
+MCP-driven development workspaces built from reusable templates.
 
 [![Release](https://img.shields.io/github/v/release/daure/tandem)](https://github.com/daure/tandem/releases/latest)
 [![Build](https://github.com/daure/tandem/actions/workflows/release.yml/badge.svg)](https://github.com/daure/tandem/actions/workflows/release.yml)
 
 [Install](#install) · [First workspace](#create-your-first-workspace) · [MCP](#connect-an-agent) · [Reference](docs/reference.md)
 
-Manage repositories, Docker Compose services, and OpenCode sessions through a TUI, CLI, or MCP.
+Agents use Model Context Protocol (MCP) to query and manage templates, workspace instances, services, and OpenCode sessions. They can control event providers, configure rules, and inspect events and reports. The TUI and CLI expose the same repository and Docker Compose workspaces.
 
 ## Features
 
