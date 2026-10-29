@@ -15,6 +15,24 @@ Manage repositories, Docker Compose services, and OpenCode sessions through a TU
 - Service health, resource usage, routes, and agent sessions in one view.
 - Event rules that route incoming work to OpenCode.
 
+## Screenshots
+
+![Agent sessions grouped by project with model details and resource usage](docs/screenshots/sessions.png)
+
+<sub>Sessions — monitor agents across projects with model details and resource usage.</sub>
+
+![Workspace instances with repository setup steps and service startup progress](docs/screenshots/instances.png)
+
+<sub>Instances — follow workspace setup and service startup in a hierarchical view.</sub>
+
+![Event rules with agent instructions, target templates, and model settings](docs/screenshots/rules.png)
+
+<sub>Rules — route incoming events to agents with task instructions and model settings.</sub>
+
+![Incoming alerts with linked rule launches in the Events view](docs/screenshots/events.png)
+
+<sub>Events — trace incoming alerts to the rules and agent launches they trigger.</sub>
+
 ## Install
 
 **Ubuntu 24.04+, x86_64.** Use a [Nerd Font](https://www.nerdfonts.com/) for icons.
