@@ -2,6 +2,8 @@
 
 A template is a shared development recipe; an instance has its own name and workspace.
 Use the returned `workspace` path: new workspaces use `workspaces_root/<template>/<instance>`, while existing flat paths remain valid.
+Creation and start initialize missing workspace-root Git repositories with all contents locally excluded;
+existing `.git` entries and nested application repositories are preserved.
 Read `core_guidance` together with this editable guidance for placement and cleanup decisions.
 
 ## Templates
@@ -26,7 +28,8 @@ Read `core_guidance` together with this editable guidance for placement and clea
   Compose-only templates use empty manifest defaults. Repository-only templates omit `compose.yaml`
   and declare at least one repository in `tandem.json`; routes and one-shots require Compose.
   Guidance-only templates need only `tandem-agents.md`: creation prepares a workspace and `AGENTS.md`
-  without Git or Docker. Their manifest is optional. An instance retains its execution kind;
+  without Docker. Workspace preparation requires host Git. Their manifest is optional.
+  An instance retains its execution kind;
   use a new name when switching between workspace-only and container-backed execution.
 - Optional `tandem-agents.md` in the template directory supplies template-specific workspace guidance.
   Its UTF-8 contents (up to 256 KiB) are appended verbatim to generated workspace `AGENTS.md`,
@@ -40,7 +43,7 @@ Read `core_guidance` together with this editable guidance for placement and clea
   Keep repository targets clear and reserve root `AGENTS.md`, root `.tandem-*`, and every `.git` path
   for Tandem or Git. Existing regular files are preserved on preparation retries; incompatible
   destinations block preparation. Template edits affect future preparation, not ready workspaces.
-  Files-only templates need no manifest, Git, or Docker.
+  Files-only templates need no manifest or Docker.
 - Generated workspace guidance includes repository instructions when repositories are identified,
   Compose controls when services are identified, and HTTP testing instructions when URLs exist.
   Write `tandem-agents.md` for verified template-specific development and self-verification:

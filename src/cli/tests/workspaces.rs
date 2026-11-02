@@ -25,6 +25,21 @@ fn repository_only_creation_reopens_and_deletes_across_processes_without_docker(
     let fixture = repository_fixture();
     success(fixture.run(&["new-instance", "review", "-t", "website", "-o"]));
     let workspace = fixture.home.join("workspaces/website/review");
+    assert_eq!(
+        git(&workspace, &["rev-parse", "--show-toplevel"]),
+        workspace.display().to_string()
+    );
+    assert_eq!(
+        git(
+            &workspace,
+            &["status", "--porcelain", "--untracked-files=all"]
+        ),
+        ""
+    );
+    assert_eq!(
+        git(&workspace.join("app"), &["rev-parse", "--show-toplevel"]),
+        workspace.join("app").display().to_string()
+    );
     let guidance = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
     assert!(guidance.contains("## Repositories"));
     assert!(guidance.contains("./app/AGENTS.md"));
@@ -121,19 +136,17 @@ fn compose_only_instances_generate_service_guidance_without_repository_or_http_c
 }
 
 #[test]
-fn blank_workspaces_create_reopen_and_delete_without_git_or_docker() {
+fn blank_workspaces_create_clean_git_roots_reopen_and_delete_without_docker() {
     let fixture = repository_fixture();
     let template = fixture.home.join("templates/website");
     fs::write(template.join("tandem.json"), "{}\n").unwrap();
-    fs::write(
-        fixture.bin.join("git"),
-        "#!/bin/sh\nprintf invoked > \"$TANDEM_HOME/git-called\"\nexit 99\n",
-    )
-    .unwrap();
-    fs::set_permissions(fixture.bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
     success(fixture.run(&["new-instance", "scratch", "-t", "website", "-o"]));
     let workspace = fixture.home.join("workspaces/website/scratch");
-    assert_eq!(fs::read_dir(&workspace).unwrap().count(), 2);
+    assert_eq!(fs::read_dir(&workspace).unwrap().count(), 3);
+    assert_eq!(
+        fs::read_to_string(workspace.join(".git/info/exclude")).unwrap(),
+        "*\n"
+    );
     assert!(workspace.join(".opencode/opencode.json").is_file());
     let guidance = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
     assert!(guidance.starts_with("# scratch\n"));
@@ -149,12 +162,63 @@ fn blank_workspaces_create_reopen_and_delete_without_git_or_docker() {
         fs::read_to_string(workspace.join("notes.md")).unwrap(),
         "Keep my notes"
     );
+    assert_eq!(
+        git(
+            &workspace,
+            &["status", "--porcelain", "--untracked-files=all"]
+        ),
+        ""
+    );
+    assert_eq!(git(&workspace, &["remote"]), "");
+    assert!(
+        !Command::new("git")
+            .current_dir(&workspace)
+            .args(["rev-parse", "--verify", "HEAD"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
     assert!(fixture.home.join("opened").exists());
     success(fixture.run(&["delete-instance", "scratch"]));
     assert!(!workspace.exists());
     assert!(fixture.runtime_record("scratch", "journal").is_none());
-    assert!(!fixture.home.join("git-called").exists());
     assert!(!fixture.home.join("docker-calls").exists());
+}
+
+#[test]
+fn workspace_git_initialization_ignores_user_git_templates() {
+    let fixture = repository_fixture();
+    fs::write(fixture.home.join("templates/website/tandem.json"), "{}\n").unwrap();
+    let git_template = fixture.home.join("git-template");
+    fs::create_dir_all(git_template.join("hooks")).unwrap();
+    fs::write(
+        git_template.join("hooks/post-checkout"),
+        "#!/bin/sh\nexit 99\n",
+    )
+    .unwrap();
+    fs::write(git_template.join("template-marker"), "personal template").unwrap();
+    fs::write(
+        fixture.home.join(".gitconfig"),
+        format!("[init]\n\ttemplateDir = {}\n", git_template.display()),
+    )
+    .unwrap();
+
+    success(wait_output(
+        fixture
+            .command(&["new-instance", "scratch", "-t", "website"])
+            .env("HOME", &fixture.home)
+            .spawn()
+            .unwrap(),
+    ));
+
+    let workspace = fixture.home.join("workspaces/website/scratch");
+    assert!(!workspace.join(".git/hooks/post-checkout").exists());
+    assert!(!workspace.join(".git/template-marker").exists());
+    assert_eq!(
+        fs::read_to_string(workspace.join(".git/info/exclude")).unwrap(),
+        "*\n"
+    );
 }
 
 #[test]
@@ -183,19 +247,13 @@ fn git_managed_read_only_templates_support_instance_creation_and_cleanup() {
 }
 
 #[test]
-fn guidance_only_workspaces_create_open_and_delete_without_git_or_docker() {
+fn guidance_only_workspaces_create_clean_git_roots_open_and_delete_without_docker() {
     let fixture = repository_fixture();
     let template = fixture.home.join("templates/website");
     fs::remove_file(template.join("tandem.json")).unwrap();
     let guidance =
         "## Research workspace\n\nRecord findings in notes.md. Keep {{literal}} intact.\n";
     fs::write(template.join("tandem-agents.md"), guidance).unwrap();
-    fs::write(
-        fixture.bin.join("git"),
-        "#!/bin/sh\nprintf invoked > \"$TANDEM_HOME/git-called\"\nexit 99\n",
-    )
-    .unwrap();
-    fs::set_permissions(fixture.bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
     success(fixture.run(&["new-instance", "review", "-t", "website", "-o"]));
     let workspace = fixture.home.join("workspaces/website/review");
     let generated = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
@@ -210,7 +268,7 @@ fn guidance_only_workspaces_create_open_and_delete_without_git_or_docker() {
     ] {
         assert!(!generated.contains(unwanted), "{generated}");
     }
-    assert_eq!(fs::read_dir(&workspace).unwrap().count(), 2);
+    assert_eq!(fs::read_dir(&workspace).unwrap().count(), 3);
     assert!(workspace.join(".opencode/opencode.json").is_file());
     fs::write(workspace.join("notes.md"), "User work").unwrap();
     fs::write(workspace.join("AGENTS.md"), "Custom instructions\n").unwrap();
@@ -228,9 +286,15 @@ fn guidance_only_workspaces_create_open_and_delete_without_git_or_docker() {
         fs::read_to_string(workspace.join("notes.md")).unwrap(),
         "User work"
     );
+    assert_eq!(
+        git(
+            &workspace,
+            &["status", "--porcelain", "--untracked-files=all"]
+        ),
+        ""
+    );
     assert!(fixture.home.join("opened").exists());
     success(fixture.run(&["delete-instance", "review"]));
     assert!(!workspace.exists());
-    assert!(!fixture.home.join("git-called").exists());
     assert!(!fixture.home.join("docker-calls").exists());
 }

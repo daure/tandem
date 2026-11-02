@@ -49,7 +49,7 @@ tandem
 
 The installer includes the OpenCode companion and prints its configuration path. See [OpenCode setup](docs/reference.md#opencode-integration).
 
-Blank workspaces need no Git or Docker. Repository templates require Linux and Git; service templates require Docker Engine and Compose v2+. OpenCode panes require Zellij 0.45+ and the companion.
+Workspace preparation requires Git. Blank workspaces need no Docker. Repository templates require Linux; service templates require Docker Engine and Compose v2+. OpenCode panes require Zellij 0.45+ and the companion.
 
 ## Create your first workspace
 

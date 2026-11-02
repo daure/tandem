@@ -11,7 +11,7 @@ Python 3.11+, Git, local Docker Engine, and Docker Compose 2.20+ are required.
 | `mailroom` | `mailroom` | Queue a greeting and poll its delivery | Redis, worker heartbeat, asynchronous completion |
 | `repo-only` | `repo-only` cloned as `app` | Local Python greeting and unit tests | Manifest-only template, Git Setup row, checkout-path copy, local guidance |
 | `compose-only` | — | Redis with a healthcheck and persistent volume | Compose without a manifest, service-only guidance, no routes |
-| `guidance-only` | — | Scratch workspace for notes and research | Optional manifest, custom `AGENTS.md`, nested `tandem-files/` seeds, no Git or Docker |
+| `guidance-only` | — | Scratch workspace for notes and research | Optional manifest, custom `AGENTS.md`, nested `tandem-files/` seeds, no Docker |
 
 ## Generate and run
 

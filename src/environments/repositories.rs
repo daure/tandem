@@ -19,6 +19,23 @@ const MAX_CONCURRENT_REPOSITORIES: usize = 4;
 mod update;
 pub(super) use update::update;
 
+pub(super) fn prepare_workspace(workspace: &Path, deadline: Instant) -> Result<(), String> {
+    let git_directory = workspace.join(".git");
+    match fs::symlink_metadata(&git_directory) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    real_directory(workspace)?;
+    let mut command = git(workspace);
+    command.args(["init", "-q", "--template="]);
+    run(command, remaining(deadline)?, None).map_err(|_| {
+        "workspace Git initialization failed; verify host Git and the startup budget".to_owned()
+    })?;
+    fs::create_dir_all(git_directory.join("info")).map_err(|error| error.to_string())?;
+    fs::write(git_directory.join("info/exclude"), "*\n").map_err(|error| error.to_string())
+}
+
 pub(super) fn validate(repositories: &[Repository]) -> Result<(), String> {
     for (index, repository) in repositories.iter().enumerate() {
         let target = &repository.target;

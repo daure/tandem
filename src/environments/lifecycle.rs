@@ -91,6 +91,7 @@ pub(crate) fn start(
             return Err("workspace escapes workspace root".into());
         }
         super::removal::validate_workspace(config, name)?;
+        repositories::prepare_workspace(&workspace, deadline)?;
         template_files::prepare(&workspace, &template, deadline, progress.clone())?;
         super::instance_mcp::prepare_config(config, &workspace)?;
         let mut preparing = journal::recorded(config, name)?.ok_or("instance record missing")?;

@@ -12,8 +12,8 @@ gateway exposes declared HTTP services at `http://localhost:9876/<instance>/<ser
 
 Building requires Rust and the sibling `../tuicore` package. Service templates require a local Docker
 Engine and Docker Compose v2 or newer; container images are pulled on first use. Repository-only
-templates require Linux and host Git but their lifecycle does not require Docker.
-Blank and guidance-only templates prepare a workspace folder without Git or Docker.
+templates require Linux but their lifecycle does not require Docker.
+All workspace preparation requires host Git. Blank and guidance-only templates need no Docker.
 New instance workspaces use `<TANDEM_HOME>/workspaces/<template>/<instance>/`; existing flat workspaces keep their paths.
 
 ```bash
@@ -1163,7 +1163,7 @@ creation-requested OpenCode pane launch, and repository cloning. Existing regula
 incompatible destinations fail preparation. Ready workspaces remain user-owned when the template changes.
 Paths must be UTF-8; symlinks and special files are refused. Seed paths must not occupy repository targets,
 root `AGENTS.md`, root `.tandem-*`, or any `.git` path. Files-only templates prepare a workspace and
-generated guidance without a manifest, Git, or Docker.
+generated guidance without a manifest or Docker.
 
 Template details show a **Files** tree tab when the folder contains files. The background observer
 refreshes the tree when entries change or the folder is removed; an empty folder hides the tab.
@@ -1227,6 +1227,11 @@ reaches installations with custom instructions without overwriting them; agents 
 conflicting guidance. Existing workspace `AGENTS.md` files remain user-owned.
 
 ### Repository provisioning
+
+On create and start, Tandem initializes an empty Git repository at the workspace root when `.git`
+is missing and writes `*` to `.git/info/exclude`. The root stays clean with no commits or remotes;
+declared clones retain their own repositories. Existing `.git` entries are preserved. Initialization
+uses an empty Git template, independently of the user's `init.templateDir`.
 
 Declare `{ "source": "…", "target": "…" }` entries in `repositories` to let Tandem prepare checkouts
 before Compose configuration and startup. Mount `${TANDEM_WORKSPACE}` into application containers;

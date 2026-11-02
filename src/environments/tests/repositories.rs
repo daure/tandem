@@ -8,6 +8,9 @@ use std::{
 #[path = "repository_updates.rs"]
 mod updates;
 
+#[path = "workspace_git.rs"]
+mod workspace_git;
+
 fn git_test(path: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .current_dir(path)

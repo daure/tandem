@@ -77,12 +77,25 @@ fn stopping_starting_and_restarting_preserve_workspace_changes_and_report_comple
     assert_eq!(inspection["instance"]["summary"]["status"], "stopped");
 
     fs::remove_file(fixture.home.join("configured")).unwrap();
+    let workspace = checkout.parent().unwrap();
+    fs::remove_dir_all(workspace.join(".git")).unwrap();
     let started = success(fixture.run(&["start-instance", "review"]));
     assert!(
         started.starts_with("Instance review ready\nWorkspace:"),
         "{started}"
     );
     assert!(fixture.home.join("configured").exists());
+    assert_eq!(
+        fs::read_to_string(workspace.join(".git/info/exclude")).unwrap(),
+        "*\n"
+    );
+    assert_eq!(
+        git(
+            workspace,
+            &["status", "--porcelain", "--untracked-files=all"]
+        ),
+        ""
+    );
     assert_eq!(
         fs::read_to_string(checkout.join("file.txt")).unwrap(),
         "Local edits"

@@ -360,6 +360,8 @@ A template may describe a Compose environment, a repository-backed workspace, a 
 Template manifests declare core-managed repositories, routes, and setup jobs. Template authors own application-specific setup and prefix-aware routing. Tandem owns safe provisioning, generated workspace guidance, and lifecycle coordination.
 
 New workspaces use `workspaces/<template>/<instance>`. Recorded flat paths remain valid; lifecycle, Compose, and scoped MCP use the recorded workspace without relocating it.
+Creation and start initialize a missing workspace-root `.git` with an empty Git template and exclude
+all contents through `.git/info/exclude`. Existing `.git` entries and nested checkouts are preserved.
 
 Templates contain shared recipes and static assets. Lifecycle operations write local instance state outside
 templates. Compose resolves relative assets from the template directory; writable binds, bind-backed local

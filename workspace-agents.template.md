@@ -2,6 +2,9 @@
 
 {{workspace_description}}
 
+Tandem initializes a missing root `.git` with all workspace contents ignored.
+A clean root status says nothing about nested repositories; run Git commands inside each application checkout.
+
 {{#inventory}}## {{inventory_heading}}
 
 {{repositories}}

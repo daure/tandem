@@ -672,7 +672,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Prepare an instance from a trusted template with user approval and confirmed=true. New instances permanently clear exact-workspace OpenCode history when integration and creation cleanup are enabled (default on); active clients or cleanup failures block creation. Workspace-only preparation needs no Docker; blank/guidance-only templates need no Git. For service templates, start_instance=true (default) starts Compose/gateway and verifies readiness; false prepares repositories, guidance and Compose config only. Preparation survives disconnection. With wait=false, poll get_operation; the latest attempt survives reconnects."
+        description = "Prepare an instance from a trusted template with user approval and confirmed=true. New instances permanently clear exact-workspace OpenCode history when integration and creation cleanup are enabled (default on); active clients or cleanup failures block creation. Workspace preparation requires host Git; workspace-only preparation needs no Docker. For service templates, start_instance=true (default) starts Compose/gateway and verifies readiness; false prepares repositories, guidance and Compose config only. Preparation survives disconnection. With wait=false, poll get_operation; the latest attempt survives reconnects."
     )]
     async fn create_instance(
         &self,
