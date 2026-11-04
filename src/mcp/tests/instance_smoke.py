@@ -65,7 +65,6 @@ def smoke(binary):
             "get_memory": {"memory_id"},
             "close": {"sessions", "zellij_tab"},
             "search_conclusions": {"search_strings"}, "get_conclusion": {"conclusion_id"},
-            "search_events": {"search_strings"}, "get_event_report": {"acceptance_id"},
         }
         assert {tool["name"] for tool in tools} == set(fields), tools
         policy = "Use `purge` only when explicitly instructed."

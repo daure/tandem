@@ -85,7 +85,7 @@ class RefreshTests(unittest.TestCase):
             terminal = Terminal(environment)
             try:
                 terminal.wait_for(lambda: inventory_calls() == 1 and b"Instances" in terminal.output)
-                terminal.send(b"]]A")
+                terminal.send(b"]A")
                 terminal.send(b"\x1b[O")
                 terminal.drain_for(11)
                 self.assertEqual(inventory_calls(), 1, "Unfocused TUI must skip ten-second inventory polls")
