@@ -45,10 +45,13 @@ pub(super) struct Overlay {
 }
 
 impl Overlay {
-    pub(super) fn new(view: View) -> Self {
+    pub(super) fn new(view: View, automation: bool) -> Self {
         let selected = Rc::new(RefCell::new(None));
         let selection = selected.clone();
-        let picker = Dropdown::multi(Sound::ALL, |sound| *sound, |sound| sound.label())
+        let sounds = Sound::ALL
+            .into_iter()
+            .filter(|sound| automation || *sound != Sound::EventAcceptance);
+        let picker = Dropdown::multi(sounds, |sound| *sound, |sound| sound.label())
             .variant(DropdownVariant::Filled)
             .search_mode(DropdownSearchMode::Fuzzy)
             .search_placeholder("Notification sounds…")

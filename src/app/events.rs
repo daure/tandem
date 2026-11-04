@@ -1049,6 +1049,13 @@ impl super::App {
 
     pub(super) fn sync_overview_tab(&mut self, ctx: &mut EventCtx<Msg>) {
         let index = self.tabs_mut().selected_index();
+        if !self.service.automation_enabled() {
+            let sessions = self.service.opencode_enabled() && index == 0;
+            if sessions != self.attached_sessions_only {
+                self.handle_message(Msg::SetAttachedSessionsOnly(sessions), ctx);
+            }
+            return;
+        }
         if index == 1 {
             self.rules_active = false;
             self.events_active = true;

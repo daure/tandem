@@ -3,6 +3,7 @@ use std::{error::Error, sync::Arc, time::Instant};
 use schemars::JsonSchema;
 use serde::Serialize;
 
+mod automation;
 mod creation;
 #[cfg(debug_assertions)]
 mod dev_server;
@@ -114,13 +115,19 @@ impl AppService {
 
     #[cfg(test)]
     pub(crate) fn for_tests() -> Self {
+        Self::for_tests_with_automation(true)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_tests_with_automation(automation: bool) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let config = crate::environments::config::Config::at(
+        let mut config = crate::environments::config::Config::at(
             directory.path().to_path_buf(),
             "tandem-test".into(),
             9876,
         )
         .unwrap();
+        config.automation = automation;
         let mut service = Self::from_config(config).unwrap();
         Arc::get_mut(&mut service.state).unwrap()._test_home = Some(directory);
         service.set_opencode_snapshot_for_tests(Default::default());

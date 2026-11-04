@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn automation_defaults_off_and_reads_the_home_config_on_startup() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path();
+    let load = || Config::at(home.into(), "config-test".into(), 9876).unwrap();
+    assert!(!load().automation);
+    for (text, expected) in [
+        ("{}", false),
+        (r#"{"ui":{}}"#, false),
+        (r#"{"ui":{"automation":false}}"#, false),
+        (r#"{"ui":{"automation":true}}"#, true),
+    ] {
+        fs::write(home.join("config.json"), text).unwrap();
+        assert_eq!(load().automation, expected);
+    }
+    let enabled = load();
+    fs::write(home.join("config.json"), r#"{"ui":{"automation":false}}"#).unwrap();
+    assert!(enabled.automation);
+    assert!(!load().automation);
+}
+
+#[test]
+fn invalid_automation_configuration_reports_the_config_path() {
+    for text in [r#"{"ui":{"automation":"true"}}"#, "{"] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        fs::write(&path, text).unwrap();
+        let error = Config::at(directory.path().into(), "config-test".into(), 9876)
+            .err()
+            .unwrap();
+        assert!(
+            error.starts_with(&format!("{}:", path.display())),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn action_keys_default_to_d_for_details_and_support_configurable_letters_and_enter() {
     let directory = tempfile::tempdir().unwrap();
     let config = Config::at(directory.path().to_path_buf(), "keys-test".into(), 9876).unwrap();

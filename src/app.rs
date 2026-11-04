@@ -347,6 +347,7 @@ pub(crate) fn root(service: AppService) -> App {
     let keys = service.environment_keys();
     let snapshot = service.environment_snapshot();
     let opencode_enabled = service.opencode_enabled();
+    let automation_enabled = service.automation_enabled();
     let overview_loading = snapshot.loading || service.opencode_loading();
     let opencode_snapshot = service.opencode_snapshot();
     let event_acceptance_count = service.event_snapshot().accepted_attempts;
@@ -370,8 +371,19 @@ pub(crate) fn root(service: AppService) -> App {
         toolbar_state.opencode_enabled = opencode_enabled;
     }
     let content = Split::vertical(
-        overview_tabs(opencode_enabled, opencode_enabled, (0, 0)),
-        overview::Pages::new(keys, toolbar_state.clone(), states, opencode_enabled),
+        overview_tabs(
+            opencode_enabled,
+            opencode_enabled,
+            (0, 0),
+            automation_enabled,
+        ),
+        overview::Pages::new(
+            keys,
+            toolbar_state.clone(),
+            states,
+            opencode_enabled,
+            automation_enabled,
+        ),
     )
     .constraints(Constraint::Length(1), Constraint::Fill(1));
     let main = Split::vertical(
@@ -418,7 +430,7 @@ pub(crate) fn root(service: AppService) -> App {
         overview_loading,
         overview_operations: Vec::new(),
         overview_options: (true, false),
-        view: sound_menu::Overlay::new(view),
+        view: sound_menu::Overlay::new(view, automation_enabled),
         instances,
         toolbar_state,
         tab_counts: (0, 0),
@@ -483,6 +495,7 @@ impl App {
                 opencode_enabled,
                 self.attached_sessions_only,
                 self.tab_counts,
+                self.service.automation_enabled(),
             );
             if events_active {
                 self.tabs_mut().select_index(1);
@@ -589,6 +602,7 @@ impl App {
             self.service.opencode_enabled(),
             self.attached_sessions_only,
             counts,
+            self.service.automation_enabled(),
         )
         .selected(selected);
         true
@@ -596,7 +610,7 @@ impl App {
 
     fn instances_tab_index(&self) -> usize {
         if self.service.opencode_enabled() {
-            2
+            1 + usize::from(self.service.automation_enabled())
         } else {
             0
         }
@@ -1330,9 +1344,12 @@ impl App {
         self.settings_sound_choice.borrow_mut().take();
         self.open(
             dialogs::settings(
-                self.service.branch_instances(),
-                self.service.opencode_enabled(),
-                self.service.clear_opencode_history(),
+                dialogs::SettingsOptions {
+                    branch_instances: self.service.branch_instances(),
+                    opencode: self.service.opencode_enabled(),
+                    clear_opencode_history: self.service.clear_opencode_history(),
+                    automation: self.service.automation_enabled(),
+                },
                 self.service.completion_fade_seconds(),
                 self.service.completion_sound_choices(),
                 [
@@ -1938,11 +1955,9 @@ impl App {
         if !bindings.tabs().previous_matches(*key) && !bindings.tabs().next_matches(*key) {
             return false;
         }
-        let count = if self.service.opencode_enabled() {
-            5
-        } else {
-            4
-        };
+        let count = 1
+            + usize::from(self.service.opencode_enabled())
+            + 3 * usize::from(self.service.automation_enabled());
         let current = self.tabs_mut().selected_index();
         let next = if bindings.tabs().previous_matches(*key) {
             (current + count - 1) % count
@@ -2329,7 +2344,12 @@ impl TuiNode<Msg> for App {
     }
 }
 
-fn overview_tabs(opencode_enabled: bool, sessions: bool, counts: (usize, usize)) -> Tabs<Msg> {
+fn overview_tabs(
+    opencode_enabled: bool,
+    sessions: bool,
+    counts: (usize, usize),
+    automation: bool,
+) -> Tabs<Msg> {
     let mut pages = Vec::new();
     if opencode_enabled {
         pages.push(Tab::text("Sessions", ""));
@@ -2337,11 +2357,16 @@ fn overview_tabs(opencode_enabled: bool, sessions: bool, counts: (usize, usize))
     if !opencode_enabled {
         pages.push(Tab::text("Instances", ""));
     }
-    pages.push(Tab::text("Events", ""));
+    if automation {
+        pages.push(Tab::text("Events", ""));
+    }
     if opencode_enabled {
         pages.push(Tab::text("Instances", ""));
     }
-    for (title, count) in [("Rules", counts.0), ("Streams", counts.1)] {
+    for (title, count) in [("Rules", counts.0), ("Streams", counts.1)]
+        .into_iter()
+        .filter(|_| automation)
+    {
         let title = if count == 0 {
             title.into()
         } else {
@@ -2350,7 +2375,11 @@ fn overview_tabs(opencode_enabled: bool, sessions: bool, counts: (usize, usize))
         pages.push(Tab::text(title, ""));
     }
     let mut tabs = Tabs::new(pages)
-        .selected(if opencode_enabled && !sessions { 2 } else { 0 })
+        .selected(if opencode_enabled && !sessions {
+            1 + usize::from(automation)
+        } else {
+            0
+        })
         .focused(true)
         .variant(TabsVariant::OneRow)
         .tab_stop(false)

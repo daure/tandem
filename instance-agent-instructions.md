@@ -65,4 +65,4 @@ closes associated OpenCode clients and their Zellij panes. Shared servers, conve
 memories remain. Cleanup continues detached; a receipt confirms admission, not success. Use
 `get_conclusion` for cleanup outcomes. Inspect the instance and obtain explicit instruction before
 retrying. Purge reuses existing cleanup history and preserves any saved report without duplicating
-memory. Linked acceptance reports remain available through event-report tools while task history is retained.
+memory. Event-report tools require enabled automation and retained task history.

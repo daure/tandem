@@ -12,6 +12,7 @@ use crate::{
 
 mod acceptance_tree;
 mod attached_sessions;
+mod automation;
 mod bulk;
 mod completion;
 mod completion_navigation;

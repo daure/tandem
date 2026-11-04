@@ -27,6 +27,7 @@ fn hidden_pages_keep_their_timers_without_invalidating_the_visible_page() {
         Rc::new(RefCell::new(toolbar::State::default())),
         std::array::from_fn(|_| Rc::new(RefCell::new(super::super::instances::State::default()))),
         false,
+        true,
     );
     let elapsed = Rc::new(Cell::new(Duration::ZERO));
     let animated = TickResult {
@@ -35,7 +36,7 @@ fn hidden_pages_keep_their_timers_without_invalidating_the_visible_page() {
         active: false,
         next_tick: Some(Duration::from_millis(80)),
     };
-    pages.pages = std::array::from_fn(|index| {
+    pages.pages = std::array::from_fn::<_, 5, _>(|index| {
         ChildSlot::new(
             format!("page-{index}"),
             Box::new(TimedPage {
@@ -51,7 +52,8 @@ fn hidden_pages_keep_their_timers_without_invalidating_the_visible_page() {
                 },
             }) as Box<dyn TuiNode<Msg>>,
         )
-    });
+    })
+    .into();
 
     assert_eq!(
         pages.tick(Duration::from_millis(80), AnimationSettings::default()),

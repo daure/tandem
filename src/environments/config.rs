@@ -17,6 +17,19 @@ pub(crate) struct Config {
     pub port: u16,
     pub keys: [KeySpec; 10],
     pub operation_id: Option<String>,
+    pub automation: bool,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct FileConfig {
+    ui: UiConfig,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct UiConfig {
+    automation: bool,
 }
 
 impl Config {
@@ -74,6 +87,13 @@ impl Config {
         }
         fs::create_dir_all(&home).map_err(|error| error.to_string())?;
         let home = fs::canonicalize(home).map_err(|error| error.to_string())?;
+        let config_path = home.join("config.json");
+        let file_config: FileConfig = match fs::read_to_string(&config_path) {
+            Ok(text) => serde_json::from_str(&text)
+                .map_err(|error| format!("{}: {error}", config_path.display()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => FileConfig::default(),
+            Err(error) => return Err(format!("{}: {error}", config_path.display())),
+        };
         let nested_templates = home.join("templates/instances");
         if nested_templates.exists() {
             let root = home.join("templates");
@@ -116,6 +136,7 @@ impl Config {
                 KeySpec::shifted('p'),
             ],
             operation_id: None,
+            automation: file_config.ui.automation,
         };
         for directory in [
             &config.templates,

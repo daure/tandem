@@ -389,6 +389,12 @@ Writable-mount protection covers the entire shared repository, including sibling
 
 ## Provider events
 
+`TANDEM_HOME/config.json` supplies the startup-only `ui.automation` boolean, defaulting to false.
+`AppService` gates event/provider/rule operations and polling; disabled TUI and MCP
+surfaces omit their controls and tools. Owned and foreground event listeners require automation.
+Shared history storage remains available to workspace lifecycle, memories, and conclusions.
+Disabling preserves existing resources and history; every process, including sidecars, needs a restart.
+
 `store/events` defines versioned envelopes, four typed profiles, processing attempts, and feedback
 messages. `environments/events` owns namespace/provider-scoped SQLite identities and transactional
 ingestion, attempts, and notification queues in the private application database. Receipt creates

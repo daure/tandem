@@ -60,6 +60,7 @@ impl AppService {
         conversation: Option<String>,
         confirmed: bool,
     ) -> Result<(Operation, Option<Session>), String> {
+        self.require_automation()?;
         if !confirmed {
             return Err("confirmation_required: recreation creates a fresh workspace without restoring deleted files or runtime data".into());
         }

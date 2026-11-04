@@ -63,6 +63,10 @@ struct ReportMatches {
 impl InstanceMcpServer {
     fn new(service: AppService, scope: Arc<InstanceScope>) -> Self {
         let mut tool_router = Self::tool_router();
+        if !service.automation_enabled() {
+            tool_router.map.remove("search_events");
+            tool_router.map.remove("get_event_report");
+        }
         for route in tool_router.map.values_mut() {
             route.attr.output_schema = None;
         }

@@ -32,6 +32,7 @@ fn token(headers: &HeaderMap) -> Result<String, Error> {
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let (status, message) = match self {
+            Self::Disabled => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
             Self::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "invalid provider credential".into(),
@@ -77,6 +78,7 @@ pub(crate) async fn run_owned(
     bind: SocketAddr,
     lease: crate::environments::provider_sidecar::Lease,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    service.require_automation()?;
     if !bind.ip().is_loopback() {
         return Err("owned provider sidecar must be loopback".into());
     }
@@ -177,6 +179,12 @@ pub(crate) async fn run(
     bind: SocketAddr,
     startup: Option<Sender<Result<(), String>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(error) = service.require_automation() {
+        if let Some(startup) = startup {
+            let _ = startup.send(Err(error.clone()));
+        }
+        return Err(error.into());
+    }
     let listener = match tokio::net::TcpListener::bind(bind).await {
         Ok(listener) => listener,
         Err(error) => {

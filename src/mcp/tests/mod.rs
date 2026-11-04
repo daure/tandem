@@ -10,6 +10,48 @@ mod providers;
 mod rules;
 
 #[test]
+fn disabled_automation_omits_its_tools_and_keeps_workspace_tools() {
+    let enabled = McpServer::new(AppService::for_tests());
+    let disabled = McpServer::new(AppService::for_tests_with_automation(false));
+    let removed: std::collections::BTreeSet<&str> = enabled
+        .tool_router
+        .map
+        .keys()
+        .filter(|name| !disabled.tool_router.map.contains_key(*name))
+        .map(|name| name.as_ref())
+        .collect();
+    assert_eq!(
+        removed,
+        std::collections::BTreeSet::from([
+            "search_event_reports",
+            "get_event_report",
+            "list_rules",
+            "get_rule",
+            "save_rule",
+            "preview_rule",
+            "list_events",
+            "get_event",
+            "get_event_diagnostics",
+            "replay_event",
+            "retry_acceptance",
+            "list_providers",
+            "delete_provider",
+            "provider_action",
+        ])
+    );
+    for name in [
+        "get_instructions",
+        "get_status",
+        "list_instances",
+        "list_sessions",
+        "search_memories",
+        "get_conclusion",
+    ] {
+        assert!(disabled.tool_router.map.contains_key(name), "{name}");
+    }
+}
+
+#[test]
 fn session_listing_mcp_validates_filters_and_requires_enabled_observation() {
     use rmcp::handler::server::wrapper::Parameters;
     let service = AppService::for_tests();

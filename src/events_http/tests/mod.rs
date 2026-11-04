@@ -2,6 +2,40 @@ use super::*;
 use crate::environments::events::tests::event;
 
 #[test]
+fn disabled_automation_rejects_provider_http_requests() {
+    let service = AppService::for_tests_with_automation(false);
+    let token = service.register_provider_for_tests("sample");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(axum::serve(listener, router(service.clone())).into_future());
+        let response = reqwest::Client::new()
+            .post(format!("{origin}/v1/events"))
+            .bearer_auth(token)
+            .header("Content-Type", "application/json")
+            .body(
+                serde_json::to_string(&Batch {
+                    events: vec![event("blocked")],
+                })
+                .unwrap(),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: serde_json::Value =
+            serde_json::from_str(&response.text().await.unwrap()).unwrap();
+        assert_eq!(body, json!({"error": Error::Disabled.to_string()}));
+        server.abort();
+        let error = run(service, "127.0.0.1:0".parse().unwrap(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), Error::Disabled.to_string());
+    });
+}
+
+#[test]
 fn sidecar_authenticates_ingestion_and_delivers_acknowledgeable_provider_feedback() {
     let service = AppService::for_tests();
     let token = service.register_provider_for_tests("sample");

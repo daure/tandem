@@ -332,7 +332,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             } else {
                 service.provider_action(name, action.into(), true)
             };
-            let result = receiver.blocking_recv()??;
+            let result = receiver
+                .blocking_recv()?
+                .map_err(|error| error.to_string())?;
             println!("{result}");
             Ok(())
         }
@@ -406,7 +408,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         Some(Commands::McpInstance) => crate::run_instance_mcp(),
         Some(Commands::ProvidersSetup) => {
             let service = crate::service::AppService::initialize()?;
-            println!("{}", service.setup_developer_providers()?);
+            println!(
+                "{}",
+                service
+                    .setup_developer_providers()
+                    .map_err(|error| error.to_string())?
+            );
             Ok(())
         }
         Some(Commands::RulesSetup { model, refresh }) => {

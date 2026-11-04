@@ -333,6 +333,7 @@ pub(crate) struct ProviderNotification {
 
 #[derive(Debug)]
 pub(crate) enum Error {
+    Disabled,
     Unauthorized,
     Invalid(String),
     Conflict(String),
@@ -343,6 +344,9 @@ pub(crate) enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Disabled => formatter.write_str(
+                "Automation is disabled; set ui.automation to true in TANDEM_HOME/config.json and restart Tandem",
+            ),
             Self::Unauthorized => formatter.write_str("invalid provider credential"),
             Self::Invalid(message) | Self::Conflict(message) | Self::Storage(message) => {
                 formatter.write_str(message)

@@ -12,6 +12,7 @@ use std::{
 use rusqlite::OptionalExtension;
 use serde_json::json;
 
+mod automation;
 mod cleanup;
 mod conclusion;
 mod existing;
@@ -44,6 +45,7 @@ impl Fixture {
         let bin = directory.path().join("bin");
         let source = directory.path().join("source");
         fs::create_dir_all(home.join("templates/website")).unwrap();
+        fs::write(home.join("config.json"), r#"{"ui":{"automation":true}}"#).unwrap();
         fs::create_dir(&bin).unwrap();
         fs::create_dir(&source).unwrap();
         git(&source, &["init", "-b", "trunk"]);

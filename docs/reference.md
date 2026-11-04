@@ -1259,6 +1259,22 @@ guidance files are user-owned; update them explicitly when adopting this workflo
 
 ## Configuration
 
+Events, Rules, and Streams require `ui.automation` in `$TANDEM_HOME/config.json`:
+
+```json
+{
+  "ui": {
+    "automation": true
+  }
+}
+```
+
+The property defaults to `false`, including when the file is absent. Disabled automation hides its
+tabs and notification controls, blocks related CLI/MCP operations and event ingestion, and skips
+event, rule, and provider polling. Workspace lifecycle, OpenCode, memories, and conclusions remain
+available. Existing collectors, instances, sessions, definitions, and history are preserved.
+Restart all Tandem processes, including MCP servers and event sidecars, after editing the file.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `TANDEM_HOME` | platform data directory / `tandem` | Absolute local root for templates, workspaces, locks, gateway, and instructions |

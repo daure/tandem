@@ -14,7 +14,7 @@ use super::{
 };
 
 pub(super) struct Pages {
-    pages: [ChildSlot<Box<dyn TuiNode<Msg>>, Msg>; 5],
+    pages: Vec<ChildSlot<Box<dyn TuiNode<Msg>>, Msg>>,
     states: [SharedState; 2],
     active: usize,
     events: super::events::SharedState,
@@ -33,6 +33,7 @@ impl Pages {
         toolbar: toolbar::SharedState,
         states: [SharedState; 2],
         sessions: bool,
+        automation: bool,
     ) -> Self {
         let events = std::rc::Rc::new(std::cell::RefCell::new(
             crate::store::events::Snapshot::default(),
@@ -51,7 +52,7 @@ impl Pages {
             super::acceptances::Context::default(),
         ));
         let events_dirty = Rc::new(Cell::new(true));
-        let pages = std::array::from_fn(|index| {
+        let build_page = |index: usize| {
             let (key, page): (&str, Box<dyn TuiNode<Msg>>) = if index == 4 {
                 (
                     "rules-page",
@@ -108,7 +109,10 @@ impl Pages {
                 )
             };
             ChildSlot::new(key, page)
-        });
+        };
+        let pages = (0..if automation { 5 } else { 2 })
+            .map(build_page)
+            .collect();
         Self {
             pages,
             states,

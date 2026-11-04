@@ -9,6 +9,7 @@ impl AppService {
         model: &str,
         refresh: bool,
     ) -> Result<Vec<Rule>, String> {
+        self.require_automation()?;
         let existing = self
             .rules
             .store

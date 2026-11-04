@@ -27,6 +27,26 @@ struct McpServer {
 impl McpServer {
     fn new(service: AppService) -> Self {
         let mut tool_router = Self::tool_router();
+        if !service.automation_enabled() {
+            for name in [
+                "search_event_reports",
+                "get_event_report",
+                "list_rules",
+                "get_rule",
+                "save_rule",
+                "preview_rule",
+                "list_events",
+                "get_event",
+                "get_event_diagnostics",
+                "replay_event",
+                "retry_acceptance",
+                "list_providers",
+                "delete_provider",
+                "provider_action",
+            ] {
+                tool_router.map.remove(name);
+            }
+        }
         for route in tool_router.map.values_mut() {
             route.attr.output_schema = None;
         }

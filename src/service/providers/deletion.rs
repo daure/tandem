@@ -13,6 +13,10 @@ impl AppService {
         confirmed: bool,
     ) -> oneshot::Receiver<Result<String, String>> {
         let (sender, receiver) = oneshot::channel();
+        if let Err(error) = self.require_automation() {
+            let _ = sender.send(Err(error));
+            return receiver;
+        }
         if !confirmed {
             let _ = sender.send(Err("confirmation_required: permanently delete provider package, collector, checkpoints, credentials, streams, events, and event-created instances, workspaces and OpenCode sessions".into()));
             return receiver;

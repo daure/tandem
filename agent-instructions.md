@@ -61,6 +61,8 @@ Read `core_guidance` together with this editable guidance for placement and clea
 
 ## Event providers
 
+- Event providers, rules, events, and event-report tools require `{"ui":{"automation":true}}` in
+  `$TANDEM_HOME/config.json`. The setting defaults to false and requires restarting Tandem processes.
 - Store provider packages (Dockerfiles, source, nonsecret defaults, assets) under
   `provider_templates_root`; keep private credentials and mutable checkpoints outside the template
   repository. Installed manifest identities must be unique and stable; use a new package for a new identity.

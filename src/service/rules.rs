@@ -112,6 +112,9 @@ impl AppService {
     }
 
     pub(crate) fn poll_rules(&self) {
+        if !self.automation_enabled() {
+            return;
+        }
         let mut last = self
             .rules
             .last_poll
@@ -143,6 +146,7 @@ impl AppService {
     }
 
     pub(crate) fn validate_rule_prompt(&self, prompt: &str) -> Result<(), String> {
+        self.require_automation()?;
         rules::validate_prompt(prompt)
     }
 
@@ -155,6 +159,10 @@ impl AppService {
     ) -> oneshot::Receiver<Result<Rule, String>> {
         let service = self.clone();
         let (sender, receiver) = oneshot::channel();
+        if let Err(error) = self.require_automation() {
+            let _ = sender.send(Err(error));
+            return receiver;
+        }
         self.runtime.spawn_blocking(move || {
             let result = (|| {
                 if definition.enabled && !confirmed {
@@ -197,6 +205,7 @@ impl AppService {
     }
 
     pub(crate) async fn list_rules(&self) -> Result<Snapshot, String> {
+        self.require_automation()?;
         let store = self.rules.store.clone();
         self.runtime
             .spawn_blocking(move || store.snapshot().map_err(|error| error.to_string()))
@@ -209,6 +218,7 @@ impl AppService {
         definition: Definition,
         sequence: i64,
     ) -> Result<Preview, String> {
+        self.require_automation()?;
         let store = self.rules.store.clone();
         self.runtime
             .spawn_blocking(move || {
@@ -278,6 +288,10 @@ impl AppService {
     pub(crate) fn retained_event(&self, sequence: i64) -> oneshot::Receiver<Result<Record, Error>> {
         let store = self.rules.store.clone();
         let (sender, receiver) = oneshot::channel();
+        if !self.automation_enabled() {
+            let _ = sender.send(Err(Error::Disabled));
+            return receiver;
+        }
         self.runtime.spawn_blocking(move || {
             let _ = sender.send(store.event(sequence));
         });
@@ -289,6 +303,7 @@ impl AppService {
         id: i64,
         confirmed: bool,
     ) -> Result<Acceptance, String> {
+        self.require_automation()?;
         if !confirmed {
             return Err("confirmation_required: retrying provisions the assigned instance".into());
         }
@@ -325,6 +340,7 @@ impl AppService {
     }
 
     fn rule_cycle(&self) -> Result<(), Error> {
+        self.require_automation().map_err(|_| Error::Disabled)?;
         let store = &self.rules.store;
         let Some(_lease) = store.lease()? else {
             return Ok(());

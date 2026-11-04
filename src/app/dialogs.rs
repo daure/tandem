@@ -295,10 +295,15 @@ pub(super) fn clear_opencode_folder(directory: &str) -> Modal {
         )), FlexItem::fit_content())))
 }
 
+pub(super) struct SettingsOptions {
+    pub branch_instances: bool,
+    pub opencode: bool,
+    pub clear_opencode_history: bool,
+    pub automation: bool,
+}
+
 pub(super) fn settings(
-    branch_instances: bool,
-    opencode: bool,
-    clear_opencode_history: bool,
+    options: SettingsOptions,
     fade_seconds: u64,
     sounds: Vec<crate::store::completion::SoundChoice>,
     selected_sounds: [&str; 3],
@@ -332,53 +337,52 @@ pub(super) fn settings(
         sound_choice,
         Msg::InstancePingSoundSelected,
     );
-    Box::new(
-        dialog("Settings").host(
-            Flex::column()
-                .child(
-                    "branch-instances",
-                    Toggle::new("Branch instances")
-                        .checked(branch_instances)
-                        .focused(true)
-                        .on_change(Msg::SetBranchInstances),
-                    FlexItem::content(),
-                )
-                .child(
-                    "opencode-integration",
-                    Toggle::new("Enable opencode integration")
-                        .checked(opencode)
-                        .on_change(Msg::SetOpencodeIntegration),
-                    FlexItem::content(),
-                )
-                .child(
-                    "clear-opencode-history",
-                    Toggle::new("Clear OpenCode history on new instance")
-                        .checked(clear_opencode_history)
-                        .on_change(Msg::SetClearOpencodeHistory),
-                    FlexItem::content(),
-                )
-                .child(
-                    "completion-fade",
-                    FormField::new("Completion fade duration", input),
-                    FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
-                )
-                .child(
-                    "completion-sound",
-                    sound,
-                    FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
-                )
-                .child(
-                    "event-acceptance-sound",
-                    event_sound,
-                    FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
-                )
-                .child(
-                    "instance-ping-sound",
-                    ping_sound,
-                    FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
-                ),
-        ),
-    )
+    let mut fields = Flex::column()
+        .child(
+            "branch-instances",
+            Toggle::new("Branch instances")
+                .checked(options.branch_instances)
+                .focused(true)
+                .on_change(Msg::SetBranchInstances),
+            FlexItem::content(),
+        )
+        .child(
+            "opencode-integration",
+            Toggle::new("Enable opencode integration")
+                .checked(options.opencode)
+                .on_change(Msg::SetOpencodeIntegration),
+            FlexItem::content(),
+        )
+        .child(
+            "clear-opencode-history",
+            Toggle::new("Clear OpenCode history on new instance")
+                .checked(options.clear_opencode_history)
+                .on_change(Msg::SetClearOpencodeHistory),
+            FlexItem::content(),
+        )
+        .child(
+            "completion-fade",
+            FormField::new("Completion fade duration", input),
+            FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
+        )
+        .child(
+            "completion-sound",
+            sound,
+            FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
+        );
+    if options.automation {
+        fields = fields.child(
+            "event-acceptance-sound",
+            event_sound,
+            FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
+        );
+    }
+    fields = fields.child(
+        "instance-ping-sound",
+        ping_sound,
+        FlexItem::fit_content().cross_size(CrossSize::Fixed(72)),
+    );
+    Box::new(dialog("Settings").host(fields))
 }
 
 fn sound_dropdown(

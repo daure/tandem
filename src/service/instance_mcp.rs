@@ -190,6 +190,7 @@ impl AppService {
         &self,
         strings: Vec<String>,
     ) -> Result<Vec<ReportSummary>, String> {
+        self.require_automation()?;
         let rules = self.rules.clone();
         tokio::task::spawn_blocking(move || {
             rules
@@ -202,6 +203,7 @@ impl AppService {
     }
 
     pub(crate) async fn get_event_report(&self, acceptance_id: i64) -> Result<Report, String> {
+        self.require_automation()?;
         if acceptance_id <= 0 {
             return Err("acceptance_id must be positive".into());
         }

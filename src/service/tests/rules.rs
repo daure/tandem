@@ -52,6 +52,31 @@ fn definition(name: &str) -> Definition {
 }
 
 #[test]
+fn disabled_automation_preserves_rules_without_accepting_work() {
+    let service = AppService::for_tests_with_automation(false);
+    let rule = service
+        .rules
+        .store
+        .save(definition("retained"), None, "main".into())
+        .unwrap();
+    let disabled = Error::Disabled.to_string();
+    assert_eq!(service.rule_cycle().unwrap_err().to_string(), disabled);
+    service.runtime.block_on(async {
+        let error = service
+            .save_rule(definition("blocked"), None, None, true)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error, disabled);
+        let preview = service.preview_rule(definition("retained"), 1).await;
+        assert_eq!(preview.unwrap_err(), disabled);
+    });
+    let snapshot = service.rules.store.snapshot().unwrap();
+    assert_eq!(snapshot.rules, vec![rule]);
+    assert!(snapshot.acceptances.is_empty());
+}
+
+#[test]
 fn dispatch_skips_busy_events_without_blocking_unrelated_work() {
     let service = AppService::for_tests();
     service

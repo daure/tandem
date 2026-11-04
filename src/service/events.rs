@@ -45,6 +45,7 @@ impl AppService {
         &self,
         event: &crate::store::events::Event,
     ) -> Result<bool, String> {
+        self.require_automation()?;
         let Some(url) = event
             .url
             .as_deref()
@@ -68,6 +69,9 @@ impl AppService {
     }
 
     pub(crate) fn poll_events(&self) {
+        if !self.automation_enabled() {
+            return;
+        }
         let mut last_poll = self
             .events
             .last_poll
@@ -98,6 +102,7 @@ impl AppService {
         &self,
         request: impl FnOnce(EventStore) -> Result<T, Error> + Send + 'static,
     ) -> Result<T, Error> {
+        self.require_automation().map_err(|_| Error::Disabled)?;
         let store = self.events.store.clone();
         self.runtime
             .spawn_blocking(move || request(store))
@@ -148,6 +153,10 @@ impl AppService {
     ) -> oneshot::Receiver<Result<crate::store::events::diagnostics::Diagnostics, Error>> {
         let store = self.events.store.clone();
         let (sender, receiver) = oneshot::channel();
+        if !self.automation_enabled() {
+            let _ = sender.send(Err(Error::Disabled));
+            return receiver;
+        }
         self.runtime.spawn_blocking(move || {
             let _ = sender.send(store.diagnostics(sequence));
         });
@@ -189,6 +198,10 @@ impl AppService {
     pub(crate) fn replay_event(&self, sequence: i64) -> oneshot::Receiver<Result<i64, Error>> {
         let store = self.events.store.clone();
         let (sender, receiver) = oneshot::channel();
+        if !self.automation_enabled() {
+            let _ = sender.send(Err(Error::Disabled));
+            return receiver;
+        }
         let request = format!(
             "{}-{}",
             std::process::id(),
@@ -203,6 +216,10 @@ impl AppService {
     pub(crate) fn delete_events(&self, target: Deletion) -> oneshot::Receiver<Result<i64, Error>> {
         let store = self.events.store.clone();
         let (sender, receiver) = oneshot::channel();
+        if !self.automation_enabled() {
+            let _ = sender.send(Err(Error::Disabled));
+            return receiver;
+        }
         self.runtime.spawn_blocking(move || {
             let _ = sender.send(store.delete(target));
         });
@@ -210,6 +227,7 @@ impl AppService {
     }
 
     pub(crate) fn setup_developer_providers(&self) -> Result<String, Error> {
+        self.require_automation().map_err(|_| Error::Disabled)?;
         self.events
             .store
             .setup_developer_credentials()

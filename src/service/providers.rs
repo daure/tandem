@@ -142,6 +142,9 @@ impl AppService {
     }
 
     pub(crate) fn poll_providers(&self) {
+        if !self.automation_enabled() {
+            return;
+        }
         let mut last = self
             .providers
             .last_poll
@@ -181,6 +184,10 @@ impl AppService {
         confirmed: bool,
     ) -> oneshot::Receiver<Result<String, ActionError>> {
         let (sender, receiver) = oneshot::channel();
+        if let Err(error) = self.require_automation() {
+            let _ = sender.send(Err(error.into()));
+            return receiver;
+        }
         if action != Action::Logs && !confirmed {
             let _ = sender.send(Err(
                 "confirmation_required: provider lifecycle uses trusted Docker privileges".into(),
@@ -220,6 +227,10 @@ impl AppService {
         confirmed: bool,
     ) -> oneshot::Receiver<Result<String, ActionError>> {
         let (sender, receiver) = oneshot::channel();
+        if let Err(error) = self.require_automation() {
+            let _ = sender.send(Err(error.into()));
+            return receiver;
+        }
         if !confirmed {
             let _ = sender.send(Err(
                 "confirmation_required: stream lifecycle controls trusted provider collection"
@@ -287,6 +298,7 @@ impl AppService {
     }
 
     pub(crate) async fn list_providers(&self) -> Result<Snapshot, String> {
+        self.require_automation()?;
         let manager = self.providers.manager.clone();
         self.runtime
             .spawn_blocking(move || manager.snapshot())
@@ -298,6 +310,7 @@ impl AppService {
         &self,
         bind: std::net::SocketAddr,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        self.require_automation()?;
         let lease = provider_sidecar::Lease::acquire(&self.environments.config)?;
         let runtime = tokio::runtime::Runtime::new()?;
         let result = runtime.block_on(crate::events_http::run_owned(self.clone(), bind, lease));
